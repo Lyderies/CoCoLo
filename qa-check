@@ -1,0 +1,34 @@
+#!/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14
+"""Operational QA tests whose fixtures fit the sandbox's process and storage rules.
+
+Local dogfood file, never pushed. The full suites still run outside QA and in CI.
+job_read_tool, catalog and qa_tree_scan create adversarial symlinks/FIFOs, which
+the outer QA storage monitor correctly rejects; they belong to the full test run.
+"""
+import os
+import sys
+import unittest
+
+SUITES = (
+    ("packages/claude-agents", ("src", "."), ("contracts", "native_fixtures", "stream_projection",
+                                              "subscription_stream", "telemetry")),
+    ("packages/codex-agents", (".",), ("app_server", "evaluation", "hosts", "learning_adapters",
+                                       "learning_contracts", "learning_live", "supervision")),
+)
+sys.dont_write_bytecode = True
+root = os.getcwd()
+ran = 0
+passed = True
+for folder, paths, modules in SUITES:
+    os.chdir(os.path.join(root, folder))
+    saved = list(sys.path)
+    sys.path[:0] = [os.path.join(root, folder, path) for path in paths]
+    for module in modules:
+        suite = unittest.defaultTestLoader.discover("tests", pattern=f"test_{module}.py")
+        result = unittest.TextTestRunner(verbosity=0).run(suite)
+        ran += result.testsRun
+        passed = passed and result.wasSuccessful()
+    sys.path[:] = saved
+    for name in [name for name in sys.modules if name == "tests" or name.startswith(("tests.", "test_"))]:
+        del sys.modules[name]
+sys.exit(0 if passed and ran else 1)

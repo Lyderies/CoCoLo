@@ -1,0 +1,30 @@
+#!/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14
+"""Operational QA security check: the identifier scan's built-in rules over this project's files.
+
+Local dogfood file, never pushed. The sandbox can't run Git or read the private denylist, so the full
+scan still runs outside QA and in CI.
+"""
+import os
+import sys
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(os.getcwd(), "scripts"))
+import check_identifiers as scan  # noqa: E402
+
+SKIP = {".git", ".codex", ".agents", ".claude", "__pycache__", ".ruff_cache", ".pytest_cache", ".venv", "research"}
+findings = []
+scanned = 0
+for folder, names, files in os.walk("."):
+    names[:] = [name for name in names if name not in SKIP]
+    for name in files:
+        path = os.path.join(folder, name)
+        if name in ("qa-check", "qa-security") or os.path.islink(path) or os.path.getsize(path) > scan.MAX_BYTES:
+            continue
+        with open(path, "rb") as handle:
+            text = scan._decode(handle.read())
+        if text is not None:
+            scanned += 1
+            findings += scan.scan_text(text, path, ())
+for finding in findings:
+    print(finding, file=sys.stderr)
+sys.exit(0 if scanned and not findings else 1)
