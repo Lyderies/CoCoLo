@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "providers": {
+    "codex": {"enabled": true},
+    "claude": {"enabled": true, "models": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]}
+  },
+  "codex_primary_may_bridge_to_claude": true
+}

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "deterministic_checks": [
+    {
+      "check_id": "tests",
+      "driver": "python-wrapper",
+      "argv": [
+        "./qa-check"
+      ],
+      "executable_sha256": "77157e6a4b43abc546608ba3a21378c531b180c04350064ffeba2b51ea46f0b0",
+      "interpreter_sha256": "87d4df53fd91304be5bac391fb204643c36b7df2023c04a0953bcbc7d4fdf634",
+      "runtime_tree": null,
+      "timeout_seconds": 300
+    }
+  ],
+  "security_checks": [
+    {
+      "check_id": "identifiers",
+      "driver": "python-wrapper",
+      "argv": [
+        "./qa-security"
+      ],
+      "executable_sha256": "1b2b59a12243bd45558cb8b16ff2069141badc6c233f59af916e96321ae6968e",
+      "interpreter_sha256": "87d4df53fd91304be5bac391fb204643c36b7df2023c04a0953bcbc7d4fdf634",
+      "runtime_tree": null,
+      "timeout_seconds": 120
+    }
+  ]
+}
