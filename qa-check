@@ -13,7 +13,8 @@ SUITES = (
     ("packages/claude-agents", ("src", "."), ("contracts", "native_fixtures", "stream_projection",
                                               "subscription_stream", "telemetry")),
     ("packages/codex-agents", (".",), ("app_server", "evaluation", "hosts", "learning_adapters",
-                                       "learning_contracts", "learning_live", "supervision")),
+                                       "learning_contracts", "learning_live", "supervision",
+                                       "result_diagnostics", "runtime_release")),
 )
 sys.dont_write_bytecode = True
 root = os.getcwd()
