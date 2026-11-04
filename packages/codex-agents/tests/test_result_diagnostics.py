@@ -87,6 +87,7 @@ class ResultDiagnosticTests(unittest.TestCase):
         for changes in (
             {"admission_state": "accepted"},
             {"admission_state": "rejected"},
+            {"admission_state": "pending"},
             {"status": "failed", "execution_state": "timed_out", "semantic_verdict": "not-applicable"},
         ):
             with self.subTest(changes=changes):

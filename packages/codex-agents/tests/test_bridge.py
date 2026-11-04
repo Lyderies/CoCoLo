@@ -2328,6 +2328,7 @@ class BridgeLifecycleTests(CliTestCase):
         for changes in (
             {"admission_state": "accepted"},
             {"admission_state": "rejected"},
+            {"admission_state": "pending"},
             {"status": "failed", "execution_state": "timed_out", "semantic_verdict": "not-applicable"},
         ):
             with self.subTest(changes=changes):
@@ -2345,7 +2346,7 @@ class BridgeLifecycleTests(CliTestCase):
                 )
         with self.ledger.repository(self.project_id) as repository:
             records = repository.records("dispatch_result")
-        self.assertEqual(3, len(records))
+        self.assertEqual(4, len(records))
         self.assertTrue(all(item["fenced"] and item["terminal_state"] == "failed" for item in records))
 
     def test_unrepresentable_child_usage_is_fenced_and_recordable(self) -> None:
@@ -2380,6 +2381,29 @@ class BridgeLifecycleTests(CliTestCase):
             records = repository.records("dispatch_result")
         self.assertEqual(1, len(records))
         self.assertTrue(records[0]["fenced"])
+
+    def test_normalization_failure_after_successful_parse_is_recordable(self) -> None:
+        self.admit("codex")
+        route = self.bridged_route("codex")
+        assigned = self.assignment_for(route)
+        handle = self.open(route, assigned)
+        self.frames("codex", [{"type": "turn.completed", "usage": {}}])
+        (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(result())))
+        nested = "CANARY-NORMALIZATION"
+        for _ in range(1200):
+            nested = [nested]
+        # Simulate a successful iterative decoder even on interpreters whose
+        # JSON parser rejects this depth first. Exercise the real normalizer.
+        parsed = null_filled({**result(), "summary": nested})
+        with mock.patch.object(bridge, "_result_object", return_value=parsed) as decoder:
+            output = self.dispatch(route, assigned, handle)
+        decoder.assert_called_once()
+        self.assertEqual("unparseable_result", output["bridge_report"]["outcome"])
+        self.assertEqual("failed", output["bridge_report"]["terminal_state"])
+        self.assertEqual([], self.workspace_entries())
+        self.assertNotIn("CANARY", json.dumps(output))
+        committed = self.commit(route, assigned, handle, output["result"], "failed")
+        self.assertFalse(committed["outcome"]["accepted"])
 
     def test_invalid_utf8_result_text_keeps_the_parse_failure_outcome(self) -> None:
         route, assigned, handle = self.claude_run()
