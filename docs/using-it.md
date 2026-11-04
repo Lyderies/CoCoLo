@@ -60,12 +60,25 @@ Raw child results must leave admission `unverified` and cannot attest their own 
 Those claims are fenced with `inconsistent_axes` before result binding; actual bridge-observed
 timeouts keep their authoritative timed-out outcome.
 
-The trusted bridge stores the reason in a version-2 `dispatch_result` record, alongside the
+The trusted bridge stores the reason in a version-3 `dispatch_result` record, alongside the
 unchanged result digest and fence. Recording that exact host result returns the stored reason
-under `dispatch_diagnostics`. A primary cannot supply or replace this diagnostic. Version-1
-records remain readable with their original bytes and an unknown reason; historical rejected
-answers cannot be reconstructed from the fenced replacement. This record-format addition needs
+under `dispatch_diagnostics`. A primary cannot supply or replace this diagnostic. Version-1 and
+version-2 records remain readable with their original bytes; absent historical observations stay
+unknown. Historical rejected answers cannot be reconstructed from the fenced replacement. This record-format addition needs
 the updated runtime, but does not rewrite ledger tables or change outcome/verifier digests.
+
+For Claude, `bridge_report.client_diagnostics` records a bounded process exit code, whether a final
+result frame was observed, its allowlisted subtype, and the most recent non-null assistant error code.
+Unknown codes use fixed `unrecognized_error` or `unrecognized_result` values; raw messages and
+output text are discarded. A null exit code means no client exit was observed, including when
+the bridge stopped the child itself. The stored observations return under
+`dispatch_diagnostics.client_diagnostics` at host commitment. They describe observed protocol
+facts and do not establish a failure's cause, admission, verification or acceptance.
+
+The existing `missing_result` outcome also covers nonzero client exits. A received error frame
+and a nonzero exit can therefore coexist with that outcome; the separate observations identify
+those facts while preserving the exact failed replacement and terminal binding. Error fields follow
+the [documented Claude message types](https://code.claude.com/docs/en/agent-sdk/typescript#sdkassistantmessage).
 
 ## Keeping it working
 

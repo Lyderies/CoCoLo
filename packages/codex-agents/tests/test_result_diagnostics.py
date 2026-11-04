@@ -12,7 +12,15 @@ from codex_agents.contracts import (
     ContractError,
     ResultContractError,
 )
-from codex_agents.learning_contracts import canonical_json, validate_learning_record
+from codex_agents.learning_contracts import (
+    CLIENT_ERROR_CODES,
+    CLIENT_EXIT_CODE_MAX,
+    CLIENT_EXIT_CODE_MIN,
+    CLIENT_RESULT_SUBTYPES,
+    canonical_json,
+    validate_client_diagnostics,
+    validate_learning_record,
+)
 from codex_agents.learning_store import MAX_WORKER_RESULT_BYTES
 from tests.learning_support import assignment, result
 
@@ -148,6 +156,13 @@ class ResultDiagnosticTests(unittest.TestCase):
         self.assertNotIn("result_validation_reason_code", validate_learning_record(legacy))
         modern = {**legacy, "schema_version": 2, "result_validation_reason_code": "missing_evidence"}
         self.assertEqual(modern, validate_learning_record(modern))
+        self.assertEqual(canonical_json(modern), canonical_json(validate_learning_record(deepcopy(modern))))
+        self.assertNotIn("client_diagnostics", validate_learning_record(modern))
+        current = {**modern, "schema_version": 3, "client_diagnostics": None}
+        self.assertEqual(current, validate_learning_record(current))
+        for bad_version in (3.0, 4, [3], {"version": 3}):
+            with self.subTest(bad_version=bad_version), self.assertRaises(ContractError):
+                validate_learning_record({**current, "schema_version": bad_version})
         for changes in (
             {"result_validation_reason_code": "CANARY-REJECTED"},
             {"result_validation_reason_code": []},
@@ -171,6 +186,56 @@ class ResultDiagnosticTests(unittest.TestCase):
         for version in (True, 1.0):
             old = {**legacy, "schema_version": version}
             self.assertEqual(canonical_json(old), canonical_json(validate_learning_record(deepcopy(old))))
+
+    def test_client_observation_codes_are_closed_and_do_not_echo_unknown_values(self) -> None:
+        for allowed, fallback in ((CLIENT_ERROR_CODES, "unrecognized_error"),
+                                  (CLIENT_RESULT_SUBTYPES, "unrecognized_result")):
+            for code in allowed:
+                self.assertEqual(code, bridge._client_observation_code(code, allowed, fallback))
+            for malformed in ("CANARY-CODE", None, True, 1, [], {"CANARY-FIELD": "CANARY-VALUE"}):
+                self.assertEqual(fallback, bridge._client_observation_code(malformed, allowed, fallback))
+
+    def test_process_exit_observations_are_bounded_strict_integers(self) -> None:
+        state = {"result_frame_seen": False, "result_subtype": None, "client_error_code": None}
+        for code in (CLIENT_EXIT_CODE_MIN, -9, 0, 1, CLIENT_EXIT_CODE_MAX):
+            observed = bridge._client_diagnostics({"returncode": code}, state)
+            self.assertEqual(code, observed["exit_code"])
+            validate_client_diagnostics(observed)
+        for code in (None, False, True, 1.0, "CANARY-EXIT", [], {},
+                     CLIENT_EXIT_CODE_MIN - 1, CLIENT_EXIT_CODE_MAX + 1):
+            observed = bridge._client_diagnostics({"returncode": code}, state)
+            self.assertIsNone(observed["exit_code"])
+            validate_client_diagnostics(observed)
+
+    def test_durable_client_observations_reject_arbitrary_content_and_inconsistent_shapes(self) -> None:
+        valid = {"exit_code": 1, "result_frame_seen": True,
+                 "result_subtype": "error_during_execution", "error_code": "server_error"}
+        self.assertEqual(valid, validate_client_diagnostics(valid))
+        for changes in (
+            {"exit_code": True}, {"exit_code": 1.0}, {"exit_code": CLIENT_EXIT_CODE_MAX + 1},
+            {"result_frame_seen": 1}, {"result_frame_seen": False}, {"result_subtype": None},
+            {"result_subtype": "CANARY-SUBTYPE"}, {"result_subtype": []},
+            {"error_code": "CANARY-ERROR"}, {"error_code": {"CANARY-FIELD": "value"}},
+            {"CANARY-FIELD": "CANARY-VALUE"},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ContractError):
+                validate_client_diagnostics({**valid, **changes})
+        for code in CLIENT_ERROR_CODES:
+            validate_client_diagnostics({**valid, "error_code": code})
+        for subtype in CLIENT_RESULT_SUBTYPES:
+            validate_client_diagnostics({**valid, "result_subtype": subtype})
+        legacy = {"schema_version": 3, "record_type": "dispatch_result", "record_id": "dispatch_result:client",
+                  "run_id": "run-client", "bridge_run_id": "brg_" + "a" * 32, "result_digest": "b" * 64,
+                  "fenced": False, "reviewed": True, "terminal_state": None, "observed_at_ms": 5,
+                  "result_validation_reason_code": None, "client_diagnostics": valid}
+        # An observed client error is not an acceptance decision or validator reason.
+        self.assertEqual(legacy, validate_learning_record(legacy))
+        for version in (1, 2):
+            old = {**legacy, "schema_version": version}
+            if version == 1:
+                old.pop("result_validation_reason_code")
+            with self.assertRaises(ContractError):
+                validate_learning_record(old)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,11 @@
   blocked answer stays unreviewed without a host-created `inconsistent_axes` rejection.
 - Malformed Claude init-frame tool entries retain the existing `init_tool_not_allowed` fence,
   child cleanup and recordable failed result instead of escaping through unhashable-value errors.
+- Bounded Claude client observations retain process exit status, final-frame presence/subtype and
+  allowlisted assistant error codes separately from result-validator reasons. Unknown values use
+  fixed fallbacks. Version-3 dispatch metadata preserves these observations through cleanup and
+  host commitment; version-1/2 bytes remain readable without invented historical observations.
+  Existing outcomes, failed replacements, result/verifier digests and admission rules are unchanged.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.

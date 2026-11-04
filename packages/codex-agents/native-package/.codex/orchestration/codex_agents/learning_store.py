@@ -5390,6 +5390,7 @@ class LearningLedger:
         reviewed: bool,
         terminal_state: str | None,
         result_validation_reason_code: str | None = None,
+        client_diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Bind what a dispatched child returned to its run, once.
 
@@ -5420,11 +5421,13 @@ class LearningLedger:
                 "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
                 (project_id, run_id),
             ).fetchall()
-            if (
-                len(intents) != 1
-                or json.loads(bytes(intents[0]["content"]))["bridge_run_id"] != bridge_run_id
-            ):
+            if len(intents) != 1:
                 raise LedgerError("only the dispatched run records its child's result")
+            intent = json.loads(bytes(intents[0]["content"]))
+            if intent["bridge_run_id"] != bridge_run_id:
+                raise LedgerError("only the dispatched run records its child's result")
+            if client_diagnostics is not None and intent["provider"] != "claude":
+                raise LedgerError("client observations require a Claude dispatch")
             if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='dispatch_result' "
                 "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
@@ -5441,6 +5444,7 @@ class LearningLedger:
                 "reviewed": reviewed,
                 "terminal_state": terminal_state,
                 "result_validation_reason_code": result_validation_reason_code,
+                "client_diagnostics": client_diagnostics,
                 "observed_at_ms": timestamp,
             }
             try:
@@ -5738,6 +5742,9 @@ class LearningLedger:
                 reason = recorded.get("result_validation_reason_code")
                 if reason is not None:
                     dispatch_diagnostics["result_validation_reason_code"] = reason
+                client_diagnostics = recorded.get("client_diagnostics")
+                if client_diagnostics is not None:
+                    dispatch_diagnostics["client_diagnostics"] = client_diagnostics
                 if not secrets.compare_digest(
                     keyed_digest(self.state.digest_key(), canonical_json(result)),
                     recorded["result_digest"],

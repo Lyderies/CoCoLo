@@ -22,6 +22,17 @@ from .contracts import ContractError, RESULT_DIAGNOSTIC_REASON_CODES, RESULT_VAL
 SCHEMA_VERSION = 1
 MAX_RECORD_BYTES = 65_536
 MAX_OUTCOME_EVIDENCE_DIGESTS = 64
+CLIENT_ERROR_CODES = frozenset({
+    "authentication_failed", "oauth_org_not_allowed", "account_on_hold", "billing_error",
+    "rate_limit", "overloaded", "invalid_request", "model_not_found", "server_error",
+    "max_output_tokens", "cloud_credential_error", "unknown", "unrecognized_error",
+})
+CLIENT_RESULT_SUBTYPES = frozenset({
+    "success", "error_max_turns", "error_during_execution", "error_max_budget_usd",
+    "error_max_structured_output_retries", "unrecognized_result",
+})
+CLIENT_EXIT_CODE_MIN = -(1 << 31)
+CLIENT_EXIT_CODE_MAX = (1 << 32) - 1
 MAX_ID_LENGTH = 160
 ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -1952,8 +1963,25 @@ DISPATCH_RESULT_FIELDS = {
     "schema_version", "record_type", "record_id", "run_id", "bridge_run_id",
     "result_digest", "fenced", "reviewed", "terminal_state", "observed_at_ms",
 }
-DISPATCH_RESULT_SCHEMA_VERSION = 2
+DISPATCH_RESULT_SCHEMA_VERSION = 3
 DISPATCH_RESULT_V2_FIELDS = DISPATCH_RESULT_FIELDS | {"result_validation_reason_code"}
+DISPATCH_RESULT_V3_FIELDS = DISPATCH_RESULT_V2_FIELDS | {"client_diagnostics"}
+
+
+def validate_client_diagnostics(data: Any) -> dict[str, Any]:
+    """Closed client observations, separate from validator reasons or authority."""
+
+    data = _closed(data, {"exit_code", "result_frame_seen", "result_subtype", "error_code"},
+                   "client_diagnostics")
+    code = data["exit_code"]
+    if code is not None and (type(code) is not int or not CLIENT_EXIT_CODE_MIN <= code <= CLIENT_EXIT_CODE_MAX):
+        raise ContractError("client exit code is invalid")
+    _boolean(data["result_frame_seen"], "result_frame_seen")
+    _enum(data["result_subtype"], CLIENT_RESULT_SUBTYPES, "result_subtype", nullable=True)
+    _enum(data["error_code"], CLIENT_ERROR_CODES, "error_code", nullable=True)
+    if data["result_frame_seen"] != (data["result_subtype"] is not None):
+        raise ContractError("client result subtype requires an observed result frame")
+    return data
 
 
 def validate_dispatch_result(data: Any) -> dict[str, Any]:
@@ -1963,14 +1991,19 @@ def validate_dispatch_result(data: Any) -> dict[str, Any]:
     the run must match it, so a made-up result or a dropped fence is refused.
     """
 
-    # Version 1 bytes stay unchanged: their missing diagnostic remains unknown.
+    # Version 1/2 bytes stay unchanged: missing observations remain unknown.
     # Only this record evolves; existing outcome/result digest formats do not.
     version = data.get("schema_version") if isinstance(data, dict) else None
-    fields = DISPATCH_RESULT_V2_FIELDS if version == 2 else DISPATCH_RESULT_FIELDS
-    data = _closed(data, fields, "dispatch_result")
-    if version == 2 and type(version) is not int:
+    fields = DISPATCH_RESULT_FIELDS
+    record_version = 1
+    if version in (2, 3) and type(version) is not int:
         raise ContractError("unsupported learning schema version")
-    _base(data, "dispatch_result", schema_version=2 if version == 2 else 1)
+    if version == 2:
+        fields, record_version = DISPATCH_RESULT_V2_FIELDS, 2
+    elif version == 3:
+        fields, record_version = DISPATCH_RESULT_V3_FIELDS, 3
+    data = _closed(data, fields, "dispatch_result")
+    _base(data, "dispatch_result", schema_version=record_version)
     _identifier(data["run_id"], "run_id")
     if not isinstance(data["bridge_run_id"], str) or re.fullmatch(
         r"brg_[0-9a-f]{32}", data["bridge_run_id"]
@@ -1982,11 +2015,13 @@ def validate_dispatch_result(data: Any) -> dict[str, Any]:
     _enum(data["terminal_state"], EXECUTION_STATES, "terminal_state", nullable=True)
     if data["fenced"] != (data["terminal_state"] is not None):
         raise ContractError("dispatch_result terminal state belongs only to a fenced outcome")
-    if version == 2:
+    if version in (2, 3):
         reason = data["result_validation_reason_code"]
         _enum(reason, RESULT_DIAGNOSTIC_REASON_CODES, "result_validation_reason_code", nullable=True)
         if reason is not None and (not data["fenced"] or data["terminal_state"] != "failed"):
             raise ContractError("result validation diagnostic requires a failed fenced outcome")
+    if version == 3 and data["client_diagnostics"] is not None:
+        validate_client_diagnostics(data["client_diagnostics"])
     _integer(data["observed_at_ms"], "observed_at_ms")
     return data
 

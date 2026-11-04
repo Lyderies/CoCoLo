@@ -2126,6 +2126,10 @@ class BridgeLifecycleTests(CliTestCase):
         )
         self.assertEqual("claude-opus-5-5", recorded["outcome"]["model"])
         self.assertEqual("claude_agents_researcher", recorded["outcome"]["role"])
+        self.assertEqual(
+            dispatched["bridge_report"]["client_diagnostics"],
+            recorded["dispatch_diagnostics"]["client_diagnostics"],
+        )
         with self.assertRaisesRegex(LedgerError, "no longer open"):
             LearningLedger(self.state, client_capabilities=self.clients) \
                 .record_claude_rate_limit_event(
@@ -2274,7 +2278,7 @@ class BridgeLifecycleTests(CliTestCase):
         with self.ledger.repository(self.project_id) as repository:
             records = repository.records("dispatch_result")
         self.assertEqual(1, len(records))
-        self.assertEqual(2, records[0]["schema_version"])
+        self.assertEqual(3, records[0]["schema_version"])
         self.assertEqual("missing_evidence", records[0]["result_validation_reason_code"])
         self.assertNotIn("CANARY-REJECTED-CONTENT", json.dumps([output, records]))
         with self.assertRaisesRegex(LedgerError, "already recorded"):
@@ -2299,7 +2303,8 @@ class BridgeLifecycleTests(CliTestCase):
         committed = self.commit(route, assigned, handle, output["result"], "failed")
         self.assertFalse(committed["outcome"]["accepted"])
         self.assertEqual(
-            {"result_validation_reason_code": "missing_evidence"}, committed["dispatch_diagnostics"]
+            {"result_validation_reason_code": "missing_evidence",
+             "client_diagnostics": output["bridge_report"]["client_diagnostics"]}, committed["dispatch_diagnostics"]
         )
         with self.assertRaises(LedgerError):
             self.commit(route, assigned, handle, output["result"], "failed")
@@ -2327,7 +2332,8 @@ class BridgeLifecycleTests(CliTestCase):
                     committed = self.commit(route, assigned, handle, output["result"], "failed")
                     self.assertFalse(committed["outcome"]["accepted"])
                     self.assertEqual(
-                        {"result_validation_reason_code": "invalid_status"}, committed["dispatch_diagnostics"]
+                        {"result_validation_reason_code": "invalid_status",
+                         "client_diagnostics": output["bridge_report"]["client_diagnostics"]}, committed["dispatch_diagnostics"]
                     )
         with self.ledger.repository(self.project_id) as repository:
             records = repository.records("dispatch_result")
@@ -2436,7 +2442,9 @@ class BridgeLifecycleTests(CliTestCase):
                     validate_result(output["result"], assignment=assigned)
                     committed = self.commit(route, assigned, handle, output["result"])
                     self.assertFalse(committed["outcome"]["accepted"])
-                    self.assertNotIn("dispatch_diagnostics", committed)
+                    client = output["bridge_report"].get("client_diagnostics")
+                    self.assertEqual({"client_diagnostics": client} if client is not None else {},
+                                     committed.get("dispatch_diagnostics", {}))
 
     def test_malformed_claude_init_tools_leave_a_committable_fence(self) -> None:
         for tools in ([[]], [{}], ["Read", []], ["Read", {"CANARY-INIT": "value"}],
@@ -2455,7 +2463,7 @@ class BridgeLifecycleTests(CliTestCase):
                 self.assert_process_gone(child)
                 committed = self.commit(route, assigned, handle, output["result"], "failed")
                 self.assertFalse(committed["outcome"]["accepted"])
-                self.assertNotIn("dispatch_diagnostics", committed)
+                self.assertNotIn("result_validation_reason_code", committed.get("dispatch_diagnostics", {}))
                 self.assertNotIn("CANARY", json.dumps(output))
         with self.ledger.repository(self.project_id) as repository:
             records = repository.records("dispatch_result")
@@ -2482,7 +2490,8 @@ class BridgeLifecycleTests(CliTestCase):
                 committed = self.commit(route, assigned, handle, output["result"], "failed")
                 self.assertFalse(committed["outcome"]["accepted"])
                 self.assertEqual(
-                    {"result_validation_reason_code": "inconsistent_axes"}, committed["dispatch_diagnostics"]
+                    {"result_validation_reason_code": "inconsistent_axes",
+                     "client_diagnostics": output["bridge_report"]["client_diagnostics"]}, committed["dispatch_diagnostics"]
                 )
         with self.ledger.repository(self.project_id) as repository:
             records = repository.records("dispatch_result")
@@ -2555,17 +2564,25 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertFalse(committed["outcome"]["accepted"])
 
     def test_outstanding_legacy_dispatch_commits_after_restart_without_inventing_a_reason(self) -> None:
+        self._assert_outstanding_legacy_dispatch(1)
+
+    def test_outstanding_v2_dispatch_commits_without_inventing_client_observations(self) -> None:
+        self._assert_outstanding_legacy_dispatch(2)
+
+    def _assert_outstanding_legacy_dispatch(self, version: int) -> None:
         route, assigned, handle = self.claude_run()
         self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps({**result(), "evidence": []}))])
         append = self.ledger._append_checked_locked
 
         def old_writer(project_id, record, **options):
-            # Model the old writer's closed v1 record, retaining the real run,
+            # Model an old writer's closed record, retaining the real run,
             # keyed result digest and terminal facts from this dispatched child.
             if record["record_type"] == "dispatch_result":
-                record = {key: value for key, value in record.items()
-                          if key not in {"record_id", "result_validation_reason_code"}}
-                record["schema_version"] = 1
+                removed = {"record_id", "client_diagnostics"}
+                if version == 1:
+                    removed.add("result_validation_reason_code")
+                record = {key: value for key, value in record.items() if key not in removed}
+                record["schema_version"] = version
                 record["record_id"] = "dispatch_result:" + content_digest(record)
             return append(project_id, record, **options)
 
@@ -2580,12 +2597,104 @@ class BridgeLifecycleTests(CliTestCase):
             self.commit(route, assigned, handle, {**output["result"], "summary": "replacement"}, "failed")
         committed = self.commit(route, assigned, handle, output["result"], "failed")
         self.assertFalse(committed["outcome"]["accepted"])
-        self.assertNotIn("dispatch_diagnostics", committed)
+        self.assertEqual({} if version == 1 else {"result_validation_reason_code": "missing_evidence"},
+                         committed.get("dispatch_diagnostics", {}))
         with self.ledger.repository(self.project_id) as repository:
             records = repository.records("dispatch_result")
         self.assertEqual(1, len(records))
-        self.assertEqual(1, records[0]["schema_version"])
-        self.assertNotIn("result_validation_reason_code", records[0])
+        self.assertEqual(version, records[0]["schema_version"])
+        self.assertNotIn("client_diagnostics", records[0])
+        if version == 1:
+            self.assertNotIn("result_validation_reason_code", records[0])
+
+    def test_client_observations_are_durable_bounded_and_do_not_change_fences(self) -> None:
+        typed_error = {"type": "assistant", "error": "server_error",
+                       "message": {"model": "<synthetic>", "content": ["CANARY-CLIENT-TEXT"]}}
+        structured = {**result_frame("CANARY-CLIENT-TEXT"), "subtype": "error_during_execution", "is_error": True}
+        cases = [
+            ([typed_error], 1, False, None, "server_error", "missing_result"),
+            ([typed_error], 0, False, None, "server_error", "missing_result"),
+            ([structured], 1, True, "error_during_execution", None, "missing_result"),
+            ([structured], 0, True, "error_during_execution", None, "child_reported_error"),
+            ([], 0, False, None, None, "missing_result"),
+            ([result_frame()], 0, True, "success", None, "result"),
+            ([{**typed_error, "error": "CANARY-ERROR"}], 1, False, None, "unrecognized_error", "missing_result"),
+            ([{**typed_error, "error": ["CANARY-ERROR"]}], 1, False, None, "unrecognized_error", "missing_result"),
+            ([{**structured, "subtype": ["CANARY-SUBTYPE"]}], 0, True,
+             "unrecognized_result", None, "child_reported_error"),
+        ]
+        fenced_bytes = {}
+        for frames, exit_code, seen, subtype, error, expected_outcome in cases:
+            with self.subTest(exit_code=exit_code, subtype=subtype, error=error):
+                route, assigned, handle = self.claude_run()
+                self.frames("claude", [init_frame(), RATE_LIMIT, *frames])
+                (self.tools / "claude-exit-code").write_text(str(exit_code))
+                output = self.dispatch(route, assigned, handle)
+                expected = {"exit_code": exit_code, "result_frame_seen": seen,
+                            "result_subtype": subtype, "error_code": error}
+                self.assertEqual(expected_outcome, output["bridge_report"]["outcome"])
+                self.assertEqual(expected, output["bridge_report"]["client_diagnostics"])
+                self.assertNotIn("result_validation_reason_code", output["bridge_report"])
+                self.assertNotIn("CANARY", json.dumps(output))
+                self.assertEqual([], self.workspace_entries())
+                terminal = "failed" if expected_outcome != "result" else None
+                with self.assertRaisesRegex(LedgerError, "host observation admission rejected"):
+                    self.ledger.commit_host_result(
+                        self.project_id, assignment=assigned, task=self.task(), route=route,
+                        result=output["result"], execution_configuration=route["execution_configuration"],
+                        observation={"run_handle": handle, "result_attempts": ACCEPTED,
+                                     "client_diagnostics": expected,
+                                     **({"terminal_state": terminal} if terminal else {})},
+                    )
+                # The primary can edit its copy of a report, but commitment
+                # reads only the original bridge-owned durable metadata.
+                output["bridge_report"]["client_diagnostics"]["error_code"] = "CANARY-SPOOF"
+                committed = self.commit(route, assigned, handle, output["result"], terminal)
+                self.assertEqual({"client_diagnostics": expected}, committed["dispatch_diagnostics"])
+                self.assertFalse(committed["outcome"]["accepted"])
+                if terminal:
+                    encoded = canonical_json(output["result"])
+                    self.assertEqual(fenced_bytes.setdefault(expected_outcome, encoded), encoded)
+        with self.ledger.repository(self.project_id) as repository:
+            before = repository.records("dispatch_result")
+        self.assertEqual(len(cases), len(before))
+        self.assertTrue(all(item["schema_version"] == 3 for item in before))
+        self.assertNotIn("CANARY", json.dumps(before))
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.addCleanup(self.ledger.close)
+        with self.ledger.repository(self.project_id) as repository:
+            self.assertEqual(before, repository.records("dispatch_result"))
+
+    def test_client_observations_before_init_do_not_bypass_init_or_invent_exit_status(self) -> None:
+        for first, seen, subtype, error in (
+            ({"type": "assistant", "error": "authentication_failed", "message": {"model": "CANARY"}},
+             False, None, "authentication_failed"),
+            ({**result_frame("CANARY"), "subtype": "error_during_execution", "is_error": True},
+             True, "error_during_execution", None),
+        ):
+            with self.subTest(seen=seen):
+                route, assigned, handle = self.claude_run()
+                self.frames("claude", [first, {"sleep": 30}])
+                output = self.dispatch(route, assigned, handle)
+                self.assertEqual("missing_init_frame", output["bridge_report"]["outcome"])
+                observed = {"exit_code": None, "result_frame_seen": seen,
+                            "result_subtype": subtype, "error_code": error}
+                self.assertEqual(observed, output["bridge_report"]["client_diagnostics"])
+                self.assertNotIn("CANARY", json.dumps(output))
+                committed = self.commit(route, assigned, handle, output["result"], "failed")
+                self.assertEqual({"client_diagnostics": observed}, committed["dispatch_diagnostics"])
+
+    def test_codex_dispatch_cannot_record_claude_client_observations(self) -> None:
+        self.admit("codex")
+        route = self.bridged_route("codex")
+        assigned = self.assignment_for(route)
+        handle = self.open(route, assigned)
+        observations = {"exit_code": 0, "result_frame_seen": True, "result_subtype": "success", "error_code": None}
+        with mock.patch.object(bridge, "run_codex", return_value=(result(), {
+            "outcome": "result", "client_diagnostics": observations,
+        })), self.assertRaisesRegex(LedgerError, "client observations require a Claude dispatch"):
+            self.dispatch(route, assigned, handle)
 
     def test_legacy_dispatch_result_replays_without_a_backfilled_reason(self) -> None:
         legacy = {

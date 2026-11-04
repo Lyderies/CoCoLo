@@ -48,7 +48,13 @@ from .host_paths import (
     remove_private_directory,
     temp_roots,
 )
-from .learning_contracts import SUPPORTED_MODELS
+from .learning_contracts import (
+    CLIENT_ERROR_CODES,
+    CLIENT_EXIT_CODE_MAX,
+    CLIENT_EXIT_CODE_MIN,
+    CLIENT_RESULT_SUBTYPES,
+    SUPPORTED_MODELS,
+)
 from .process_tree import (
     TRACK_INTERVAL_SECONDS,
     WATCHDOG_READY_SECONDS,
@@ -820,6 +826,20 @@ def _check_claude_init(frame: dict[str, Any], model: str) -> str | None:
     return None
 
 
+def _client_observation_code(value: Any, allowed: frozenset[str], fallback: str) -> str:
+    return value if isinstance(value, str) and value in allowed else fallback
+
+
+def _client_diagnostics(outcome: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    code = outcome.get("returncode")
+    return {
+        "exit_code": code if type(code) is int and CLIENT_EXIT_CODE_MIN <= code <= CLIENT_EXIT_CODE_MAX else None,
+        "result_frame_seen": state["result_frame_seen"],
+        "result_subtype": state["result_subtype"],
+        "error_code": state["client_error_code"],
+    }
+
+
 def run_claude(
     *,
     ledger: Any,
@@ -864,6 +884,7 @@ def run_claude(
     ]
     state: dict[str, Any] = {
         "init": None, "result": None, "rate_limit_events": 0, "rate_limit_kept": 0,
+        "result_frame_seen": False, "result_subtype": None, "client_error_code": None,
         "rate_limit_failed": False, "frames": 0,
         "models": set(),
         "helper_models": set(),
@@ -872,6 +893,17 @@ def run_claude(
     def on_frame(frame: dict[str, Any]) -> None:
         state["frames"] += 1
         kind = frame.get("type")
+        # These are observed protocol facts, not failure causes or admission
+        # evidence. Observe them even if the first frame fails the init check.
+        if kind == "assistant" and frame.get("error") is not None:
+            state["client_error_code"] = _client_observation_code(
+                frame["error"], CLIENT_ERROR_CODES, "unrecognized_error"
+            )
+        if kind == "result":
+            state["result_frame_seen"] = True
+            state["result_subtype"] = _client_observation_code(
+                frame.get("subtype"), CLIENT_RESULT_SUBTYPES, "unrecognized_result"
+            )
         if state["init"] is None:
             if kind != "system" or frame.get("subtype") != "init":
                 raise _Abort("missing_init_frame")
@@ -955,6 +987,7 @@ def run_claude(
         "rate_limit_record_failed": state["rate_limit_failed"],
         "usage": None,
         "permission_denials": None,
+        "client_diagnostics": _client_diagnostics(outcome, state),
     }
     result_frame = state["result"]
     if isinstance(result_frame, dict):
@@ -1537,6 +1570,7 @@ def dispatch(
         project_id, run_handle=run_handle, bridge_run_id=intent["bridge_run_id"],
         result=result, fenced=fenced, reviewed=reviewed, terminal_state=terminal_state,
         result_validation_reason_code=result_validation_reason_code,
+        client_diagnostics=report.get("client_diagnostics"),
     )
     report.update(
         bridge_run_id=intent["bridge_run_id"],
