@@ -2324,6 +2324,30 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertNotIn("CANARY-AXIS", json.dumps(records))
         self.assertNotIn("CANARY-VALUE", json.dumps(records))
 
+    def test_result_evidence_capacity_is_fenced_before_immutable_binding(self) -> None:
+        self.admit("codex")
+        for count, expected in ((62, "result"), (63, "result_too_large"), (64, "result_too_large")):
+            with self.subTest(count=count):
+                route = self.bridged_route("codex")
+                assigned = self.assignment_for(route, required_evidence=[
+                    {"id": f"criterion-{index}", "description": "fixture evidence"} for index in range(count)
+                ])
+                handle = self.open(route, assigned)
+                candidate = {**result(), "evidence": [
+                    {**result()["evidence"][0], "criterion_id": item["id"]}
+                    for item in assigned["required_evidence"]
+                ]}
+                self.frames("codex", [{"type": "turn.completed", "usage": {}}])
+                (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(candidate)))
+                output = self.dispatch(route, assigned, handle)
+                self.assertEqual(expected, output["bridge_report"]["outcome"])
+                self.assertNotIn("result_validation_reason_code", output["bridge_report"])
+                terminal = "failed" if expected != "result" else None
+                committed = self.commit(route, assigned, handle, output["result"], terminal)
+                self.assertEqual(count, committed["outcome"]["required_criteria_total"])
+                self.assertLessEqual(len(committed["outcome"]["evidence_digests"]), 64)
+                self.assertFalse(committed["outcome"]["accepted"])
+
     def test_child_cannot_claim_host_admission_or_timeout(self) -> None:
         for changes in (
             {"admission_state": "accepted"},

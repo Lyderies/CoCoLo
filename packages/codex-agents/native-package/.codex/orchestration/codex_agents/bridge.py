@@ -1546,7 +1546,7 @@ def _unrecordable(
 ) -> tuple[str | None, str | None]:
     """Return the fence outcome and a content-free validator reason, if any."""
 
-    from .learning_contracts import canonical_json
+    from .learning_contracts import MAX_OUTCOME_EVIDENCE_DIGESTS, canonical_json
     from .learning_store import MAX_WORKER_RESULT_BYTES
 
     try:
@@ -1564,6 +1564,10 @@ def _unrecordable(
     # real bridge timeouts get their authoritative fence later in dispatch.
     if axes["admission_state"] != "unverified" or axes["execution_state"] == "timed_out":
         return "invalid_result", "inconsistent_axes"
+    # Host outcomes keep one digest per criterion plus the assignment/result
+    # bindings. Fence before binding if that existing durable limit cannot fit.
+    if len(result["evidence"]) + 2 > MAX_OUTCOME_EVIDENCE_DIGESTS:
+        return "result_too_large", None
     if len(canonical_json(result)) > MAX_WORKER_RESULT_BYTES:
         return "result_too_large", None
     return None, None

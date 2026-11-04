@@ -102,6 +102,19 @@ class ResultDiagnosticTests(unittest.TestCase):
             bridge._unrecordable({**result(), "usage": {"cost": 10 ** 400}}, assignment()),
         )
 
+    def test_host_metadata_capacity_reserves_assignment_and_result_digests(self) -> None:
+        for count, expected in ((62, (None, None)), (63, ("result_too_large", None))):
+            assigned = assignment()
+            assigned["required_evidence"] = [
+                {"id": f"criterion-{index}", "description": "fixture"} for index in range(count)
+            ]
+            candidate = {**result(), "evidence": [
+                {**result()["evidence"][0], "criterion_id": criterion["id"]}
+                for criterion in assigned["required_evidence"]
+            ]}
+            with self.subTest(count=count):
+                self.assertEqual(expected, bridge._unrecordable(candidate, assigned))
+
     def test_result_and_stream_parser_failures_stay_bounded(self) -> None:
         self.assertIsNone(bridge._result_object("\ud800"))
         with mock.patch.object(bridge.json, "loads", side_effect=RecursionError("CANARY-PARSER")):

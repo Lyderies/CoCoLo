@@ -19,6 +19,8 @@
 - Bridge preflight rejects child-authored admission decisions and timeout claims before immutable
   result binding, matching the host's existing admission rules. These become failed replacements
   with `inconsistent_axes`; actual bridge-observed timeouts retain their authoritative outcome.
+- Results that exceed the existing host-outcome evidence capacity are fenced as `result_too_large`
+  before binding. The durable limit is retained, including room for assignment/result digests.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.

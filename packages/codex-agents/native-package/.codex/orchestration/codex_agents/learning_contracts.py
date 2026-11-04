@@ -21,6 +21,7 @@ from .contracts import ContractError, RESULT_DIAGNOSTIC_REASON_CODES, RESULT_VAL
 
 SCHEMA_VERSION = 1
 MAX_RECORD_BYTES = 65_536
+MAX_OUTCOME_EVIDENCE_DIGESTS = 64
 MAX_ID_LENGTH = 160
 ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -790,7 +791,9 @@ def validate_outcome(data: Any) -> dict[str, Any]:
         data["evaluation_case_digest"] is None
     ):
         raise ContractError("evaluation candidate and case bindings must appear together")
-    _digest_list(data["evidence_digests"], "evidence_digests", minimum=1)
+    _digest_list(
+        data["evidence_digests"], "evidence_digests", minimum=1, maximum=MAX_OUTCOME_EVIDENCE_DIGESTS
+    )
     _usage(data["usage"])
     if "usage_sources" in data:
         sources = data["usage_sources"]
