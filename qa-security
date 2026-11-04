@@ -1,5 +1,5 @@
 #!/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14
-"""Operational QA security check: the identifier scan's built-in rules over this project's files.
+"""Operational QA identifier rules over public source, including nested runtime folders.
 
 Local dogfood file, never pushed. The sandbox can't run Git or read the private denylist, so the full
 scan still runs outside QA and in CI.
@@ -11,15 +11,21 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.getcwd(), "scripts"))
 import check_identifiers as scan  # noqa: E402
 
-SKIP = {".git", ".codex", ".agents", ".claude", "__pycache__", ".ruff_cache", ".pytest_cache", ".venv", "research"}
+# These root paths are private installation/preparation, excluded from release history.
+# Nested .codex/.agents/.claude folders under packages are public source and MUST be scanned.
+PRIVATE_ROOTS = {".git", ".codex", ".agents", ".claude", "workflow",
+                 "LOCAL-LIVENESS-HANDOFF.md", "qa-check", "qa-security"}
+GENERATED = {"__pycache__", ".ruff_cache", ".pytest_cache", ".venv"}
 findings = []
 scanned = 0
 for folder, names, files in os.walk("."):
-    names[:] = [name for name in names if name not in SKIP]
+    root = folder == "."
+    names[:] = [name for name in names if name not in GENERATED and not (root and name in PRIVATE_ROOTS)]
     for name in files:
         path = os.path.join(folder, name)
-        if name in ("qa-check", "qa-security") or os.path.islink(path) or os.path.getsize(path) > scan.MAX_BYTES:
+        if (root and name in PRIVATE_ROOTS) or os.path.islink(path) or os.path.getsize(path) > scan.MAX_BYTES:
             continue
+        findings += scan.scan_text(path, path + " (path)", ())
         with open(path, "rb") as handle:
             text = scan._decode(handle.read())
         if text is not None:
