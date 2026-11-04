@@ -8,6 +8,9 @@ import os
 import sys
 
 sys.dont_write_bytecode = True
+# The scrubbed sandbox has no HOME or directory-service access. This check uses
+# built-in rules only; keep the scanner's unused default denylist inside QA work.
+os.environ["HOME"] = os.environ.get("TMPDIR", os.getcwd())
 sys.path.insert(0, os.path.join(os.getcwd(), "scripts"))
 import check_identifiers as scan  # noqa: E402
 
