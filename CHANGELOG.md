@@ -35,6 +35,11 @@
   fixed fallbacks. Version-3 dispatch metadata preserves these observations through cleanup and
   host commitment; version-1/2 bytes remain readable without invented historical observations.
   Existing outcomes, failed replacements, result/verifier digests and admission rules are unchanged.
+- Offline service foundation adds a pure, closed request codec for project status and cancellation.
+  It bounds messages, rejects duplicate/authority/SQL fields and binds canonical request digests to
+  project, primary session, supervisor instance/generation, runtime and exact attempt target.
+  Valid requests confer no authority. Authenticated transport, responses, account operations,
+  independent supervisors and database migration remain unimplemented; no endpoint is enabled.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.

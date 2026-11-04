@@ -48,6 +48,7 @@ RUNTIME_FILES = (
     "codex_agents/providers.py",
     "codex_agents/routing.py",
     "codex_agents/runtime_files.py",
+    "codex_agents/service_protocol.py",
     "codex_agents/session_guard.py",
     "codex_agents/supervision.py",
     "codex_agents/validation.py",
