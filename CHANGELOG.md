@@ -13,7 +13,9 @@
 - Unrepresentable result usage numbers produce `invalid_usage`. Reroute annotation validates the
   original answer before changing its verdict or claim list. Invalid UTF-8 and parser recursion
   keep the existing parse-failure outcomes; schema versions require integers. These fixes address
-  findings from the first independent review/verifier pair; the corrected slice awaits fresh review.
+  findings from independent review/verifier pairs; the corrected slice awaits fresh review.
+- A deeply nested Codex result that parses successfully but exceeds optional-null normalization's
+  recursion limit now follows the existing `unparseable_result` fence and remains recordable.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.

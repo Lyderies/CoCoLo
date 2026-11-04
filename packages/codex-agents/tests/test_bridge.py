@@ -2334,6 +2334,29 @@ class BridgeLifecycleTests(CliTestCase):
         committed = self.commit(route, assigned, handle, output["result"], "failed")
         self.assertFalse(committed["outcome"]["accepted"])
 
+    def test_deep_codex_result_normalization_is_fenced_and_recordable(self) -> None:
+        self.admit("codex")
+        route = self.bridged_route("codex")
+        assigned = self.assignment_for(route)
+        handle = self.open(route, assigned)
+        self.frames("codex", [{"type": "turn.completed", "usage": {}}])
+        raw = json.dumps(null_filled({**result(), "summary": "CANARY-DEEP-SUMMARY"}))
+        nested = "[" * 1200 + '"CANARY-DEEP-VALUE"' + "]" * 1200
+        raw = raw.replace('"CANARY-DEEP-SUMMARY"', nested)
+        (self.tools / "codex-last-message.json").write_text(raw)
+        output = self.dispatch(route, assigned, handle)
+        self.assertEqual("unparseable_result", output["bridge_report"]["outcome"])
+        self.assertEqual("failed", output["bridge_report"]["terminal_state"])
+        self.assertNotIn("result_validation_reason_code", output["bridge_report"])
+        self.assertEqual([], self.workspace_entries())
+        self.assertNotIn("CANARY", json.dumps(output))
+        committed = self.commit(route, assigned, handle, output["result"], "failed")
+        self.assertFalse(committed["outcome"]["accepted"])
+        with self.ledger.repository(self.project_id) as repository:
+            records = repository.records("dispatch_result")
+        self.assertEqual(1, len(records))
+        self.assertTrue(records[0]["fenced"])
+
     def test_invalid_utf8_result_text_keeps_the_parse_failure_outcome(self) -> None:
         route, assigned, handle = self.claude_run()
         self.frames("claude", [init_frame(), RATE_LIMIT, result_frame("\ud800")])

@@ -1111,7 +1111,13 @@ def run_codex(
         return None, {**report, "outcome": "unparseable_result"}
     # The strict schema makes Codex fill optional keys with null; remove those
     # so the result goes through the ordinary validation unchanged.
-    return remove_optional_nulls(result, original_schema), {**report, "outcome": "result"}
+    try:
+        normalized = remove_optional_nulls(result, original_schema)
+    except RecursionError:
+        # Some supported JSON parsers accept deeper values than this schema
+        # projection can traverse. Preserve the ordinary failed-result fence.
+        return None, {**report, "outcome": "unparseable_result"}
+    return normalized, {**report, "outcome": "result"}
 
 
 def _toml_string(value: str) -> str:
