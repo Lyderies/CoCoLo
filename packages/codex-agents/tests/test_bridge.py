@@ -908,6 +908,18 @@ class SecurityReviewFixTests(BridgeTestCase):
 
 
 class StrictSchemaTests(unittest.TestCase):
+    def test_incomplete_result_fence_finishes_within_a_bounded_subprocess(self) -> None:
+        program = (
+            "import sys\n"
+            f"sys.path.insert(0, {str(ORCHESTRATION_ROOT)!r})\n"
+            "from codex_agents.bridge import _result_object\n"
+            "assert _result_object(chr(96) * 3 + 'json' + ' ' * 10000 + 'x') is None\n"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c", program], capture_output=True, text=True, timeout=5,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+
     def test_strict_variant_requires_every_key_and_leaves_the_original(self) -> None:
         original = json.loads(RESULT_SCHEMA)
         before = deepcopy(original)

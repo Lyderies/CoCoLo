@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from copy import deepcopy
 from unittest import mock
@@ -124,6 +125,17 @@ class ResultDiagnosticTests(unittest.TestCase):
                 bridge._deliver(b'{"nested":[]}', callback)
             self.assertEqual("unparseable_stream", str(captured.exception))
             callback.assert_not_called()
+
+    def test_result_fence_syntax_is_preserved(self) -> None:
+        value = {"marker": "fixture"}
+        raw = json.dumps(value)
+        for wrapped in (raw, "```" + raw + "```", "```json" + raw + "```",
+                        " \n```json\n " + raw + " \n```\n "):
+            with self.subTest(wrapped=wrapped):
+                self.assertEqual(value, bridge._result_object(wrapped))
+        for malformed in ("```json" + " " * 4000 + "x", "``` json " + raw + "```", "```JSON" + raw + "```"):
+            with self.subTest(malformed=malformed[:20]):
+                self.assertIsNone(bridge._result_object(malformed))
 
     def test_versioned_diagnostic_record_keeps_legacy_bytes_and_unknown_reasons(self) -> None:
         legacy = {

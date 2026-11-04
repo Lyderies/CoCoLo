@@ -593,9 +593,13 @@ def _result_object(text: Any) -> dict[str, Any] | None:
     if encoded_size > MAX_RESULT_BYTES:
         return None
     stripped = text.strip()
-    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, re.DOTALL)
-    if fenced:
-        stripped = fenced.group(1)
+    # Avoid regex backtracking on an incomplete fence with long whitespace.
+    # Keep the existing optional, immediately adjacent lowercase json header.
+    if stripped.startswith("```") and stripped.endswith("```") and len(stripped) >= 6:
+        stripped = stripped[3:-3]
+        if stripped.startswith("json"):
+            stripped = stripped[4:]
+        stripped = stripped.strip()
     try:
         value = json.loads(stripped)
     except (ValueError, RecursionError):

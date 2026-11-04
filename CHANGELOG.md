@@ -21,6 +21,8 @@
   with `inconsistent_axes`; actual bridge-observed timeouts retain their authoritative outcome.
 - Results that exceed the existing host-outcome evidence capacity are fenced as `result_too_large`
   before binding. The durable limit is retained, including room for assignment/result digests.
+- Markdown result fences use linear extraction, preserving accepted syntax while avoiding regex
+  backtracking on long whitespace in an incomplete fence. A bounded subprocess regression covers it.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.
