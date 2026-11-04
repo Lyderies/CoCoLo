@@ -69,10 +69,35 @@ class ResultDiagnosticTests(unittest.TestCase):
                     bridge._unrecordable(result(), assignment()),
                 )
 
+    def test_malformed_result_axes_return_a_typed_reason_without_an_exception(self) -> None:
+        for field in ("execution_state", "semantic_verdict", "admission_state"):
+            for value in (["CANARY-AXIS"], {"CANARY-AXIS": "CANARY-VALUE"}, True, 42, None):
+                with self.subTest(field=field, value=value):
+                    self.assertEqual(
+                        ("invalid_result", "invalid_status"),
+                        bridge._unrecordable({**result(), field: value}, assignment()),
+                    )
+
     def test_valid_and_oversized_results_have_no_contract_rejection_reason(self) -> None:
         self.assertEqual((None, None), bridge._unrecordable(result(), assignment()))
         oversized = {**result(), "summary": "x" * MAX_WORKER_RESULT_BYTES}
         self.assertEqual(("result_too_large", None), bridge._unrecordable(oversized, assignment()))
+
+    def test_unrepresentable_usage_is_a_typed_rejection(self) -> None:
+        self.assertEqual(
+            ("invalid_result", "invalid_usage"),
+            bridge._unrecordable({**result(), "usage": {"cost": 10 ** 400}}, assignment()),
+        )
+
+    def test_result_and_stream_parser_failures_stay_bounded(self) -> None:
+        self.assertIsNone(bridge._result_object("\ud800"))
+        with mock.patch.object(bridge.json, "loads", side_effect=RecursionError("CANARY-PARSER")):
+            self.assertIsNone(bridge._result_object('{"nested":[]}'))
+            callback = mock.Mock()
+            with self.assertRaises(bridge._Abort) as captured:
+                bridge._deliver(b'{"nested":[]}', callback)
+            self.assertEqual("unparseable_stream", str(captured.exception))
+            callback.assert_not_called()
 
     def test_versioned_diagnostic_record_keeps_legacy_bytes_and_unknown_reasons(self) -> None:
         legacy = {
@@ -92,6 +117,7 @@ class ResultDiagnosticTests(unittest.TestCase):
             {"terminal_state": "timed_out"},
             {"fenced": False, "terminal_state": None},
             {"schema_version": 3},
+            {"schema_version": 2.0},
             {"CANARY-FIELD": "CANARY-REJECTED"},
         ):
             with self.subTest(changes=changes), self.assertRaises(ContractError):
@@ -102,6 +128,9 @@ class ResultDiagnosticTests(unittest.TestCase):
             validate_learning_record({**legacy, "result_validation_reason_code": "missing_evidence"})
         with self.assertRaises(ContractError):
             validate_learning_record({**legacy, "schema_version": 2})
+        for version in (True, 1.0):
+            with self.assertRaises(ContractError):
+                validate_learning_record({**legacy, "schema_version": version})
 
 
 if __name__ == "__main__":

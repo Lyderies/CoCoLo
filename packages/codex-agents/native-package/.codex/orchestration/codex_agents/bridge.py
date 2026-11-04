@@ -573,7 +573,7 @@ def _track(tree: ProcessTree) -> Table | None:
 def _deliver(line: bytes, on_frame: Callable[[dict[str, Any]], None]) -> None:
     try:
         frame = json.loads(line)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise _Abort("unparseable_stream") from exc
     if not isinstance(frame, dict):
         raise _Abort("unparseable_stream")
@@ -583,7 +583,13 @@ def _deliver(line: bytes, on_frame: Callable[[dict[str, Any]], None]) -> None:
 def _result_object(text: Any) -> dict[str, Any] | None:
     """Parse the child's final message as one JSON object, tolerating a fence."""
 
-    if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_RESULT_BYTES:
+    if not isinstance(text, str):
+        return None
+    try:
+        encoded_size = len(text.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None
+    if encoded_size > MAX_RESULT_BYTES:
         return None
     stripped = text.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, re.DOTALL)
@@ -591,7 +597,7 @@ def _result_object(text: Any) -> dict[str, Any] | None:
         stripped = fenced.group(1)
     try:
         value = json.loads(stripped)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     return value if isinstance(value, dict) else None
 
@@ -1476,19 +1482,25 @@ def dispatch(
     finally:
         remove_private_directory(workspace)
     reviewed = True
+    result_validation_reason_code = None
     if result is not None and report.get("rerouted"):
         # A reroute means the work was not done by the routed model: its verdict
-        # is unknown, and the result stays unreviewed.
+        # is unknown, and the result stays unreviewed. Validate before annotating:
+        # annotation must not repair a malformed claim list or overwrite bad axes.
         reviewed = False
-        result = {
-            **result,
-            "semantic_verdict": "not-applicable",
-            "unverified_claims": [
-                *result.get("unverified_claims", []),
-                "the provider rerouted this run to another model; verdict unknown",
-            ],
-        }
-    result_validation_reason_code = None
+        problem, result_validation_reason_code = _unrecordable(result, assignment)
+        if problem is not None:
+            result = None
+            report["outcome"] = problem
+        else:
+            result = {
+                **result,
+                "semantic_verdict": "not-applicable",
+                "unverified_claims": [
+                    *result["unverified_claims"],
+                    "the provider rerouted this run to another model; verdict unknown",
+                ],
+            }
     if result is not None:
         # The primary records exactly this result, so one it could not record
         # (invalid, or too large to keep for its verifier) is fenced here.
@@ -1496,8 +1508,8 @@ def dispatch(
         if problem is not None:
             result = None
             report["outcome"] = problem
-        if result_validation_reason_code is not None:
-            report["result_validation_reason_code"] = result_validation_reason_code
+    if result_validation_reason_code is not None:
+        report["result_validation_reason_code"] = result_validation_reason_code
     if result is None:
         state = "timed_out" if report["outcome"] == "timed_out" else "failed"
         result = _fenced_result(assignment, state, report["outcome"])

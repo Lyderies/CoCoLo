@@ -837,11 +837,11 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
     execution_state = axes["execution_state"]
     semantic_verdict = axes["semantic_verdict"]
     admission_state = axes["admission_state"]
-    if execution_state not in EXECUTION_STATES:
+    if not isinstance(execution_state, str) or execution_state not in EXECUTION_STATES:
         raise ResultContractError("invalid_status", "execution_state is unsupported")
-    if semantic_verdict not in SEMANTIC_VERDICTS:
+    if not isinstance(semantic_verdict, str) or semantic_verdict not in SEMANTIC_VERDICTS:
         raise ResultContractError("invalid_status", "semantic_verdict is unsupported")
-    if admission_state not in ADMISSION_STATES:
+    if not isinstance(admission_state, str) or admission_state not in ADMISSION_STATES:
         raise ResultContractError("invalid_status", "admission_state is unsupported")
     if data["status"] != legacy_result_status(execution_state, semantic_verdict):
         raise ResultContractError(
@@ -1004,12 +1004,18 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
                 f"usage has unknown fields: {', '.join(usage_unknown)}",
             )
         for field, value in usage.items():
-            if value is not None and (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or value < 0
-            ):
+            if value is None:
+                continue
+            try:
+                valid_number = (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(value)
+                    and value >= 0
+                )
+            except OverflowError:
+                valid_number = False
+            if not valid_number:
                 raise ResultContractError(
                     "invalid_usage",
                     f"usage.{field} must be null or a non-negative number",

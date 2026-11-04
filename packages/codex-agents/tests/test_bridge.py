@@ -2031,6 +2031,25 @@ class CodexBridgeTests(BridgeTestCase):
                 self.assertEqual("not-applicable", output["result"]["semantic_verdict"])
                 validate_result(output["result"], assignment=assigned)
 
+    def test_reroute_annotation_cannot_repair_malformed_result_fields(self) -> None:
+        for changes, reason in (
+            ({"unverified_claims": None}, "invalid_shape"),
+            ({"unverified_claims": 42}, "invalid_shape"),
+            ({"unverified_claims": "CANARY-CLAIM"}, "invalid_shape"),
+            ({"unverified_claims": {"CANARY-CLAIM": "value"}}, "invalid_shape"),
+            ({"semantic_verdict": ["CANARY-AXIS"]}, "invalid_status"),
+        ):
+            with self.subTest(changes=changes):
+                route, assigned, handle = self.codex_run()
+                self.frames("codex", [{"type": "model/rerouted"}, {"type": "turn.completed", "usage": {}}])
+                (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled({**result(), **changes})))
+                output = self.dispatch(route, assigned, handle)
+                self.assertFalse(output["bridge_report"]["reviewed"])
+                self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+                self.assertEqual(reason, output["bridge_report"]["result_validation_reason_code"])
+                self.assertEqual("failed", output["bridge_report"]["terminal_state"])
+                self.assertNotIn("CANARY", json.dumps(output))
+
     def test_missing_last_message_is_ambiguous(self) -> None:
         route, assigned, handle = self.codex_run()
         self.frames("codex", [{"type": "turn.completed", "usage": {}}])
@@ -2246,6 +2265,12 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertEqual(2, records[0]["schema_version"])
         self.assertEqual("missing_evidence", records[0]["result_validation_reason_code"])
         self.assertNotIn("CANARY-REJECTED-CONTENT", json.dumps([output, records]))
+        with self.assertRaisesRegex(LedgerError, "already recorded"):
+            self.ledger.record_dispatch_result(
+                self.project_id, run_handle=handle, bridge_run_id=output["bridge_report"]["bridge_run_id"],
+                result=output["result"], fenced=True, reviewed=True, terminal_state="failed",
+                result_validation_reason_code="unknown_fields",
+            )
         validate_result(output["result"], assignment=assigned)
         # The fence is the bridge's fact: recording without it is refused.
         with self.assertRaisesRegex(LedgerError, "terminal state differs"):
@@ -2274,6 +2299,82 @@ class BridgeLifecycleTests(CliTestCase):
         self.addCleanup(self.ledger.close)
         with self.ledger.repository(self.project_id) as repository:
             self.assertEqual(records, repository.records("dispatch_result"))
+
+    def test_malformed_child_axes_are_fenced_and_durably_diagnosed(self) -> None:
+        for field in ("execution_state", "semantic_verdict", "admission_state"):
+            for value in (["CANARY-AXIS"], {"CANARY-AXIS": "CANARY-VALUE"}):
+                with self.subTest(field=field, value=value):
+                    route, assigned, handle = self.claude_run()
+                    invalid = {**result(), field: value}
+                    self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps(invalid))])
+                    output = self.dispatch(route, assigned, handle)
+                    self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+                    self.assertEqual("invalid_status", output["bridge_report"]["result_validation_reason_code"])
+                    self.assertEqual("failed", output["bridge_report"]["terminal_state"])
+                    self.assertEqual([], self.workspace_entries())
+                    committed = self.commit(route, assigned, handle, output["result"], "failed")
+                    self.assertFalse(committed["outcome"]["accepted"])
+                    self.assertEqual(
+                        {"result_validation_reason_code": "invalid_status"}, committed["dispatch_diagnostics"]
+                    )
+        with self.ledger.repository(self.project_id) as repository:
+            records = repository.records("dispatch_result")
+        self.assertEqual(6, len(records))
+        self.assertTrue(all(record["result_validation_reason_code"] == "invalid_status" for record in records))
+        self.assertNotIn("CANARY-AXIS", json.dumps(records))
+        self.assertNotIn("CANARY-VALUE", json.dumps(records))
+
+    def test_unrepresentable_child_usage_is_fenced_and_recordable(self) -> None:
+        route, assigned, handle = self.claude_run()
+        invalid = {**result(), "usage": {"cost": 10 ** 400}}
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps(invalid))])
+        output = self.dispatch(route, assigned, handle)
+        self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+        self.assertEqual("invalid_usage", output["bridge_report"]["result_validation_reason_code"])
+        committed = self.commit(route, assigned, handle, output["result"], "failed")
+        self.assertFalse(committed["outcome"]["accepted"])
+
+    def test_invalid_utf8_result_text_keeps_the_parse_failure_outcome(self) -> None:
+        route, assigned, handle = self.claude_run()
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame("\ud800")])
+        output = self.dispatch(route, assigned, handle)
+        self.assertEqual("unparseable_result", output["bridge_report"]["outcome"])
+        self.assertNotIn("result_validation_reason_code", output["bridge_report"])
+        committed = self.commit(route, assigned, handle, output["result"], "failed")
+        self.assertFalse(committed["outcome"]["accepted"])
+
+    def test_outstanding_legacy_dispatch_commits_after_restart_without_inventing_a_reason(self) -> None:
+        route, assigned, handle = self.claude_run()
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps({**result(), "evidence": []}))])
+        append = self.ledger._append_checked_locked
+
+        def old_writer(project_id, record, **options):
+            # Model the old writer's closed v1 record, retaining the real run,
+            # keyed result digest and terminal facts from this dispatched child.
+            if record["record_type"] == "dispatch_result":
+                record = {key: value for key, value in record.items()
+                          if key not in {"record_id", "result_validation_reason_code"}}
+                record["schema_version"] = 1
+                record["record_id"] = "dispatch_result:" + content_digest(record)
+            return append(project_id, record, **options)
+
+        with mock.patch.object(self.ledger, "_append_checked_locked", side_effect=old_writer):
+            output = self.dispatch(route, assigned, handle)
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.addCleanup(self.ledger.close)
+        with self.assertRaisesRegex(LedgerError, "terminal state differs"):
+            self.commit(route, assigned, handle, output["result"])
+        with self.assertRaisesRegex(LedgerError, "differs from the bridged child's result"):
+            self.commit(route, assigned, handle, {**output["result"], "summary": "replacement"}, "failed")
+        committed = self.commit(route, assigned, handle, output["result"], "failed")
+        self.assertFalse(committed["outcome"]["accepted"])
+        self.assertNotIn("dispatch_diagnostics", committed)
+        with self.ledger.repository(self.project_id) as repository:
+            records = repository.records("dispatch_result")
+        self.assertEqual(1, len(records))
+        self.assertEqual(1, records[0]["schema_version"])
+        self.assertNotIn("result_validation_reason_code", records[0])
 
     def test_legacy_dispatch_result_replays_without_a_backfilled_reason(self) -> None:
         legacy = {

@@ -441,7 +441,7 @@ def _digest_list(
 def _base(
     data: dict[str, Any], record_type: str, *, schema_version: int = SCHEMA_VERSION
 ) -> None:
-    if data["schema_version"] != schema_version:
+    if type(data["schema_version"]) is not int or data["schema_version"] != schema_version:
         raise ContractError("unsupported learning schema version")
     if data["record_type"] != record_type:
         raise ContractError(f"record_type must be {record_type}")

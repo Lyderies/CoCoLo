@@ -7,6 +7,13 @@
   is discarded. Host-result reporting obtains the reason from the trusted dispatch record.
   Version-1 records remain readable without invented historical reasons. This diagnostic slice
   uses Codex package 0.8.13; the development project's installed stable toolchain remains 0.8.12.
+- Malformed explicit result axes now produce `invalid_status` instead of escaping the validator
+  as an unhashable-value exception. Dispatch regressions cover failed fencing and durable reasons
+  for list/object values on all three axes; legacy pending results still bind correctly after restart.
+- Unrepresentable result usage numbers produce `invalid_usage`. Reroute annotation validates the
+  original answer before changing its verdict or claim list. Invalid UTF-8 and parser recursion
+  keep the existing parse-failure outcomes; schema versions require integers. These fixes address
+  findings from the first independent review/verifier pair; the corrected slice awaits fresh review.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.
