@@ -2360,6 +2360,39 @@ class BridgeLifecycleTests(CliTestCase):
                 self.assertLessEqual(len(committed["outcome"]["evidence_digests"]), 64)
                 self.assertFalse(committed["outcome"]["accepted"])
 
+    def test_schema_valid_child_axes_always_leave_a_committable_result(self) -> None:
+        from codex_agents.contracts import EXECUTION_STATES, SEMANTIC_VERDICTS, legacy_result_status
+
+        self.admit("codex")
+        candidates = []
+        for execution in sorted(EXECUTION_STATES):
+            for verdict in sorted(SEMANTIC_VERDICTS):
+                candidate = {**result(), "execution_state": execution, "semantic_verdict": verdict,
+                             "admission_state": "unverified", "status": legacy_result_status(execution, verdict)}
+                try:
+                    validate_result(candidate, assignment=assignment())
+                except ContractError:
+                    continue
+                candidates.append(candidate)
+        self.assertEqual(EXECUTION_STATES, {item["execution_state"] for item in candidates})
+        for rerouted in (False, True):
+            for candidate in candidates:
+                with self.subTest(execution=candidate["execution_state"], verdict=candidate["semantic_verdict"],
+                                  rerouted=rerouted):
+                    route = self.bridged_route("codex")
+                    assigned = self.assignment_for(route)
+                    handle = self.open(route, assigned)
+                    frames = [{"type": "turn.completed", "usage": {}}]
+                    if rerouted:
+                        frames.insert(0, {"type": "model/rerouted"})
+                    self.frames("codex", frames)
+                    (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(candidate)))
+                    output = self.dispatch(route, assigned, handle)
+                    committed = self.commit(
+                        route, assigned, handle, output["result"], output["bridge_report"]["terminal_state"]
+                    )
+                    self.assertFalse(committed["outcome"]["accepted"])
+
     def test_child_cannot_claim_host_admission_or_timeout(self) -> None:
         for changes in (
             {"admission_state": "accepted"},
