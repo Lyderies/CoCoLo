@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased: 0.3.0 (in progress)
+
+- Result-contract failures retain a bounded validator reason in the bridge report and durable
+  dispatch metadata. The failed fence and exact result binding remain in force; rejected content
+  is discarded. Host-result reporting obtains the reason from the trusted dispatch record.
+  Version-1 records remain readable without invented historical reasons. This diagnostic slice
+  uses Codex package 0.8.13; the development project's installed stable toolchain remains 0.8.12.
+- Both-provider liveness, concurrent projects, database service APIs, the remaining reported
+  usability fixes and release validation are still required. Write-capable children belong to
+  0.4.0 and are excluded from this release.
+
 ## 0.2.2: readiness and hook diagnostics (Codex package 0.8.12)
 
 - Repeated hook deliveries include their observation time in their identity, matching their timestamped

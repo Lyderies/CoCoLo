@@ -27,7 +27,9 @@ from typing import Any
 from .catalog import CatalogError, parse_claude_agent
 from .contracts import (
     ONE_EVIDENCE_ENTRY_RULE,
+    RESULT_VALIDATION_REASON_CODES,
     ContractError,
+    ResultContractError,
     result_preflight,
     validate_assignment,
     validate_result,
@@ -1486,13 +1488,16 @@ def dispatch(
                 "the provider rerouted this run to another model; verdict unknown",
             ],
         }
+    result_validation_reason_code = None
     if result is not None:
         # The primary records exactly this result, so one it could not record
         # (invalid, or too large to keep for its verifier) is fenced here.
-        problem = _unrecordable(result, assignment)
+        problem, result_validation_reason_code = _unrecordable(result, assignment)
         if problem is not None:
             result = None
             report["outcome"] = problem
+        if result_validation_reason_code is not None:
+            report["result_validation_reason_code"] = result_validation_reason_code
     if result is None:
         state = "timed_out" if report["outcome"] == "timed_out" else "failed"
         result = _fenced_result(assignment, state, report["outcome"])
@@ -1503,6 +1508,7 @@ def dispatch(
     ledger.record_dispatch_result(
         project_id, run_handle=run_handle, bridge_run_id=intent["bridge_run_id"],
         result=result, fenced=fenced, reviewed=reviewed, terminal_state=terminal_state,
+        result_validation_reason_code=result_validation_reason_code,
     )
     report.update(
         bridge_run_id=intent["bridge_run_id"],
@@ -1516,19 +1522,26 @@ def dispatch(
     return {"result": result, "bridge_report": report}
 
 
-def _unrecordable(result: dict[str, Any], assignment: dict[str, Any]) -> str | None:
-    """Why the primary could not record this child result as returned, or None."""
+def _unrecordable(
+    result: dict[str, Any], assignment: dict[str, Any]
+) -> tuple[str | None, str | None]:
+    """Return the fence outcome and a content-free validator reason, if any."""
 
     from .learning_contracts import canonical_json
     from .learning_store import MAX_WORKER_RESULT_BYTES
 
     try:
         validate_result(result, assignment=assignment)
-    except ContractError:
-        return "invalid_result"
+    except ContractError as exc:
+        reason = "contract_validation_failed"
+        if isinstance(exc, ResultContractError):
+            code = getattr(exc, "reason_code", None)
+            if isinstance(code, str) and code in RESULT_VALIDATION_REASON_CODES:
+                reason = code
+        return "invalid_result", reason
     if len(canonical_json(result)) > MAX_WORKER_RESULT_BYTES:
-        return "result_too_large"
-    return None
+        return "result_too_large", None
+    return None, None
 
 
 def _record_unavailable(

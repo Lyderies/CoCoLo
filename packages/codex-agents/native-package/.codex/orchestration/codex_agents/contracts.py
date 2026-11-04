@@ -91,6 +91,11 @@ RESULT_VALIDATION_REASON_CODES = {
     "unknown_fields",
     "inconsistent_axes",
 }
+# Durable bridge diagnostics also cover validators that raise an untyped error.
+# Never add exception text or caller-selected values to this vocabulary.
+RESULT_DIAGNOSTIC_REASON_CODES = frozenset(
+    RESULT_VALIDATION_REASON_CODES | {"contract_validation_failed"}
+)
 BOUND_FIELDS = {
     "max_attempts",
     "max_steers_per_attempt",

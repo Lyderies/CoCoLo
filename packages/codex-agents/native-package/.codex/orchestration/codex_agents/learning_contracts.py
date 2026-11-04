@@ -16,7 +16,7 @@ import binascii
 from pathlib import Path
 from typing import Any, Callable
 
-from .contracts import ContractError, RESULT_VALIDATION_REASON_CODES
+from .contracts import ContractError, RESULT_DIAGNOSTIC_REASON_CODES, RESULT_VALIDATION_REASON_CODES
 
 
 SCHEMA_VERSION = 1
@@ -438,8 +438,10 @@ def _digest_list(
         _digest(item, field)
 
 
-def _base(data: dict[str, Any], record_type: str) -> None:
-    if data["schema_version"] != SCHEMA_VERSION:
+def _base(
+    data: dict[str, Any], record_type: str, *, schema_version: int = SCHEMA_VERSION
+) -> None:
+    if data["schema_version"] != schema_version:
         raise ContractError("unsupported learning schema version")
     if data["record_type"] != record_type:
         raise ContractError(f"record_type must be {record_type}")
@@ -1947,6 +1949,8 @@ DISPATCH_RESULT_FIELDS = {
     "schema_version", "record_type", "record_id", "run_id", "bridge_run_id",
     "result_digest", "fenced", "reviewed", "terminal_state", "observed_at_ms",
 }
+DISPATCH_RESULT_SCHEMA_VERSION = 2
+DISPATCH_RESULT_V2_FIELDS = DISPATCH_RESULT_FIELDS | {"result_validation_reason_code"}
 
 
 def validate_dispatch_result(data: Any) -> dict[str, Any]:
@@ -1956,8 +1960,12 @@ def validate_dispatch_result(data: Any) -> dict[str, Any]:
     the run must match it, so a made-up result or a dropped fence is refused.
     """
 
-    data = _closed(data, DISPATCH_RESULT_FIELDS, "dispatch_result")
-    _base(data, "dispatch_result")
+    # Version 1 bytes stay unchanged: their missing diagnostic remains unknown.
+    # Only this record evolves; existing outcome/result digest formats do not.
+    version = data.get("schema_version") if isinstance(data, dict) else None
+    fields = DISPATCH_RESULT_V2_FIELDS if version == 2 else DISPATCH_RESULT_FIELDS
+    data = _closed(data, fields, "dispatch_result")
+    _base(data, "dispatch_result", schema_version=2 if version == 2 else 1)
     _identifier(data["run_id"], "run_id")
     if not isinstance(data["bridge_run_id"], str) or re.fullmatch(
         r"brg_[0-9a-f]{32}", data["bridge_run_id"]
@@ -1969,6 +1977,11 @@ def validate_dispatch_result(data: Any) -> dict[str, Any]:
     _enum(data["terminal_state"], EXECUTION_STATES, "terminal_state", nullable=True)
     if data["fenced"] != (data["terminal_state"] is not None):
         raise ContractError("dispatch_result terminal state belongs only to a fenced outcome")
+    if version == 2:
+        reason = data["result_validation_reason_code"]
+        _enum(reason, RESULT_DIAGNOSTIC_REASON_CODES, "result_validation_reason_code", nullable=True)
+        if reason is not None and (not data["fenced"] or data["terminal_state"] != "failed"):
+            raise ContractError("result validation diagnostic requires a failed fenced outcome")
     _integer(data["observed_at_ms"], "observed_at_ms")
     return data
 

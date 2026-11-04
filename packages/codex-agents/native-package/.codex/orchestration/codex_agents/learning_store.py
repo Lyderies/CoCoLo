@@ -36,6 +36,7 @@ from .contracts import (
     validate_task,
 )
 from .learning_contracts import (
+    DISPATCH_RESULT_SCHEMA_VERSION,
     MAX_RECORD_BYTES,
     RECORD_TYPES,
     canonical_json,
@@ -5388,6 +5389,7 @@ class LearningLedger:
         fenced: bool,
         reviewed: bool,
         terminal_state: str | None,
+        result_validation_reason_code: str | None = None,
     ) -> dict[str, Any]:
         """Bind what a dispatched child returned to its run, once.
 
@@ -5430,7 +5432,7 @@ class LearningLedger:
             ).fetchone() is not None:
                 raise LedgerError("the dispatched child's result is already recorded")
             material = {
-                "schema_version": 1,
+                "schema_version": DISPATCH_RESULT_SCHEMA_VERSION,
                 "record_type": "dispatch_result",
                 "run_id": run_id,
                 "bridge_run_id": bridge_run_id,
@@ -5438,6 +5440,7 @@ class LearningLedger:
                 "fenced": fenced,
                 "reviewed": reviewed,
                 "terminal_state": terminal_state,
+                "result_validation_reason_code": result_validation_reason_code,
                 "observed_at_ms": timestamp,
             }
             try:
@@ -5707,6 +5710,7 @@ class LearningLedger:
             }
         # Every result path needs the run's stored passing admission, including
         # collector-bound sessions, whose admission is decided when they bind.
+        dispatch_diagnostics = {}
         with self._lock:
             self._run_admission_locked(project_id, checked_observation["run_id"])
             if client_version == BRIDGE_CLIENT_VERSION and self._connection.execute(
@@ -5729,6 +5733,11 @@ class LearningLedger:
                 if len(dispatched) != 1:
                     raise LedgerError("a bridged run has no recorded child result")
                 recorded = json.loads(bytes(dispatched[0]["content"]))
+                # Diagnostics come only from the bridge's durable record, never
+                # the primary's observation or its (already fenced) result.
+                reason = recorded.get("result_validation_reason_code")
+                if reason is not None:
+                    dispatch_diagnostics["result_validation_reason_code"] = reason
                 if not secrets.compare_digest(
                     keyed_digest(self.state.digest_key(), canonical_json(result)),
                     recorded["result_digest"],
@@ -5948,6 +5957,7 @@ class LearningLedger:
             "worker_result_stored": stored_result is not None,
             "event_commit": event_result,
             "outcome_commit": outcome_result,
+            **({"dispatch_diagnostics": dispatch_diagnostics} if dispatch_diagnostics else {}),
         }
 
     def _write_worker_result(

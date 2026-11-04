@@ -48,6 +48,22 @@ billing, exhausted headroom or a run cap ([full list](security-model.md#what-v1-
 messages and their fixes are in [troubleshooting](troubleshooting.md); nearly every fix is "run
 `./setup.sh` again".
 
+## Result-contract diagnostics
+
+A client can finish successfully while its answer violates the assignment's result contract.
+The bridge still returns `outcome: invalid_result` and a failed fenced replacement. Its
+`bridge_report.result_validation_reason_code` names the bounded validator rule, such as
+`missing_evidence` or `duplicate_criterion`. An untyped validation error uses
+`contract_validation_failed`; rejected text, field names and exception messages are never included.
+The reason does not authorize repair, retry, model escalation or acceptance.
+
+The trusted bridge stores the reason in a version-2 `dispatch_result` record, alongside the
+unchanged result digest and fence. Recording that exact host result returns the stored reason
+under `dispatch_diagnostics`. A primary cannot supply or replace this diagnostic. Version-1
+records remain readable with their original bytes and an unknown reason; historical rejected
+answers cannot be reconstructed from the fenced replacement. This record-format addition needs
+the updated runtime, but does not rewrite ledger tables or change outcome/verifier digests.
+
 ## Keeping it working
 
 - Run `./setup.sh` again to update the install, verify it, re-run the billing attestation or change the

@@ -34,7 +34,7 @@ from codex_agents.bridge import (
 )
 from codex_agents.contracts import ONE_EVIDENCE_ENTRY_RULE, ContractError, validate_result
 from codex_agents.learning_adapters import load_client_capabilities
-from codex_agents.learning_contracts import content_digest
+from codex_agents.learning_contracts import canonical_json, content_digest
 from codex_agents.learning_engine import installed_execution_configuration
 from codex_agents.learning_store import (
     CollectorServer,
@@ -2232,18 +2232,70 @@ class BridgeLifecycleTests(CliTestCase):
 
     def test_an_invalid_child_result_comes_back_fenced(self) -> None:
         route, assigned, handle = self.claude_run()
-        invalid = {**result(), "evidence": []}
+        invalid = {**result(), "evidence": [], "summary": "CANARY-REJECTED-CONTENT"}
         self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps(invalid))])
         output = self.dispatch(route, assigned, handle)
         self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
         self.assertEqual("failed", output["bridge_report"]["terminal_state"])
         self.assertEqual("failed", output["result"]["status"])
+        self.assertEqual("missing_evidence", output["bridge_report"]["result_validation_reason_code"])
+        self.assertEqual([], self.workspace_entries())
+        with self.ledger.repository(self.project_id) as repository:
+            records = repository.records("dispatch_result")
+        self.assertEqual(1, len(records))
+        self.assertEqual(2, records[0]["schema_version"])
+        self.assertEqual("missing_evidence", records[0]["result_validation_reason_code"])
+        self.assertNotIn("CANARY-REJECTED-CONTENT", json.dumps([output, records]))
         validate_result(output["result"], assignment=assigned)
         # The fence is the bridge's fact: recording without it is refused.
         with self.assertRaisesRegex(LedgerError, "terminal state differs"):
             self.commit(route, assigned, handle, output["result"])
+        with self.assertRaisesRegex(LedgerError, "host observation admission rejected"):
+            self.ledger.commit_host_result(
+                self.project_id, assignment=assigned, task=self.task(), route=route,
+                result=output["result"], execution_configuration=route["execution_configuration"],
+                observation={
+                    "run_handle": handle, "terminal_state": "failed", "result_attempts": ACCEPTED,
+                    "result_validation_reason_code": "unknown_fields",
+                },
+            )
         committed = self.commit(route, assigned, handle, output["result"], "failed")
         self.assertFalse(committed["outcome"]["accepted"])
+        self.assertEqual(
+            {"result_validation_reason_code": "missing_evidence"}, committed["dispatch_diagnostics"]
+        )
+        with self.assertRaises(LedgerError):
+            self.commit(route, assigned, handle, output["result"], "failed")
+        with self.ledger.repository(self.project_id) as repository:
+            self.assertEqual(records, repository.records("dispatch_result"))
+        # A restart must preserve the diagnostic without keeping the rejected answer.
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.addCleanup(self.ledger.close)
+        with self.ledger.repository(self.project_id) as repository:
+            self.assertEqual(records, repository.records("dispatch_result"))
+
+    def test_legacy_dispatch_result_replays_without_a_backfilled_reason(self) -> None:
+        legacy = {
+            "schema_version": 1, "record_type": "dispatch_result", "record_id": "dispatch_result:legacy",
+            "run_id": "legacy-run", "bridge_run_id": "brg_" + "a" * 32, "result_digest": "b" * 64,
+            "fenced": True, "reviewed": True, "terminal_state": "failed", "observed_at_ms": 5,
+        }
+        # Seed an old-format durable record, as an old runtime would have written it.
+        with self.ledger._lock, self.ledger._connection:
+            self.ledger._append_checked_locked(self.project_id, legacy, producer="lifecycle", timestamp=5)
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.addCleanup(self.ledger.close)
+        with self.ledger.repository(self.project_id) as repository:
+            records = repository.records("dispatch_result")
+        self.assertEqual(1, len(records))
+        self.assertEqual(legacy, {key: value for key, value in records[0].items() if not key.startswith("_")})
+        row = self.ledger._connection.execute(
+            "SELECT content FROM records WHERE project_id=? AND record_id=?",
+            (self.project_id, legacy["record_id"]),
+        ).fetchone()
+        self.assertEqual(canonical_json(legacy), bytes(row["content"]))
 
     def test_fenced_outcome_records_as_failed(self) -> None:
         route, assigned, handle = self.claude_run(timeout_seconds=1)
