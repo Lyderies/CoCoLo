@@ -34,7 +34,12 @@ from codex_agents.bridge import (
 )
 from codex_agents.contracts import ONE_EVIDENCE_ENTRY_RULE, ContractError, validate_result
 from codex_agents.learning_adapters import load_client_capabilities
-from codex_agents.learning_contracts import canonical_json, content_digest
+from codex_agents.learning_contracts import (
+    DISPATCH_RESULT_V3_FIELDS,
+    canonical_json,
+    content_digest,
+    validate_learning_record,
+)
 from codex_agents.learning_engine import installed_execution_configuration
 from codex_agents.learning_store import (
     CollectorServer,
@@ -2316,6 +2321,83 @@ class BridgeLifecycleTests(CliTestCase):
         self.addCleanup(self.ledger.close)
         with self.ledger.repository(self.project_id) as repository:
             self.assertEqual(records, repository.records("dispatch_result"))
+
+    def test_client_observations_require_the_matching_pending_dispatch(self) -> None:
+        route, assigned, handle = self.claude_run()
+        observations = {
+            "exit_code": 1, "result_frame_seen": False,
+            "result_subtype": None, "error_code": "rate_limit",
+        }
+        arguments = {
+            "run_handle": handle, "bridge_run_id": "brg_" + "0" * 32,
+            "result": result(), "fenced": True, "reviewed": True,
+            "terminal_state": "failed", "client_diagnostics": observations,
+        }
+        with self.assertRaisesRegex(LedgerError, "host run is not pending"):
+            self.ledger.record_dispatch_result(
+                self.project_id, **{**arguments, "run_handle": "hrn_" + "0" * 48},
+            )
+        # A normally admitted handle has no launch intent until dispatch starts.
+        with self.assertRaisesRegex(LedgerError, "only the dispatched run"):
+            self.ledger.record_dispatch_result(self.project_id, **arguments)
+        with self.ledger.repository(self.project_id) as repository:
+            self.assertEqual([], repository.records("dispatch_result"))
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame()])
+        record_result = self.ledger.record_dispatch_result
+
+        def check_bridge_identity(project_id, **actual):
+            # Test the wrong bridge before any dispatch_result exists, so the
+            # duplicate fence cannot hide a missing identity check.
+            with self.assertRaisesRegex(LedgerError, "only the dispatched run"):
+                record_result(project_id, **{
+                    **actual, "bridge_run_id": arguments["bridge_run_id"],
+                    "client_diagnostics": observations,
+                })
+            with self.ledger.repository(project_id) as repository:
+                self.assertEqual([], repository.records("dispatch_result"))
+            return record_result(project_id, **actual)
+
+        with mock.patch.object(self.ledger, "record_dispatch_result", side_effect=check_bridge_identity):
+            output = self.dispatch(route, assigned, handle)
+        with self.ledger.repository(self.project_id) as repository:
+            recorded = repository.records("dispatch_result")
+        self.assertEqual(1, len(recorded))
+        self.assertEqual(output["bridge_report"]["client_diagnostics"], recorded[0]["client_diagnostics"])
+        self.commit(route, assigned, handle, output["result"])
+        # The real bridge identity cannot reopen a consumed binding.
+        with self.assertRaisesRegex(LedgerError, "host run is not pending"):
+            self.ledger.record_dispatch_result(self.project_id, **{
+                **arguments, "bridge_run_id": output["bridge_report"]["bridge_run_id"],
+            })
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.addCleanup(self.ledger.close)
+        with self.ledger.repository(self.project_id) as repository:
+            self.assertEqual(recorded, repository.records("dispatch_result"))
+
+    def test_generic_append_cannot_forge_dispatch_client_observations(self) -> None:
+        route, assigned, handle = self.claude_run()
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame()])
+        output = self.dispatch(route, assigned, handle)
+        with self.ledger.repository(self.project_id) as repository:
+            recorded = repository.records("dispatch_result")
+        forged = {**{key: recorded[0][key] for key in DISPATCH_RESULT_V3_FIELDS}, "client_diagnostics": {
+            "exit_code": 1, "result_frame_seen": False,
+            "result_subtype": None, "error_code": "rate_limit",
+        }}
+        forged["record_id"] = "dispatch_result:" + content_digest({
+            key: value for key, value in forged.items() if key != "record_id"
+        })
+        validate_learning_record(forged)
+        for producer in ("host", "lifecycle", "verifier"):
+            with self.subTest(producer=producer), self.assertRaisesRegex(
+                LedgerError, "ledger-run observation|not authorized",
+            ):
+                self.ledger.append(self.project_id, forged, producer=producer)
+        committed = self.commit(route, assigned, handle, output["result"])
+        self.assertEqual(recorded[0]["client_diagnostics"], committed["dispatch_diagnostics"]["client_diagnostics"])
+        with self.ledger.repository(self.project_id) as repository:
+            self.assertEqual(recorded, repository.records("dispatch_result"))
 
     def test_malformed_child_axes_are_fenced_and_durably_diagnosed(self) -> None:
         for field in ("execution_state", "semantic_verdict", "admission_state"):
