@@ -11,8 +11,9 @@
   as an unhashable-value exception. Dispatch regressions cover failed fencing and durable reasons
   for list/object values on all three axes; legacy pending results still bind correctly after restart.
 - Unrepresentable result usage numbers produce `invalid_usage`. Reroute annotation validates the
-  original answer before changing its verdict or claim list. Invalid UTF-8 and parser recursion
-  keep the existing parse-failure outcomes; new dispatch-record versions require integers. These fixes address
+  original answer before changing its verdict or claim list. Invalid string encoding at the parser
+  boundary and parser recursion keep the existing parse-failure outcomes; Codex last-message bytes
+  retain their existing UTF-8 replacement decoding. New dispatch-record versions require integers. These fixes address
   findings from independent review/verifier pairs; the corrected slice awaits fresh review.
 - A deeply nested Codex result that parses successfully but exceeds optional-null normalization's
   recursion limit now follows the existing `unparseable_result` fence and remains recordable.
@@ -25,6 +26,8 @@
   backtracking on long whitespace in an incomplete fence. A bounded subprocess regression covers it.
 - Legacy version-1 record validation retains its original numeric representation semantics and bytes;
   strict version typing is confined to the new dispatch metadata, preserving existing ledger replay.
+- Reroute annotation updates the legacy status projection with its unknown verdict, so a valid
+  blocked answer stays unreviewed without a host-created `inconsistent_axes` rejection.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.

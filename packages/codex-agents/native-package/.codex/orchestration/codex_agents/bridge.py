@@ -30,6 +30,7 @@ from .contracts import (
     RESULT_VALIDATION_REASON_CODES,
     ContractError,
     ResultContractError,
+    legacy_result_status,
     result_axes,
     result_preflight,
     validate_assignment,
@@ -1504,8 +1505,10 @@ def dispatch(
             result = None
             report["outcome"] = problem
         else:
+            axes = result_axes(result, attempt=assignment.get("attempt", 1))
             result = {
                 **result,
+                "status": legacy_result_status(axes["execution_state"], "not-applicable"),
                 "semantic_verdict": "not-applicable",
                 "unverified_claims": [
                     *result["unverified_claims"],

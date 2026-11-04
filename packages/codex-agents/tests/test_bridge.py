@@ -2388,10 +2388,55 @@ class BridgeLifecycleTests(CliTestCase):
                     self.frames("codex", frames)
                     (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(candidate)))
                     output = self.dispatch(route, assigned, handle)
+                    if candidate["execution_state"] == "timed_out":
+                        self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+                        self.assertEqual("inconsistent_axes", output["bridge_report"]["result_validation_reason_code"])
+                    else:
+                        expected_verdict = "not-applicable" if rerouted else candidate["semantic_verdict"]
+                        self.assertEqual("result", output["bridge_report"]["outcome"])
+                        self.assertNotIn("result_validation_reason_code", output["bridge_report"])
+                        self.assertIsNone(output["bridge_report"]["terminal_state"])
+                        self.assertEqual(candidate["execution_state"], output["result"]["execution_state"])
+                        self.assertEqual(expected_verdict, output["result"]["semantic_verdict"])
+                        self.assertEqual(legacy_result_status(candidate["execution_state"], expected_verdict),
+                                         output["result"]["status"])
                     committed = self.commit(
                         route, assigned, handle, output["result"], output["bridge_report"]["terminal_state"]
                     )
                     self.assertFalse(committed["outcome"]["accepted"])
+
+    def test_rerouted_blocked_result_has_no_host_created_validator_reason(self) -> None:
+        for provider in ("codex", "claude"):
+            self.admit(provider)
+            for explicit_axes in (False, True):
+                with self.subTest(provider=provider, explicit_axes=explicit_axes):
+                    route = self.bridged_route(provider)
+                    assigned = self.assignment_for(route)
+                    handle = self.open(route, assigned)
+                    candidate = {**result(), "status": "blocked"}
+                    if explicit_axes:
+                        candidate.update(execution_state="completed", semantic_verdict="blocked",
+                                         admission_state="unverified")
+                    validate_result(candidate, assignment=assigned)
+                    if provider == "codex":
+                        self.frames(provider, [{"type": "model/rerouted"}, {"type": "turn.completed", "usage": {}}])
+                        (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(candidate)))
+                    else:
+                        self.frames(provider, [init_frame(), RATE_LIMIT,
+                                               {"type": "assistant", "message": {"model": "claude-sonnet-5-5"}},
+                                               result_frame(json.dumps(candidate))])
+                    output = self.dispatch(route, assigned, handle)
+                    self.assertEqual("result", output["bridge_report"]["outcome"])
+                    self.assertTrue(output["bridge_report"]["rerouted"])
+                    self.assertFalse(output["bridge_report"]["reviewed"])
+                    self.assertIsNone(output["bridge_report"]["terminal_state"])
+                    self.assertNotIn("result_validation_reason_code", output["bridge_report"])
+                    self.assertEqual("completed", output["result"]["status"])
+                    self.assertEqual("not-applicable", output["result"]["semantic_verdict"])
+                    validate_result(output["result"], assignment=assigned)
+                    committed = self.commit(route, assigned, handle, output["result"])
+                    self.assertFalse(committed["outcome"]["accepted"])
+                    self.assertNotIn("dispatch_diagnostics", committed)
 
     def test_child_cannot_claim_host_admission_or_timeout(self) -> None:
         for changes in (
