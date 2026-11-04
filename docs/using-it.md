@@ -56,6 +56,9 @@ The bridge still returns `outcome: invalid_result` and a failed fenced replaceme
 `missing_evidence` or `duplicate_criterion`. An untyped validation error uses
 `contract_validation_failed`; rejected text, field names and exception messages are never included.
 The reason does not authorize repair, retry, model escalation or acceptance.
+Raw child results must leave admission `unverified` and cannot attest their own timeout.
+Those claims are fenced with `inconsistent_axes` before result binding; actual bridge-observed
+timeouts keep their authoritative timed-out outcome.
 
 The trusted bridge stores the reason in a version-2 `dispatch_result` record, alongside the
 unchanged result digest and fence. Recording that exact host result returns the stored reason

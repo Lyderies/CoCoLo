@@ -30,6 +30,7 @@ from .contracts import (
     RESULT_VALIDATION_REASON_CODES,
     ContractError,
     ResultContractError,
+    result_axes,
     result_preflight,
     validate_assignment,
     validate_result,
@@ -1557,6 +1558,12 @@ def _unrecordable(
             if isinstance(code, str) and code in RESULT_VALIDATION_REASON_CODES:
                 reason = code
         return "invalid_result", reason
+    axes = result_axes(result, attempt=assignment.get("attempt", 1))
+    # Raw child results cannot grant their own admission or attest a timeout.
+    # Match host commitment before binding an immutable child-result digest;
+    # real bridge timeouts get their authoritative fence later in dispatch.
+    if axes["admission_state"] != "unverified" or axes["execution_state"] == "timed_out":
+        return "invalid_result", "inconsistent_axes"
     if len(canonical_json(result)) > MAX_WORKER_RESULT_BYTES:
         return "result_too_large", None
     return None, None

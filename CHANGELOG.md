@@ -16,6 +16,9 @@
   findings from independent review/verifier pairs; the corrected slice awaits fresh review.
 - A deeply nested Codex result that parses successfully but exceeds optional-null normalization's
   recursion limit now follows the existing `unparseable_result` fence and remains recordable.
+- Bridge preflight rejects child-authored admission decisions and timeout claims before immutable
+  result binding, matching the host's existing admission rules. These become failed replacements
+  with `inconsistent_axes`; actual bridge-observed timeouts retain their authoritative outcome.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.

@@ -2324,6 +2324,30 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertNotIn("CANARY-AXIS", json.dumps(records))
         self.assertNotIn("CANARY-VALUE", json.dumps(records))
 
+    def test_child_cannot_claim_host_admission_or_timeout(self) -> None:
+        for changes in (
+            {"admission_state": "accepted"},
+            {"admission_state": "rejected"},
+            {"status": "failed", "execution_state": "timed_out", "semantic_verdict": "not-applicable"},
+        ):
+            with self.subTest(changes=changes):
+                route, assigned, handle = self.claude_run()
+                invalid = {**result(), **changes}
+                self.frames("claude", [init_frame(), RATE_LIMIT, result_frame(json.dumps(invalid))])
+                output = self.dispatch(route, assigned, handle)
+                self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+                self.assertEqual("inconsistent_axes", output["bridge_report"]["result_validation_reason_code"])
+                self.assertEqual("failed", output["bridge_report"]["terminal_state"])
+                committed = self.commit(route, assigned, handle, output["result"], "failed")
+                self.assertFalse(committed["outcome"]["accepted"])
+                self.assertEqual(
+                    {"result_validation_reason_code": "inconsistent_axes"}, committed["dispatch_diagnostics"]
+                )
+        with self.ledger.repository(self.project_id) as repository:
+            records = repository.records("dispatch_result")
+        self.assertEqual(3, len(records))
+        self.assertTrue(all(item["fenced"] and item["terminal_state"] == "failed" for item in records))
+
     def test_unrepresentable_child_usage_is_fenced_and_recordable(self) -> None:
         route, assigned, handle = self.claude_run()
         invalid = {**result(), "usage": {"cost": 10 ** 400}}

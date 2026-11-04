@@ -83,6 +83,18 @@ class ResultDiagnosticTests(unittest.TestCase):
         oversized = {**result(), "summary": "x" * MAX_WORKER_RESULT_BYTES}
         self.assertEqual(("result_too_large", None), bridge._unrecordable(oversized, assignment()))
 
+    def test_child_axes_cannot_claim_host_owned_admission_or_timeout(self) -> None:
+        for changes in (
+            {"admission_state": "accepted"},
+            {"admission_state": "rejected"},
+            {"status": "failed", "execution_state": "timed_out", "semantic_verdict": "not-applicable"},
+        ):
+            with self.subTest(changes=changes):
+                self.assertEqual(
+                    ("invalid_result", "inconsistent_axes"),
+                    bridge._unrecordable({**result(), **changes}, assignment()),
+                )
+
     def test_unrepresentable_usage_is_a_typed_rejection(self) -> None:
         self.assertEqual(
             ("invalid_result", "invalid_usage"),
