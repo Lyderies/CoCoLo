@@ -12,7 +12,7 @@
   for list/object values on all three axes; legacy pending results still bind correctly after restart.
 - Unrepresentable result usage numbers produce `invalid_usage`. Reroute annotation validates the
   original answer before changing its verdict or claim list. Invalid UTF-8 and parser recursion
-  keep the existing parse-failure outcomes; schema versions require integers. These fixes address
+  keep the existing parse-failure outcomes; new dispatch-record versions require integers. These fixes address
   findings from independent review/verifier pairs; the corrected slice awaits fresh review.
 - A deeply nested Codex result that parses successfully but exceeds optional-null normalization's
   recursion limit now follows the existing `unparseable_result` fence and remains recordable.
@@ -23,6 +23,8 @@
   before binding. The durable limit is retained, including room for assignment/result digests.
 - Markdown result fences use linear extraction, preserving accepted syntax while avoiding regex
   backtracking on long whitespace in an incomplete fence. A bounded subprocess regression covers it.
+- Legacy version-1 record validation retains its original numeric representation semantics and bytes;
+  strict version typing is confined to the new dispatch metadata, preserving existing ledger replay.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.

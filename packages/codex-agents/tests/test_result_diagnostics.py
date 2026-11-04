@@ -166,9 +166,11 @@ class ResultDiagnosticTests(unittest.TestCase):
             validate_learning_record({**legacy, "result_validation_reason_code": "missing_evidence"})
         with self.assertRaises(ContractError):
             validate_learning_record({**legacy, "schema_version": 2})
+        # Preserve the exact legacy reader semantics and signed/canonical bytes;
+        # only the newly introduced v2 record requires an integer representation.
         for version in (True, 1.0):
-            with self.assertRaises(ContractError):
-                validate_learning_record({**legacy, "schema_version": version})
+            old = {**legacy, "schema_version": version}
+            self.assertEqual(canonical_json(old), canonical_json(validate_learning_record(deepcopy(old))))
 
 
 if __name__ == "__main__":

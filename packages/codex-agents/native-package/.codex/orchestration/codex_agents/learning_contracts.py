@@ -442,7 +442,7 @@ def _digest_list(
 def _base(
     data: dict[str, Any], record_type: str, *, schema_version: int = SCHEMA_VERSION
 ) -> None:
-    if type(data["schema_version"]) is not int or data["schema_version"] != schema_version:
+    if data["schema_version"] != schema_version:
         raise ContractError("unsupported learning schema version")
     if data["record_type"] != record_type:
         raise ContractError(f"record_type must be {record_type}")
@@ -1968,6 +1968,8 @@ def validate_dispatch_result(data: Any) -> dict[str, Any]:
     version = data.get("schema_version") if isinstance(data, dict) else None
     fields = DISPATCH_RESULT_V2_FIELDS if version == 2 else DISPATCH_RESULT_FIELDS
     data = _closed(data, fields, "dispatch_result")
+    if version == 2 and type(version) is not int:
+        raise ContractError("unsupported learning schema version")
     _base(data, "dispatch_result", schema_version=2 if version == 2 else 1)
     _identifier(data["run_id"], "run_id")
     if not isinstance(data["bridge_run_id"], str) or re.fullmatch(
