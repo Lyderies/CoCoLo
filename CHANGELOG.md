@@ -28,6 +28,8 @@
   strict version typing is confined to the new dispatch metadata, preserving existing ledger replay.
 - Reroute annotation updates the legacy status projection with its unknown verdict, so a valid
   blocked answer stays unreviewed without a host-created `inconsistent_axes` rejection.
+- Malformed Claude init-frame tool entries retain the existing `init_tool_not_allowed` fence,
+  child cleanup and recordable failed result instead of escaping through unhashable-value errors.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.

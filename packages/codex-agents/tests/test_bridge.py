@@ -2438,6 +2438,32 @@ class BridgeLifecycleTests(CliTestCase):
                     self.assertFalse(committed["outcome"]["accepted"])
                     self.assertNotIn("dispatch_diagnostics", committed)
 
+    def test_malformed_claude_init_tools_leave_a_committable_fence(self) -> None:
+        for tools in ([[]], [{}], ["Read", []], ["Read", {"CANARY-INIT": "value"}],
+                      [False], [1], None, "Read"):
+            with self.subTest(tools=tools):
+                route, assigned, handle = self.claude_run()
+                self.frames("claude", [init_frame(tools=tools), {"sleep": 30}, result_frame()])
+                output = self.dispatch(route, assigned, handle)
+                self.assertEqual("init_tool_not_allowed", output["bridge_report"]["outcome"])
+                self.assertEqual("failed", output["bridge_report"]["terminal_state"])
+                self.assertNotIn("result_validation_reason_code", output["bridge_report"])
+                self.assertEqual("failed", output["result"]["execution_state"])
+                self.assertLess(output["bridge_report"]["wall_seconds"], 20)
+                self.assertEqual([], self.workspace_entries())
+                child = [i for i in self.invocations("claude") if "-p" in i["argv"]][-1]
+                self.assert_process_gone(child)
+                committed = self.commit(route, assigned, handle, output["result"], "failed")
+                self.assertFalse(committed["outcome"]["accepted"])
+                self.assertNotIn("dispatch_diagnostics", committed)
+                self.assertNotIn("CANARY", json.dumps(output))
+        with self.ledger.repository(self.project_id) as repository:
+            records = repository.records("dispatch_result")
+        self.assertEqual(8, len(records))
+        self.assertTrue(all(item["fenced"] and item["terminal_state"] == "failed" for item in records))
+        self.assertTrue(all(item["result_validation_reason_code"] is None for item in records))
+        self.assertNotIn("CANARY", json.dumps(records))
+
     def test_child_cannot_claim_host_admission_or_timeout(self) -> None:
         for changes in (
             {"admission_state": "accepted"},

@@ -813,7 +813,9 @@ def _check_claude_init(frame: dict[str, Any], model: str) -> str | None:
     if frame.get("mcp_servers") != []:
         return "mcp_server_loaded"
     tools = frame.get("tools")
-    if not isinstance(tools, list) or not set(tools) <= set(CLAUDE_TOOLS):
+    if not isinstance(tools, list) or any(
+        not isinstance(tool, str) or tool not in CLAUDE_TOOLS for tool in tools
+    ):
         return "tool_not_allowed"
     return None
 
