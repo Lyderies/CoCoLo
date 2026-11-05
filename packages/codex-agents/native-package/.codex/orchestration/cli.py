@@ -1339,6 +1339,8 @@ def main() -> int:
     try:
         _require_protected_runtime(args)
         _require_own_roots(args)
+        if args.command == "dispatch-preflight" and args.policy is not None:
+            raise OwnRootRefused("--policy is refused: dispatch preflight uses its installed policy")
         if getattr(args, "policy", False) is None:
             args.policy = ORCHESTRATION_ROOT / "config" / (
                 "discovery-policy.json" if args.command == "inventory" else "routing-policy.json"

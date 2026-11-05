@@ -49,6 +49,7 @@ admission or launch claim. Working-tree edits and untracked files are excluded.
 The project must be registered and its trusted learning state available: preflight uses the
 same released-candidate route resolver as open and dispatch. It has no base-route fallback
 when that state is unavailable. Like bridge dispatch, it refuses `--fallback-receipt`.
+An explicit `--policy` is refused because this resolver uses the installed policy.
 
 Replies are at most 16 KiB. When `next_offset` is non-null, pass it as `--offset` and repeat
 the returned commit as `--expected-export-commit`; `--limit` accepts 1 through 100 entries.

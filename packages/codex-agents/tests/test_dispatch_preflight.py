@@ -279,6 +279,18 @@ class DispatchPreflightTests(unittest.TestCase):
                 mock.patch.object(cli, "_learning_ledger", side_effect=AssertionError("state opened")):
             self.assertEqual(2, cli.main())
 
+    def test_cli_refuses_policy_override_before_state_or_inputs_are_opened(self) -> None:
+        argv = ["cli.py", "dispatch-preflight", "--project-root", str(self.root),
+                "--task", "missing-task.json", "--assignment", "missing-assignment.json",
+                "--parent-grant", "missing-grant.json", "--policy", "missing-policy.json"]
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), \
+                mock.patch.object(cli, "_learning_ledger", side_effect=AssertionError("state opened")), \
+                mock.patch.object(cli, "_json_input", side_effect=AssertionError("input opened")):
+            self.assertEqual(2, cli.main())
+        self.assertFalse(json.loads(output.getvalue())["ready"])
+        self.assertIn("--policy is refused", output.getvalue())
+
     def test_bounded_git_output_and_total_timeout_reap_the_fixture_process(self) -> None:
         executable = bridge.find_git(untrusted=[self.root])
         with self.assertRaises(git_plumbing.GitOutputLimitError) as caught:
