@@ -125,3 +125,49 @@ caller authentication, a production service API, power-loss behavior or full C1-
 This schema has no legacy importer yet. Exact source sequences, expiry, links, signed bytes,
 owner/account facts and cross-store authority ordering still need the drained migration and
 account-service implementation. Local control/timers must run independently of this writer.
+
+## Closed history API increment
+
+`history_api` provides a pure codec and non-retrying client; `history_service` provides the
+connection-owning handler. Eight closed operations record events, intents and outcomes, bind a
+verifier, commit or acknowledge a terminal delivery, read one record and page pending deliveries.
+No request may select SQL, a method, database path, PID, producer, role or authorization flag.
+Project/runtime labels and parsed `AttemptBinding` values remain claims rather than authority.
+
+The handler's default authorization adapter denies before opening a store. A configured trusted
+adapter must independently verify native caller identity, current session/generation, permitted
+operation and exact record/claim/receipt semantics. Its server-only output binds the complete
+canonical request digest and operation set. The handler rechecks that digest after authorization,
+pins project/runtime, and limits hook/app-server sources to event recording. This adapter seam
+does not establish native enrollment: no production adapter, listener, protected launcher or
+normal CLI/hook/bridge migration is enabled by this increment.
+
+Mutation request IDs are immutable business identities: the record ID for record operations and
+the claim ID for terminal/acknowledgement operations, scoped by authorized project/operation.
+Existing durable canonical-content/source and claim/receipt conflicts supply replay protection;
+there is no transient request cache to evict. Exact retries retain first-ingest metadata or the
+same delivery. Changed data conflicts. This API deletes no rows or identities; retention and
+generation revocation must be defined before deleting replay state. Read IDs only correlate fresh
+views and do not promise a retained snapshot. Cancellation needs its separate durable protocol.
+
+The whole request frame is at most 80 KiB including newline. Records travel as nested JSON objects
+and retain their exact canonical bytes, rather than expanding through double escaping/base64.
+Replies are at most 16 KiB including the wire envelope; pending pages shrink to fit that actual
+encoding. An explicit single-record read may use the 80 KiB metadata-transfer ceiling. These
+limits do not enable up-to-1MiB worker-result transfer or LIVE4 full-report retrieval.
+Terminal receipts and pending entries include the persisted closed dispatch-result metadata,
+so its validator reason, fence, terminal state and client observation codes survive delivery.
+Their digest is checked against the immutable delivery; no rejected model body is returned.
+
+The client has one deadline per exchange and never starts a service, opens SQLite, stops another
+writer or falls back to persistence. A lost or invalid reply may follow a commit: it is an
+ambiguous delivery, and retry is explicit with the same immutable business identity. Recording a
+receipt or result does not prove child completion/cleanup or release shared account capacity.
+
+Tests exercise the actual client/handler/owner in disposable writer processes: B commits through
+its API while A holds a write transaction, lost replies keep first-ingest metadata on explicit
+retry, and terminal acknowledgements survive restart. Additional checks cover default denial,
+closed schemas, full-request binding, source/operation/thread separation, paging and a client
+import guard that blocks SQLite and persistence owners even when the endpoint is unavailable.
+Fixture context/channels are explicitly synthetic; they do not prove native authentication,
+production intake fairness, independent local timers, account coordination or complete C1-C19.

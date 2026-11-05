@@ -1,0 +1,323 @@
+"""Closed history-owner contracts and client; no database or native authority.
+
+Endpoint discovery, transport identity and caller enrollment are separate gates.
+Project/runtime fields are claims. The client neither starts an owner nor falls
+back to SQLite, and never retries an ambiguously delivered mutation automatically.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from pathlib import Path
+
+from .contracts import ContractError
+from .history_contracts import (
+    HISTORY_REASON_CODES, MAX_SEQUENCE, AttemptBinding, HistoryError, TerminalDelivery,
+    _DIGEST, _ID, _PROJECT, matches, valid_integer,
+)
+from .learning_contracts import SOURCES, canonical_json, parse_bounded_json, validate_learning_record
+from .service_transport import MAX_FRAME_BYTES, MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
+
+HISTORY_PROTOCOL_VERSION = 1
+MAX_HISTORY_REPLY_BYTES = 16_384
+_RECORD_OPERATIONS = {
+    "history.record_event": "event", "history.record_intent": "dispatch_intent",
+    "history.record_outcome": "outcome", "history.bind_verifier": "verification_binding",
+    "history.commit_terminal": "dispatch_result",
+}
+HISTORY_OPERATIONS = frozenset({
+    *_RECORD_OPERATIONS, "history.pending_terminals", "history.acknowledge_terminal", "history.read_record",
+})
+_REQUEST_FIELDS = {"protocol_version", "operation", "request_id", "project_id", "runtime_digest", "payload"}
+_RESPONSE_FIELDS = {"protocol_version", "project_id", "runtime_digest", "request_id", "ready", "result", "reason_code"}
+_METADATA_FIELDS = {"record_id", "source", "source_sequence", "observed_at_ms", "ingested_at_ms", "content_digest", "late"}
+
+
+@dataclass(frozen=True)
+class HistoryRequest:
+    protocol_version: int
+    operation: str
+    request_id: str
+    project_id: str
+    runtime_digest: str
+    payload: dict
+
+    def __post_init__(self) -> None:
+        encode_history_request(self)
+
+
+def _closed(value: object, fields: set[str]) -> bool:
+    return type(value) is dict and value.keys() == fields
+
+
+def _validate_request(request: HistoryRequest) -> None:
+    if (
+        type(request) is not HistoryRequest or type(request.protocol_version) is not int
+        or request.protocol_version != HISTORY_PROTOCOL_VERSION
+        or type(request.operation) is not str or request.operation not in HISTORY_OPERATIONS
+        or not matches(request.request_id, _ID) or not matches(request.project_id, _PROJECT)
+        or not matches(request.runtime_digest, _DIGEST)
+    ):
+        raise HistoryError("history_invalid_request")
+    payload, operation = request.payload, request.operation
+    if operation in _RECORD_OPERATIONS:
+        fields = {"record", "binding"} if operation == "history.commit_terminal" else {"record"}
+        if not _closed(payload, fields):
+            raise HistoryError("history_invalid_request")
+        record = payload["record"]
+        if (
+            type(record) is not dict or type(record.get("schema_version")) is not int
+            or record.get("record_type") != _RECORD_OPERATIONS[operation]
+        ):
+            raise HistoryError("history_invalid_request")
+        validate_learning_record(record)
+        identity = record["record_id"]
+        if operation == "history.commit_terminal":
+            if type(payload["binding"]) is not dict:
+                raise HistoryError("history_invalid_request")
+            binding = AttemptBinding(**payload["binding"])
+            if binding.project_id != request.project_id or binding.run_id != record["run_id"]:
+                raise HistoryError("history_invalid_request")
+            identity = binding.claim_id
+        if request.request_id != identity:
+            raise HistoryError("history_invalid_request")
+    elif operation == "history.acknowledge_terminal":
+        if (
+            not _closed(payload, {"claim_id", "record_content_digest", "receipt_digest"})
+            or request.request_id != payload["claim_id"] or not matches(payload["claim_id"], _ID)
+            or not all(matches(payload[key], _DIGEST) for key in ("record_content_digest", "receipt_digest"))
+        ):
+            raise HistoryError("history_invalid_request")
+    elif operation == "history.pending_terminals":
+        if (
+            not _closed(payload, {"after_sequence", "limit"})
+            or not valid_integer(payload["after_sequence"])
+            or not valid_integer(payload["limit"], minimum=1, maximum=100)
+        ):
+            raise HistoryError("history_invalid_request")
+    elif not _closed(payload, {"record_id"}) or not matches(payload["record_id"], _ID):
+        raise HistoryError("history_invalid_request")
+
+
+def encode_history_request(request: HistoryRequest) -> bytes:
+    invalid = False
+    try:
+        _validate_request(request)
+        encoded = canonical_json({name: getattr(request, name) for name in _REQUEST_FIELDS})
+    except (HistoryError, ContractError, AttributeError, TypeError, ValueError, OverflowError, RecursionError):
+        invalid = True
+    if invalid:
+        raise HistoryError("history_invalid_request")
+    if len(encoded) + 1 > MAX_FRAME_BYTES:
+        raise HistoryError("history_request_too_large")
+    return encoded
+
+
+def decode_history_request(payload: bytes) -> HistoryRequest:
+    if type(payload) is not bytes:
+        raise HistoryError("history_invalid_request")
+    if len(payload) + 1 > MAX_FRAME_BYTES:
+        raise HistoryError("history_request_too_large")
+    invalid = False
+    try:
+        data = parse_bounded_json(payload, max_bytes=MAX_FRAME_BYTES - 1)
+        if not _closed(data, _REQUEST_FIELDS):
+            raise HistoryError("history_invalid_request")
+        request = HistoryRequest(**data)
+    except (HistoryError, ContractError, TypeError, ValueError, OverflowError, RecursionError):
+        invalid = True
+    if invalid:
+        raise HistoryError("history_invalid_request")
+    return request
+
+
+def history_request_digest(request: HistoryRequest) -> str:
+    return hashlib.sha256(encode_history_request(request)).hexdigest()
+
+
+def _validate_metadata(value: object) -> None:
+    if (
+        not _closed(value, _METADATA_FIELDS) or not matches(value["record_id"], _ID)
+        or type(value["source"]) is not str or value["source"] not in SOURCES
+        or not valid_integer(value["source_sequence"], minimum=1, maximum=MAX_SEQUENCE - 1)
+        or not valid_integer(value["observed_at_ms"]) or not valid_integer(value["ingested_at_ms"])
+        or not matches(value["content_digest"], _DIGEST) or type(value["late"]) is not bool
+    ):
+        raise HistoryError("history_invalid_response")
+
+
+def delivery_from_data(value: object) -> TerminalDelivery:
+    invalid = False
+    try:
+        delivery = _decoded_delivery(value)
+    except (HistoryError, ContractError, KeyError, TypeError, ValueError, OverflowError, RecursionError):
+        invalid = True
+    if invalid:
+        raise HistoryError("history_invalid_response")
+    return delivery
+
+
+def _decoded_delivery(value: object) -> TerminalDelivery:
+    fields = {"delivery_sequence", "binding", "record_id", "record_content_digest", "result_digest"}
+    if not _closed(value, fields | {"dispatch_result"}):
+        raise HistoryError("history_invalid_response")
+    if type(value["binding"]) is not dict:
+        raise HistoryError("history_invalid_response")
+    delivery = TerminalDelivery(**{**{name: value[name] for name in fields}, "binding": AttemptBinding(**value["binding"])})
+    record = validate_learning_record(value["dispatch_result"])
+    if (
+        record["record_type"] != "dispatch_result" or record["record_id"] != delivery.record_id
+        or record["run_id"] != delivery.binding.run_id or record["result_digest"] != delivery.result_digest
+        or hashlib.sha256(canonical_json(record)).hexdigest() != delivery.record_content_digest
+    ):
+        raise HistoryError("history_invalid_response")
+    return delivery
+
+
+def _validate_result(request: HistoryRequest, result: object) -> None:
+    operation = request.operation
+    if operation in _RECORD_OPERATIONS and operation != "history.commit_terminal":
+        _validate_metadata(result)
+        record = request.payload["record"]
+        if (
+            result["record_id"] != record["record_id"] or result["observed_at_ms"] != record["observed_at_ms"]
+            or result["content_digest"] != hashlib.sha256(canonical_json(record)).hexdigest()
+        ):
+            raise HistoryError("history_invalid_response")
+    elif operation == "history.commit_terminal":
+        delivery = delivery_from_data(result)
+        if (
+            delivery.binding.as_data() != request.payload["binding"]
+            or delivery.record_id != request.payload["record"]["record_id"]
+            or delivery.result_digest != request.payload["record"]["result_digest"]
+            or delivery.record_content_digest != hashlib.sha256(canonical_json(request.payload["record"])).hexdigest()
+        ):
+            raise HistoryError("history_invalid_response")
+    elif operation == "history.pending_terminals":
+        if not _closed(result, {"deliveries", "next_after_sequence"}) or type(result["deliveries"]) is not list:
+            raise HistoryError("history_invalid_response")
+        if len(result["deliveries"]) > request.payload["limit"]:
+            raise HistoryError("history_invalid_response")
+        sequence = request.payload["after_sequence"]
+        for data in result["deliveries"]:
+            delivery = delivery_from_data(data)
+            if delivery.binding.project_id != request.project_id or delivery.delivery_sequence <= sequence:
+                raise HistoryError("history_invalid_response")
+            sequence = delivery.delivery_sequence
+        expected = sequence if result["deliveries"] else None
+        if result["next_after_sequence"] != expected or (
+            expected is not None and type(result["next_after_sequence"]) is not int
+        ):
+            raise HistoryError("history_invalid_response")
+    elif operation == "history.acknowledge_terminal":
+        if not _closed(result, {"recorded"}) or result["recorded"] is not True:
+            raise HistoryError("history_invalid_response")
+    else:
+        if not _closed(result, {"record", "metadata"}) or type(result["record"]) is not dict:
+            raise HistoryError("history_invalid_response")
+        _validate_metadata(result["metadata"])
+        record, metadata = validate_learning_record(result["record"]), result["metadata"]
+        if (
+            record["record_id"] != request.payload["record_id"] or metadata["record_id"] != record["record_id"]
+            or metadata["observed_at_ms"] != record["observed_at_ms"]
+            or metadata["content_digest"] != hashlib.sha256(canonical_json(record)).hexdigest()
+        ):
+            raise HistoryError("history_invalid_response")
+
+
+def decode_history_response(raw: bytes, request: HistoryRequest) -> dict:
+    invalid = False
+    try:
+        _validate_request(request)
+        limit = MAX_FRAME_BYTES if request.operation == "history.read_record" else MAX_HISTORY_REPLY_BYTES
+        if type(raw) is not bytes or len(raw) + 1 > limit:
+            raise HistoryError("history_invalid_response")
+        response = parse_bounded_json(raw, max_bytes=limit - 1)
+        if (
+            not _closed(response, _RESPONSE_FIELDS) or type(response["protocol_version"]) is not int
+            or response["protocol_version"] != HISTORY_PROTOCOL_VERSION
+            or response["project_id"] != request.project_id or response["runtime_digest"] != request.runtime_digest
+            or response["request_id"] != request.request_id or type(response["ready"]) is not bool
+        ):
+            raise HistoryError("history_invalid_response")
+        if response["ready"]:
+            if response["reason_code"] is not None:
+                raise HistoryError("history_invalid_response")
+            _validate_result(request, response["result"])
+        elif (
+            response["result"] is not None or type(response["reason_code"]) is not str
+            or response["reason_code"] not in HISTORY_REASON_CODES
+        ):
+            raise HistoryError("history_invalid_response")
+    except (HistoryError, ContractError, AttributeError, TypeError, ValueError, KeyError, OverflowError, RecursionError):
+        invalid = True
+    if invalid:
+        raise HistoryError("history_invalid_response")
+    if not response["ready"]:
+        raise HistoryError(response["reason_code"])
+    return response["result"]
+
+
+class HistoryClient:
+    """A bounded, non-retrying client for an already trusted local endpoint.
+
+    Runtime/project labels alone do not authenticate that endpoint or its caller.
+    A transport/parse failure may follow a commit; explicitly retry the same
+    immutable business identity after reconciling availability.
+    """
+
+    def __init__(self, endpoint: Path, project_id: str, runtime_digest: str, *, timeout: float) -> None:
+        if (
+            not isinstance(endpoint, Path) or not endpoint.is_absolute()
+            or not matches(project_id, _PROJECT) or not matches(runtime_digest, _DIGEST)
+            or type(timeout) not in (int, float) or not 0 < timeout <= MAX_TIMEOUT_SECONDS
+        ):
+            raise HistoryError("history_invalid_input")
+        self._endpoint, self._project, self._runtime, self._timeout = endpoint, project_id, runtime_digest, timeout
+
+    def _call(self, operation: str, identity: str, payload: dict) -> dict:
+        request = HistoryRequest(HISTORY_PROTOCOL_VERSION, operation, identity, self._project, self._runtime, payload)
+        encoded = encode_history_request(request)
+        request = decode_history_request(encoded)
+        failure = False
+        try:
+            raw = exchange_frame(self._endpoint, encoded, timeout=self._timeout,
+                                 response_limit=MAX_FRAME_BYTES if operation == "history.read_record" else MAX_HISTORY_REPLY_BYTES)
+        except ServiceTransportError:
+            failure = True
+        if failure:
+            raise HistoryError("history_service_unavailable")
+        return decode_history_response(raw, request)
+
+    def _record_call(self, operation: str, record: dict) -> dict:
+        if type(record) is not dict:
+            raise HistoryError("history_invalid_input")
+        return self._call(operation, record.get("record_id"), {"record": record})
+
+    def record_event(self, record: dict) -> dict:
+        return self._record_call("history.record_event", record)
+
+    def record_intent(self, record: dict) -> dict:
+        return self._record_call("history.record_intent", record)
+
+    def record_outcome(self, record: dict) -> dict:
+        return self._record_call("history.record_outcome", record)
+
+    def bind_verifier(self, record: dict) -> dict:
+        return self._record_call("history.bind_verifier", record)
+
+    def commit_terminal(self, record: dict, binding: AttemptBinding) -> dict:
+        if type(binding) is not AttemptBinding:
+            raise HistoryError("history_invalid_input")
+        return self._call("history.commit_terminal", binding.claim_id, {"record": record, "binding": binding.as_data()})
+
+    def pending_terminals(self, *, after_sequence: int = 0, limit: int = 10) -> dict:
+        return self._call("history.pending_terminals", "pending", {"after_sequence": after_sequence, "limit": limit})
+
+    def acknowledge_terminal(self, claim_id: str, record_content_digest: str, receipt_digest: str) -> dict:
+        return self._call("history.acknowledge_terminal", claim_id,
+                          {"claim_id": claim_id, "record_content_digest": record_content_digest, "receipt_digest": receipt_digest})
+
+    def read_record(self, record_id: str) -> dict:
+        return self._call("history.read_record", "read", {"record_id": record_id})
