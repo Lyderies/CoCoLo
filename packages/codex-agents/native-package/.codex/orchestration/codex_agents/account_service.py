@@ -20,7 +20,8 @@ from .account_api import (
 )
 from .learning_contracts import canonical_json
 from .learning_store import (
-    OWNER_SIGNER_LINE, LearningLedger, LedgerError, _owner_key_identity, _signer_fingerprint,
+    OWNER_SIGNER_LINE, LearningLedger, LedgerError, OwnerSignerNotConfigured, StateError,
+    _owner_key_identity, _signer_fingerprint,
 )
 
 
@@ -105,11 +106,18 @@ class AccountOwnerViews:
             count, last = row[0], row[1]
             if not integer(count) or (last is not None and not integer(last)) or (count == 0) != (last is None):
                 raise AccountError("account_incompatible")
-            signer = self._ledger._current_signer_bytes()
+            try:
+                signer = self._ledger.state._owner_signer_bytes()
+            except (FileNotFoundError, OwnerSignerNotConfigured):
+                signer, unconfigured = None, True
+            except (StateError, OSError):
+                signer, unconfigured = None, False
+            else:
+                unconfigured = False
             if owner is None:
                 if count:
                     raise AccountError("account_incompatible")
-                return {"state": "not_configured" if signer is None else "mismatch", "fingerprint": None,
+                return {"state": "not_configured" if unconfigured else "mismatch", "fingerprint": None,
                         "sequence": 0, "replacements": 0, "last_replaced_at_ms": None}
             try:
                 if OWNER_SIGNER_LINE.fullmatch(owner[1]) is None:

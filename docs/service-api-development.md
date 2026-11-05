@@ -238,6 +238,8 @@ connection and does not start or migrate persistence on request. Its project vie
 the authorized active project's ID, status and creation time. Its owner-key view returns the
 public fingerprint, history sequence, replacement count/time and signer-file consistency state
 through that same owner's connection. A mismatch stays visible without changing owner history.
+With empty history, only a missing or safely checked empty signer file is `not_configured`;
+malformed, unsafe or present-but-unrecorded signer material reports `mismatch`.
 No key bytes, signatures, roots, paths, SQL or arbitrary methods are returned or selected by JSON.
 
 Authorization defaults to denial before backend work. The server-only adapter output must bind

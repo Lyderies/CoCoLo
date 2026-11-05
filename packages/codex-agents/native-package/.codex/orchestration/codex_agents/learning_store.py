@@ -217,6 +217,10 @@ class StateError(RuntimeError):
     """Raised when local state would violate an accepted boundary."""
 
 
+class OwnerSignerNotConfigured(StateError):
+    """The checked signer file is empty; other unsafe states stay distinct."""
+
+
 class LedgerError(RuntimeError):
     """Raised for controlled ledger failures without echoing record content."""
 
@@ -1307,7 +1311,7 @@ class LearningState:
                 raise StateError("owner allowed-signers path is unsafe")
             content = handle.read(OWNER_SIGNERS_MAX_BYTES + 1)
         if not content:
-            raise StateError("owner public key is not configured")
+            raise OwnerSignerNotConfigured("owner public key is not configured")
         # The whole file must be the one line: ssh-keygen reads all of it, and a
         # key after an over-long first line would otherwise go unchecked.
         if len(content) > OWNER_SIGNERS_MAX_BYTES or OWNER_SIGNER_LINE.fullmatch(content) is None:

@@ -89,7 +89,8 @@ class AccountApiTests(unittest.TestCase):
         key = self.state.digest_key()
         changes = self.ledger._connection.total_changes
         history = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_key_history")]
-        with mock.patch.object(self.state, "recorded_owner_key", side_effect=AssertionError("second DB connection")):
+        with mock.patch.object(self.state, "recorded_owner_key", side_effect=AssertionError("second DB connection")), \
+                mock.patch("sqlite3.connect", side_effect=AssertionError("second DB connection")):
             a = self.call(self.request("account.project"))
             b = self.call(self.request("account.project", project=self.projects[1]))
             owner = self.call(self.request("account.owner_key"))
@@ -106,6 +107,14 @@ class AccountApiTests(unittest.TestCase):
         with self.assertRaisesRegex(AccountError, "account_unavailable"):
             self.call(self.request())
         self.assertEqual(self.projects[0], self.ledger.project_for_root(self.roots[0]))
+
+    def test_inactive_project_cannot_read_registration_or_owner_metadata(self):
+        self.ledger._connection.execute("UPDATE projects SET status='deleted' WHERE project_id=?", (self.projects[0],))
+        with mock.patch.object(self.state, "_owner_signer_bytes", side_effect=AssertionError("inactive project read key")):
+            for operation in ("account.project", "account.owner_key"):
+                with self.assertRaisesRegex(AccountError, "account_project_not_found"):
+                    self.call(self.request(operation))
+        self.assertFalse(self.call(self.request())["database_checked"])
 
     def test_malformed_frames_and_open_fields_are_fixed_and_never_echoed(self):
         data = json.loads(encode_account_request(self.request()))
@@ -177,7 +186,8 @@ class AccountApiTests(unittest.TestCase):
                         self.request("account.project", identity="another-read")):
             with self.assertRaisesRegex(AccountError, "account_invalid_response"):
                 decode_account_response(canonical_json(response), changed)
-        for field, value in (("protocol_version", True), ("ready", 1), ("request_digest", "0" * 64)):
+        for field, value in (("protocol_version", True), ("ready", 1),
+                             ("runtime_digest", "b" * 64), ("request_digest", "0" * 64)):
             with self.assertRaisesRegex(AccountError, "account_invalid_response"):
                 decode_account_response(canonical_json({**response, field: value}), request)
         for value in (True, 1.0, -1):
@@ -211,6 +221,39 @@ class AccountApiTests(unittest.TestCase):
             self.state.allowed_signers_path.write_bytes(line)
         self.assertEqual(first, self.call(request))
 
+    def test_empty_history_distinguishes_missing_empty_and_damaged_signer_files(self):
+        # Separate disposable unconfigured account, not a per-project production owner.
+        state = LearningState(self.base / "unconfigured")
+        authorize_collector_runtime(state, ORCHESTRATION_ROOT / "cli.py")
+        ledger = LearningLedger(state)
+        self.addCleanup(ledger.close)
+        project = ledger.register_project(self.roots[0], now_ms=1)
+        views = AccountOwnerViews(ledger)
+        changes = ledger._connection.total_changes
+        expected = {"state": "not_configured", "fingerprint": None, "sequence": 0,
+                    "replacements": 0, "last_replaced_at_ms": None}
+        path = state.allowed_signers_path
+        self.assertEqual(expected, views.owner_key(project))
+        path.unlink()
+        self.assertEqual(expected, views.owner_key(project))
+        for content in (b"CANARY-malformed", b"x" * 4097):
+            path.write_bytes(content)
+            path.chmod(0o600)
+            self.assertEqual({**expected, "state": "mismatch"}, views.owner_key(project))
+            path.unlink()
+        path.write_bytes(b"")
+        path.chmod(0o644)
+        self.assertEqual({**expected, "state": "mismatch"}, views.owner_key(project))
+        path.unlink()
+        path.symlink_to(self.base / "missing-signer")
+        self.assertEqual({**expected, "state": "mismatch"}, views.owner_key(project))
+        path.unlink()
+        path.write_bytes(self.state.allowed_signers_path.read_bytes())
+        path.chmod(0o600)
+        self.assertEqual({**expected, "state": "mismatch"}, views.owner_key(project))
+        self.assertEqual(changes, ledger._connection.total_changes)
+        self.assertEqual(0, ledger._connection.execute("SELECT COUNT(*) FROM owner_key_history").fetchone()[0])
+
     def test_owner_replacement_is_a_fresh_public_view_through_the_same_connection(self):
         key = self.state.digest_key()
         request = self.request("account.owner_key")
@@ -231,14 +274,16 @@ class AccountApiTests(unittest.TestCase):
 
     def test_wrong_sql_thread_is_refused_but_health_survives_a_blocked_owner(self):
         replies = []
-        request = self.request("account.project")
-        worker = threading.Thread(target=lambda: replies.append(self.service.handle(encode_account_request(request), TOKEN)))
-        worker.start()
-        worker.join(3)
-        self.assertFalse(worker.is_alive())
-        with self.assertRaisesRegex(AccountError, "account_wrong_owner"):
-            decode_account_response(replies[0], request)
+        for operation in ("account.project", "account.owner_key"):
+            request = self.request(operation)
+            worker = threading.Thread(target=lambda: replies.append(self.service.handle(encode_account_request(request), TOKEN)))
+            worker.start()
+            worker.join(3)
+            self.assertFalse(worker.is_alive())
+            with self.assertRaisesRegex(AccountError, "account_wrong_owner"):
+                decode_account_response(replies[-1], request)
         entered, release = threading.Event(), threading.Event()
+        request = self.request("account.project")
         health, failures = [], []
         original = self.views.project
         def blocked(project):
@@ -443,6 +488,8 @@ except AccountError as exc:
         self._server_line(process, "seen-2")
         self.assertEqual(expected, b.owner_key())
         self._server_line(process, "seen-3")
+        self.assertEqual({"transport_alive": True, "database_checked": False}, a.health())
+        self._server_line(process, "seen-4")
         stop()
         self.assertEqual(key, self.state.digest_key())
         endpoint, process, stop = self._start_view_server("views")
