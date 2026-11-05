@@ -63,3 +63,18 @@ when an exchange fails. The old persistence-module imports remain compatibility 
 The CLI and hook use the new client import, but still use persistence/state helpers for other
 work: normal CLI ledger ownership has not yet migrated. Independent supervisors, bounded
 server intake/queues, account coordination and cross-store migration/recovery remain required.
+
+## Queue scheduling increment
+
+`service_queue.ProjectFairQueue` is an internal in-memory metadata queue, with explicit
+per-project quotas and a round-robin turn for each active project. One project's backlog
+cannot consume another admitted project's quota. The active-project ceiling, quota product
+and item size bound retained entries and payload bytes. Overload has fixed codes. A consumer
+takes one item without waiting for work; the queue does no I/O and executes no callbacks.
+
+The service must authenticate and validate requests before selecting a lane or using a project
+label. Queues grant no caller authority, business idempotency, launch permission or durable
+receipt. Separate instances are needed for reserved control/terminal/restriction capacity and
+routine work. This helper does not start a service, choose installed capacity defaults, bound
+in-flight workers, coalesce updates or make a blocked writer safe for local timers. Those
+integration, measurement and recovery checks remain required; queued memory is lost on a crash.

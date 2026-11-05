@@ -61,6 +61,9 @@
 - Collector client code and its shared metadata/errors are separate from the SQLite owner.
   Existing imports remain compatibility aliases; protocol behavior and runtime checks are
   preserved. This is preparation for the service boundary, not completed API migration.
+- An internal metadata queue has finite per-project quotas, round-robin scheduling and fixed
+  overload codes. Separate lane instances can reserve control/terminal capacity. It grants no
+  caller authority or durable receipt; service integration and measured defaults remain open.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.
