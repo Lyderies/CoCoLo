@@ -32,6 +32,8 @@ _APPLICATION_ID = 0x43444831
 _SCHEMA_VERSION = 1
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding"})
 MAX_DELIVERY_PAGE_BYTES = 16_384
+MAX_BINDING_BYTES = 4096
+MAX_HISTORY_ROW_BYTES = 2 * MAX_RECORD_BYTES
 _SCHEMA = """
 CREATE TABLE history_identity(
  project_id TEXT PRIMARY KEY, next_source_sequence INTEGER NOT NULL,
@@ -115,6 +117,9 @@ class ProjectHistory:
                 except FileNotFoundError:
                     pass
             self._connection = sqlite3.connect(directory / "history.sqlite3", timeout=0.25, isolation_level=None)
+            # Bound corrupted TEXT/BLOB rows in SQLite before Python receives
+            # them. A valid record plus its fixed metadata fits this ceiling.
+            self._connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_HISTORY_ROW_BYTES)
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA trusted_schema=OFF")
             self._connection.execute("PRAGMA foreign_keys=ON")
@@ -270,7 +275,7 @@ class ProjectHistory:
     def _entry(self, row) -> HistoryEntry:
         invalid = False
         try:
-            content = bytes(row["content"])
+            content = self._stored_blob(row["content"], maximum=MAX_RECORD_BYTES)
             checked = self._checked_record(content, row["source"], row["ingested_at_ms"])
             invalid = (
                 row["project_id"] != self.project_id or row["record_id"] != checked["record_id"]
@@ -286,7 +291,7 @@ class ProjectHistory:
             raise HistoryError("history_incompatible")
         return HistoryEntry(
             row["project_id"], row["record_id"], row["source"], row["source_sequence"],
-            row["observed_at_ms"], row["ingested_at_ms"], bytes(row["content"]),
+            row["observed_at_ms"], row["ingested_at_ms"], content,
             row["content_digest"], bool(row["late"]),
         )
 
@@ -296,15 +301,18 @@ class ProjectHistory:
             "SELECT * FROM records WHERE project_id=? AND record_id=?", (self.project_id, checked["record_id"]),
         ).fetchone()
         if row is not None:
-            if row["content_digest"] != digest or bytes(row["content"]) != content or row["source"] != source:
+            entry = self._entry(row)
+            if entry.content_digest != digest or entry.content != content or entry.source != source:
                 raise HistoryError("history_conflict")
-            return self._entry(row)
+            return entry
         sequence = self._connection.execute("SELECT next_source_sequence FROM history_identity").fetchone()[0]
         if not valid_integer(sequence, minimum=1, maximum=MAX_SEQUENCE - 1):
             raise HistoryError("history_sequence_exhausted")
         maximum = self._connection.execute(
             "SELECT COALESCE(MAX(observed_at_ms),0) FROM records WHERE project_id=?", (self.project_id,),
         ).fetchone()[0]
+        if not valid_integer(maximum):
+            raise HistoryError("history_incompatible")
         late = checked["observed_at_ms"] < maximum
         self._connection.execute(
             "INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -335,10 +343,18 @@ class ProjectHistory:
             raise HistoryError("history_not_found")
         return self._entry(row)
 
+    @staticmethod
+    def _stored_blob(value: object, *, maximum: int) -> bytes:
+        # bytes(INTEGER) allocates that many bytes; bytes(TEXT) raises TypeError.
+        # SQLite BLOB affinity does not enforce the storage class. Never coerce.
+        if type(value) is not bytes or not 0 < len(value) <= maximum:
+            raise HistoryError("history_incompatible")
+        return value
+
     def _delivery(self, row) -> TerminalDelivery:
         invalid = False
         try:
-            encoded = bytes(row["binding"])
+            encoded = self._stored_blob(row["binding"], maximum=MAX_BINDING_BYTES)
             binding = AttemptBinding(**parse_bounded_json(encoded))
             entry = self.record(row["record_id"])
             checked = parse_bounded_json(entry.content)
@@ -386,9 +402,10 @@ class ProjectHistory:
                 (self.project_id, binding.claim_id),
             ).fetchone()
             if existing is not None:
-                if bytes(existing["binding"]) != encoded_binding or existing["record_content_digest"] != digest:
+                delivery = self._delivery(existing)
+                if canonical_json(delivery.binding.as_data()) != encoded_binding or delivery.record_content_digest != digest:
                     raise HistoryError("history_conflict")
-                return self._delivery(existing)
+                return delivery
             sequence = self._connection.execute("SELECT next_delivery_sequence FROM history_identity").fetchone()[0]
             if not valid_integer(sequence, minimum=1, maximum=MAX_SEQUENCE - 1):
                 raise HistoryError("history_sequence_exhausted")

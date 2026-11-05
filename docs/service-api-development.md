@@ -113,6 +113,10 @@ row and rejects a changed receipt. Acknowledging it cannot change central accoun
 A valid unfenced completion retains its null forced-terminal state; the trusted service must
 establish actual worker completion and cleanup separately. Parsing a record or its fence never
 proves cleanup or authorizes account capacity release.
+Stored BLOBs are checked without coercion, including replay paths: an SQLite integer is never
+passed to `bytes()`. Binding bodies are at most 4 KiB, records retain their 64 KiB limit, and
+the owner's SQLite connection caps complete row/value lengths at 128 KiB. Oversized corrupt
+rows fail with a fixed unavailable code before delivery; invalid stored types fail closed.
 
 Tests exercise the actual persistence methods in separate processes, abrupt process exit before
 and after commit, reopen/retry, terminal atomicity and independent B writes during an A write

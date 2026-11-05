@@ -21,7 +21,7 @@ from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 from codex_agents.contracts import ContractError
 from codex_agents.history_contracts import MAX_SEQUENCE, AttemptBinding, HistoryError
 from codex_agents.learning_contracts import canonical_json, validate_learning_record
-from codex_agents.project_history import MAX_DELIVERY_PAGE_BYTES, ProjectHistory
+from codex_agents.project_history import MAX_DELIVERY_PAGE_BYTES, MAX_HISTORY_ROW_BYTES, ProjectHistory
 from codex_agents import project_history
 from tests.learning_support import event_record, verification_outcome
 
@@ -182,6 +182,41 @@ class ProjectHistoryTests(unittest.TestCase):
         self.store._connection.execute("UPDATE records SET content_digest=?", ("f" * 64,))
         with self.assertRaisesRegex(HistoryError, "history_incompatible"):
             self.store.record("dispatch-1")
+
+    def test_integer_and_text_blob_storage_cannot_allocate_or_escape_during_replay(self) -> None:
+        content = canonical_json(event_record("event-replay"))
+        self.store.append_record(content, source="host", ingested_at_ms=1000)
+        self.store.commit_terminal(terminal(), binding(), ingested_at_ms=1000)
+        for stored in (1 << 62, content.decode("ascii"), b"x" * 65_537):
+            self.store._connection.execute("UPDATE records SET content=? WHERE record_id='event-replay'", (stored,))
+            for operation in (
+                lambda: self.store.record("event-replay"),
+                lambda: self.store.append_record(content, source="host", ingested_at_ms=1000),
+            ):
+                with self.assertRaisesRegex(HistoryError, "history_incompatible") as caught:
+                    operation()
+                self.assertIsNone(caught.exception.__context__)
+        for stored in (1 << 62, canonical_json(binding().as_data()).decode("ascii"), b"x" * 4097):
+            self.store._connection.execute("UPDATE terminal_outbox SET binding=?", (stored,))
+            for operation in (
+                self.store.pending_terminals,
+                lambda: self.store.commit_terminal(terminal(), binding(), ingested_at_ms=1000),
+            ):
+                with self.assertRaisesRegex(HistoryError, "history_incompatible") as caught:
+                    operation()
+                self.assertIsNone(caught.exception.__context__)
+
+    def test_sqlite_length_limit_bounds_oversized_corrupt_rows_before_delivery(self) -> None:
+        self.store.commit_terminal(terminal(), binding(), ingested_at_ms=1000)
+        # Another test-only connection simulates a corrupt row that this owner
+        # could never have written through its validators or connection limits.
+        connection = sqlite3.connect(self.directory / "history.sqlite3")
+        connection.execute("UPDATE terminal_outbox SET binding=?", (b"x" * (MAX_HISTORY_ROW_BYTES + 1),))
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(HistoryError, "history_unavailable") as caught:
+            self.store.pending_terminals()
+        self.assertIsNone(caught.exception.__context__)
 
     def test_verified_receipt_ack_does_not_allow_changed_binding_or_receipt(self) -> None:
         delivery = self.store.commit_terminal(terminal(), binding(), ingested_at_ms=100)
