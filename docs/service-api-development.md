@@ -57,6 +57,9 @@ Bulk worker-result transfer needs its own bounded contract rather than increasin
 limits or accepting an arbitrary caller-supplied path.
 
 This helper does not authenticate peers or enroll a caller. No new privileged endpoint is enabled.
-`CollectorClient` still lives in the persistence module, and normal CLI ledger ownership has not
-yet migrated. Independent supervisors, bounded server intake/queues, account coordination and
-cross-store migration/recovery remain required.
+`CollectorClient` now lives in `collector_client`, with shared wire metadata and errors in
+`collector_contracts`. These modules do not import the persistence owner or SQLite, including
+when an exchange fails. The old persistence-module imports remain compatibility aliases.
+The CLI and hook use the new client import, but still use persistence/state helpers for other
+work: normal CLI ledger ownership has not yet migrated. Independent supervisors, bounded
+server intake/queues, account coordination and cross-store migration/recovery remain required.

@@ -96,13 +96,13 @@ def _record(args: argparse.Namespace, raw: bytes, checkout_root: Path | None) ->
     # Appended, never first: with -I the script's folder is not on the path, so a module
     # planted beside this file (a `socket.py`) can never shadow the standard library.
     sys.path.append(str(ORCHESTRATION_ROOT))
+    from codex_agents.collector_client import CollectorClient
+    from codex_agents.collector_contracts import CollectorError
     from codex_agents.contracts import ContractError
     from codex_agents.host_paths import HostPathError
     from codex_agents.learning_adapters import normalize_hook
     from codex_agents.learning_contracts import parse_bounded_json
     from codex_agents.learning_store import (
-        CollectorClient,
-        CollectorError,
         LearningState,
         StateError,
         client_health_clear,

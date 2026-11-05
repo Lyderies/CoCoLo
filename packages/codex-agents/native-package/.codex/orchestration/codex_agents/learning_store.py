@@ -25,6 +25,24 @@ try:  # AF_UNIX collector is currently supported on POSIX hosts.
 except ImportError:  # pragma: no cover - Windows has no supported collector transport yet.
     fcntl = None  # type: ignore[assignment]
 
+from .collector_client import (
+    COLLECTOR_RUNTIME_DIGEST as COLLECTOR_RUNTIME_DIGEST,
+    PACKAGE_VERSION as PACKAGE_VERSION,
+    CollectorClient as CollectorClient,
+)
+from .collector_contracts import (
+    COLLECTOR_PROTOCOL_VERSION as COLLECTOR_PROTOCOL_VERSION,
+    LEDGER_SCHEMA_VERSION as LEDGER_SCHEMA_VERSION,
+    MAX_REQUEST_BYTES as MAX_REQUEST_BYTES,
+    CollectorAuthorizationError as CollectorAuthorizationError,
+    CollectorBuildConflictError as CollectorBuildConflictError,
+    CollectorError as CollectorError,
+    CollectorNewerVersionError as CollectorNewerVersionError,
+    CollectorRestartError as CollectorRestartError,
+    CollectorUpgradeRequired as CollectorUpgradeRequired,
+    CollectorVersionError as CollectorVersionError,
+    _version_tuple,
+)
 from .contracts import (
     HOST_OUTCOME_DIGEST,
     RESULT_VALIDATION_REASON_CODES,
@@ -37,7 +55,6 @@ from .contracts import (
 )
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION,
-    MAX_RECORD_BYTES,
     RECORD_TYPES,
     canonical_json,
     content_digest,
@@ -51,54 +68,7 @@ from .learning_contracts import (
 )
 from .learning_adapters import HOOK_EVENTS, empty_usage, load_client_capabilities, reconcile_run
 from .runtime_files import ORCHESTRATION_PREFIX, RUNTIME_FILES, runtime_digest
-from .service_transport import ServiceTransportError, exchange_frame
 
-
-def _collector_runtime_digest() -> str:
-    """The digest of every runtime file this process runs from (`RUNTIME_FILES`)."""
-
-    orchestration_root = Path(__file__).resolve().parent.parent
-    return runtime_digest(
-        {relative: (orchestration_root / relative).read_bytes() for relative in RUNTIME_FILES}
-    )
-
-
-def _package_version() -> str:
-    bundle_root = Path(__file__).resolve().parent.parent.parent.parent
-    manifest_path = bundle_root / ".codex" / "orchestration" / "install-manifest.json"
-    if manifest_path.is_file():
-        try:
-            manifest = json.loads(manifest_path.read_bytes())
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError("installed package manifest is invalid") from exc
-        value = manifest.get("version") if isinstance(manifest, dict) else None
-    else:
-        value = (bundle_root / "VERSION").read_text(encoding="ascii").strip()
-    if not isinstance(value, str):
-        raise RuntimeError("package version is unavailable")
-    if len(value.split(".")) != 3 or not all(
-        part.isdigit() for part in value.split(".")
-    ):
-        raise RuntimeError("package VERSION must be a three-part numeric version")
-    return value
-
-
-def _version_tuple(value: Any) -> tuple[int, int, int] | None:
-    if not isinstance(value, str):
-        return None
-    parts = value.split(".")
-    if len(parts) != 3 or not all(part.isascii() and part.isdigit() for part in parts):
-        return None
-    try:
-        return (int(parts[0]), int(parts[1]), int(parts[2]))
-    except ValueError:
-        return None
-
-
-LEDGER_SCHEMA_VERSION = 6
-COLLECTOR_PROTOCOL_VERSION = 1
-COLLECTOR_RUNTIME_DIGEST = _collector_runtime_digest()
-PACKAGE_VERSION = _package_version()
 COLLECTOR_AUTHORIZATION_SCHEMA_VERSION = 1
 # The one line `install_owner_public_key` writes; the allowed-signers file holds nothing else.
 # The owner's allowed-signers file is read whole up to this size; anything longer refuses.
@@ -140,7 +110,6 @@ MAX_PENDING_OPERATIONAL_CHECKS = 256
 # never needs more.
 MAX_WORKER_RESULT_BYTES = 1_048_576
 INGESTION_FRESH_MS = 30 * 60 * 1000
-MAX_REQUEST_BYTES = MAX_RECORD_BYTES + 16_384
 PRODUCER_AUTHORITY = {
     "hook": {"event"},
     "app_server": {"event"},
@@ -253,38 +222,6 @@ class LedgerError(RuntimeError):
 
 class ProjectNotRegisteredError(LedgerError):
     """Raised when an exact project root has no active registration."""
-
-
-class CollectorError(RuntimeError):
-    """Raised for bounded collector protocol failures."""
-
-    def __init__(self, message: str, *, code: str | None = None) -> None:
-        super().__init__(message)
-        self.code = code
-
-
-class CollectorVersionError(CollectorError):
-    """Raised when a healthy collector runs a different package build."""
-
-
-class CollectorUpgradeRequired(CollectorVersionError):
-    """Raised when the active collector is older than this installed package."""
-
-
-class CollectorNewerVersionError(CollectorVersionError):
-    """Raised without replacement when a newer collector owns shared state."""
-
-
-class CollectorBuildConflictError(CollectorVersionError):
-    """Raised without replacement for divergent builds with the same version."""
-
-
-class CollectorAuthorizationError(CollectorVersionError):
-    """Raised when this package is not the owner-authorized collector runtime."""
-
-
-class CollectorRestartError(CollectorError):
-    """Raised after a ledger operation committed but collector recovery failed."""
 
 
 _BACKUP_PROJECT_COLUMNS = (
@@ -9747,131 +9684,6 @@ class CollectorServer:
             return True
         self._thread.join(timeout)
         return not self._thread.is_alive()
-
-
-class CollectorClient:
-    """Bounded, fail-fast client used by hook and App Server adapters."""
-
-    def __init__(self, socket_path: Path, *, timeout: float = 0.25) -> None:
-        self.socket_path = socket_path
-        self.timeout = timeout
-
-    def _request(self, request: dict[str, Any]) -> dict[str, Any]:
-        reason = None
-        try:
-            raw = exchange_frame(
-                self.socket_path, canonical_json(request), timeout=self.timeout,
-                request_limit=MAX_REQUEST_BYTES, response_limit=16_384,
-            )
-        except ServiceTransportError as exc:
-            reason = exc.reason_code
-        if reason == "request_too_large":
-            raise CollectorError("collector request is oversized")
-        if reason == "response_too_large":
-            raise CollectorError("collector response is oversized")
-        if reason is not None:
-            raise CollectorError("collector is unavailable", code="transport_unavailable")
-        invalid_response = False
-        try:
-            response = json.loads(raw)
-        except (ValueError, UnicodeError, RecursionError):
-            invalid_response = True
-        if invalid_response:
-            raise CollectorError("collector response is invalid", code="response_invalid")
-        if not isinstance(response, dict) or response.get("ok") is not True:
-            code = response.get("code", "unknown") if isinstance(response, dict) else "unknown"
-            raise CollectorError(f"collector rejected request: {code}", code=code)
-        return response
-
-    def bind(
-        self, project_root: Path, session_id: str, producer: str, client_version: str
-    ) -> str:
-        response = self._request(
-            {
-                "protocol": COLLECTOR_PROTOCOL_VERSION,
-                "op": "bind",
-                "project_root": str(project_root.resolve()),
-                "session_id": session_id,
-                "producer": producer,
-                "client_version": client_version,
-            }
-        )
-        return str(response["binding_token"])
-
-    def ingest(self, binding_token: str, record: dict[str, Any]) -> dict[str, Any]:
-        return self._request(
-            {
-                "protocol": COLLECTOR_PROTOCOL_VERSION,
-                "op": "ingest",
-                "binding_token": binding_token,
-                "record": record,
-            }
-        )
-
-    def health(self, project_root: Path | None = None) -> dict[str, Any]:
-        request: dict[str, Any] = {
-            "protocol": COLLECTOR_PROTOCOL_VERSION,
-            "op": "health",
-        }
-        if project_root is not None:
-            request["project_root"] = str(project_root.resolve())
-        response = self._request(request)
-        server_schema = response.get("schema_version")
-        server_version = _version_tuple(response.get("runtime_version"))
-        client_version = _version_tuple(PACKAGE_VERSION)
-        if client_version is None:  # guarded when PACKAGE_VERSION is loaded
-            raise CollectorError("installed package version is invalid")
-        if (
-            server_version is not None
-            and server_version > client_version
-        ) or (
-            isinstance(server_schema, int)
-            and not isinstance(server_schema, bool)
-            and server_schema > LEDGER_SCHEMA_VERSION
-        ):
-            raise CollectorNewerVersionError(
-                "a newer collector owns the shared learning state; update this project",
-                code="runtime_newer",
-            )
-        if (
-            not isinstance(server_schema, int)
-            or isinstance(server_schema, bool)
-            or server_schema < LEDGER_SCHEMA_VERSION
-            or server_version is None
-            or server_version < client_version
-        ):
-            raise CollectorUpgradeRequired(
-                "collector runtime is older than the installed package",
-                code="runtime_upgrade_required",
-            )
-        if response.get("runtime_digest") != COLLECTOR_RUNTIME_DIGEST:
-            raise CollectorBuildConflictError(
-                "collector build conflicts with this package version",
-                code="runtime_conflict",
-            )
-        return response
-
-    def shutdown(self) -> None:
-        self._request(
-            {"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "shutdown"}
-        )
-
-    def issue_result_repair(
-        self,
-        project_root: Path,
-        assignment_digest: str,
-        reason_code: str,
-    ) -> str:
-        response = self._request(
-            {
-                "protocol": COLLECTOR_PROTOCOL_VERSION,
-                "op": "issue_result_repair",
-                "project_root": str(project_root.resolve()),
-                "assignment_digest": assignment_digest,
-                "reason_code": reason_code,
-            }
-        )
-        return str(response["receipt_id"])
 
 
 CLIENT_HEALTH_CODES = {

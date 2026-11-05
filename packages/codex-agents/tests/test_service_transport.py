@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -12,10 +14,11 @@ from pathlib import Path
 from unittest import mock
 
 import tests.support  # noqa: F401
-from tests.support import TEMP_ROOT
+from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 
-from codex_agents import learning_store, service_transport as transport
-from codex_agents.learning_store import CollectorClient, CollectorError
+from codex_agents import collector_client, collector_contracts, learning_store, service_transport as transport
+from codex_agents.collector_client import CollectorClient
+from codex_agents.collector_contracts import CollectorError
 
 
 class FakeSocket:
@@ -152,7 +155,7 @@ class ServiceTransportTests(unittest.TestCase):
             "runtime_version": learning_store.PACKAGE_VERSION,
             "runtime_digest": learning_store.COLLECTOR_RUNTIME_DIGEST,
         }
-        with mock.patch.object(learning_store, "exchange_frame", return_value=json.dumps(reply).encode()) as exchange:
+        with mock.patch.object(collector_client, "exchange_frame", return_value=json.dumps(reply).encode()) as exchange:
             self.assertEqual(reply, client.health())
         self.assertEqual(1, exchange.call_count)
         arguments, options = exchange.call_args
@@ -166,7 +169,7 @@ class ServiceTransportTests(unittest.TestCase):
             ("transport_unavailable", "transport_unavailable", "unavailable"),
         ):
             with self.subTest(reason=reason), mock.patch.object(
-                learning_store, "exchange_frame", side_effect=transport.ServiceTransportError(reason),
+                collector_client, "exchange_frame", side_effect=transport.ServiceTransportError(reason),
             ) as exchange:
                 with self.assertRaisesRegex(CollectorError, message) as caught:
                     client.health()
@@ -174,7 +177,7 @@ class ServiceTransportTests(unittest.TestCase):
                 self.assertIsNone(caught.exception.__context__)
                 self.assertEqual(1, exchange.call_count)
         for raw in (b"CANARY", b"\xff", b"[" * 10_000):
-            with self.subTest(raw_length=len(raw)), mock.patch.object(learning_store, "exchange_frame", return_value=raw):
+            with self.subTest(raw_length=len(raw)), mock.patch.object(collector_client, "exchange_frame", return_value=raw):
                 with self.assertRaises(CollectorError) as caught:
                     client.health()
                 self.assertEqual("response_invalid", caught.exception.code)
@@ -198,7 +201,7 @@ class ServiceTransportTests(unittest.TestCase):
             ({"runtime_digest": "0" * 64}, "runtime_conflict"),
         ):
             with self.subTest(changes=changes), mock.patch.object(
-                learning_store, "exchange_frame", return_value=json.dumps({**healthy, **changes}).encode(),
+                collector_client, "exchange_frame", return_value=json.dumps({**healthy, **changes}).encode(),
             ) as exchange:
                 with self.assertRaises(CollectorError) as caught:
                     client.health()
@@ -206,7 +209,7 @@ class ServiceTransportTests(unittest.TestCase):
                 self.assertEqual(1, exchange.call_count)
         root = Path.cwd()
         record = {"record_type": "fixture"}
-        with mock.patch.object(learning_store, "exchange_frame", side_effect=[
+        with mock.patch.object(collector_client, "exchange_frame", side_effect=[
             b'{"ok":true,"binding_token":"bnd_fixture"}', b'{"ok":true,"stored":true}',
         ]) as exchange:
             token = client.bind(root, "session-fixture", "hook", "codex-hooks-v1")
@@ -227,7 +230,7 @@ class ServiceTransportTests(unittest.TestCase):
         ):
             for code in codes:
                 with self.subTest(method=method.__name__, code=code), mock.patch.object(
-                    learning_store, "exchange_frame", return_value=json.dumps({"ok": False, "code": code}).encode(),
+                    collector_client, "exchange_frame", return_value=json.dumps({"ok": False, "code": code}).encode(),
                 ) as exchange:
                     with self.assertRaises(CollectorError) as caught:
                         method(*arguments)
@@ -235,17 +238,50 @@ class ServiceTransportTests(unittest.TestCase):
                     self.assertEqual(1, exchange.call_count)
 
     def test_version_tuple_preserves_valid_versions_and_fences_conversion_failure(self) -> None:
-        self.assertEqual((0, 8, 13), learning_store._version_tuple("000.08.013"))
+        self.assertEqual((0, 8, 13), collector_contracts._version_tuple("000.08.013"))
         for value in (None, [], {}, 1, "", "1.2", "1.2.3.4", "\u00b2.0.0", "\u0661.0.0", "1.-2.3"):
             with self.subTest(value=value):
-                self.assertIsNone(learning_store._version_tuple(value))
+                self.assertIsNone(collector_contracts._version_tuple(value))
         # Python's integer-string conversion limits are configurable; a
         # conversion rejection must remain safe regardless of that setting.
-        with mock.patch.object(learning_store, "int", side_effect=ValueError("CANARY-CONVERSION"), create=True):
-            self.assertIsNone(learning_store._version_tuple("1.2.3"))
+        with mock.patch.object(collector_contracts, "int", side_effect=ValueError("CANARY-CONVERSION"), create=True):
+            self.assertIsNone(collector_contracts._version_tuple("1.2.3"))
 
 
 class ServiceTransportSocketTests(unittest.TestCase):
+    def test_collector_client_import_and_unavailability_do_not_load_persistence(self) -> None:
+        probe = """
+import importlib.abc, json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+
+class RefusePersistence(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in {"sqlite3", "_sqlite3", "codex_agents.learning_store"}:
+            raise AssertionError("client crossed the persistence boundary")
+
+sys.meta_path.insert(0, RefusePersistence())
+from codex_agents.collector_client import CollectorClient
+from codex_agents.collector_contracts import CollectorError
+client = CollectorClient(Path.cwd() / "absent.sock", timeout=0.1)
+try:
+    client.health()
+except CollectorError as error:
+    assert error.code == "transport_unavailable", error.code
+else:
+    raise AssertionError("missing endpoint unexpectedly succeeded")
+assert not {"sqlite3", "_sqlite3", "codex_agents.learning_store"}.intersection(sys.modules)
+print(json.dumps({"client_boundary": "pass"}))
+"""
+        with tempfile.TemporaryDirectory(prefix="svc-client-", dir=TEMP_ROOT) as directory:
+            completed = subprocess.run(
+                [sys.executable, "-I", "-B", "-S", "-c", probe, str(ORCHESTRATION_ROOT)],
+                cwd=directory, capture_output=True, text=True, timeout=10, check=True,
+            )
+        self.assertEqual({"client_boundary": "pass"}, json.loads(completed.stdout))
+        self.assertIs(CollectorClient, learning_store.CollectorClient)
+        self.assertIs(CollectorError, learning_store.CollectorError)
+
     def test_slow_reply_cannot_extend_the_deadline(self) -> None:
         with tempfile.TemporaryDirectory(prefix="svc-wire-", dir=TEMP_ROOT) as directory:
             endpoint = Path(directory) / "s"
