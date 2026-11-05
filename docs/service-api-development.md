@@ -82,7 +82,12 @@ integration, measurement and recovery checks remain required; queued memory is l
 ## Project history persistence owner
 
 `project_history.ProjectHistory` now owns one project's SQLite connection and writer lock in
-an existing protected directory. Its connection belongs to one process and thread. Different
+an existing protected directory. A descriptor walk rejects replaceable ancestry and aliases;
+root/owner sticky temporary directories are allowed only with root/owner entries. These are
+POSIX mode/ownership checks; the trusted launcher must establish effective protection including
+ACLs and keep state outside admitted model write roots. Owner permissions do not
+isolate arbitrary unsandboxed programs running as that same owner.
+Its connection belongs to one process and thread. Different
 projects use independent files and locks; a transaction in A does not take B's writer. The store
 creates no account state, signing material or digest key and imports neither `LearningState`
 nor `LearningLedger`. It cannot admit, launch or release account work.
@@ -94,13 +99,20 @@ by a client cannot be trusted as authorization. The service must establish calle
 the immutable account claim and any completion receipt before calling this persistence owner.
 
 The initial supported records are run events, intents, outcomes and verification bindings.
+New writes require an integer schema version; the legacy reader's bytes and equality semantics
+remain unchanged. Unsupported record types are refused before their generic validators run.
 Canonical bytes and content digests are retained unchanged, with project sequence, ingest time
 and late-arrival metadata outside the record. A dispatch result can only be committed together
 with its terminal outbox entry. The outbox retains the exact project/session/runtime/supervisor
-generation/orchestration/run/attempt/claim binding and result digest. Duplicate commits return
+generation/orchestration/run/attempt/claim binding and result digest. One run-handle/attempt or
+claim digest cannot be rebound through a different claim ID. Stored binding/record corruption
+returns a fixed incompatibility code. Duplicate commits return
 the same delivery; changed content or binding conflicts. Pending metadata pages are bounded to
 16 KiB of canonical JSON including newline. An acknowledged delivery retains its immutable
 row and rejects a changed receipt. Acknowledging it cannot change central account capacity.
+A valid unfenced completion retains its null forced-terminal state; the trusted service must
+establish actual worker completion and cleanup separately. Parsing a record or its fence never
+proves cleanup or authorizes account capacity release.
 
 Tests exercise the actual persistence methods in separate processes, abrupt process exit before
 and after commit, reopen/retry, terminal atomicity and independent B writes during an A write

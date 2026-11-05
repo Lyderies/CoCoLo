@@ -45,9 +45,11 @@ CREATE TABLE records(
  FOREIGN KEY(project_id) REFERENCES history_identity(project_id));
 CREATE TABLE terminal_outbox(
  project_id TEXT NOT NULL, claim_id TEXT NOT NULL, delivery_sequence INTEGER NOT NULL,
+ run_handle TEXT NOT NULL, attempt INTEGER NOT NULL, claim_digest TEXT NOT NULL,
  binding BLOB NOT NULL, record_id TEXT NOT NULL, record_content_digest TEXT NOT NULL,
  result_digest TEXT NOT NULL, receipt_digest TEXT,
  PRIMARY KEY(project_id,claim_id), UNIQUE(project_id,delivery_sequence), UNIQUE(project_id,record_id),
+ UNIQUE(project_id,run_handle,attempt), UNIQUE(project_id,claim_digest),
  FOREIGN KEY(project_id,record_id) REFERENCES records(project_id,record_id));
 CREATE INDEX records_observed ON records(project_id,observed_at_ms);
 """
@@ -55,7 +57,7 @@ _COLUMNS = {
     "history_identity": ("project_id", "next_source_sequence", "next_delivery_sequence"),
     "records": ("project_id", "record_id", "record_type", "source", "source_sequence",
                 "observed_at_ms", "ingested_at_ms", "content", "content_digest", "late"),
-    "terminal_outbox": ("project_id", "claim_id", "delivery_sequence", "binding", "record_id",
+    "terminal_outbox": ("project_id", "claim_id", "delivery_sequence", "run_handle", "attempt", "claim_digest", "binding", "record_id",
                         "record_content_digest", "result_digest", "receipt_digest"),
 }
 
@@ -99,8 +101,7 @@ class ProjectHistory:
         try:
             if directory.resolve(strict=True) != directory:
                 raise HistoryError("history_unsafe_path")
-            self._directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            self._check_owned(os.fstat(self._directory_fd), directory=True)
+            self._directory_fd = self._open_directory(directory)
             self._writer_fd = self._owned_file("history.lock")
             try:
                 fcntl.flock(self._writer_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -129,6 +130,34 @@ class ProjectHistory:
         if failure is not None:
             self.close()
             raise HistoryError(failure)
+
+    @staticmethod
+    def _open_directory(directory: Path) -> int:
+        """Check POSIX ancestry before SQLite's path open.
+
+        A root/owner sticky directory (such as /private/tmp) protects entries
+        owned by root/owner; every next component is checked for that ownership.
+        The trusted launcher must additionally establish effective protection,
+        including ACLs, and keep state outside every admitted model's writable
+        roots. Mode checks cannot isolate arbitrary unsandboxed owner code.
+        """
+        descriptor = os.open(directory.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for component in directory.parts[1:]:
+                parent = os.fstat(descriptor)
+                if (
+                    not stat.S_ISDIR(parent.st_mode) or parent.st_uid not in (0, os.getuid())
+                    or (stat.S_IMODE(parent.st_mode) & 0o022 and not parent.st_mode & stat.S_ISVTX)
+                ):
+                    raise HistoryError("history_unsafe_path")
+                child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = child
+            ProjectHistory._check_owned(os.fstat(descriptor), directory=True)
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
 
     @staticmethod
     def _check_owned(info, *, directory: bool = False) -> None:
@@ -217,19 +246,44 @@ class ProjectHistory:
             raise HistoryError("history_invalid_input")
         invalid = False
         try:
-            checked = validate_learning_record(parse_bounded_json(content))
+            parsed = parse_bounded_json(content)
+            record_type = parsed.get("record_type")
+            # Strict new writes do not change the legacy reader's canonical
+            # bytes or equality semantics. Legacy import is a separate gate.
             if (
-                checked["record_type"] not in _RECORD_TYPES or canonical_json(checked) != content
+                type(record_type) is not str or record_type not in _RECORD_TYPES
+                or type(parsed.get("schema_version")) is not int
+            ):
+                raise HistoryError("history_invalid_input")
+            checked = validate_learning_record(parsed)
+            if (
+                canonical_json(checked) != content
                 or not valid_integer(checked.get("observed_at_ms"))
             ):
                 invalid = True
-        except (ContractError, ValueError, TypeError, RecursionError):
+        except (ContractError, ValueError, TypeError, RecursionError, OverflowError):
             invalid = True
         if invalid:
             raise HistoryError("history_invalid_input")
         return checked
 
     def _entry(self, row) -> HistoryEntry:
+        invalid = False
+        try:
+            content = bytes(row["content"])
+            checked = self._checked_record(content, row["source"], row["ingested_at_ms"])
+            invalid = (
+                row["project_id"] != self.project_id or row["record_id"] != checked["record_id"]
+                or row["record_type"] != checked["record_type"]
+                or row["observed_at_ms"] != checked["observed_at_ms"]
+                or not valid_integer(row["source_sequence"], minimum=1, maximum=MAX_SEQUENCE - 1)
+                or type(row["late"]) is not int or row["late"] not in (0, 1)
+                or row["content_digest"] != hashlib.sha256(content).hexdigest()
+            )
+        except (HistoryError, TypeError, ValueError, OverflowError):
+            invalid = True
+        if invalid:
+            raise HistoryError("history_incompatible")
         return HistoryEntry(
             row["project_id"], row["record_id"], row["source"], row["source_sequence"],
             row["observed_at_ms"], row["ingested_at_ms"], bytes(row["content"]),
@@ -281,17 +335,36 @@ class ProjectHistory:
             raise HistoryError("history_not_found")
         return self._entry(row)
 
-    @staticmethod
-    def _delivery(row) -> TerminalDelivery:
-        return TerminalDelivery(
-            row["delivery_sequence"], AttemptBinding(**parse_bounded_json(bytes(row["binding"]))),
-            row["record_id"], row["record_content_digest"], row["result_digest"],
-        )
+    def _delivery(self, row) -> TerminalDelivery:
+        invalid = False
+        try:
+            encoded = bytes(row["binding"])
+            binding = AttemptBinding(**parse_bounded_json(encoded))
+            entry = self.record(row["record_id"])
+            checked = parse_bounded_json(entry.content)
+            delivery = TerminalDelivery(row["delivery_sequence"], binding, row["record_id"],
+                                        row["record_content_digest"], row["result_digest"])
+            invalid = (
+                encoded != canonical_json(binding.as_data())
+                or row["project_id"] != self.project_id or binding.project_id != self.project_id
+                or row["claim_id"] != binding.claim_id or row["claim_digest"] != binding.claim_digest
+                or row["run_handle"] != binding.run_handle or row["attempt"] != binding.attempt
+                or entry.source != "host" or entry.content_digest != delivery.record_content_digest
+                or checked["record_type"] != "dispatch_result" or checked["run_id"] != binding.run_id
+                or checked["result_digest"] != delivery.result_digest
+                or (row["receipt_digest"] is not None and not matches(row["receipt_digest"], _DIGEST))
+            )
+        except (ContractError, HistoryError, KeyError, TypeError, ValueError, RecursionError, OverflowError):
+            invalid = True
+        if invalid:
+            raise HistoryError("history_incompatible")
+        return delivery
 
     def _insert_terminal(self, delivery: TerminalDelivery, binding: bytes) -> None:
         self._connection.execute(
-            "INSERT INTO terminal_outbox VALUES(?,?,?,?,?,?,?,NULL)",
-            (self.project_id, delivery.binding.claim_id, delivery.delivery_sequence, binding,
+            "INSERT INTO terminal_outbox VALUES(?,?,?,?,?,?,?,?,?,?,NULL)",
+            (self.project_id, delivery.binding.claim_id, delivery.delivery_sequence,
+             delivery.binding.run_handle, delivery.binding.attempt, delivery.binding.claim_digest, binding,
              delivery.record_id, delivery.record_content_digest, delivery.result_digest),
         )
 
@@ -353,12 +426,13 @@ class ProjectHistory:
             raise HistoryError("history_invalid_input")
         with self._transaction():
             row = self._connection.execute(
-                "SELECT record_content_digest,receipt_digest FROM terminal_outbox WHERE project_id=? AND claim_id=?",
+                "SELECT * FROM terminal_outbox WHERE project_id=? AND claim_id=?",
                 (self.project_id, claim_id),
             ).fetchone()
             if row is None:
                 raise HistoryError("history_not_found")
-            if row[0] != record_content_digest or row[1] not in (None, receipt_digest):
+            self._delivery(row)
+            if row["record_content_digest"] != record_content_digest or row["receipt_digest"] not in (None, receipt_digest):
                 raise HistoryError("history_conflict")
             self._connection.execute(
                 "UPDATE terminal_outbox SET receipt_digest=? WHERE project_id=? AND claim_id=?",

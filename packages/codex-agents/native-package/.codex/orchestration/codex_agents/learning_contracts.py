@@ -428,8 +428,8 @@ def _number(
     if (
         not isinstance(value, (int, float))
         or isinstance(value, bool)
-        or not math.isfinite(value)
         or not minimum <= value <= maximum
+        or not math.isfinite(value)
     ):
         raise ContractError(f"{field} must be a number from {minimum} to {maximum}")
 

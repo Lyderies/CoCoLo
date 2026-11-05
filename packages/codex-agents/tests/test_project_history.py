@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import select
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -16,10 +18,12 @@ from unittest import mock
 import tests.support  # noqa: F401
 from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 
-from codex_agents.history_contracts import AttemptBinding, HistoryError
-from codex_agents.learning_contracts import canonical_json
+from codex_agents.contracts import ContractError
+from codex_agents.history_contracts import MAX_SEQUENCE, AttemptBinding, HistoryError
+from codex_agents.learning_contracts import canonical_json, validate_learning_record
 from codex_agents.project_history import MAX_DELIVERY_PAGE_BYTES, ProjectHistory
-from tests.learning_support import event_record
+from codex_agents import project_history
+from tests.learning_support import event_record, verification_outcome
 
 PROJECT_A = "prj_" + "a" * 32
 PROJECT_B = "prj_" + "b" * 32
@@ -28,7 +32,7 @@ PROJECT_B = "prj_" + "b" * 32
 def binding(number: int = 1, *, project: str = PROJECT_A) -> AttemptBinding:
     return AttemptBinding(project, "session-1", "a" * 64, "supervisor-1", 1,
                           "orc_" + "a" * 48, "hrn_" + f"{number:048x}", f"run-{number}",
-                          1, f"claim-{number}", f"{number:064x}")
+                          1, f"claim-{number}", hashlib.sha256(f"claim-{number}".encode()).hexdigest())
 
 
 def terminal(number: int = 1) -> bytes:
@@ -83,6 +87,24 @@ class ProjectHistoryTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, "history_invalid_input"):
             self.store.append_record(terminal(), source="host", ingested_at_ms=1000)
 
+    def test_supported_run_records_preserve_their_bytes(self) -> None:
+        intent = {
+            "schema_version": 1, "record_type": "dispatch_intent", "record_id": "intent-fixture",
+            "run_id": "run-fixture", "bridge_run_id": "brg_" + "a" * 32,
+            "provider": "codex", "model": "gpt-6-astra", "effort": "high",
+            "observed_at_ms": 1000, "deadline_at_ms": 2000,
+        }
+        verification = {
+            "schema_version": 1, "record_type": "verification_binding", "record_id": "binding-fixture",
+            "run_id": "verifier-fixture", "worker_outcome_digest": "a" * 64, "observed_at_ms": 1000,
+        }
+        for record in (intent, verification_outcome(), verification):
+            with self.subTest(kind=record["record_type"]):
+                content = canonical_json(record)
+                entry = self.store.append_record(content, source="host", ingested_at_ms=1000)
+                self.assertEqual(content, entry.content)
+                self.assertEqual(entry, self.store.record(record["record_id"]))
+
     def test_terminal_record_and_outbox_are_atomic_and_exactly_idempotent(self) -> None:
         content = terminal()
         with mock.patch.object(self.store, "_insert_terminal", side_effect=RuntimeError("fixture cut")):
@@ -122,16 +144,60 @@ class ProjectHistoryTests(unittest.TestCase):
         self.assertEqual(2, second.delivery_sequence)
         self.assertEqual(2, self.store.record("dispatch-2").source_sequence)
 
+    def test_one_attempt_and_claim_digest_cannot_acquire_a_second_terminal_binding(self) -> None:
+        original = self.store.commit_terminal(terminal(), binding(), ingested_at_ms=100)
+        other = json.loads(terminal(2))
+        other["run_id"] = binding().run_id
+        with self.assertRaisesRegex(HistoryError, "history_conflict"):
+            self.store.commit_terminal(canonical_json(other), replace(binding(), claim_id="claim-2", claim_digest="b" * 64),
+                                       ingested_at_ms=100)
+        with self.assertRaisesRegex(HistoryError, "history_conflict"):
+            self.store.commit_terminal(terminal(2), replace(binding(2), claim_digest=binding().claim_digest), ingested_at_ms=100)
+        with self.assertRaisesRegex(HistoryError, "history_not_found"):
+            self.store.record("dispatch-2")
+        self.assertEqual((original,), self.store.pending_terminals())
+
+    def test_unfenced_completion_keeps_its_unknown_forced_terminal_state(self) -> None:
+        record = json.loads(terminal())
+        record.update(fenced=False, reviewed=True, terminal_state=None, result_validation_reason_code=None)
+        content = canonical_json(record)
+        delivery = self.store.commit_terminal(content, binding(), ingested_at_ms=100)
+        self.assertEqual((delivery,), self.store.pending_terminals())
+        self.assertEqual(content, self.store.record(record["record_id"]).content)
+        self.assertIsNone(json.loads(self.store.record(record["record_id"]).content)["terminal_state"])
+
+    def test_corrupted_binding_or_record_returns_fixed_failure_without_chained_input(self) -> None:
+        self.store.commit_terminal(terminal(), binding(), ingested_at_ms=100)
+        for content in (b"CANARY-corrupted-json", b'{"CANARY-UNKNOWN-FIELD":1}'):
+            self.store._connection.execute("UPDATE terminal_outbox SET binding=?", (content,))
+            with self.assertRaisesRegex(HistoryError, "history_incompatible") as caught:
+                self.store.pending_terminals()
+            self.assertIsNone(caught.exception.__context__)
+            self.assertNotIn("CANARY", str(caught.exception))
+        self.store._connection.execute("UPDATE terminal_outbox SET binding=?", (canonical_json(binding().as_data()),))
+        self.store._connection.execute("UPDATE terminal_outbox SET result_digest=?", ("f" * 64,))
+        with self.assertRaisesRegex(HistoryError, "history_incompatible"):
+            self.store.pending_terminals()
+        self.store._connection.execute("UPDATE terminal_outbox SET result_digest=?", (json.loads(terminal())["result_digest"],))
+        self.store._connection.execute("UPDATE records SET content_digest=?", ("f" * 64,))
+        with self.assertRaisesRegex(HistoryError, "history_incompatible"):
+            self.store.record("dispatch-1")
+
     def test_verified_receipt_ack_does_not_allow_changed_binding_or_receipt(self) -> None:
         delivery = self.store.commit_terminal(terminal(), binding(), ingested_at_ms=100)
         with self.assertRaisesRegex(HistoryError, "history_conflict"):
             self.store.acknowledge_terminal("claim-1", "f" * 64, "a" * 64)
         self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "a" * 64)
         self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "a" * 64)
+        self.store.close()
+        self.store = ProjectHistory(self.directory, PROJECT_A)
+        self.addCleanup(self.store.close)
         self.assertEqual((), self.store.pending_terminals())
+        self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "a" * 64)
         with self.assertRaisesRegex(HistoryError, "history_conflict"):
             self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "b" * 64)
         self.assertEqual(delivery, self.store.commit_terminal(terminal(), binding(), ingested_at_ms=100))
+        self.assertEqual((), self.store.pending_terminals())
 
     def test_delivery_pages_bound_encoded_bytes_and_allow_continuation(self) -> None:
         for index in range(1, 41):
@@ -146,7 +212,8 @@ class ProjectHistoryTests(unittest.TestCase):
             seen.extend(item.delivery_sequence for item in page)
             offset = page[-1].delivery_sequence
         self.assertEqual(list(range(1, 41)), seen)
-        for options in ({"limit": True}, {"limit": 101}, {"after_sequence": -1}):
+        for options in ({"limit": True}, {"limit": 101}, {"after_sequence": -1},
+                        {"after_sequence": True}, {"after_sequence": MAX_SEQUENCE + 1}):
             with self.assertRaisesRegex(HistoryError, "history_invalid_input"):
                 self.store.pending_terminals(**options)
 
@@ -186,6 +253,141 @@ class ProjectHistoryTests(unittest.TestCase):
         world.mkdir(mode=0o755)
         with self.assertRaisesRegex(HistoryError, "history_unsafe_path"):
             ProjectHistory(world, PROJECT_A)
+
+    def test_replaceable_ancestor_is_refused_before_sqlite_open(self) -> None:
+        parent = self.base / "replaceable-ancestor"
+        parent.mkdir()
+        parent.chmod(0o777)  # No sticky bit: another user could rename its children.
+        self.addCleanup(parent.chmod, 0o700)
+        leaf = parent / "protected-leaf"
+        leaf.mkdir(mode=0o700)
+        with mock.patch.object(project_history.sqlite3, "connect", side_effect=AssertionError("SQLite opened")), \
+                self.assertRaisesRegex(HistoryError, "history_unsafe_path"):
+            ProjectHistory(leaf, PROJECT_A)
+        self.assertEqual([], list(leaf.iterdir()))
+
+    def test_lock_and_sidecar_aliases_are_refused_before_sqlite_open(self) -> None:
+        target = self.base / "untouched-canary"
+        target.write_bytes(b"CANARY")
+        target.chmod(0o600)
+        for name in ("history.lock", "history.sqlite3-wal", "history.sqlite3-shm", "history.sqlite3-journal"):
+            for alias in ("symlink", "hardlink"):
+                directory = self.base / (name + alias)
+                directory.mkdir(mode=0o700)
+                if alias == "symlink":
+                    (directory / name).symlink_to(target)
+                else:
+                    os.link(target, directory / name)
+                with self.subTest(name=name, alias=alias), \
+                        mock.patch.object(project_history.sqlite3, "connect", side_effect=AssertionError("SQLite opened")), \
+                        self.assertRaises(HistoryError):
+                    ProjectHistory(directory, PROJECT_A)
+                self.assertEqual(b"CANARY", target.read_bytes())
+                (directory / name).unlink()
+
+    def test_incompatible_version_application_and_columns_are_not_opened_as_history(self) -> None:
+        for index, mutation in enumerate(("PRAGMA user_version=2", "PRAGMA application_id=123",
+                                         "ALTER TABLE records RENAME COLUMN source TO wrong_source")):
+            directory = self.base / f"incompatible-{index}"
+            directory.mkdir(mode=0o700)
+            other = ProjectHistory(directory, PROJECT_A)
+            other.close()
+            connection = sqlite3.connect(directory / "history.sqlite3")
+            connection.execute(mutation)
+            connection.commit()
+            connection.close()
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(HistoryError, "history_incompatible"):
+                ProjectHistory(directory, PROJECT_A)
+
+    def test_sequence_exhaustion_does_not_wrap_or_leave_terminal_rows(self) -> None:
+        self.store._connection.execute("UPDATE history_identity SET next_source_sequence=?", (MAX_SEQUENCE,))
+        with self.assertRaisesRegex(HistoryError, "history_sequence_exhausted"):
+            self.store.append_record(canonical_json(event_record()), source="host", ingested_at_ms=1000)
+        self.store._connection.execute("UPDATE history_identity SET next_source_sequence=1,next_delivery_sequence=?", (MAX_SEQUENCE,))
+        with self.assertRaisesRegex(HistoryError, "history_sequence_exhausted"):
+            self.store.commit_terminal(terminal(), binding(), ingested_at_ms=1000)
+        with self.assertRaisesRegex(HistoryError, "history_not_found"):
+            self.store.record("dispatch-1")
+        self.assertEqual((), self.store.pending_terminals())
+
+    def test_unsupported_record_is_rejected_before_generic_validation(self) -> None:
+        content = canonical_json({"record_type": "provider_headroom", "windows": [{"used_percent": 10**400}]})
+        with mock.patch.object(project_history, "validate_learning_record", side_effect=AssertionError("wrong validator")), \
+                self.assertRaisesRegex(HistoryError, "history_invalid_input") as caught:
+            self.store.append_record(content, source="provider", ingested_at_ms=1000)
+        self.assertIsNone(caught.exception.__context__)
+
+    def test_boolean_float_versions_and_numeric_overflow_are_fixed_rejections(self) -> None:
+        legacy = {key: value for key, value in json.loads(terminal()).items()
+                  if key not in {"client_diagnostics", "result_validation_reason_code"}}
+        legacy["schema_version"] = 1
+        for version in (True, 1.0):
+            for record in (event_record("evt-invalid-version"), dict(legacy)):
+                record["schema_version"] = version
+                with self.subTest(version=version, kind=record["record_type"]), \
+                        self.assertRaisesRegex(HistoryError, "history_invalid_input"):
+                    self.store._checked_record(canonical_json(record), "host", 1000)
+        with mock.patch.object(project_history, "validate_learning_record", side_effect=OverflowError("CANARY")), \
+                self.assertRaisesRegex(HistoryError, "history_invalid_input") as caught:
+            self.store.append_record(canonical_json(event_record()), source="host", ingested_at_ms=1000)
+        self.assertIsNone(caught.exception.__context__)
+
+        # The shared provider validator also rejects an out-of-range integer
+        # before math.isfinite would convert it to an overflowing C double.
+        headroom = {
+            "schema_version": 1, "record_type": "provider_headroom", "record_id": "headroom-fixture",
+            "provider": "codex", "account_fingerprint": "a" * 64,
+            "windows": [{"window_minutes": 300, "scope": None, "used_percent": 10**400, "resets_at": 1000}],
+            "status": None, "run_id": None, "phase": None, "observed_at_ms": 1000,
+        }
+        with self.assertRaises(ContractError):
+            validate_learning_record(headroom)
+
+    def test_other_process_cannot_acquire_the_same_writer(self) -> None:
+        program = """
+import json,sys
+from pathlib import Path
+from codex_agents.history_contracts import HistoryError
+from codex_agents.project_history import ProjectHistory
+try: ProjectHistory(Path(sys.argv[1]),sys.argv[2])
+except HistoryError as exc: print(json.dumps({'reason':exc.reason_code}))
+else: raise SystemExit(1)
+"""
+        completed = subprocess.run(
+            [sys.executable, "-I", "-B", "-S", "-c",
+             f"import sys;sys.path.insert(0,{str(ORCHESTRATION_ROOT)!r});" + program,
+             str(self.directory), PROJECT_A], capture_output=True, text=True, timeout=5,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual({"reason": "history_writer_busy"}, json.loads(completed.stdout))
+
+    @unittest.skipUnless(hasattr(os, "fork"), "process-affinity check requires fork")
+    def test_forked_process_cannot_use_or_close_the_inherited_writer(self) -> None:
+        reader, writer = os.pipe()
+        child = os.fork()
+        if child == 0:
+            os.close(reader)
+            errors = []
+            for operation in (self.store.pending_terminals, self.store.close):
+                try:
+                    operation()
+                except HistoryError as exc:
+                    errors.append(exc.reason_code)
+            os.write(writer, b"1" if errors == ["history_wrong_owner"] * 2 else b"0")
+            os.close(writer)
+            os._exit(0)
+        os.close(writer)
+        try:
+            if not select.select([reader], [], [], 5)[0]:
+                os.kill(child, signal.SIGKILL)
+                self.fail("forked fixture did not finish")
+            self.assertEqual(b"1", os.read(reader, 1))
+        finally:
+            os.close(reader)
+            os.waitpid(child, 0)
+        # The inherited close was refused without releasing this process's lock.
+        with self.assertRaisesRegex(HistoryError, "history_writer_busy"):
+            ProjectHistory(self.directory, PROJECT_A)
 
     def test_unexpected_schema_is_refused_without_running_its_triggers(self) -> None:
         self.store.close()
@@ -235,7 +437,12 @@ os._exit(72)
                         store.record("dispatch-1")
                 else:
                     self.assertEqual(terminal(), store.record("dispatch-1").content)
-                    self.assertEqual(1, len(store.pending_terminals()))
+                    expected = store.commit_terminal(terminal(), binding(), ingested_at_ms=999)
+                    self.assertEqual((expected,), store.pending_terminals())
+                    self.assertEqual(binding(), expected.binding)
+                    self.assertEqual(hashlib.sha256(terminal()).hexdigest(), expected.record_content_digest)
+                    self.assertEqual(json.loads(terminal())["result_digest"], expected.result_digest)
+                    self.assertEqual(1, expected.delivery_sequence)
             finally:
                 store.close()
 

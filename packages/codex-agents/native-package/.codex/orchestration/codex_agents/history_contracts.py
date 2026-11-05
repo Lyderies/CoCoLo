@@ -93,5 +93,15 @@ class TerminalDelivery:
     record_content_digest: str
     result_digest: str
 
+    def __post_init__(self) -> None:
+        if (
+            not valid_integer(self.delivery_sequence, minimum=1, maximum=MAX_SEQUENCE - 1)
+            or type(self.binding) is not AttemptBinding or not matches(self.record_id, _ID)
+            or not matches(self.record_content_digest, _DIGEST) or not matches(self.result_digest, _DIGEST)
+        ):
+            raise HistoryError("history_invalid_input")
+        self.binding.as_data()
+
     def as_data(self) -> dict:
+        self.__post_init__()
         return asdict(self)
