@@ -69,6 +69,11 @@
   checks sizes before reading blobs and bounds Git output. Optional expected-commit checks
   prevent later preview pages or dispatch from silently switching snapshots. Exact tool-call
   enforcement remains unavailable and is reported explicitly; native preview remains open.
+- Preflight resolves released learning candidates through the same trusted path as open and
+  dispatch, without a base-route fallback or legacy fallback receipt. It reports nominal zero
+  separately from the existing client turn-limit floor. Export rejects folded Git/context names
+  and shares one absolute budget across inspection and copying; Git-command checks observe both
+  process launch paths.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.

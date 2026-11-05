@@ -478,9 +478,24 @@ def _learning_ledger(args: argparse.Namespace) -> tuple[_RestartingLedger, str]:
         raise
 
 
-def _validated_assignment_route(args: argparse.Namespace) -> tuple[dict, dict, dict]:
+def _validated_assignment_route(
+    args: argparse.Namespace, *, trusted_host: bool = False
+) -> tuple[dict, dict, dict]:
     task = _json_input(args.task)
     project_root = getattr(args, "project_root", None)
+    if trusted_host:
+        if project_root is None:
+            raise ContractError("trusted route preflight requires a registered project")
+        ledger, project_id = _learning_ledger(args)
+        try:
+            route, _ = _trusted_host_route(ledger, project_id, project_root, task)
+        finally:
+            _close_ledger(ledger)
+        assigned = validate_assignment(
+            _json_input(args.assignment), task=task, route=route,
+            parent_grant=_json_input(args.parent_grant),
+        )
+        return assigned, route, task
     policy = (
         load_effective_policy(
             project_root,
@@ -1505,7 +1520,9 @@ def main() -> int:
         elif args.command == "result-preflight":
             report = {"ready": True, **result_preflight(_validated_assignment(args))}
         elif args.command == "dispatch-preflight":
-            assignment, route, task = _validated_assignment_route(args)
+            if args.fallback_receipt is not None:
+                raise ContractError("bridged preflight never uses a fallback receipt")
+            assignment, route, task = _validated_assignment_route(args, trusted_host=True)
             report = dispatch_preflight(
                 args.project_root, task, route, assignment,
                 offset=args.offset, limit=args.limit, expected_commit=args.expected_export_commit,

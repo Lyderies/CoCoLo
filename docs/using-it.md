@@ -46,12 +46,16 @@ Run `dispatch-preflight` with the same `--project-root`, `--task`, `--assignment
 `--parent-grant` used for validation. It lists committed file paths, sizes and object IDs,
 the commit and manifest digest, and configured effective tools and bounds. It creates no
 admission or launch claim. Working-tree edits and untracked files are excluded.
+The project must be registered and its trusted learning state available: preflight uses the
+same released-candidate route resolver as open and dispatch. It has no base-route fallback
+when that state is unavailable. Like bridge dispatch, it refuses `--fallback-receipt`.
 
 Replies are at most 16 KiB. When `next_offset` is non-null, pass it as `--offset` and repeat
 the returned commit as `--expected-export-commit`; `--limit` accepts 1 through 100 entries.
 A changed HEAD refuses further pages. To require that snapshot at launch, also pass
 `--expected-export-commit` to `dispatch`. The actual bridge report returns its commit and
 manifest digest. The reserved verifier input is indicated without returning the worker body.
+Inspection and copying share one 60-second monotonic export budget; late completion is refused.
 The role instructions, skills and assignment-bound result guidance are identified as additional
 context outside the repository manifest; the preview does not return their text.
 

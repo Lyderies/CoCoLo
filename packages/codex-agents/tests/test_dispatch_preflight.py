@@ -3,6 +3,8 @@ from __future__ import annotations
 # ruff: noqa: I001 -- tests.support bootstraps the native package import path.
 
 import json
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -11,10 +13,12 @@ import time
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 from tests.learning_support import assignment, routing_fields
+import cli
 from codex_agents import bridge, git_plumbing
 from codex_agents.routing import load_policy, route_task
 
@@ -178,11 +182,58 @@ class DispatchPreflightTests(unittest.TestCase):
             self.assertEqual(7, capabilities["nominal_max_tool_calls"])
             self.assertIsNone(capabilities["exact_tool_call_limit"])
             self.assertFalse(capabilities["per_path_read_isolation"])
+            self.assertEqual(["shell"], capabilities["assignment_tools"])
             if provider == "claude":
                 self.assertEqual(["Read", "Glob", "Grep"], capabilities["client_tool_allowlist"])
                 self.assertEqual(7, capabilities["model_turn_limit"])
+                self.assertEqual("client --max-turns", capabilities["model_turn_enforcement"])
             else:
                 self.assertIsNone(capabilities["model_turn_limit"])
+                self.assertEqual("unavailable", capabilities["model_turn_enforcement"])
+
+        self.route["provider"] = "claude"
+        self.assigned["bounds"]["max_tool_calls"] = 0
+        capabilities = self.preview()["capabilities"]
+        self.assertEqual(0, capabilities["nominal_max_tool_calls"])
+        self.assertEqual(1, capabilities["model_turn_limit"])
+
+    def test_unsupported_or_writable_preview_refuses_before_git(self) -> None:
+        for route in ({**self.route, "dispatch": "native"}, {**self.route, "sandbox_mode": "workspace-write"}):
+            with self.subTest(route=route["dispatch"]), \
+                    mock.patch.object(bridge, "_git", side_effect=AssertionError("git called")), \
+                    self.assertRaises(bridge.BridgeRefused):
+                bridge.dispatch_preflight(self.root, self.task, route, self.assigned)
+
+    def test_reserved_worker_input_is_indicated_without_a_repository_path_or_body(self) -> None:
+        self.task["verification_for_outcome"] = "f" * 64
+        self.assigned["context"] = ["f" * 64]
+        self.assigned["permissions"]["filesystem"] = []
+        report = self.preview()
+        self.assertTrue(report["reserved_worker_result"])
+        self.assertEqual([], report["files"])
+        self.assertNotIn("CANARY", json.dumps(report))
+
+    def test_folded_git_and_claude_context_names_are_not_materialized(self) -> None:
+        docs = self.root / "docs"
+        docs.mkdir()
+        (docs / "safe").write_text("x\n")
+        self.commit()
+        original = bridge._git
+
+        def listing_as(name):
+            def changed(root, *arguments, **options):
+                completed = original(root, *arguments, **options)
+                if "ls-tree" in arguments:
+                    completed.stdout = completed.stdout.replace(b"docs/safe", name.encode())
+                return completed
+            return changed
+
+        for name in ("docs/.GiT/config", "docs/.G\u200biT/config"):
+            with self.subTest(name=name), mock.patch.object(bridge, "_git", side_effect=listing_as(name)), \
+                    self.assertRaisesRegex(bridge.BridgeRefused, "inside the repository"):
+                bridge.committed_export_manifest(self.root, ["docs"])
+        with mock.patch.object(bridge, "_git", side_effect=listing_as("docs/CLAU\u200bDE.md")):
+            self.assertEqual(0, bridge.committed_export_manifest(self.root, ["docs"])["file_count"])
 
     def test_cli_preflight_does_not_create_learning_state(self) -> None:
         for name, data in (("task", self.task), ("assignment", self.assigned), ("grant", self.grant)):
@@ -193,9 +244,40 @@ class DispatchPreflightTests(unittest.TestCase):
                    "--task", str(self.base / "task.json"), "--assignment", str(self.base / "assignment.json"),
                    "--parent-grant", str(self.base / "grant.json")]
         completed = subprocess.run(command, capture_output=True, text=True, timeout=20)
-        self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
-        self.assertTrue(json.loads(completed.stdout)["preflight_only"])
+        self.assertEqual(2, completed.returncode, completed.stderr + completed.stdout)
+        self.assertFalse(json.loads(completed.stdout)["ready"])
+        self.assertNotIn("files", json.loads(completed.stdout))
         self.assertFalse(state.exists())
+
+    def test_cli_uses_the_trusted_route_including_released_model_and_effort_changes(self) -> None:
+        learned = {**self.route, "model": "gpt-6-astra", "effort": "medium",
+                   "learning_candidate_digests": ["d" * 64]}
+        self.assigned.update(model=learned["model"], effort=learned["effort"])
+        for name, data in (("task", self.task), ("assignment", self.assigned), ("grant", self.grant)):
+            (self.base / f"{name}.json").write_text(json.dumps(data))
+        argv = ["cli.py", "dispatch-preflight", "--project-root", str(self.root),
+                "--task", str(self.base / "task.json"), "--assignment", str(self.base / "assignment.json"),
+                "--parent-grant", str(self.base / "grant.json")]
+        ledger = object()
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), \
+                mock.patch.object(cli, "_learning_ledger", return_value=(ledger, "project-fixture")), \
+                mock.patch.object(cli, "_close_ledger") as close, \
+                mock.patch.object(cli, "route_task", side_effect=AssertionError("base route used")), \
+                mock.patch.object(cli, "_trusted_host_route", return_value=(learned, {})) as resolve:
+            self.assertEqual(0, cli.main())
+        resolve.assert_called_once_with(ledger, "project-fixture", self.root, self.task)
+        close.assert_called_once_with(ledger)
+        report = json.loads(output.getvalue())
+        self.assertEqual("gpt-6-astra", report["capabilities"]["model"])
+        self.assertEqual("medium", report["capabilities"]["effort"])
+        self.assertFalse(report["admission_created"])
+
+        # The refusal matches dispatch, before state or task files are opened.
+        with mock.patch.object(sys, "argv", [*argv, "--fallback-receipt", "receipt-fixture"]), \
+                contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(cli, "_learning_ledger", side_effect=AssertionError("state opened")):
+            self.assertEqual(2, cli.main())
 
     def test_bounded_git_output_and_total_timeout_reap_the_fixture_process(self) -> None:
         executable = bridge.find_git(untrusted=[self.root])
@@ -219,6 +301,43 @@ class DispatchPreflightTests(unittest.TestCase):
             git_plumbing.run_git(str(script), self.root, "unused", timeout=0.15, max_output_bytes=65536)
         self.assertLess(time.monotonic() - started, 3)
         self.assertIsNotNone(spawned[0].returncode)
+
+    def test_export_shares_one_absolute_budget_across_metadata_and_blob_reads(self) -> None:
+        exported = self.base / "export"
+        exported.mkdir()
+        original = git_plumbing._bounded_git_output
+        with mock.patch.object(git_plumbing, "_bounded_git_output", wraps=original) as calls:
+            bridge.export_committed_snapshot(self.root, ["source.txt"], exported)
+        deadlines = [call.kwargs["deadline"] for call in calls.call_args_list]
+        self.assertGreaterEqual(len(deadlines), 5)
+        self.assertTrue(all(value is not None and value == deadlines[0] for value in deadlines))
+
+    def test_late_blob_read_cannot_restart_export_budget_or_publish_content(self) -> None:
+        now = [time.monotonic()]
+        original = bridge._git
+        blobs = []
+
+        def delayed(root, *arguments, **options):
+            completed = original(root, *arguments, **options)
+            if "cat-file" in arguments:
+                blobs.append(1)
+                now[0] += bridge.MAX_EXPORT_SECONDS + 1
+            return completed
+
+        exported = self.base / "export"
+        exported.mkdir()
+        with mock.patch.object(bridge, "time", SimpleNamespace(monotonic=lambda: now[0])), \
+                mock.patch.object(bridge, "_git", side_effect=delayed), \
+                self.assertRaisesRegex(bridge.BridgeRefused, "export deadline exceeded"):
+            bridge.export_committed_snapshot(self.root, ["source.txt"], exported)
+        self.assertEqual(1, len(blobs))
+        self.assertEqual([], list(exported.iterdir()))
+
+    def test_expired_absolute_git_deadline_never_starts_a_process(self) -> None:
+        with mock.patch.object(git_plumbing.subprocess, "Popen", side_effect=AssertionError("process started")), \
+                self.assertRaises(subprocess.TimeoutExpired):
+            git_plumbing.run_git("fixture-git", self.root, "rev-parse", "HEAD", max_output_bytes=100,
+                                 deadline=time.monotonic() - 1)
 
 
 if __name__ == "__main__":

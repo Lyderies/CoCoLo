@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import contextlib
+import math
 import selectors
 import stat
 import subprocess
@@ -84,11 +85,15 @@ class GitOutputLimitError(subprocess.SubprocessError):
     """A fixed failure without captured repository output."""
 
 
-def _bounded_git_output(arguments: list[str], *, text: bool, timeout: float, limit: int) -> subprocess.CompletedProcess:
+def _bounded_git_output(
+    arguments: list[str], *, text: bool, timeout: float, limit: int, deadline: float | None = None
+) -> subprocess.CompletedProcess:
     if (type(limit) is not int or not 1 <= limit <= 32 * 1_048_576
             or type(timeout) not in (int, float) or not 0 < timeout <= 60):
         raise ValueError("bounded git limits are invalid")
-    deadline = time.monotonic() + timeout
+    if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+        raise ValueError("bounded git deadline is invalid")
+    deadline = min(time.monotonic() + timeout, deadline) if deadline is not None else time.monotonic() + timeout
 
     def remaining() -> float:
         value = deadline - time.monotonic()
@@ -96,6 +101,7 @@ def _bounded_git_output(arguments: list[str], *, text: bool, timeout: float, lim
             raise subprocess.TimeoutExpired(arguments, timeout)
         return value
 
+    remaining()
     process = subprocess.Popen(
         arguments, env=GIT_ENVIRONMENT, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -187,12 +193,15 @@ def run_git(
     text: bool = False,
     timeout: float | None = 60,
     max_output_bytes: int | None = None,
+    deadline: float | None = None,
 ) -> subprocess.CompletedProcess:
     if max_output_bytes is not None:
         return _bounded_git_output(
             [executable, *GIT_OPTIONS, "-C", str(root), *arguments],
-            text=text, timeout=timeout, limit=max_output_bytes,
+            text=text, timeout=timeout, limit=max_output_bytes, deadline=deadline,
         )
+    if deadline is not None:
+        raise ValueError("a git deadline requires bounded output")
     return subprocess.run(
         [executable, *GIT_OPTIONS, "-C", str(root), *arguments],
         env=GIT_ENVIRONMENT,
@@ -205,7 +214,7 @@ def run_git(
     )
 
 
-def repository_layout_problem(executable: str, root: Path) -> str | None:
+def repository_layout_problem(executable: str, root: Path, *, deadline: float | None = None) -> str | None:
     """Why the project's repository cannot be trusted, or None.
 
     The project must be the top of its working tree, and its git directory and
@@ -215,11 +224,19 @@ def repository_layout_problem(executable: str, root: Path) -> str | None:
     would otherwise let the model rewrite the configuration git reads.
     """
 
+    def request_timeout() -> float:
+        if deadline is None:
+            return 10
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("git layout check", 0)
+        return min(10, remaining)
+
     try:
         completed = run_git(
             executable, root, "rev-parse", "--path-format=absolute",
-            "--show-toplevel", "--git-dir", "--git-common-dir", text=True, timeout=10,
-            max_output_bytes=65_536,
+            "--show-toplevel", "--git-dir", "--git-common-dir", text=True, timeout=request_timeout(),
+            max_output_bytes=65_536, deadline=deadline,
         )
     except (OSError, UnicodeError, subprocess.SubprocessError):
         return "the project repository is unavailable"
@@ -242,8 +259,8 @@ def repository_layout_problem(executable: str, root: Path) -> str | None:
         promisor = run_git(
             executable, root, "config", "--get-regexp",
             r"^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$",
-            text=True, timeout=10,
-            max_output_bytes=65_536,
+            text=True, timeout=request_timeout(),
+            max_output_bytes=65_536, deadline=deadline,
         )
     except (OSError, UnicodeError, subprocess.SubprocessError):
         return "the project repository is unavailable"

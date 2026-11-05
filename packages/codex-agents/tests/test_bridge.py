@@ -1019,8 +1019,8 @@ class ReviewHardeningTests(BridgeTestCase):
         # And any listed path outside the request refuses the export.
         original = bridge._git
 
-        def widened(root, *arguments, text=False):
-            completed = original(root, *arguments, text=text)
+        def widened(root, *arguments, text=False, **limits):
+            completed = original(root, *arguments, text=text, **limits)
             if "ls-tree" in arguments:
                 completed.stdout += completed.stdout.replace(b"source.txt", b"secret.txt")
             return completed

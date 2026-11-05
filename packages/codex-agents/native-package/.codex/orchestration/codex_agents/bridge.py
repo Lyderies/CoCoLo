@@ -74,6 +74,7 @@ from .providers import (
 
 MAX_EXPORT_BYTES = 16 * 1024 * 1024
 MAX_EXPORT_FILES = 2_000
+MAX_EXPORT_SECONDS = 60
 MAX_STREAM_BYTES = 8 * 1024 * 1024
 MAX_LINE_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = 1024 * 1024
@@ -240,7 +241,7 @@ def assignment_read_paths(
         if value.startswith(":") or set(value) & PATHSPEC_SPECIAL:
             raise BridgeRefused("assignment read path must be a plain literal path")
         path = PurePosixPath(value)
-        if path.is_absolute() or any(part in {"", ".", "..", ".git"} for part in path.parts):
+        if path.is_absolute() or any(part in {"", ".", ".."} or _fold_name(part) == ".git" for part in path.parts):
             raise BridgeRefused("assignment read path must stay inside the repository")
         if _claude_context_path(path.as_posix()):
             raise BridgeRefused("assignment read path names Claude context files")
@@ -296,18 +297,27 @@ def names_reserved_input(relative: str) -> bool:
 
 
 def _claude_context_path(relative: str) -> bool:
-    return any(part.lower() in CLAUDE_CONTEXT_NAMES for part in PurePosixPath(relative).parts)
+    return any(_fold_name(part) in CLAUDE_CONTEXT_NAMES for part in PurePosixPath(relative).parts)
 
 
-def _git(root: Path, *arguments: str, text: bool = False) -> subprocess.CompletedProcess:
+def _git(root: Path, *arguments: str, text: bool = False, deadline: float | None = None) -> subprocess.CompletedProcess:
     executable = find_git(untrusted=[root])
     if executable is None:
         raise BridgeRefused("git is unavailable")
     try:
         return run_git(executable, root, *arguments, text=text, timeout=60,
-                       max_output_bytes=32 * 1_048_576)
+                       max_output_bytes=32 * 1_048_576, deadline=deadline)
     except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
         raise BridgeRefused("git export failed") from exc
+
+
+def _export_git(root: Path, *arguments: str, deadline: float, text: bool = False) -> subprocess.CompletedProcess:
+    if time.monotonic() >= deadline:
+        raise BridgeRefused("assignment export deadline exceeded")
+    completed = _git(root, *arguments, text=text, deadline=deadline)
+    if time.monotonic() >= deadline:
+        raise BridgeRefused("assignment export deadline exceeded")
+    return completed
 
 
 def committed_export_manifest(
@@ -317,6 +327,7 @@ def committed_export_manifest(
     max_bytes: int = MAX_EXPORT_BYTES,
     max_files: int = MAX_EXPORT_FILES,
     expected_commit: str | None = None,
+    _deadline: float | None = None,
 ) -> dict[str, Any]:
     """Inspect the same committed blobs that export copies, without their content.
 
@@ -329,14 +340,15 @@ def committed_export_manifest(
         or type(max_files) is not int or not 0 <= max_files <= MAX_EXPORT_FILES
     ):
         raise BridgeRefused("assignment export limits are invalid")
+    deadline = time.monotonic() + MAX_EXPORT_SECONDS if _deadline is None else _deadline
     root = repository_root.resolve()
     executable = find_git(untrusted=[root])
-    if executable is None or repository_layout_problem(executable, root) is not None:
+    if executable is None or repository_layout_problem(executable, root, deadline=deadline) is not None:
         raise BridgeRefused("project repository cannot be trusted for export")
-    top = _git(root, "rev-parse", "--show-toplevel", text=True)
+    top = _export_git(root, "rev-parse", "--show-toplevel", text=True, deadline=deadline)
     if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root:
         raise BridgeRefused("project root is not the top of a git repository")
-    head = _git(root, "rev-parse", "--verify", "HEAD^{commit}", text=True)
+    head = _export_git(root, "rev-parse", "--verify", "HEAD^{commit}", text=True, deadline=deadline)
     commit = head.stdout.strip()
     if head.returncode != 0 or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit) is None:
         raise BridgeRefused("assignment read path is not committed")
@@ -348,9 +360,11 @@ def committed_export_manifest(
         if not isinstance(requested, str) or not requested or "\x00" in requested:
             raise BridgeRefused("assignment read path is invalid")
         requested_path = PurePosixPath(requested)
-        if requested_path.is_absolute() or ".." in requested_path.parts or ".git" in requested_path.parts:
+        if (requested_path.is_absolute() or ".." in requested_path.parts
+                or any(_fold_name(part) == ".git" for part in requested_path.parts)):
             raise BridgeRefused("assignment read path must stay inside the repository")
-        listing = _git(root, "ls-tree", "-r", "-l", "-z", "--full-tree", commit, "--", requested)
+        listing = _export_git(root, "ls-tree", "-r", "-l", "-z", "--full-tree", commit, "--", requested,
+                              deadline=deadline)
         if listing.returncode != 0:
             raise BridgeRefused("assignment read path is not committed")
         found = [item for item in listing.stdout.split(b"\x00") if item]
@@ -377,7 +391,9 @@ def committed_export_manifest(
             ):
                 raise BridgeRefused("assignment read path is not exportable")
             parts = PurePosixPath(relative).parts
-            if PurePosixPath(relative).is_absolute() or any(part in {"", ".", "..", ".git"} for part in parts) or len(name) > 4096:
+            if (PurePosixPath(relative).is_absolute()
+                    or any(part in {"", ".", ".."} or _fold_name(part) == ".git" for part in parts)
+                    or len(name) > 4096):
                 raise BridgeRefused("assignment read path must stay inside the repository")
             entry = {"path": relative, "object_id": oid, "mode": mode, "size_bytes": int(size_text)}
             if relative in entries:
@@ -393,6 +409,8 @@ def committed_export_manifest(
     manifest = {"commit": commit, "files": [entries[path] for path in sorted(entries)]}
     digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"),
                                        ensure_ascii=True).encode("ascii")).hexdigest()
+    if time.monotonic() >= deadline:
+        raise BridgeRefused("assignment export deadline exceeded")
     return {**manifest, "manifest_digest": digest, "file_count": len(entries), "total_bytes": total}
 
 
@@ -405,11 +423,13 @@ def export_committed_snapshot(
     max_files: int = MAX_EXPORT_FILES,
     expected_commit: str | None = None,
 ) -> dict[str, Any]:
+    deadline = time.monotonic() + MAX_EXPORT_SECONDS
     manifest = committed_export_manifest(
         repository_root, paths, max_bytes=max_bytes, max_files=max_files, expected_commit=expected_commit,
+        _deadline=deadline,
     )
     for entry in manifest["files"]:
-        blob = _git(repository_root.resolve(), "cat-file", "blob", entry["object_id"])
+        blob = _export_git(repository_root.resolve(), "cat-file", "blob", entry["object_id"], deadline=deadline)
         if blob.returncode != 0 or len(blob.stdout) != entry["size_bytes"]:
             raise BridgeRefused("assignment read path is unavailable")
         target = destination.joinpath(*PurePosixPath(entry["path"]).parts)
@@ -417,6 +437,8 @@ def export_committed_snapshot(
         descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(blob.stdout)
+    if time.monotonic() >= deadline:
+        raise BridgeRefused("assignment export deadline exceeded")
     return {key: manifest[key] for key in ("commit", "manifest_digest", "file_count", "total_bytes")}
 
 
@@ -482,7 +504,8 @@ def dispatch_preflight(
     manifest = committed_export_manifest(repository_root, paths, expected_commit=expected_commit)
     if offset > manifest["file_count"]:
         raise BridgeRefused("export preview offset is outside the manifest")
-    deadline, nominal_calls = effective_dispatch_limits(route, assignment)
+    deadline, model_turns = effective_dispatch_limits(route, assignment)
+    nominal_calls = min(int(route["bounds"]["max_tool_calls"]), int(assignment["bounds"]["max_tool_calls"]))
     report = {
         "ready": True, "preflight_only": True, "admission_created": False,
         "export_commit": manifest["commit"], "export_manifest_digest": manifest["manifest_digest"],
@@ -500,7 +523,7 @@ def dispatch_preflight(
             "per_path_read_isolation": False, "network": False, "mcps": False,
             "hard_timeout_seconds": deadline, "nominal_max_tool_calls": nominal_calls,
             "exact_tool_call_limit": None,
-            "model_turn_limit": nominal_calls if provider == "claude" else None,
+            "model_turn_limit": model_turns if provider == "claude" else None,
             "model_turn_enforcement": "client --max-turns" if provider == "claude" else "unavailable",
             "basis": "runtime configuration; not client readiness or admission",
         },
