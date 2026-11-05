@@ -1148,6 +1148,35 @@ class ReviewHardeningTests(BridgeTestCase):
                 self.assertEqual(2 if expected is None else 0, len(seen))
 
 
+class DeadlineArgumentTests(unittest.TestCase):
+    def test_slow_identification_cannot_renew_the_watchdog_deadline(self) -> None:
+        process = mock.Mock(pid=424242, stdout=io.BytesIO())
+        tree = mock.Mock(root_birth="fixture-birth")
+        tree.identify.return_value = True
+        active = {}
+        # Identification consumes ten simulated seconds of a five-second budget.
+        # No OS process or watchdog is created, and no host clock is changed.
+        with mock.patch.object(bridge, "tracking_available", return_value=True), \
+                mock.patch.object(bridge, "ProcessTree", return_value=tree), \
+                mock.patch.object(bridge, "process_table", return_value={}), \
+                mock.patch.object(bridge, "_ACTIVE_CHILDREN", active), \
+                mock.patch.object(bridge.time, "monotonic", side_effect=[100.0, 110.0, 110.0]), \
+                mock.patch.object(bridge.time, "time", side_effect=AssertionError("wall time consulted")), \
+                mock.patch.object(bridge.selectors, "DefaultSelector"), \
+                mock.patch.object(bridge, "_start_watchdog") as start, \
+                mock.patch.object(bridge, "_stop_child") as stop:
+            outcome = bridge.run_child(
+                ["fixture-client"], environment={}, cwd=Path.cwd(), deadline_seconds=5,
+                on_frame=lambda frame: self.fail("expired child frame delivered"),
+                popen=mock.Mock(return_value=process),
+            )
+        start.assert_called_once_with(424242, "fixture-birth", 105.0 + bridge.WATCHDOG_GRACE_SECONDS)
+        stop.assert_called_once_with(process, tree)
+        self.assertEqual({"returncode": None, "abort": "timed_out"}, outcome)
+        self.assertTrue(process.stdout.closed)
+        self.assertEqual({}, active)
+
+
 DRIVER = """
 import os, sys
 from pathlib import Path
