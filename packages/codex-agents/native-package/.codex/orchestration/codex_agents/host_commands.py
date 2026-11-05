@@ -74,6 +74,7 @@ PRIMARY_HOST_COMMANDS = (
     "learning-route",
     "validate-assignment",
     "result-preflight",
+    "dispatch-preflight",
     "validate-result",
     "learning-status",
     "learning-open-orchestration",

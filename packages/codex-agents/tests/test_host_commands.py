@@ -1278,6 +1278,7 @@ class OwnRootTests(unittest.TestCase):
         own, other, state = str(self.project), str(self.other), str(self.other_state)
         context = ("--assignment", "a.json", "--task", "t.json", "--parent-grant", "g.json")
         lifecycle = {
+            "dispatch-preflight": context,
             "dispatch": (*context, "--route", "r.json", "--run-handle", "h"),
             "provider-observe": ("--provider", "claude", "--billing-probe"),
             "learning-open-host-run": (
@@ -1308,6 +1309,8 @@ class OwnRootTests(unittest.TestCase):
         self.assert_refused("--root", "route", "--task", "t.json", "--root", other)
         self.assert_refused("--policy", "route", "--task", "t.json", "--policy", "p.json")
         self.assert_refused("--policy", "inventory", "--policy", "p.json")
+        self.assert_refused("--policy", "dispatch-preflight", *context,
+                            "--project-root", own, "--policy", "p.json")
         for command in ("validate-assignment", "result-preflight", "validate-result"):
             with self.subTest(command=command):
                 result = ("--result", "r.json") if command == "validate-result" else ()

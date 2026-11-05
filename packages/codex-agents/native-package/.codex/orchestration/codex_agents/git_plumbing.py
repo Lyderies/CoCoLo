@@ -25,9 +25,12 @@ directory the sandboxed model can write.
 from __future__ import annotations
 
 import os
+import contextlib
+import selectors
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -75,6 +78,55 @@ GIT_OPTIONS = (
     "-c", "gc.auto=0",
     "-c", "maintenance.auto=false",
 )
+
+
+class GitOutputLimitError(subprocess.SubprocessError):
+    """A fixed failure without captured repository output."""
+
+
+def _bounded_git_output(arguments: list[str], *, text: bool, timeout: float, limit: int) -> subprocess.CompletedProcess:
+    if (type(limit) is not int or not 1 <= limit <= 32 * 1_048_576
+            or type(timeout) not in (int, float) or not 0 < timeout <= 60):
+        raise ValueError("bounded git limits are invalid")
+    deadline = time.monotonic() + timeout
+
+    def remaining() -> float:
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise subprocess.TimeoutExpired(arguments, timeout)
+        return value
+
+    process = subprocess.Popen(
+        arguments, env=GIT_ENVIRONMENT, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    output = bytearray()
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while True:
+                if not selector.select(remaining()):
+                    raise subprocess.TimeoutExpired(arguments, timeout)
+                chunk = os.read(process.stdout.fileno(), min(65536, limit + 1 - len(output)))
+                remaining()
+                if not chunk:
+                    break
+                output.extend(chunk)
+                if len(output) > limit:
+                    raise GitOutputLimitError("git output exceeded its limit")
+        returncode = process.wait(timeout=remaining())
+    except BaseException:
+        # Only trusted, helper-free plumbing runs here. Reap the directly
+        # launched process on overflow, timeout or caller interruption.
+        with contextlib.suppress(OSError):
+            process.kill()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=5)
+        raise
+    finally:
+        process.stdout.close()
+    raw = bytes(output)
+    return subprocess.CompletedProcess(arguments, returncode, raw.decode("utf-8") if text else raw)
 
 
 def _developer_directory() -> str | None:
@@ -134,7 +186,13 @@ def run_git(
     *arguments: str,
     text: bool = False,
     timeout: float | None = 60,
+    max_output_bytes: int | None = None,
 ) -> subprocess.CompletedProcess:
+    if max_output_bytes is not None:
+        return _bounded_git_output(
+            [executable, *GIT_OPTIONS, "-C", str(root), *arguments],
+            text=text, timeout=timeout, limit=max_output_bytes,
+        )
     return subprocess.run(
         [executable, *GIT_OPTIONS, "-C", str(root), *arguments],
         env=GIT_ENVIRONMENT,
@@ -161,8 +219,9 @@ def repository_layout_problem(executable: str, root: Path) -> str | None:
         completed = run_git(
             executable, root, "rev-parse", "--path-format=absolute",
             "--show-toplevel", "--git-dir", "--git-common-dir", text=True, timeout=10,
+            max_output_bytes=65_536,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, UnicodeError, subprocess.SubprocessError):
         return "the project repository is unavailable"
     lines = completed.stdout.splitlines()
     if completed.returncode != 0 or len(lines) != 3:
@@ -184,8 +243,9 @@ def repository_layout_problem(executable: str, root: Path) -> str | None:
             executable, root, "config", "--get-regexp",
             r"^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$",
             text=True, timeout=10,
+            max_output_bytes=65_536,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, UnicodeError, subprocess.SubprocessError):
         return "the project repository is unavailable"
     if promisor.returncode != 1:
         return "the project repository is a partial clone or names a promisor remote"

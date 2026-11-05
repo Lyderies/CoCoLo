@@ -72,6 +72,7 @@ sys.path.append(str(ORCHESTRATION_ROOT))
 from codex_agents.bridge import BridgeRefused  # noqa: E402
 from codex_agents.bridge import signal_guard as bridge_signal_guard  # noqa: E402
 from codex_agents.bridge import dispatch as dispatch_bridge  # noqa: E402
+from codex_agents.bridge import dispatch_preflight  # noqa: E402
 from codex_agents.catalog import CatalogError, discover, load_discovery_policy  # noqa: E402
 from codex_agents.contracts import (  # noqa: E402
     ContractError,
@@ -477,7 +478,7 @@ def _learning_ledger(args: argparse.Namespace) -> tuple[_RestartingLedger, str]:
         raise
 
 
-def _validated_assignment(args: argparse.Namespace) -> dict:
+def _validated_assignment_route(args: argparse.Namespace) -> tuple[dict, dict, dict]:
     task = _json_input(args.task)
     project_root = getattr(args, "project_root", None)
     policy = (
@@ -530,12 +531,17 @@ def _validated_assignment(args: argparse.Namespace) -> dict:
             _close_ledger(ledger)
     else:
         route = route_task(task, policy, primary_provider=_host_primary_provider())
-    return validate_assignment(
+    assigned = validate_assignment(
         _json_input(args.assignment),
         task=task,
         route=route,
         parent_grant=_json_input(args.parent_grant),
     )
+    return assigned, route, task
+
+
+def _validated_assignment(args: argparse.Namespace) -> dict:
+    return _validated_assignment_route(args)[0]
 
 
 # Bridged children run under their own ledger client, which declares the
@@ -765,6 +771,16 @@ def build_parser() -> argparse.ArgumentParser:
     result_preflight_parser.add_argument("--project-root", type=Path)
     _add_assignment_context(result_preflight_parser)
 
+    dispatch_preview = subparsers.add_parser(
+        "dispatch-preflight", help="preview committed bridge files and configured effective capabilities; does not admit or launch",
+    )
+    dispatch_preview.add_argument("--project-root", required=True, type=Path)
+    dispatch_preview.add_argument("--state-root", type=Path)
+    dispatch_preview.add_argument("--offset", type=int, default=0)
+    dispatch_preview.add_argument("--limit", type=int, default=50)
+    dispatch_preview.add_argument("--expected-export-commit")
+    _add_assignment_context(dispatch_preview)
+
     assignment_parser = subparsers.add_parser(
         "validate-assignment", help="validate one bounded subagent assignment"
     )
@@ -883,6 +899,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_assignment_context(dispatch_parser, allow_policy_override=False)
     dispatch_parser.add_argument("--route", required=True)
     dispatch_parser.add_argument("--run-handle", required=True)
+    dispatch_parser.add_argument("--expected-export-commit", help="refuse before launch if HEAD differs from this preflight commit")
 
     provider_observe = subparsers.add_parser(
         "provider-observe",
@@ -1487,6 +1504,12 @@ def main() -> int:
             report = _validated_assignment(args)
         elif args.command == "result-preflight":
             report = {"ready": True, **result_preflight(_validated_assignment(args))}
+        elif args.command == "dispatch-preflight":
+            assignment, route, task = _validated_assignment_route(args)
+            report = dispatch_preflight(
+                args.project_root, task, route, assignment,
+                offset=args.offset, limit=args.limit, expected_commit=args.expected_export_commit,
+            )
         elif args.command == "validate-result":
             assignment = _validated_assignment(args)
             try:
@@ -1858,6 +1881,7 @@ def main() -> int:
                             assignment=_json_input(args.assignment),
                             parent_grant=_json_input(args.parent_grant),
                             run_handle=args.run_handle,
+                            expected_export_commit=args.expected_export_commit,
                             result_schema=(
                                 ORCHESTRATION_ROOT / "schemas" / "result.schema.json"
                             ).read_bytes(),

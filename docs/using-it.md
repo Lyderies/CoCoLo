@@ -40,6 +40,29 @@ no automatic replacement with a packaged role. The project owner can align its m
 patch authorship; the primary can meanwhile write code and delegate eligible research and review tasks.
 The provider, model, effort and role still come from `learning-route`.
 
+## Previewing a bridge assignment
+
+Run `dispatch-preflight` with the same `--project-root`, `--task`, `--assignment` and
+`--parent-grant` used for validation. It lists committed file paths, sizes and object IDs,
+the commit and manifest digest, and configured effective tools and bounds. It creates no
+admission or launch claim. Working-tree edits and untracked files are excluded.
+
+Replies are at most 16 KiB. When `next_offset` is non-null, pass it as `--offset` and repeat
+the returned commit as `--expected-export-commit`; `--limit` accepts 1 through 100 entries.
+A changed HEAD refuses further pages. To require that snapshot at launch, also pass
+`--expected-export-commit` to `dispatch`. The actual bridge report returns its commit and
+manifest digest. The reserved verifier input is indicated without returning the worker body.
+The role instructions, skills and assignment-bound result guidance are identified as additional
+context outside the repository manifest; the preview does not return their text.
+
+An assignment's tool names can be broader than the client's tools. Claude bridge children
+receive Read, Glob and Grep, while the nominal `max_tool_calls` value currently limits model
+turns through `--max-turns`. Neither bridge currently enforces that field as an exact count
+of tool executions; the preview reports that limit as unavailable. Filesystem declarations
+select exported content and do not provide per-path OS read isolation. Preflight reports
+configuration, and admission still checks the reviewed client and account before launch.
+Native routes are not supported by this bridge preview.
+
 ## When a task is denied
 
 A denial comes back as a `reason_code`, and no child starts. Admission fails closed, for example on an

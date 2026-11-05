@@ -272,6 +272,7 @@ class BridgeTestCase(unittest.TestCase):
             parent_grant=options.pop("parent_grant", PARENT_GRANT),
             run_handle=handle, result_schema=RESULT_SCHEMA,
             environ=options.pop("environ", CLEAN),
+            expected_export_commit=options.pop("expected_export_commit", None),
         )
 
     def claude_run(self, **route_options) -> tuple[dict, dict, str]:
@@ -724,6 +725,21 @@ class DispatchRefusalTests(BridgeTestCase):
             bridge.export_committed_paths(
                 self.project, ["source.txt"], Path(directory), max_bytes=3
             )
+
+    def test_changed_preflight_commit_refuses_before_claim_and_keeps_handle_usable(self) -> None:
+        route, assigned, handle = self.claude_run()
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame()])
+        preview = bridge.dispatch_preflight(self.project, self.task(), route, assigned)
+        with self.assertRaisesRegex(BridgeRefused, "export commit changed"):
+            self.dispatch(route, assigned, handle, expected_export_commit="0" * 40)
+        self.assertEqual([], self.workspace_entries())
+        self.assertFalse([i for i in self.invocations("claude") if "-p" in i["argv"]])
+        with self.ledger.repository(self.project_id) as repository:
+            self.assertEqual([], repository.records("dispatch_intent"))
+        output = self.dispatch(route, assigned, handle, expected_export_commit=preview["export_commit"])
+        self.assertEqual("result", output["bridge_report"]["outcome"])
+        self.assertEqual(preview["export_commit"], output["bridge_report"]["export_commit"])
+        self.assertEqual(preview["export_manifest_digest"], output["bridge_report"]["export_manifest_digest"])
 
 
 class SecurityReviewFixTests(BridgeTestCase):

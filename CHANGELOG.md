@@ -64,6 +64,11 @@
 - An internal metadata queue has finite per-project quotas, round-robin scheduling and fixed
   overload codes. Separate lane instances can reserve control/terminal capacity. It grants no
   caller authority or durable receipt; service integration and measured defaults remain open.
+- `dispatch-preflight` previews a committed bridge manifest and effective configured tools and
+  bound units in pages of at most 16 KiB, without admission or launch. Export pins one commit,
+  checks sizes before reading blobs and bounds Git output. Optional expected-commit checks
+  prevent later preview pages or dispatch from silently switching snapshots. Exact tool-call
+  enforcement remains unavailable and is reported explicitly; native preview remains open.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.
