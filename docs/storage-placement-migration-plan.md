@@ -1,8 +1,8 @@
 # Storage placement and migration plan: review draft
 
-Status: requirements and corrected build-plan draft for 0.3.0. No split-layout
-migration, launch-claim protocol or privileged service is enabled by this document.
-It needs independent planning verification and the implementation exits below.
+Status: unaccepted build-plan draft for 0.3.0 with concrete authority, namespace
+and drain blockers. No split-layout migration, launch-claim protocol or privileged
+service is enabled by this document. The implementation exits below remain required.
 The [service API boundary](service-api-development.md) remains required.
 
 ## Current source facts
@@ -45,8 +45,7 @@ ordering obligations, rather than an accepted schema:
 | Candidate owner | Record types |
 | --- | --- |
 | Account authority | provider_identity, provider_headroom, provider_billing, billing_attestation, admission_decision, probe_admission |
-| Account authority with checked project copies | feedback, grader_calibration, owner_grant |
-| Project canonical history | event, outcome, evaluation_case, evaluation_assignment, qa_evidence, evidence_review, evaluation_trial, candidate, comparison, canary_report, promotion, learning_export, dispatch_intent, dispatch_result, host_run_profile, verification_binding, observation_unavailable, provider_usage |
+| Project canonical history | event, outcome, feedback, evaluation_case, evaluation_assignment, qa_evidence, evidence_review, evaluation_trial, candidate, comparison, canary_report, grader_calibration, owner_grant, promotion, learning_export, dispatch_intent, dispatch_result, host_run_profile, verification_binding, observation_unavailable, provider_usage |
 
 Verify the last two types' actual consumers before selecting their owner.
 `record_observation_unavailable` explicitly describes diagnostic, non-admission
@@ -56,6 +55,9 @@ account restrictions still require a complete audit.
 The final map must also place sessions/provenance, host bindings, signatures,
 lineage, consumed grants, repair/fallback receipts, operational QA/check receipts,
 orchestrations/checkpoints, health/ingestion, managed files/backups and new journals.
+It must explicitly preserve or verify a translation of
+`additive_migrations(feature_key)`, including hook-ingestion backfill and aggregate
+trigger effects. Import must not repeat a backfill or silently lose its completion.
 No writable replica may become another owner of authority. Valid cross-store
 lineage needs a checked reference or immutable receipt; merely refusing all such
 edges does not constitute a complete importer.
@@ -74,6 +76,38 @@ does not alone establish a secret-exposure defect. Define custody and lost-reply
 recovery from the actual threat and authority boundary. Preserve documented
 same-user read limits, exact legacy identities and pending work. Do not introduce a
 generic HMAC oracle or a per-project account key.
+
+## Authority edges and record identity: blocking requirements
+
+Co-locating decision comparands does not establish a complete service protocol.
+Build an operation/read dependency matrix before freezing the schema. At minimum:
+
+| Decision | Required dependency and proof |
+| --- | --- |
+| Account open/admission | Current registry and exact prepared owner/provider inputs, plus project orchestration liveness, fallback reservation and pending-capacity prerequisites. Define complete binding, conflict, freshness and revocation rules for each. |
+| Launch client/recheck | The admitted provider identity and its client version, current observed launch client, original pass decision and all existing recheck restrictions. A receipt containing only provider, fingerprint and pass digest is insufficient. |
+| Owner-authorized project decisions | Exact signature/project/prerequisite binding and operation-specific owner-generation semantics. Preserve prerequisite ingestion-time and sequence checks; a generic generation lookup or monotonic high-water cannot replace final admission input revalidation. |
+| Usage and diagnostics | Preserve provider usage in the authoritative host outcome and unavailable-observation metadata without treating them as current admission evidence. |
+| Lineage, retention and replay | Resolve each canonical endpoint and cross-store dependency, with checked digest references, closure, promoted protection and unresolved-work retention. |
+
+Every authority receipt needs a closed operation-specific payload, preconditions,
+decision point, replay/conflict behavior, freshness/revocation rules and recovery
+path. Naming a receipt envelope does not supply those contracts. Mixed legacy/new
+ordering needs a defined comparison bridge wherever a historical prerequisite
+meets a new decision; domain labels alone do not preserve the old comparison.
+
+The legacy `(project_id, record_id)` namespace spans all record types. Event
+validation permits arbitrary syntactically valid IDs. Two stores cannot accept
+different records under the same key merely because their types have different
+owners. Specify collision exclusion and canonical lookup for imported and new
+records, including concurrent opposite-owner writes, before either owner reports
+acceptance. Do not assume existing ID prefixes prove namespace separation.
+
+Project-owned consumed grants are not inherently a cross-project replay defect:
+the current grant identity hashes material containing the project and signature,
+and commit validates the signed project. Preserve atomic grant/promotion/spend,
+exact duplicate-versus-conflict behavior and imported binding consistency. Choose
+placement from the actual authority flow, not the global lookup alone.
 
 ## Conservative launch and completion protocol
 
@@ -113,16 +147,35 @@ imported legacy and delivery/journal sequence domains. Retention and project
 deletion cannot resurrect a spent permission or discard unresolved work.
 
 Build a proven drain and old-writer fence, an immutable verified source image, and
-owner-only staged stores with a resumable migration journal. Old open processes
-must actually be drained; a schema integer alone cannot fence an existing
-connection. Preserve canonical/signature bytes and global keys without re-signing
-or inferring native ownership for old data.
+owner-only staged stores with a resumable migration journal. Keep exclusive
+ownership of the original ledger writer lock continuously, as well as the runtime
+and maintenance gate, through image, staging, activation and rollback selection.
+A maintenance probe that briefly acquires and releases the writer lock is not
+migration ownership. Preserve canonical/signature bytes and global keys without
+re-signing or inferring native ownership for old data.
+
+A schema integer or trigger fence cannot revoke a launch already authorized in
+memory. Required drain cases include bridge execution paused after intent/binding
+and before OS spawn, a probe paused after admission and before invocation, and a
+returned native-spawn authorization whose ledger connection has closed. Obtain
+observable refusal or quiescence evidence for every outstanding launch capability;
+otherwise activation stays blocked. Database health, checkpoints, refused writes,
+unknown rows and PID absence do not prove that those capabilities are drained.
+Already-open/prepared WAL connections and non-database writers also need explicit
+compatibility and refusal tests.
 
 Publish only verified staging through an explicit activation protocol that
 prevents two writable authorities and partially activated projects. Define crash
 cuts around fencing, image, staging, verification, activation and first new write.
 After new authority writes, an old snapshot cannot silently replace them.
 Unresolved old execution remains conservative and never automatically relaunches.
+The no-new-write test and any pointer reversal/unfencing remain exclusive until
+complete. Authority cannot be served before its first-write epoch barrier.
+
+A permanent bootstrap marker with `bootstrap_unproven` for missing upgraded-ledger
+history changes some legacy decisions. Record an explicit policy disposition and
+decision-difference fixtures before activation; absence of retained evidence is
+not proof that bootstrap was unused.
 
 Required exits include real commit-failure/SIGKILL/restart/lost-reply tests,
 same-account last-slot/bootstrap and generation races, complete byte/metadata/order
