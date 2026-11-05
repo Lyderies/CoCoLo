@@ -30,6 +30,8 @@ ORCHESTRATION_PREFIX = ".codex/orchestration/"
 RUNTIME_FILES = (
     "cli.py",
     "codex_agents/__init__.py",
+    "codex_agents/account_api.py",
+    "codex_agents/account_service.py",
     "codex_agents/bridge.py",
     "codex_agents/catalog.py",
     "codex_agents/claude_host.py",

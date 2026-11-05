@@ -229,3 +229,35 @@ closed schemas, full-request binding, source/operation/thread separation, paging
 import guard that blocks SQLite and persistence owners even when the endpoint is unavailable.
 Fixture context/channels are explicitly synthetic; they do not prove native authentication,
 production intake fairness, independent local timers, account coordination or complete C1-C19.
+
+## Closed account read API increment
+
+`account_api` contains a pure codec and client for three closed read operations. `account_service`
+receives one already opened global `LearningLedger`; it creates no per-project key, ledger or
+connection and does not start or migrate persistence on request. Its project view returns only
+the authorized active project's ID, status and creation time. Its owner-key view returns the
+public fingerprint, history sequence, replacement count/time and signer-file consistency state
+through that same owner's connection. A mismatch stays visible without changing owner history.
+No key bytes, signatures, roots, paths, SQL or arbitrary methods are returned or selected by JSON.
+
+Authorization defaults to denial before backend work. The server-only adapter output must bind
+the full request digest, project, runtime and permitted operations; the handler rechecks it after
+the callback. Hook/app-server sources are limited to health. Health reports transport response
+only, explicitly `database_checked=false`, and avoids the persistence backend and its writer lock.
+SQL views require the owning process/thread. Forked handlers refuse before acquiring inherited
+locks; closing a handler leaves the shared persistence owner open.
+
+Both request and reply frames are at most 16 KiB including newline, with exact integer protocol
+versions, closed fields and operation-specific result types. Responses bind the full request;
+malformed requests return null labels and denials echo only validated caller labels. Error codes
+are fixed and omit exception text. The client makes one exchange under one deadline, never
+imports SQLite, starts a service or automatically retries. Read IDs correlate fresh views; they
+do not preserve snapshots. EOF with empty or truncated JSON is an invalid response. Another
+explicit read with the same ID is still a new view.
+
+Disposable socket tests read two projects through one account owner, restart it without changing
+the global key, and drop/truncate replies to check explicit retry. Separate tests check default
+denial, scope, full-response binding, redaction, thread/fork guards and health while a backend is
+blocked. These fixture adapters are synthetic. No production listener, native caller enrollment,
+endpoint identity, mutation/launch-claim API or normal-client migration is enabled or proven by
+this increment. Those gates and the complete concurrency/release criteria remain mandatory.
