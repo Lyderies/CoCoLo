@@ -169,7 +169,9 @@ hook/app-server producers, including concurrent first binds; another producer ca
 denied root or spend another account-window place. Existing provenance without a pass remains
 unadmitted. Known complete producer/session bindings take no writer reservation or signature
 work. Missing producer metadata is added atomically without revisiting admission, while
-inconsistent immutable provenance is refused. Project activity is checked before writes.
+inconsistent immutable provenance on any producer is refused before returning or adding either
+binding. A bounded root query also refuses unknown/extra producer rows. Project activity is
+checked before writes.
 These are persistence-owner rules, not new proof that a native client is authorized.
 
 ## Closed history API increment

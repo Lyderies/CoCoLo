@@ -1658,15 +1658,46 @@ os.kill(os.getpid(), signal.SIGKILL)
 
     def test_native_binding_refuses_inconsistent_provenance_without_repair_or_admission(self) -> None:
         self._prepared_fixture_attestations()
-        with mock.patch.object(self.ledger, "_clock_ms", return_value=self.clock + 1):
-            project, _, run = self.ledger.bind_session(self.project, "inconsistent-native", "hook", "codex-native-fixture")
-        with self.ledger._account_transaction():
-            self.ledger._connection.execute("UPDATE run_provenance SET client_version='wrong-version' WHERE project_id=? AND run_id=?",
-                                            (project, run))
-        before = self._launch_rows()
-        with self.assertRaisesRegex(LedgerError, "provenance conflicts"):
-            self.ledger.bind_session(self.project, "inconsistent-native", "hook", "codex-native-fixture")
-        self.assertEqual(before, self._launch_rows())
+        for field in ("client_version", "session_digest"):
+            with self.subTest(field=field):
+                identifier = "inconsistent-native-" + field
+                with mock.patch.object(self.ledger, "_clock_ms", return_value=self.clock + 1):
+                    project, session, run = self.ledger.bind_session(self.project, identifier, "hook", "codex-native-fixture")
+                with self.ledger._account_transaction():
+                    if field == "client_version":
+                        self.ledger._connection.execute("UPDATE run_provenance SET client_version='wrong-version' WHERE project_id=? AND run_id=?",
+                                                        (project, run))
+                    else:
+                        self.ledger._connection.execute("UPDATE run_provenance SET session_digest='wrong-session' WHERE project_id=? AND run_id=?",
+                                                        (project, run))
+                before = self._launch_rows()
+                try:
+                    for producer in ("hook", "app_server"):
+                        with self.subTest(producer=producer), self.assertRaisesRegex(LedgerError, "provenance conflicts"):
+                            self.ledger.bind_session(self.project, identifier, producer, "codex-native-fixture")
+                        self.assertEqual(before, self._launch_rows())
+                finally:
+                    with self.ledger._account_transaction():
+                        self.ledger._connection.execute("UPDATE run_provenance SET client_version=?,session_digest=? WHERE project_id=? AND run_id=?",
+                                                        ("codex-native-fixture", session, project, run))
+
+    def test_native_binding_refuses_unknown_and_extra_root_producer_rows(self) -> None:
+        self._prepared_fixture_attestations()
+        for mode in ("unknown", "extra"):
+            identifier = "unexpected-native-" + mode
+            with mock.patch.object(self.ledger, "_clock_ms", return_value=self.clock + 1):
+                project, session, run = self.ledger.bind_session(self.project, identifier, "hook", "codex-native-fixture")
+            if mode == "extra":
+                self.ledger.bind_session(self.project, identifier, "app_server", "codex-native-fixture")
+            with self.ledger._account_transaction():
+                # A managed-host row is invalid in this native-root namespace.
+                self.ledger._connection.execute("INSERT INTO run_provenance VALUES(?,?,?,?,?,?)",
+                                                (project, run, "host", "codex-native-fixture", session, NOW))
+            before = self._launch_rows()
+            for producer in ("hook", "app_server"):
+                with self.subTest(mode=mode, producer=producer), self.assertRaisesRegex(LedgerError, "provenance conflicts"):
+                    self.ledger.bind_session(self.project, identifier, producer, "codex-native-fixture")
+                self.assertEqual(before, self._launch_rows())
 
     def test_native_binding_sigkill_before_and_after_commit_has_one_durable_boundary(self) -> None:
         self._prepared_fixture_attestations()

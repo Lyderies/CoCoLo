@@ -2880,26 +2880,28 @@ class LearningLedger:
             if row is None or row["status"] != "active":
                 raise LedgerError("project binding is not active")
 
-        def producer_binding():
-            row = self._connection.execute(
-                "SELECT client_version,session_digest FROM run_provenance "
-                "WHERE project_id=? AND run_id=? AND producer=?",
-                (project_id, root_run_id, producer),
-            ).fetchone()
-            if row is not None and (row["client_version"] != client_version or row["session_digest"] != session_digest):
+        def root_bindings():
+            # At most the two native event producers may share this root.
+            # Inspect every existing binding before accepting either producer.
+            rows = self._connection.execute(
+                "SELECT producer,client_version,session_digest FROM run_provenance "
+                "WHERE project_id=? AND run_id=? LIMIT 3",
+                (project_id, root_run_id),
+            ).fetchall()
+            if len(rows) > 2 or any(
+                row["producer"] not in {"hook", "app_server"}
+                or row["client_version"] != client_version or row["session_digest"] != session_digest
+                for row in rows
+            ):
                 raise LedgerError("session provenance conflicts")
-            return row
+            return rows
 
         def persist(prepared: _PreparedAttestations | None) -> tuple[str, str, str]:
             with self._account_transaction():
                 require_active()
-                producer_binding()
                 # Admission belongs to the root run, not each event producer.
                 # Legacy provenance without admission remains unadmitted.
-                known_root = self._connection.execute(
-                    "SELECT 1 FROM run_provenance WHERE project_id=? AND run_id=? LIMIT 1",
-                    (project_id, root_run_id),
-                ).fetchone() is not None
+                known_root = bool(root_bindings())
                 self._connection.execute(
                     "INSERT OR IGNORE INTO sessions VALUES(?,?,?,?)",
                     (project_id, session_digest, producer, timestamp),
@@ -2914,13 +2916,10 @@ class LearningLedger:
 
         with self._lock:
             require_active()
-            known = self._connection.execute(
-                "SELECT 1 FROM run_provenance WHERE project_id=? AND run_id=? LIMIT 1",
-                (project_id, root_run_id),
-            ).fetchone() is not None
-            if known:
+            bindings = root_bindings()
+            if bindings:
                 # Most hook binds are already known: no writer or crypto work.
-                if producer_binding() is not None:
+                if any(row["producer"] == producer for row in bindings):
                     complete = self._connection.execute(
                         "SELECT 1 FROM sessions WHERE project_id=? AND session_digest=? AND producer=?",
                         (project_id, session_digest, producer),
