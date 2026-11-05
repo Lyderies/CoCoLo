@@ -2860,6 +2860,9 @@ class LearningLedger:
         *,
         now_ms: int | None = None,
     ) -> tuple[str, str, str]:
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
         if producer not in {"hook", "app_server"}:
             raise LedgerError("collector producer is not authorized")
         if not isinstance(session_id, str) or not session_id or len(session_id) > 1024:
@@ -2872,23 +2875,65 @@ class LearningLedger:
         root_run_id = external_id(
             self.state.digest_key(), "run", f"{client_version}\x00{session_id}\x00root"
         )
-        with self._lock, self._connection:
-            self._connection.execute(
-                "INSERT OR IGNORE INTO sessions VALUES(?,?,?,?)",
-                (project_id, session_digest, producer, timestamp),
-            )
-            new_run = self._connection.execute(
-                "INSERT OR IGNORE INTO run_provenance VALUES(?,?,?,?,?,?)",
-                (
-                    project_id, root_run_id, producer, client_version,
-                    session_digest, timestamp,
-                ),
-            ).rowcount == 1
-        if new_run:
-            self._admit_session_run(project_id, root_run_id)
-        return project_id, session_digest, root_run_id
+        def require_active() -> None:
+            row = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (project_id,)).fetchone()
+            if row is None or row["status"] != "active":
+                raise LedgerError("project binding is not active")
 
-    def _admit_session_run(self, project_id: str, run_id: str) -> None:
+        def producer_binding():
+            row = self._connection.execute(
+                "SELECT client_version,session_digest FROM run_provenance "
+                "WHERE project_id=? AND run_id=? AND producer=?",
+                (project_id, root_run_id, producer),
+            ).fetchone()
+            if row is not None and (row["client_version"] != client_version or row["session_digest"] != session_digest):
+                raise LedgerError("session provenance conflicts")
+            return row
+
+        def persist(prepared: _PreparedAttestations | None) -> tuple[str, str, str]:
+            with self._account_transaction():
+                require_active()
+                producer_binding()
+                # Admission belongs to the root run, not each event producer.
+                # Legacy provenance without admission remains unadmitted.
+                known_root = self._connection.execute(
+                    "SELECT 1 FROM run_provenance WHERE project_id=? AND run_id=? LIMIT 1",
+                    (project_id, root_run_id),
+                ).fetchone() is not None
+                self._connection.execute(
+                    "INSERT OR IGNORE INTO sessions VALUES(?,?,?,?)",
+                    (project_id, session_digest, producer, timestamp),
+                )
+                self._connection.execute(
+                    "INSERT OR IGNORE INTO run_provenance VALUES(?,?,?,?,?,?)",
+                    (project_id, root_run_id, producer, client_version, session_digest, timestamp),
+                )
+                if not known_root:
+                    self._admit_session_run_locked(project_id, root_run_id, prepared)
+            return project_id, session_digest, root_run_id
+
+        with self._lock:
+            require_active()
+            known = self._connection.execute(
+                "SELECT 1 FROM run_provenance WHERE project_id=? AND run_id=? LIMIT 1",
+                (project_id, root_run_id),
+            ).fetchone() is not None
+            if known:
+                # Most hook binds are already known: no writer or crypto work.
+                if producer_binding() is not None:
+                    complete = self._connection.execute(
+                        "SELECT 1 FROM sessions WHERE project_id=? AND session_digest=? AND producer=?",
+                        (project_id, session_digest, producer),
+                    ).fetchone()
+                    if complete is not None:
+                        return project_id, session_digest, root_run_id
+                return persist(None)
+        prepared = self._prepare_attestations(project_id, "codex")
+        return persist(prepared)
+
+    def _admit_session_run_locked(
+        self, project_id: str, run_id: str, prepared: _PreparedAttestations | None,
+    ) -> None:
         """Decide admission once for a collector-bound Codex session run.
 
         These sessions never pass through open_host_run, so their admission is
@@ -2896,17 +2941,18 @@ class LearningLedger:
         still record events, but its result can never be committed.
         """
 
-        with self._lock, self._connection:
-            # The ledger's clock is read under the lock that orders decisions.
-            timestamp = self._clock_ms()
-            decision = self._evaluate_admission_locked(
-                project_id, provider="codex", environ=os.environ, timestamp=timestamp
+        if not self._connection.in_transaction or type(prepared) is not _PreparedAttestations:
+            raise LedgerError("session admission preparation is unavailable")
+        # The ledger's clock is read under the writer that orders decisions.
+        timestamp = self._clock_ms()
+        decision = self._evaluate_admission_locked(
+            project_id, provider="codex", environ=os.environ, timestamp=timestamp,
+            _prepared_attestations=prepared,
+        )
+        if decision["decision"] == "pass":
+            self._store_admission_locked(
+                project_id, decision, run_id=run_id, timestamp=timestamp
             )
-            if decision["decision"] == "pass":
-                self._store_admission_locked(
-                    project_id, decision, run_id=run_id, timestamp=timestamp
-                )
-        self.state.harden_database_files()
 
     def append(
         self,

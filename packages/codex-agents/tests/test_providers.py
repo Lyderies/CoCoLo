@@ -756,7 +756,7 @@ class AdmissionTests(unittest.TestCase):
 
     def test_prepared_signature_inputs_cannot_change_before_admission(self) -> None:
         prepared = self._prepared_fixture_attestations()
-        identifier, _, content, digest, source, signature = prepared.rows[0]
+        identifier, sequence, content, digest, source, signature = prepared.rows[0]
         changed_record = json.loads(content)
         changed_record["observed_at_ms"] += 1
         changed_content = canonical_json(changed_record)
@@ -765,6 +765,8 @@ class AdmissionTests(unittest.TestCase):
             ("source", "provider"),
             ("content", changed_content),
             ("signer", b""),
+            ("sequence", sequence + 100_000),
+            ("digest", "0" * 64),
         )
         for field, changed in variants:
             with self.subTest(field=field):
@@ -778,17 +780,21 @@ class AdmissionTests(unittest.TestCase):
                     elif field == "content":
                         self.ledger._connection.execute("UPDATE records SET content=?,content_digest=? WHERE project_id=? AND record_id=?",
                                                         (changed, hashlib.sha256(changed).hexdigest(), self.project_id, identifier))
-                    else:
+                    elif field == "signer":
                         self.state.allowed_signers_path.write_bytes(changed)
+                    elif field == "sequence":
+                        self.ledger._connection.execute("UPDATE records SET source_sequence=? WHERE project_id=? AND record_id=?", (changed, self.project_id, identifier))
+                    else:
+                        self.ledger._connection.execute("UPDATE records SET content_digest=? WHERE project_id=? AND record_id=?", (changed, self.project_id, identifier))
                 try:
-                    with self.assertRaisesRegex(LedgerError, "preparation is stale"):
+                    with self.assertRaisesRegex(LedgerError, "preparation is stale|attestation is incompatible"):
                         self.ledger.evaluate_admission(self.project_id, provider="codex", environ=CLEAN,
                                                        now_ms=self.clock + 1, _prepared_attestations=prepared)
                 finally:
                     self.state.allowed_signers_path.write_bytes(prepared.signer)
                     with self.ledger._account_transaction():
-                        self.ledger._connection.execute("UPDATE records SET content=?,content_digest=?,source=? WHERE project_id=? AND record_id=?",
-                                                        (content, digest, source, self.project_id, identifier))
+                        self.ledger._connection.execute("UPDATE records SET content=?,content_digest=?,source=?,source_sequence=? WHERE project_id=? AND record_id=?",
+                                                        (content, digest, source, sequence, self.project_id, identifier))
                         self.ledger._connection.execute("UPDATE owner_attestations SET signature=? WHERE project_id=? AND subject_record_id=?",
                                                         (signature, self.project_id, identifier))
                 self.assertEqual(before, self._launch_rows())
@@ -908,6 +914,38 @@ class AdmissionTests(unittest.TestCase):
         self._reopen_launch_fixture()
         self.assertEqual(before, self._launch_rows())
         self.assertEqual(1, self.ledger._connection.execute("SELECT created_at_ms FROM projects WHERE project_id=?", (self.project_id,)).fetchone()[0])
+
+    def test_mode_fault_rolls_back_initial_and_locked_admission_denials(self) -> None:
+        identity = self.observe()[0]
+        self.attest("codex", identity["account_fingerprint"])
+        other = Path(self.temporary.name) / "denial-mode-project"
+        other.mkdir()
+        other_id = self.ledger.register_project(other, now_ms=NOW)
+        harden = self.state.harden_database_files
+
+        def refuse_writer():
+            if self.ledger._connection.in_transaction:
+                raise StateError("fixture denial mode refusal")
+            harden()
+
+        before = self._launch_rows()
+        with mock.patch.object(self.state, "harden_database_files", side_effect=refuse_writer), \
+                self.assertRaisesRegex(StateError, "fixture denial mode"):
+            self.ledger.evaluate_admission(other_id, provider="codex", environ=CLEAN, now_ms=self.clock + 1)
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self._reopen_launch_fixture()
+        self.assertEqual(before, self._launch_rows())
+        orchestration = self.ledger.open_orchestration(self.project_id, client_version="codex-host-v1", now_ms=NOW)
+        fresh = self.clock + 1
+        stale = identity["observed_at_ms"] + IDENTITY_MAX_AGE_MS + 1
+        times = iter((fresh, stale))
+        with mock.patch.object(self.ledger, "_clock_ms", side_effect=lambda: next(times)), \
+                mock.patch.object(self.state, "harden_database_files", side_effect=refuse_writer), \
+                self.assertRaisesRegex(StateError, "fixture denial mode"):
+            self._open_run("codex", orchestration, fresh)
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self._reopen_launch_fixture()
+        self.assertEqual(before, self._launch_rows())
 
     def test_late_open_failure_rolls_back_binding_provenance_events_and_admission(self) -> None:
         identity = self.observe()[0]
@@ -1516,6 +1554,162 @@ os.kill(os.getpid(), signal.SIGKILL)
             LedgerError, "no stored admission decision"
         ):
             self.ledger._run_admission_locked(self.project_id, unadmitted)
+
+    def test_native_binding_rolls_back_provenance_and_pass_together_after_append_fault(self) -> None:
+        self._prepared_fixture_attestations()
+        before = self._launch_rows()
+        append = self.ledger._store_admission_locked
+
+        def fail_after_pass(*args, **kwargs):
+            append(*args, **kwargs)
+            raise sqlite3.OperationalError("fixture native admission fault")
+
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=self.clock + 1), \
+                mock.patch.object(self.ledger, "_store_admission_locked", side_effect=fail_after_pass), \
+                self.assertRaisesRegex(sqlite3.OperationalError, "fixture native"):
+            self.ledger.bind_session(self.project, "atomic-native", "hook", "codex-native-fixture", now_ms=self.clock + 1)
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self._reopen_launch_fixture()
+        self.assertEqual(before, self._launch_rows())
+        project, _, run = self.ledger.bind_session(self.project, "atomic-native", "hook", "codex-native-fixture", now_ms=self.clock + 2)
+        with self.ledger._lock:
+            self.assertEqual("pass", self.ledger._run_admission_locked(project, run)["decision"])
+
+    def test_native_binding_known_and_new_producer_paths_never_reverify_or_charge_twice(self) -> None:
+        self.limit("codex", max_admissions_per_window=1)
+        self._prepared_fixture_attestations()
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=self.clock + 1):
+            first = self.ledger.bind_session(self.project, "one-native-root", "hook", "codex-native-fixture")
+        statements = []
+        self.ledger._connection.set_trace_callback(statements.append)
+        try:
+            with mock.patch.object(self.ledger, "_prepare_attestations", side_effect=AssertionError("repeated crypto")), \
+                    mock.patch.object(OwnerGrantAuthority, "verify_owner_record", side_effect=AssertionError("known binding did crypto")), \
+                    mock.patch.object(self.ledger, "_account_transaction", side_effect=AssertionError("known binding took writer")):
+                self.assertEqual(first, self.ledger.bind_session(self.project, "one-native-root", "hook", "codex-native-fixture"))
+        finally:
+            self.ledger._connection.set_trace_callback(None)
+        self.assertFalse(any(sql.startswith(("BEGIN", "INSERT", "UPDATE", "DELETE")) for sql in statements))
+        with mock.patch.object(self.ledger, "_prepare_attestations", side_effect=AssertionError("producer rebinding did crypto")), \
+                mock.patch.object(OwnerGrantAuthority, "verify_owner_record", side_effect=AssertionError("producer rebinding verified crypto")), \
+                mock.patch.object(self.ledger, "_clock_ms", return_value=self.clock + 2):
+            self.assertEqual(first, self.ledger.bind_session(self.project, "one-native-root", "app_server", "codex-native-fixture"))
+        self.assertEqual(2, len(self._launch_rows()["run_provenance"]))
+        with self.ledger._lock:
+            self.assertEqual("pass", self.ledger._run_admission_locked(first[0], first[2])["decision"])
+            self.assertEqual(1, len(self.ledger._prior_run_admissions_locked("codex", self.clock + 2)))
+
+    def test_denied_native_root_is_not_upgraded_through_another_producer(self) -> None:
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=self.clock + 1):
+            first = self.ledger.bind_session(self.project, "denied-native-root", "hook", "codex-native-fixture")
+        self._prepared_fixture_attestations()
+        with mock.patch.object(self.ledger, "_prepare_attestations", side_effect=AssertionError("denied root re-admitted")), \
+                mock.patch.object(self.ledger, "_clock_ms", return_value=self.clock + 2):
+            self.assertEqual(first, self.ledger.bind_session(self.project, "denied-native-root", "app_server", "codex-native-fixture"))
+        with self.ledger._lock, self.assertRaisesRegex(LedgerError, "no stored admission decision"):
+            self.ledger._run_admission_locked(first[0], first[2])
+        self.assertEqual(2, len(self._launch_rows()["run_provenance"]))
+
+    def test_native_binding_race_charges_one_root_once_across_producers(self) -> None:
+        self.limit("codex", max_admissions_per_window=1)
+        self._prepared_fixture_attestations()
+        prepare = self.ledger._prepare_attestations
+        barrier = threading.Barrier(2)
+        bindings, errors = [], []
+
+        def prepared_together(*args, **kwargs):
+            value = prepare(*args, **kwargs)
+            barrier.wait(timeout=5)
+            return value
+
+        def bind(producer):
+            try:
+                bindings.append(self.ledger.bind_session(self.project, "racing-native", producer, "codex-native-fixture"))
+            except BaseException as exc:
+                errors.append(exc)
+
+        with mock.patch.object(self.ledger, "_prepare_attestations", side_effect=prepared_together), \
+                mock.patch.object(self.ledger, "_clock_ms", return_value=self.clock + 1):
+            workers = [threading.Thread(target=bind, args=(producer,), daemon=True) for producer in ("hook", "app_server")]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(10)
+            self.assertFalse(any(worker.is_alive() for worker in workers))
+        self.assertEqual([], errors)
+        self.assertEqual(2, len(bindings))
+        self.assertEqual(bindings[0], bindings[1])
+        with self.ledger._lock:
+            self.assertEqual("pass", self.ledger._run_admission_locked(bindings[0][0], bindings[0][2])["decision"])
+            self.assertEqual(1, len(self.ledger._prior_run_admissions_locked("codex", self.clock + 2)))
+
+    def test_native_binding_refuses_outer_work_before_preparation(self) -> None:
+        connection = self.ledger._connection
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute("UPDATE projects SET created_at_ms=2 WHERE project_id=?", (self.project_id,))
+            with mock.patch.object(self.ledger, "_prepare_attestations", side_effect=AssertionError("crypto in outer writer")), \
+                    self.assertRaisesRegex(LedgerError, "already active"):
+                self.ledger.bind_session(self.project, "nested-native", "hook", "codex-native-fixture")
+            self.assertTrue(connection.in_transaction)
+            self.assertEqual(2, connection.execute("SELECT created_at_ms FROM projects WHERE project_id=?", (self.project_id,)).fetchone()[0])
+        finally:
+            connection.rollback()
+
+    def test_native_binding_refuses_inconsistent_provenance_without_repair_or_admission(self) -> None:
+        self._prepared_fixture_attestations()
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=self.clock + 1):
+            project, _, run = self.ledger.bind_session(self.project, "inconsistent-native", "hook", "codex-native-fixture")
+        with self.ledger._account_transaction():
+            self.ledger._connection.execute("UPDATE run_provenance SET client_version='wrong-version' WHERE project_id=? AND run_id=?",
+                                            (project, run))
+        before = self._launch_rows()
+        with self.assertRaisesRegex(LedgerError, "provenance conflicts"):
+            self.ledger.bind_session(self.project, "inconsistent-native", "hook", "codex-native-fixture")
+        self.assertEqual(before, self._launch_rows())
+
+    def test_native_binding_sigkill_before_and_after_commit_has_one_durable_boundary(self) -> None:
+        self._prepared_fixture_attestations()
+        script = r'''
+import os, signal, sys
+from pathlib import Path
+import tests.support
+from codex_agents.learning_store import LearningLedger, LearningState
+ledger = LearningLedger(LearningState(Path(sys.argv[1])))
+stamp = int(sys.argv[4]); ledger._clock_ms = lambda: stamp
+append = ledger._store_admission_locked
+def cut(*args, **kwargs):
+    append(*args, **kwargs)
+    print("before-commit", flush=True)
+    os.kill(os.getpid(), signal.SIGKILL)
+if sys.argv[3] == "before-commit":
+    ledger._store_admission_locked = cut
+ledger.bind_session(Path(sys.argv[2]), "kill-native", "hook", "codex-native-fixture", now_ms=stamp)
+print("after-commit", flush=True)
+os.kill(os.getpid(), signal.SIGKILL)
+'''
+        for phase in ("before-commit", "after-commit"):
+            with self.subTest(phase=phase):
+                before = self._launch_rows()
+                self.ledger.close()
+                try:
+                    child = subprocess.run([sys.executable, "-B", "-c", script, str(self.state.root), str(self.project), phase, str(self.clock + 1)],
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                           cwd=Path(__file__).resolve().parent.parent, timeout=15, check=False)
+                finally:
+                    self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+                self.assertEqual(-signal.SIGKILL, child.returncode, child.stderr.decode(errors="replace"))
+                self.assertEqual(phase, child.stdout.decode().strip())
+                after = self._launch_rows()
+                if phase == "before-commit":
+                    self.assertEqual(before, after)
+                else:
+                    self.assertEqual(1, len(after["sessions"]) - len(before["sessions"]))
+                    self.assertEqual(1, len(after["run_provenance"]) - len(before["run_provenance"]))
+                    new_records = [json.loads(row[8]) for row in after["records"][len(before["records"]):]]
+                    self.assertEqual(["admission_decision"], [record["record_type"] for record in new_records])
+                    self.assertEqual(after["run_provenance"][-1][1], new_records[0]["run_id"])
+                self.assertFalse(self.ledger._connection.in_transaction)
 
     def test_replay_reads_the_stored_decision_after_observations_go_stale(self) -> None:
         identity = self.observe()[0]

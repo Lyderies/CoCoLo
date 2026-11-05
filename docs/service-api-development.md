@@ -156,11 +156,21 @@ account restrictions, billing/headroom, cap/bootstrap history and decision time 
 fresh at the final admission check; preparation does not cache a passing admission.
 
 The preparation is never a JSON/native caller credential. No production account endpoint or
-normal-client migration is enabled. Other legacy session/probe/launch helpers still need the
+normal-client migration is enabled. Other legacy probe/launch helpers still need the
 same ownership audit and conversion. Signature-job intake/count/deadline limits and immutable
 policy/runtime generation snapshots remain service work: this library refactor does not make
 unbounded historical input a bounded API. A daemon still needs verified actual launch-caller
 facts instead of its own environment. Independent local timers/control cannot wait here.
+
+Collector session binding now prepares signatures before its writer and commits session,
+root provenance and its first passing admission together. A denied root still records events
+without gaining result admission. An identical computed root-run ID is decided once across
+hook/app-server producers, including concurrent first binds; another producer cannot upgrade a
+denied root or spend another account-window place. Existing provenance without a pass remains
+unadmitted. Known complete producer/session bindings take no writer reservation or signature
+work. Missing producer metadata is added atomically without revisiting admission, while
+inconsistent immutable provenance is refused. Project activity is checked before writes.
+These are persistence-owner rules, not new proof that a native client is authorized.
 
 ## Closed history API increment
 
