@@ -78,3 +78,34 @@ receipt. Separate instances are needed for reserved control/terminal/restriction
 routine work. This helper does not start a service, choose installed capacity defaults, bound
 in-flight workers, coalesce updates or make a blocked writer safe for local timers. Those
 integration, measurement and recovery checks remain required; queued memory is lost on a crash.
+
+## Project history persistence owner
+
+`project_history.ProjectHistory` now owns one project's SQLite connection and writer lock in
+an existing protected directory. Its connection belongs to one process and thread. Different
+projects use independent files and locks; a transaction in A does not take B's writer. The store
+creates no account state, signing material or digest key and imports neither `LearningState`
+nor `LearningLedger`. It cannot admit, launch or release account work.
+
+The internal methods accept already authorized work from a future project service. They are
+not external request handlers: no listener, native enrollment or normal CLI/hook/bridge path
+is enabled by this increment. A role, project label, `AttemptBinding` or receipt digest supplied
+by a client cannot be trusted as authorization. The service must establish caller ownership,
+the immutable account claim and any completion receipt before calling this persistence owner.
+
+The initial supported records are run events, intents, outcomes and verification bindings.
+Canonical bytes and content digests are retained unchanged, with project sequence, ingest time
+and late-arrival metadata outside the record. A dispatch result can only be committed together
+with its terminal outbox entry. The outbox retains the exact project/session/runtime/supervisor
+generation/orchestration/run/attempt/claim binding and result digest. Duplicate commits return
+the same delivery; changed content or binding conflicts. Pending metadata pages are bounded to
+16 KiB of canonical JSON including newline. An acknowledged delivery retains its immutable
+row and rejects a changed receipt. Acknowledging it cannot change central account capacity.
+
+Tests exercise the actual persistence methods in separate processes, abrupt process exit before
+and after commit, reopen/retry, terminal atomicity and independent B writes during an A write
+transaction. The process harness supplies fixture input directly; it does not establish native
+caller authentication, a production service API, power-loss behavior or full C1-C19 acceptance.
+This schema has no legacy importer yet. Exact source sequences, expiry, links, signed bytes,
+owner/account facts and cross-store authority ordering still need the drained migration and
+account-service implementation. Local control/timers must run independently of this writer.
