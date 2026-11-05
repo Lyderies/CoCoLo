@@ -254,6 +254,12 @@ class HistoryApiTests(unittest.TestCase):
         store.close()
         page = self.call(request("history.pending_terminals", identity="pending", payload={"after_sequence": 0, "limit": 1}))
         self.assertEqual("b" * 64, page["deliveries"][0]["binding"]["runtime_digest"])
+        payload = {"claim_id": "claim-1", "record_content_digest": page["deliveries"][0]["record_content_digest"],
+                   "receipt_digest": "c" * 64}
+        with self.assertRaisesRegex(HistoryError, "history_not_authorized"):
+            self.call(request("history.acknowledge_terminal", identity="claim-1", payload=payload))
+        unchanged = self.call(request("history.pending_terminals", identity="pending-again", payload={"after_sequence": 0, "limit": 1}))
+        self.assertEqual(page, unchanged)
 
     def test_client_selects_the_explicit_record_read_response_ceiling(self):
         client = HistoryClient(self.base / "unused.sock", PROJECT_A, RUNTIME, timeout=1)

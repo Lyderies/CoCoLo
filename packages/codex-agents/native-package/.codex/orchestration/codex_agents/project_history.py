@@ -453,13 +453,19 @@ class ProjectHistory:
         return tuple(page)
 
     @_operation
-    def acknowledge_terminal(self, claim_id: str, record_content_digest: str, receipt_digest: str) -> None:
+    def acknowledge_terminal(
+        self, claim_id: str, record_content_digest: str, receipt_digest: str, *, runtime_digest: str,
+    ) -> None:
         """Persist an already verified account receipt, not a caller's claimed receipt.
 
         The service must verify account/claim/result binding before this internal
-        call. This store cannot release account capacity or authenticate a receipt.
+        call. Ordinary ACKs cannot retire an older runtime's delivery; recovery
+        needs a separate, explicitly authorized protocol. This store cannot release
+        account capacity or authenticate a receipt.
         """
-        if not matches(claim_id, _ID) or not all(matches(value, _DIGEST) for value in (record_content_digest, receipt_digest)):
+        if not matches(claim_id, _ID) or not all(
+            matches(value, _DIGEST) for value in (record_content_digest, receipt_digest, runtime_digest)
+        ):
             raise HistoryError("history_invalid_input")
         with self._transaction():
             row = self._connection.execute(
@@ -468,7 +474,9 @@ class ProjectHistory:
             ).fetchone()
             if row is None:
                 raise HistoryError("history_not_found")
-            self._delivery(row)
+            delivery = self._delivery(row)
+            if delivery.binding.runtime_digest != runtime_digest:
+                raise HistoryError("history_not_authorized")
             if row["record_content_digest"] != record_content_digest or row["receipt_digest"] not in (None, receipt_digest):
                 raise HistoryError("history_conflict")
             self._connection.execute(

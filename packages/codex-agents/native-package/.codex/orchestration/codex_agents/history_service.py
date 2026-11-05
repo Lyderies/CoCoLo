@@ -156,7 +156,8 @@ class HistoryService:
                                              ingested_at_ms=self._clock())
             return self._delivery_result(delivery)
         if operation == "history.acknowledge_terminal":
-            store.acknowledge_terminal(payload["claim_id"], payload["record_content_digest"], payload["receipt_digest"])
+            store.acknowledge_terminal(payload["claim_id"], payload["record_content_digest"], payload["receipt_digest"],
+                                       runtime_digest=request.runtime_digest)
             return {"recorded": True}
         if operation == "history.pending_terminals":
             deliveries = store.pending_terminals(after_sequence=payload["after_sequence"], limit=payload["limit"])

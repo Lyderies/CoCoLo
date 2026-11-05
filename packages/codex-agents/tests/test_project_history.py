@@ -201,7 +201,7 @@ class ProjectHistoryTests(unittest.TestCase):
             for operation in (
                 self.store.pending_terminals,
                 lambda: self.store.commit_terminal(terminal(), binding(), ingested_at_ms=1000),
-                lambda: self.store.acknowledge_terminal("claim-1", hashlib.sha256(terminal()).hexdigest(), "f" * 64),
+                lambda: self.store.acknowledge_terminal("claim-1", hashlib.sha256(terminal()).hexdigest(), "f" * 64, runtime_digest="a" * 64),
             ):
                 with self.assertRaisesRegex(HistoryError, "history_incompatible") as caught:
                     operation()
@@ -254,7 +254,7 @@ class ProjectHistoryTests(unittest.TestCase):
         connection.close()
         for operation in (
             self.store.pending_terminals,
-            lambda: self.store.acknowledge_terminal("claim-1", hashlib.sha256(terminal()).hexdigest(), "f" * 64),
+            lambda: self.store.acknowledge_terminal("claim-1", hashlib.sha256(terminal()).hexdigest(), "f" * 64, runtime_digest="a" * 64),
         ):
             with self.assertRaisesRegex(HistoryError, "history_unavailable") as caught:
                 operation()
@@ -270,17 +270,22 @@ class ProjectHistoryTests(unittest.TestCase):
 
     def test_verified_receipt_ack_does_not_allow_changed_binding_or_receipt(self) -> None:
         delivery = self.store.commit_terminal(terminal(), binding(), ingested_at_ms=100)
+        with self.assertRaisesRegex(HistoryError, "history_not_authorized"):
+            self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "a" * 64, runtime_digest="b" * 64)
+        self.assertEqual((delivery,), self.store.pending_terminals())
         with self.assertRaisesRegex(HistoryError, "history_conflict"):
-            self.store.acknowledge_terminal("claim-1", "f" * 64, "a" * 64)
-        self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "a" * 64)
-        self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "a" * 64)
+            self.store.acknowledge_terminal("claim-1", "f" * 64, "a" * 64, runtime_digest="a" * 64)
+        self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "a" * 64, runtime_digest="a" * 64)
+        self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "a" * 64, runtime_digest="a" * 64)
         self.store.close()
         self.store = ProjectHistory(self.directory, PROJECT_A)
         self.addCleanup(self.store.close)
         self.assertEqual((), self.store.pending_terminals())
-        self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "a" * 64)
+        with self.assertRaisesRegex(HistoryError, "history_not_authorized"):
+            self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "a" * 64, runtime_digest="b" * 64)
+        self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "a" * 64, runtime_digest="a" * 64)
         with self.assertRaisesRegex(HistoryError, "history_conflict"):
-            self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "b" * 64)
+            self.store.acknowledge_terminal("claim-1", delivery.record_content_digest, "b" * 64, runtime_digest="a" * 64)
         self.assertEqual(delivery, self.store.commit_terminal(terminal(), binding(), ingested_at_ms=100))
         self.assertEqual((), self.store.pending_terminals())
 
