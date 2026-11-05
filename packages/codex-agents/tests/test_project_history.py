@@ -201,6 +201,7 @@ class ProjectHistoryTests(unittest.TestCase):
             for operation in (
                 self.store.pending_terminals,
                 lambda: self.store.commit_terminal(terminal(), binding(), ingested_at_ms=1000),
+                lambda: self.store.acknowledge_terminal("claim-1", hashlib.sha256(terminal()).hexdigest(), "f" * 64),
             ):
                 with self.assertRaisesRegex(HistoryError, "history_incompatible") as caught:
                     operation()
@@ -217,6 +218,55 @@ class ProjectHistoryTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, "history_unavailable") as caught:
             self.store.pending_terminals()
         self.assertIsNone(caught.exception.__context__)
+
+    def test_missing_or_corrupted_identity_counters_fail_with_fixed_reasons(self) -> None:
+        self.store._connection.execute("UPDATE history_identity SET next_source_sequence=0,next_delivery_sequence='CANARY'")
+        for operation in (
+            lambda: self.store.append_record(canonical_json(event_record()), source="host", ingested_at_ms=1000),
+            lambda: self.store.commit_terminal(terminal(), binding(), ingested_at_ms=1000),
+        ):
+            with self.assertRaisesRegex(HistoryError, "history_incompatible") as caught:
+                operation()
+            self.assertIsNone(caught.exception.__context__)
+        self.store._connection.execute("DELETE FROM history_identity")
+        for operation in (
+            lambda: self.store.append_record(canonical_json(event_record()), source="host", ingested_at_ms=1000),
+            lambda: self.store.commit_terminal(terminal(), binding(), ingested_at_ms=1000),
+        ):
+            with self.assertRaisesRegex(HistoryError, "history_incompatible") as caught:
+                operation()
+            self.assertIsNone(caught.exception.__context__)
+
+    def test_corrupted_observation_aggregate_cannot_escape_or_append(self) -> None:
+        self.store.append_record(canonical_json(event_record()), source="host", ingested_at_ms=1000)
+        self.store._connection.execute("UPDATE records SET observed_at_ms='CANARY'")
+        with self.assertRaisesRegex(HistoryError, "history_incompatible") as caught:
+            self.store.append_record(canonical_json(event_record("evt-new")), source="host", ingested_at_ms=1000)
+        self.assertIsNone(caught.exception.__context__)
+        with self.assertRaisesRegex(HistoryError, "history_not_found"):
+            self.store.record("evt-new")
+
+    def test_nested_oversized_record_failure_keeps_the_unavailable_reason(self) -> None:
+        self.store.commit_terminal(terminal(), binding(), ingested_at_ms=1000)
+        connection = sqlite3.connect(self.directory / "history.sqlite3")
+        connection.execute("UPDATE records SET content=?", (b"x" * (MAX_HISTORY_ROW_BYTES + 1),))
+        connection.commit()
+        connection.close()
+        for operation in (
+            self.store.pending_terminals,
+            lambda: self.store.acknowledge_terminal("claim-1", hashlib.sha256(terminal()).hexdigest(), "f" * 64),
+        ):
+            with self.assertRaisesRegex(HistoryError, "history_unavailable") as caught:
+                operation()
+            self.assertIsNone(caught.exception.__context__)
+
+    def test_unsupported_sqlite_limit_binding_is_refused_before_opening_files(self) -> None:
+        directory = self.base / "unsupported-bindings"
+        directory.mkdir(mode=0o700)
+        with mock.patch.object(project_history.sqlite3, "SQLITE_LIMIT_LENGTH", None), \
+                mock.patch.object(project_history.os, "open", side_effect=AssertionError("file opened")), \
+                self.assertRaisesRegex(HistoryError, "history_incompatible"):
+            ProjectHistory(directory, PROJECT_A)
 
     def test_verified_receipt_ack_does_not_allow_changed_binding_or_receipt(self) -> None:
         delivery = self.store.commit_terminal(terminal(), binding(), ingested_at_ms=100)

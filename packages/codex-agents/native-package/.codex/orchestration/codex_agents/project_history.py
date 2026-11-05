@@ -96,6 +96,11 @@ class ProjectHistory:
         self._closed = False
         self._connection = None
         self._directory_fd = self._writer_fd = None
+        if (
+            not callable(getattr(sqlite3.Connection, "setlimit", None))
+            or type(getattr(sqlite3, "SQLITE_LIMIT_LENGTH", None)) is not int
+        ):
+            raise HistoryError("history_incompatible")
         if not matches(project_id, _PROJECT) or not isinstance(directory, Path) or not directory.is_absolute():
             raise HistoryError("history_invalid_input")
         self.project_id = project_id
@@ -305,9 +310,7 @@ class ProjectHistory:
             if entry.content_digest != digest or entry.content != content or entry.source != source:
                 raise HistoryError("history_conflict")
             return entry
-        sequence = self._connection.execute("SELECT next_source_sequence FROM history_identity").fetchone()[0]
-        if not valid_integer(sequence, minimum=1, maximum=MAX_SEQUENCE - 1):
-            raise HistoryError("history_sequence_exhausted")
+        sequence = self._next_sequence(terminal=False)
         maximum = self._connection.execute(
             "SELECT COALESCE(MAX(observed_at_ms),0) FROM records WHERE project_id=?", (self.project_id,),
         ).fetchone()[0]
@@ -351,8 +354,23 @@ class ProjectHistory:
             raise HistoryError("history_incompatible")
         return value
 
+    def _next_sequence(self, *, terminal: bool) -> int:
+        statement = (
+            "SELECT next_delivery_sequence FROM history_identity WHERE project_id=?" if terminal
+            else "SELECT next_source_sequence FROM history_identity WHERE project_id=?"
+        )
+        row = self._connection.execute(statement, (self.project_id,)).fetchone()
+        if row is None:
+            raise HistoryError("history_incompatible")
+        if type(row[0]) is int and row[0] == MAX_SEQUENCE:
+            raise HistoryError("history_sequence_exhausted")
+        if not valid_integer(row[0], minimum=1, maximum=MAX_SEQUENCE - 1):
+            raise HistoryError("history_incompatible")
+        return row[0]
+
     def _delivery(self, row) -> TerminalDelivery:
         invalid = False
+        reason = "history_incompatible"
         try:
             encoded = self._stored_blob(row["binding"], maximum=MAX_BINDING_BYTES)
             binding = AttemptBinding(**parse_bounded_json(encoded))
@@ -370,10 +388,14 @@ class ProjectHistory:
                 or checked["result_digest"] != delivery.result_digest
                 or (row["receipt_digest"] is not None and not matches(row["receipt_digest"], _DIGEST))
             )
-        except (ContractError, HistoryError, KeyError, TypeError, ValueError, RecursionError, OverflowError):
+        except HistoryError as exc:
+            invalid = True
+            if exc.reason_code == "history_unavailable":
+                reason = "history_unavailable"
+        except (ContractError, KeyError, TypeError, ValueError, RecursionError, OverflowError):
             invalid = True
         if invalid:
-            raise HistoryError("history_incompatible")
+            raise HistoryError(reason)
         return delivery
 
     def _insert_terminal(self, delivery: TerminalDelivery, binding: bytes) -> None:
@@ -406,9 +428,7 @@ class ProjectHistory:
                 if canonical_json(delivery.binding.as_data()) != encoded_binding or delivery.record_content_digest != digest:
                     raise HistoryError("history_conflict")
                 return delivery
-            sequence = self._connection.execute("SELECT next_delivery_sequence FROM history_identity").fetchone()[0]
-            if not valid_integer(sequence, minimum=1, maximum=MAX_SEQUENCE - 1):
-                raise HistoryError("history_sequence_exhausted")
+            sequence = self._next_sequence(terminal=True)
             entry = self._append_locked(checked, content, "host", ingested_at_ms)
             delivery = TerminalDelivery(sequence, binding, entry.record_id, entry.content_digest, checked["result_digest"])
             self._insert_terminal(delivery, encoded_binding)
