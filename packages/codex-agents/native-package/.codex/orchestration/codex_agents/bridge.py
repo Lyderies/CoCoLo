@@ -388,7 +388,7 @@ _ACTIVE_CHILDREN: dict[int, tuple[Any, ProcessTree]] = {}
 WATCHDOG_SCRIPT = Path(__file__).resolve().with_name("process_tree.py")
 
 
-def _start_watchdog(root: int, birth: str, deadline_epoch: float) -> None:
+def _start_watchdog(root: int, birth: str, deadline_monotonic: float) -> None:
     """Start the watchdog and wait until it has verified the child.
 
     The child stays unreaped meanwhile, so its pid cannot pass to another
@@ -400,7 +400,7 @@ def _start_watchdog(root: int, birth: str, deadline_epoch: float) -> None:
         watchdog = subprocess.Popen(
             [
                 sys.executable, *PYTHON_ISOLATION_FLAGS, str(WATCHDOG_SCRIPT),
-                str(root), birth, repr(deadline_epoch),
+                str(root), birth, repr(deadline_monotonic),
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -514,7 +514,7 @@ def run_child(
             raise _Abort("process_tracking_unavailable")
         _start_watchdog(
             process.pid, tree.root_birth,
-            time.time() + deadline_seconds + WATCHDOG_GRACE_SECONDS,
+            deadline + WATCHDOG_GRACE_SECONDS,
         )
         next_track = time.monotonic() + TRACK_INTERVAL_SECONDS
         with selectors.DefaultSelector() as selector:

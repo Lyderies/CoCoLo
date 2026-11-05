@@ -335,7 +335,9 @@ def watch(root: int, birth: str, deadline: float, announce) -> None:
     It verifies the child's identity from the bridge, which keeps the child
     unreaped until `announce` acknowledges, and gives up silently if it cannot.
     It then tracks the tree on its own, so a crash of the bridge still ends it:
-    the tree is killed at the deadline, or once the child itself has exited.
+    the tree is killed at the absolute monotonic deadline supplied by the bridge,
+    or once the child itself has exited. Wall-clock corrections cannot shorten or
+    extend that budget. Supported Python versions share this clock across processes.
     """
 
     tree = ProcessTree(root)
@@ -352,7 +354,7 @@ def watch(root: int, birth: str, deadline: float, announce) -> None:
         if tree.root_exited():
             tree.terminate()
             return
-        if time.time() >= deadline:
+        if time.monotonic() >= deadline:
             tree.terminate()
             return
         time.sleep(WATCHDOG_INTERVAL_SECONDS)

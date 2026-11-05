@@ -1154,6 +1154,11 @@ from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 from codex_agents import bridge
 marker, deadline = sys.argv[2], float(sys.argv[3])
+if len(sys.argv) > 4:
+    # A fixture-local reading only; never change the operating system clock.
+    offset = float(sys.argv[4])
+    original_wall = bridge.time.time
+    bridge.time.time = lambda: original_wall() + offset
 child = [sys.executable, "-c",
          "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpgid(0)));"
          " print('{}', flush=True); time.sleep(120)", marker]
@@ -1171,11 +1176,11 @@ with bridge.signal_guard():
 
 
 class ChildTerminationTests(unittest.TestCase):
-    def start(self, directory: Path, deadline: float) -> tuple[subprocess.Popen, int]:
+    def start(self, directory: Path, deadline: float, wall_offset: float = 0) -> tuple[subprocess.Popen, int]:
         marker = directory / "child-group"
         driver = subprocess.Popen(
             [sys.executable, "-c", DRIVER, str(ORCHESTRATION_ROOT), str(marker),
-             str(deadline)],
+             str(deadline), str(wall_offset)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         reading = directory / "child-group-reading"
@@ -1217,6 +1222,24 @@ class ChildTerminationTests(unittest.TestCase):
             finally:
                 with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.killpg(group, signal.SIGKILL)
+
+    def test_detached_deadline_survives_fixture_wall_clock_disagreement(self) -> None:
+        for offset in (-600, 600):
+            with self.subTest(offset=offset), tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
+                driver, group = self.start(Path(directory), 3, wall_offset=offset)
+                try:
+                    # Reaching the reading marker proves the watchdog acknowledged
+                    # the still-live child despite a mismatched wall-clock reading.
+                    driver.kill()
+                    driver.wait(timeout=10)
+                    os.killpg(group, 0)
+                    self.assertTrue(self.wait_gone(group, 20))
+                finally:
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.killpg(group, signal.SIGKILL)
+                    if driver.poll() is None:
+                        driver.kill()
+                    driver.wait(timeout=10)
 
 
 # A child that leaves descendants outside its own process group, as Codex helpers and
@@ -1632,6 +1655,21 @@ class ProcessTreeTests(unittest.TestCase):
             ("group", 100, kill), ("group", 102, kill),
             ("pid", 100, kill), ("pid", 101, kill), ("pid", 102, kill),
         ], self.signals)
+
+    def test_watchdog_waits_for_the_monotonic_deadline_without_reading_wall_time(self) -> None:
+        announced = mock.Mock()
+        with self.recorded(self.listing()), \
+                mock.patch.object(process_tree.time, "time", side_effect=AssertionError("wall time consulted")), \
+                mock.patch.object(process_tree.time, "monotonic", side_effect=[100, 100, 104.99, 105]), \
+                mock.patch.object(process_tree.time, "sleep") as sleep:
+            process_tree.watch(100, "b100", 105, announced)
+        announced.assert_called_once_with()
+        self.assertEqual([
+            mock.call(process_tree.WATCHDOG_INTERVAL_SECONDS),
+            mock.call(process_tree.WATCHDOG_INTERVAL_SECONDS),
+            mock.call(process_tree.KILL_ROUND_PAUSE_SECONDS),
+        ], sleep.call_args_list)
+        self.assertTrue(self.signals)
 
 
 class KernelRecordTests(unittest.TestCase):

@@ -55,6 +55,9 @@
   with explicit legacy status projections for completed verdicts. The sample positive template
   does not request a positive conclusion. Result validation, host admission and fencing remain
   in force; the additional guidance is not an output field or new authority.
+- The bridge and its detached watchdog now share one absolute monotonic hard deadline,
+  including the existing watchdog grace. Fixture clock disagreement cannot kill a child
+  early or extend cleanup after bridge death. No host clock setting is changed by the tests.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.
