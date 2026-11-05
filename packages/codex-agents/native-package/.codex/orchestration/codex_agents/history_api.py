@@ -29,8 +29,9 @@ _RECORD_OPERATIONS = {
 HISTORY_OPERATIONS = frozenset({
     *_RECORD_OPERATIONS, "history.pending_terminals", "history.acknowledge_terminal", "history.read_record",
 })
+HISTORY_RECORD_TYPES = frozenset(_RECORD_OPERATIONS.values())
 _REQUEST_FIELDS = {"protocol_version", "operation", "request_id", "project_id", "runtime_digest", "payload"}
-_RESPONSE_FIELDS = {"protocol_version", "project_id", "runtime_digest", "request_id", "ready", "result", "reason_code"}
+_RESPONSE_FIELDS = {"protocol_version", "project_id", "runtime_digest", "request_id", "request_digest", "ready", "result", "reason_code"}
 _METADATA_FIELDS = {"record_id", "source", "source_sequence", "observed_at_ms", "ingested_at_ms", "content_digest", "late"}
 
 
@@ -51,6 +52,18 @@ def _closed(value: object, fields: set[str]) -> bool:
     return type(value) is dict and value.keys() == fields
 
 
+def _checked_history_record(value: object, *, expected_type: str | None = None) -> dict:
+    # Protocol-v1 history values describe the new typed store, not legacy import.
+    # The existing shared legacy reader and its canonical bytes remain unchanged.
+    if (
+        type(value) is not dict or type(value.get("schema_version")) is not int
+        or type(value.get("record_type")) is not str or value["record_type"] not in HISTORY_RECORD_TYPES
+        or (expected_type is not None and value["record_type"] != expected_type)
+    ):
+        raise HistoryError("history_invalid_input")
+    return validate_learning_record(value)
+
+
 def _validate_request(request: HistoryRequest) -> None:
     if (
         type(request) is not HistoryRequest or type(request.protocol_version) is not int
@@ -65,19 +78,16 @@ def _validate_request(request: HistoryRequest) -> None:
         fields = {"record", "binding"} if operation == "history.commit_terminal" else {"record"}
         if not _closed(payload, fields):
             raise HistoryError("history_invalid_request")
-        record = payload["record"]
-        if (
-            type(record) is not dict or type(record.get("schema_version")) is not int
-            or record.get("record_type") != _RECORD_OPERATIONS[operation]
-        ):
-            raise HistoryError("history_invalid_request")
-        validate_learning_record(record)
+        record = _checked_history_record(payload["record"], expected_type=_RECORD_OPERATIONS[operation])
         identity = record["record_id"]
         if operation == "history.commit_terminal":
             if type(payload["binding"]) is not dict:
                 raise HistoryError("history_invalid_request")
             binding = AttemptBinding(**payload["binding"])
-            if binding.project_id != request.project_id or binding.run_id != record["run_id"]:
+            if (
+                binding.project_id != request.project_id or binding.run_id != record["run_id"]
+                or binding.runtime_digest != request.runtime_digest
+            ):
                 raise HistoryError("history_invalid_request")
             identity = binding.claim_id
         if request.request_id != identity:
@@ -165,7 +175,7 @@ def _decoded_delivery(value: object) -> TerminalDelivery:
     if type(value["binding"]) is not dict:
         raise HistoryError("history_invalid_response")
     delivery = TerminalDelivery(**{**{name: value[name] for name in fields}, "binding": AttemptBinding(**value["binding"])})
-    record = validate_learning_record(value["dispatch_result"])
+    record = _checked_history_record(value["dispatch_result"], expected_type="dispatch_result")
     if (
         record["record_type"] != "dispatch_result" or record["record_id"] != delivery.record_id
         or record["run_id"] != delivery.binding.run_id or record["result_digest"] != delivery.result_digest
@@ -217,7 +227,7 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
         if not _closed(result, {"record", "metadata"}) or type(result["record"]) is not dict:
             raise HistoryError("history_invalid_response")
         _validate_metadata(result["metadata"])
-        record, metadata = validate_learning_record(result["record"]), result["metadata"]
+        record, metadata = _checked_history_record(result["record"]), result["metadata"]
         if (
             record["record_id"] != request.payload["record_id"] or metadata["record_id"] != record["record_id"]
             or metadata["observed_at_ms"] != record["observed_at_ms"]
@@ -239,6 +249,7 @@ def decode_history_response(raw: bytes, request: HistoryRequest) -> dict:
             or response["protocol_version"] != HISTORY_PROTOCOL_VERSION
             or response["project_id"] != request.project_id or response["runtime_digest"] != request.runtime_digest
             or response["request_id"] != request.request_id or type(response["ready"]) is not bool
+            or response["request_digest"] != history_request_digest(request)
         ):
             raise HistoryError("history_invalid_response")
         if response["ready"]:

@@ -77,26 +77,34 @@ class HistoryService:
         self._store: ProjectHistory | None = None
         self._closed = False
 
-    def _reply(self, identity: str | None, *, result: dict | None = None, reason: str | None = None) -> bytes:
+    def _reply(self, identity: str | None, *, request_digest: str | None = None,
+               project_id: str | None = None, runtime_digest: str | None = None,
+               result: dict | None = None, reason: str | None = None) -> bytes:
         return canonical_json({
-            "protocol_version": HISTORY_PROTOCOL_VERSION, "project_id": self._project,
-            "runtime_digest": self._runtime, "request_id": identity,
+            # Denials echo only validated caller labels; malformed requests get
+            # null labels. No configured project/runtime is disclosed pre-auth.
+            "protocol_version": HISTORY_PROTOCOL_VERSION, "project_id": project_id,
+            "runtime_digest": runtime_digest, "request_id": identity,
+            "request_digest": request_digest,
             "ready": reason is None, "result": result, "reason_code": reason,
         })
 
     def handle(self, raw: bytes, transport_context: object = None) -> bytes:
         identity = None
+        digest = None
+        project = runtime = None
         try:
             if self._closed or self._thread != threading.get_ident():
                 raise HistoryError("history_wrong_owner")
             request = decode_history_request(raw)
             identity = request.request_id
+            digest = history_request_digest(request)
+            project, runtime = request.project_id, request.runtime_digest
             if (
                 request.project_id != self._project or request.runtime_digest != self._runtime
                 or self._authorizer is None
             ):
                 raise HistoryError("history_not_authorized")
-            digest = history_request_digest(request)
             authorization = self._authorizer(request, transport_context)
             if type(authorization) is not HistoryAuthorization:
                 raise HistoryError("history_not_authorized")
@@ -116,7 +124,7 @@ class HistoryService:
                     raise HistoryError("history_service_unavailable")
                 self._store = store
             result = self._execute(request, authorization)
-            reply = self._reply(identity, result=result)
+            reply = self._reply(identity, request_digest=digest, project_id=project, runtime_digest=runtime, result=result)
             if request.operation == "history.pending_terminals":
                 # The owner caps the bare list; the wire envelope must fit too.
                 while len(reply) + 1 > MAX_HISTORY_REPLY_BYTES and result["deliveries"]:
@@ -124,7 +132,7 @@ class HistoryService:
                     result["next_after_sequence"] = (
                         result["deliveries"][-1]["delivery_sequence"] if result["deliveries"] else None
                     )
-                    reply = self._reply(identity, result=result)
+                    reply = self._reply(identity, request_digest=digest, project_id=project, runtime_digest=runtime, result=result)
             limit = MAX_FRAME_BYTES if request.operation == "history.read_record" else MAX_HISTORY_REPLY_BYTES
             if len(reply) + 1 > limit:
                 raise HistoryError("history_service_unavailable")
@@ -136,7 +144,7 @@ class HistoryService:
             # A fault after commit still leaves its durable identity. An error
             # reply never proves the operation did not commit, and leaks no input.
             reason = "history_service_unavailable"
-        return self._reply(identity, reason=reason)
+        return self._reply(identity, request_digest=digest, project_id=project, runtime_digest=runtime, reason=reason)
 
     def _execute(self, request: HistoryRequest, authorization: HistoryAuthorization) -> dict:
         operation, payload, store = request.operation, request.payload, self._store

@@ -141,6 +141,12 @@ canonical request digest and operation set. The handler rechecks that digest aft
 pins project/runtime, and limits hook/app-server sources to event recording. This adapter seam
 does not establish native enrollment: no production adapter, listener, protected launcher or
 normal CLI/hook/bridge migration is enabled by this increment.
+Every decoded-request reply also binds that complete request digest, including acknowledgement
+receipt/content parameters; a reply for different parameters cannot confirm the new request.
+Ordinary terminal commits require the binding runtime to match the pinned request runtime.
+Pending history may retain older runtimes unchanged; cross-runtime terminal recovery requires
+its separately reviewed recovery protocol. Malformed/denied replies disclose no configured
+labels: they return null labels or only the validated labels supplied by that caller.
 
 Mutation request IDs are immutable business identities: the record ID for record operations and
 the claim ID for terminal/acknowledgement operations, scoped by authorized project/operation.
@@ -151,7 +157,10 @@ generation revocation must be defined before deleting replay state. Read IDs onl
 views and do not promise a retained snapshot. Cancellation needs its separate durable protocol.
 
 The whole request frame is at most 80 KiB including newline. Records travel as nested JSON objects
-and retain their exact canonical bytes, rather than expanding through double escaping/base64.
+with the five supported history types and exact integer schema versions on requests and replies.
+This new wire contract does not change the shared legacy reader or rewrite its historical bytes;
+legacy import and its transfer capabilities remain a separate migration gate. Records retain
+their exact canonical bytes, rather than expanding through double escaping/base64.
 Replies are at most 16 KiB including the wire envelope; pending pages shrink to fit that actual
 encoding. An explicit single-record read may use the 80 KiB metadata-transfer ceiling. These
 limits do not enable up-to-1MiB worker-result transfer or LIVE4 full-report retrieval.

@@ -21,8 +21,9 @@ from codex_agents.history_api import (
 )
 from codex_agents.history_contracts import HistoryError
 from codex_agents.history_service import HistoryAuthorization, HistoryService
-from codex_agents.learning_contracts import canonical_json
+from codex_agents.learning_contracts import canonical_json, validate_learning_record
 from codex_agents.project_history import ProjectHistory
+from codex_agents.service_transport import MAX_FRAME_BYTES
 from tests.learning_support import event_record, verification_outcome
 from tests.test_project_history import PROJECT_A, PROJECT_B, binding, terminal
 
@@ -80,6 +81,8 @@ class HistoryApiTests(unittest.TestCase):
             reply = json.loads(service.handle(encode_history_request(command), context))
             self.assertFalse(reply["ready"])
             self.assertEqual("history_not_authorized", reply["reason_code"])
+            self.assertEqual(command.project_id, reply["project_id"])
+            self.assertEqual(command.runtime_digest, reply["runtime_digest"])
         self.assertEqual([], self.opened)
         self.assertEqual([], list(self.directory.iterdir()))
 
@@ -145,6 +148,8 @@ class HistoryApiTests(unittest.TestCase):
             result = self.service.handle(raw, FIXTURE_CONTEXT)
             self.assertFalse(json.loads(result)["ready"])
             self.assertNotIn(b"CANARY", result)
+            self.assertIsNone(json.loads(result)["project_id"])
+            self.assertIsNone(json.loads(result)["runtime_digest"])
         self.assertEqual([], self.opened)
 
     def test_hook_context_cannot_use_lifecycle_or_read_operations(self):
@@ -203,18 +208,119 @@ class HistoryApiTests(unittest.TestCase):
 
     def test_terminal_api_preserves_only_exact_trusted_diagnostic_metadata(self):
         record = json.loads(terminal())
+        record["client_diagnostics"] = {
+            "exit_code": 1, "result_frame_seen": True, "result_subtype": "error_during_execution", "error_code": "server_error",
+        }
         command = request("history.commit_terminal", identity="claim-1", payload={"record": record, "binding": binding().as_data()})
         raw = self.service.handle(encode_history_request(command), FIXTURE_CONTEXT)
         receipt = decode_history_response(raw, command)
         self.assertEqual(record, receipt["dispatch_result"])
         self.assertEqual("invalid_shape", receipt["dispatch_result"]["result_validation_reason_code"])
         self.assertTrue(receipt["dispatch_result"]["fenced"])
+        self.assertEqual(record["client_diagnostics"], receipt["dispatch_result"]["client_diagnostics"])
         forged = json.loads(raw)
         forged["result"]["dispatch_result"]["result_validation_reason_code"] = "CANARY-REJECTED-CONTENT"
         with self.assertRaisesRegex(HistoryError, "history_invalid_response") as caught:
             decode_history_response(canonical_json(forged), command)
         self.assertIsNone(caught.exception.__context__)
         self.assertNotIn("CANARY", str(caught.exception))
+
+    def test_ack_reply_cannot_be_substituted_for_changed_receipt_parameters(self):
+        commit = request("history.commit_terminal", identity="claim-1",
+                         payload={"record": json.loads(terminal()), "binding": binding().as_data()})
+        delivery = self.call(commit)
+        payload = {"claim_id": "claim-1", "record_content_digest": delivery["record_content_digest"], "receipt_digest": "c" * 64}
+        command = request("history.acknowledge_terminal", identity="claim-1", payload=payload)
+        reply = self.service.handle(encode_history_request(command), FIXTURE_CONTEXT)
+        self.assertEqual({"recorded": True}, decode_history_response(reply, command))
+        for changes in ({"receipt_digest": "d" * 64}, {"record_content_digest": "f" * 64}):
+            changed = request("history.acknowledge_terminal", identity="claim-1", payload={**payload, **changes})
+            with self.assertRaisesRegex(HistoryError, "history_invalid_response"):
+                decode_history_response(reply, changed)
+
+    def test_cross_runtime_commit_is_refused_but_historical_pending_binding_is_retained(self):
+        record = json.loads(terminal())
+        foreign = {**binding().as_data(), "runtime_digest": "b" * 64}
+        valid = request("history.commit_terminal", identity="claim-1", payload={"record": record, "binding": binding().as_data()})
+        raw = json.loads(encode_history_request(valid))
+        raw["payload"]["binding"] = foreign
+        reply = json.loads(self.service.handle(canonical_json(raw), FIXTURE_CONTEXT))
+        self.assertFalse(reply["ready"])
+        self.assertEqual("history_invalid_request", reply["reason_code"])
+        self.assertEqual([], self.opened)
+        from codex_agents.history_contracts import AttemptBinding
+        store = ProjectHistory(self.directory, PROJECT_A)
+        store.commit_terminal(terminal(), AttemptBinding(**foreign), ingested_at_ms=1000)
+        store.close()
+        page = self.call(request("history.pending_terminals", identity="pending", payload={"after_sequence": 0, "limit": 1}))
+        self.assertEqual("b" * 64, page["deliveries"][0]["binding"]["runtime_digest"])
+
+    def test_client_selects_the_explicit_record_read_response_ceiling(self):
+        client = HistoryClient(self.base / "unused.sock", PROJECT_A, RUNTIME, timeout=1)
+        with mock.patch("codex_agents.history_api.exchange_frame", side_effect=lambda path, raw, **opts: self.service.handle(raw, FIXTURE_CONTEXT)) as wire:
+            client.record_event(event_record())
+            client.read_record("evt_1")
+        self.assertEqual([MAX_HISTORY_REPLY_BYTES, MAX_FRAME_BYTES], [call.kwargs["response_limit"] for call in wire.call_args_list])
+
+    def test_read_and_pending_require_history_types_and_exact_integer_versions(self):
+        self.call(request())
+        read = request("history.read_record", identity="read", payload={"record_id": "evt_1"})
+        original = json.loads(self.service.handle(encode_history_request(read), FIXTURE_CONTEXT))
+        for version in (True, 1.0):
+            response = json.loads(canonical_json(original))
+            record = response["result"]["record"]
+            record["schema_version"] = version
+            # Preserve the shared legacy reader's exact historical semantics.
+            self.assertEqual(canonical_json(record), canonical_json(validate_learning_record(record)))
+            response["result"]["metadata"]["content_digest"] = hashlib.sha256(canonical_json(record)).hexdigest()
+            with self.assertRaisesRegex(HistoryError, "history_invalid_response"):
+                decode_history_response(canonical_json(response), read)
+        response = json.loads(canonical_json(original))
+        record = {"schema_version": 1, "record_type": "provider_headroom", "record_id": "evt_1", "provider": "codex",
+                  "account_fingerprint": "a" * 64, "windows": [], "status": None, "run_id": None,
+                  "phase": None, "observed_at_ms": 1000}
+        validate_learning_record(record)
+        response["result"]["record"] = record
+        response["result"]["metadata"]["content_digest"] = hashlib.sha256(canonical_json(record)).hexdigest()
+        with self.assertRaisesRegex(HistoryError, "history_invalid_response"):
+            decode_history_response(canonical_json(response), read)
+
+        commit = request("history.commit_terminal", identity="claim-1",
+                         payload={"record": json.loads(terminal()), "binding": binding().as_data()})
+        self.call(commit)
+        pending = request("history.pending_terminals", identity="pending", payload={"after_sequence": 0, "limit": 1})
+        original = json.loads(self.service.handle(encode_history_request(pending), FIXTURE_CONTEXT))
+        for version in (True, 1.0):
+            response = json.loads(canonical_json(original))
+            data = response["result"]["deliveries"][0]
+            record = data["dispatch_result"]
+            record.pop("client_diagnostics")
+            record.pop("result_validation_reason_code")
+            record["schema_version"] = version
+            validate_learning_record(record)
+            data["record_content_digest"] = hashlib.sha256(canonical_json(record)).hexdigest()
+            with self.assertRaisesRegex(HistoryError, "history_invalid_response"):
+                decode_history_response(canonical_json(response), pending)
+
+    def test_post_commit_reply_fault_keeps_durable_truth_and_exact_retry(self):
+        command = request()
+        original_reply = self.service._reply
+
+        def reply_fault(identity, **arguments):
+            if arguments.get("reason") is None:
+                raise RuntimeError("CANARY-response-fault")
+            return original_reply(identity, **arguments)
+        with mock.patch.object(self.service, "_reply", side_effect=reply_fault):
+            raw = self.service.handle(encode_history_request(command), FIXTURE_CONTEXT)
+        with self.assertRaisesRegex(HistoryError, "history_service_unavailable") as caught:
+            decode_history_response(raw, command)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("CANARY", str(caught.exception))
+        entry = self.service._store.record("evt_1")
+        self.assertEqual(canonical_json(event_record()), entry.content)
+        retry = self.call(command)
+        self.assertEqual(1, retry["source_sequence"])
+        self.assertEqual(entry.ingested_at_ms, retry["ingested_at_ms"])
 
     def test_owner_failure_preserves_fixed_reason_and_never_reopens_as_a_fallback(self):
         self.call(request("history.pending_terminals", identity="pending", payload={"after_sequence": 0, "limit": 1}))
@@ -324,6 +430,11 @@ try:
    if mode=='drop' and count==1:
     print('dropped',flush=True)
     continue
+   if mode=='formatted-read' and json.loads(payload)['operation']=='history.read_record':
+    # Legal JSON whitespace exercises a read frame above the ordinary ceiling
+    # while keeping its record schema and canonical content unchanged.
+    reply=b' '*20000+reply
+    print('formatted-read',flush=True)
    connection.sendall(reply+b'\n')
   if mode=='hold' and count==1:
    service._store._connection.execute('BEGIN IMMEDIATE')
@@ -395,6 +506,16 @@ class HistoryProcessApiTests(unittest.TestCase):
         process.stdin.write("release\n")
         process.stdin.flush()
         self.assertEqual("event-a", a.read_record("event-a")["metadata"]["record_id"])
+
+    def test_explicit_record_read_frame_can_exceed_the_ordinary_reply_limit(self):
+        client, process, _ = self.start("large-read", PROJECT_A, mode="formatted-read")
+        record = event_record("large-record")
+        content = canonical_json(record)
+        receipt = client.record_event(record)
+        returned = client.read_record(record["record_id"])
+        self.assert_line(process, "formatted-read")
+        self.assertEqual(content, canonical_json(returned["record"]))
+        self.assertEqual(receipt, returned["metadata"])
 
     def test_terminal_delivery_and_acknowledgement_replay_survive_process_restart(self):
         client, _, stop = self.start("terminal", PROJECT_A)
