@@ -135,6 +135,9 @@ class ServiceTransportTests(unittest.TestCase):
 
     def test_response_limit_includes_delimiter_and_bounds_read_allocation(self) -> None:
         self.assertEqual(b"1234567", self.exchange(FakeSocket([b"1234567\n"]), response_limit=8))
+        for chunks in ([b"1234567\nx"], [b"1234567\n", b"x"], [b"1234567\n" + b"x" * 100_000]):
+            with self.subTest(fragmentation=[len(chunk) for chunk in chunks]):
+                self.assertEqual(b"1234567", self.exchange(FakeSocket(chunks), response_limit=8))
         for chunks in ([b"12345678\n"], [b"1234", b"56789"]):
             client = FakeSocket(chunks)
             with self.assertRaises(transport.ServiceTransportError) as caught:
@@ -177,7 +180,44 @@ class ServiceTransportTests(unittest.TestCase):
                 self.assertEqual("response_invalid", caught.exception.code)
                 self.assertIsNone(caught.exception.__context__)
 
-
+    def test_collector_adapter_keeps_negative_runtime_and_binding_paths(self) -> None:
+        client = CollectorClient(Path("/fixture/service.sock"))
+        healthy = {
+            "ok": True, "schema_version": learning_store.LEDGER_SCHEMA_VERSION,
+            "runtime_version": learning_store.PACKAGE_VERSION,
+            "runtime_digest": learning_store.COLLECTOR_RUNTIME_DIGEST,
+        }
+        for changes, expected in (
+            ({"runtime_version": "99.0.0"}, "runtime_newer"),
+            ({"runtime_version": "0.0.0"}, "runtime_upgrade_required"),
+            ({"schema_version": learning_store.LEDGER_SCHEMA_VERSION + 1}, "runtime_newer"),
+            ({"schema_version": True}, "runtime_upgrade_required"),
+            ({"schema_version": None}, "runtime_upgrade_required"),
+            ({"runtime_digest": "0" * 64}, "runtime_conflict"),
+        ):
+            with self.subTest(changes=changes), mock.patch.object(
+                learning_store, "exchange_frame", return_value=json.dumps({**healthy, **changes}).encode(),
+            ) as exchange:
+                with self.assertRaises(CollectorError) as caught:
+                    client.health()
+                self.assertEqual(expected, caught.exception.code)
+                self.assertEqual(1, exchange.call_count)
+        root = Path.cwd()
+        record = {"record_type": "fixture"}
+        with mock.patch.object(learning_store, "exchange_frame", side_effect=[
+            b'{"ok":true,"binding_token":"bnd_fixture"}', b'{"ok":true,"stored":true}',
+        ]) as exchange:
+            token = client.bind(root, "session-fixture", "hook", "codex-hooks-v1")
+            self.assertEqual("bnd_fixture", token)
+            self.assertTrue(client.ingest(token, record)["stored"])
+        self.assertEqual(2, exchange.call_count)
+        self.assertEqual([
+            {"protocol": learning_store.COLLECTOR_PROTOCOL_VERSION, "op": "bind",
+             "project_root": str(root.resolve()), "session_id": "session-fixture",
+             "producer": "hook", "client_version": "codex-hooks-v1"},
+            {"protocol": learning_store.COLLECTOR_PROTOCOL_VERSION, "op": "ingest",
+             "binding_token": "bnd_fixture", "record": record},
+        ], [json.loads(call.args[1]) for call in exchange.call_args_list])
 class ServiceTransportSocketTests(unittest.TestCase):
     def test_slow_reply_cannot_extend_the_deadline(self) -> None:
         with tempfile.TemporaryDirectory(prefix="svc-wire-", dir=TEMP_ROOT) as directory:

@@ -75,6 +75,12 @@ def exchange_frame(
                 if not chunk:
                     break
                 raw.extend(chunk)
+                newline = raw.find(b"\n")
+                if newline != -1:
+                    if newline + 1 > response_limit:
+                        raise ServiceTransportError("response_too_large")
+                    del raw[newline + 1:]
+                    break
                 if len(raw) > response_limit:
                     raise ServiceTransportError("response_too_large")
             response = bytes(raw).split(b"\n", 1)[0]
