@@ -60,6 +60,12 @@ Raw child results must leave admission `unverified` and cannot attest their own 
 Those claims are fenced with `inconsistent_axes` before result binding; actual bridge-observed
 timeouts keep their authoritative timed-out outcome.
 
+Bridge prompts carry the same allowed values and consistency rules as `result-preflight`,
+with the literal result shape and its string-array types. A finished review can use completed
+execution with a `not-ready` verdict; the sample `pass` value is not a requested conclusion.
+The prompt also shows the legacy status projection: a `blocked` verdict uses status `blocked`.
+Keep finding severity and corrections in evidence details, without adding output fields.
+
 The trusted bridge stores the reason in a version-3 `dispatch_result` record, alongside the
 unchanged result digest and fence. Recording that exact host result returns the stored reason
 under `dispatch_diagnostics`. A primary cannot supply or replace this diagnostic. Version-1 and

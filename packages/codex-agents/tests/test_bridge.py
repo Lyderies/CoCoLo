@@ -388,6 +388,7 @@ class ClaudeBridgeTests(BridgeTestCase):
         for flag in ("--strict-mcp-config", "--no-session-persistence", "--verbose"):
             self.assertIn(flag, argv)
         # The prompt, last, states one evidence entry per criterion at its most severe outcome.
+        self.assertIn("Contract guidance (not result fields):\n", argv[-1])
         self.assertIn(f"In the evidence list, {ONE_EVIDENCE_ENTRY_RULE}.", argv[-1])
         self.assertIn("(fail, then not_run, then observed, then pass)", argv[-1])
         # Each criterion's description reaches the child, not only its id.
@@ -1737,6 +1738,7 @@ class CodexBridgeTests(BridgeTestCase):
         argv = invocation["argv"]
         self.assertEqual("read-only", argv[argv.index("-s") + 1])
         self.assertIn(f"In the evidence list, {ONE_EVIDENCE_ENTRY_RULE}.", argv[-1])
+        self.assertIn("Contract guidance (not result fields):\n", argv[-1])
         self.assertEqual("--", argv[-2])
         for item in assigned["required_evidence"]:
             self.assertIn(f"- {item['id']}: {item['description']}\n", argv[-1])

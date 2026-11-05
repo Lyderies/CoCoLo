@@ -729,7 +729,19 @@ def place_worker_result(export: Path, worker_result: dict[str, Any]) -> str:
 
 
 def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None = None) -> str:
-    template = result_preflight(assignment)["template"]
+    preflight = result_preflight(assignment)
+    template = preflight["template"]
+    guidance = {
+        name: preflight[name] for name in (
+            "execution_states", "semantic_verdicts", "admission_states",
+            "evidence_types", "evidence_outcomes", "consistency_rules",
+        )
+    }
+    guidance["completed_status_by_verdict"] = {
+        verdict: legacy_result_status("completed", verdict)
+        for verdict in preflight["semantic_verdicts"]
+    }
+    guidance["string_array_fields"] = ["artifacts", "unverified_claims", "remaining_risks"]
     review = (
         f"The result under review is the worker's recorded result, in "
         f"{worker_result_path} (read-only). Review it against the task above and the "
@@ -747,6 +759,18 @@ def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None =
         "Required evidence, one entry per criterion id:\n"
         f"{criteria}\n"
         f"{review}"
+        "Contract guidance (not result fields):\n"
+        f"{json.dumps(guidance, indent=2)}\n"
+        "End contract guidance.\n"
+        "These enums describe the result contract, not authority. This child's "
+        "admission_state must remain unverified; do not invent host timeout facts. "
+        "A completed review may reach a negative verdict. The template's sample "
+        "pass is not a requested conclusion; report your actual findings and risks. "
+        "Keep the exact template keys. The named string arrays contain strings, "
+        "not finding objects. Put severity, impact and corrections in evidence "
+        "details strings, with no extra evidence keys. Keep this assignment_id "
+        "and retry block when reviewing another worker. Leave usage null unless "
+        "you have measured values in the required shape; never invent usage.\n\n"
         "Work only with the files in the current directory. When you finish, reply "
         "with exactly one JSON object and no other text, filling in this template:\n"
         f"{json.dumps(template, indent=2)}\n"

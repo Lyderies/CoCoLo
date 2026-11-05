@@ -11,6 +11,8 @@ from codex_agents.contracts import (
     RESULT_VALIDATION_REASON_CODES,
     ContractError,
     ResultContractError,
+    result_preflight,
+    validate_result,
 )
 from codex_agents.learning_contracts import (
     CLIENT_ERROR_CODES,
@@ -236,6 +238,69 @@ class ResultDiagnosticTests(unittest.TestCase):
                 old.pop("result_validation_reason_code")
             with self.assertRaises(ContractError):
                 validate_learning_record(old)
+
+
+class ResultPromptContractTests(unittest.TestCase):
+    @staticmethod
+    def prompt_objects(assigned, **options):
+        prompt = bridge.child_prompt(assigned, **options)
+        decoder = json.JSONDecoder()
+        guidance, _ = decoder.raw_decode(prompt.split("Contract guidance (not result fields):\n", 1)[1])
+        template, _ = decoder.raw_decode(prompt.split("filling in this template:\n", 1)[1])
+        return guidance, template
+
+    def test_prompt_includes_the_preflight_vocabularies_and_rules(self) -> None:
+        assigned = assignment()
+        preflight = result_preflight(assigned)
+        guidance, template = self.prompt_objects(assigned)
+        for name in ("execution_states", "semantic_verdicts", "admission_states",
+                     "evidence_types", "evidence_outcomes", "consistency_rules"):
+            with self.subTest(name=name):
+                self.assertEqual(preflight[name], guidance[name])
+                self.assertNotIn(name, template)
+        self.assertEqual(preflight["template"], template)
+        self.assertEqual(set(preflight["semantic_verdicts"]), set(guidance["completed_status_by_verdict"]))
+        self.assertEqual("completed", guidance["completed_status_by_verdict"]["not-ready"])
+        self.assertEqual("blocked", guidance["completed_status_by_verdict"]["blocked"])
+
+    def test_prompt_examples_validate_without_weakening_negative_fences(self) -> None:
+        assigned = assignment()
+        guidance, template = self.prompt_objects(assigned)
+        for verdict in ("pass", "not-ready", "blocked"):
+            value = deepcopy(template)
+            value.update(semantic_verdict=verdict, status=guidance["completed_status_by_verdict"][verdict],
+                         summary="Synthetic prompt-contract example only.")
+            for item in value["evidence"]:
+                item.update(reference="synthetic-prompt-contract", details="Synthetic structural validation only.",
+                            outcome="observed" if verdict == "pass" else "fail")
+            with self.subTest(verdict=verdict):
+                validate_result(value, assignment=assigned)
+                self.assertEqual((None, None), bridge._unrecordable(value, assigned))
+                # Copying guidance into the result does not extend its schema.
+                self.assertEqual(("invalid_result", "unknown_fields"), bridge._unrecordable(
+                    {**value, "semantic_verdicts": guidance["semantic_verdicts"]}, assigned,
+                ))
+                for field in guidance["string_array_fields"]:
+                    self.assertIn(field, template)
+                    self.assertEqual(("invalid_result", "invalid_shape"), bridge._unrecordable(
+                        {**value, field: [{"severity": "synthetic-finding"}]}, assigned,
+                    ))
+                if verdict != "pass":
+                    wrong = "blocked" if value["status"] == "completed" else "completed"
+                    self.assertEqual(("invalid_result", "inconsistent_axes"), bridge._unrecordable(
+                        {**value, "status": wrong}, assigned,
+                    ))
+
+    def test_verifier_template_keeps_its_own_assignment_and_retry(self) -> None:
+        assigned = {**assignment(), "assignment_id": "verifier-2", "attempt": 2,
+                    "retry_of_assignment_id": "verifier-1"}
+        guidance, template = self.prompt_objects(
+            assigned, worker_result_path=".orchestration-input/worker-result.json",
+        )
+        self.assertEqual("verifier-2", template["assignment_id"])
+        self.assertEqual({"attempt": 2, "retry_of_assignment_id": "verifier-1"}, template["retry"])
+        self.assertEqual("unverified", template["admission_state"])
+        self.assertNotIn("assignment_id", guidance)
 
 
 if __name__ == "__main__":

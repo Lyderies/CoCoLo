@@ -51,6 +51,10 @@
 - Malformed peer runtime versions use the existing compatibility error path, including Unicode
   digit strings and integer-conversion rejection. Valid ASCII three-part versions retain their
   numeric comparison behavior. Adapter regressions retain negative binding/error propagation.
+- Bridge prompts include the validator-owned enums and consistency rules from result preflight,
+  with explicit legacy status projections for completed verdicts. The sample positive template
+  does not request a positive conclusion. Result validation, host admission and fencing remain
+  in force; the additional guidance is not an output field or new authority.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.
