@@ -135,16 +135,32 @@ Initial admission-denial recording also owns an explicit transaction and raises 
 only after that transaction commits. A failed denial append leaves no partial denial record.
 The lineage assertion uses a real outcome-to-host-event link inside the internal account unit;
 ordinary open/intent/result fixtures do not generate new lineage themselves.
-Open checks before its initial admission call can enter a connection context. A non-claiming
+Open refuses an outer transaction before starting admission preparation. A non-claiming
 intent preflight performs no write reservation. The existing shared-account admission and
 single-dispatch checks still own the decisions; this adds no launch or caller authority.
 Fault/reopen assertions and real SIGKILL cuts exercise the open commit boundary. They do not
 establish the distributed central/local claim protocol or an atomic SQL-to-OS launch.
 
-This remains the old in-process ledger path. Signature verification still needs extraction
-into immutable snapshots with generation revalidation before a short service write; a daemon
-also needs verified launch-caller facts instead of its own environment. Neither requirement
-is satisfied by adding a transaction, and no production account endpoint is enabled here.
+The fixed database/WAL mode/path checks run before account-unit commit. A failure there rolls
+back open, intent or result writes; it does not lose an already committed handle. A crash or
+lost reply after the real commit can still leave complete durable state unknown to the caller.
+The separate distributed claim/idempotency protocol must reconcile that ambiguity.
+
+Host-run open and informational admission now prepare owner-signature checks outside the
+account lock and write transaction. Their owner-local immutable preparation pins the exact
+record bytes, digest, source, sequence, signature bytes, signer-file bytes and monotonic owner
+history sequence. The owner rechecks these inputs before using the verified attestations;
+changed inputs, another owner instance or a reopened owner invalidate the preparation.
+An identical key value under a newer history sequence cannot reuse old verification. Current
+account restrictions, billing/headroom, cap/bootstrap history and decision time are still read
+fresh at the final admission check; preparation does not cache a passing admission.
+
+The preparation is never a JSON/native caller credential. No production account endpoint or
+normal-client migration is enabled. Other legacy session/probe/launch helpers still need the
+same ownership audit and conversion. Signature-job intake/count/deadline limits and immutable
+policy/runtime generation snapshots remain service work: this library refactor does not make
+unbounded historical input a bounded API. A daemon still needs verified actual launch-caller
+facts instead of its own environment. Independent local timers/control cannot wait here.
 
 ## Closed history API increment
 

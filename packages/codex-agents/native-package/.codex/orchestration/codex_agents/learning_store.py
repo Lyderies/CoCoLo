@@ -55,6 +55,7 @@ from .contracts import (
 )
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION,
+    MAX_RECORD_BYTES,
     RECORD_TYPES,
     canonical_json,
     content_digest,
@@ -1285,8 +1286,8 @@ class LearningState:
         self.owner_signer_line()
         return self.allowed_signers_path
 
-    def owner_signer_line(self) -> bytes:
-        """The allowed-signers bytes, only while they name exactly one owner key.
+    def _owner_signer_bytes(self) -> bytes:
+        """Bounded checked signer-file bytes; the persistence owner checks history.
 
         It must be exactly the single canonical line `install_owner_public_key` writes:
         `ssh-keygen -Y verify` accepts a signature from any key the file lists, so a second
@@ -1311,6 +1312,12 @@ class LearningState:
         # key after an over-long first line would otherwise go unchecked.
         if len(content) > OWNER_SIGNERS_MAX_BYTES or OWNER_SIGNER_LINE.fullmatch(content) is None:
             raise StateError("owner allowed-signers must name exactly one owner key")
+        return content
+
+    def owner_signer_line(self) -> bytes:
+        """The checked signer line only while it agrees with recorded owner history."""
+
+        content = self._owner_signer_bytes()
         recorded = self.recorded_owner_key()
         if recorded is not None and recorded["signer_line"] != content:
             raise StateError(
@@ -1747,6 +1754,19 @@ class _RecheckDenied(Exception):
         self.decision = decision
 
 
+@dataclass(frozen=True, repr=False)
+class _PreparedAttestations:
+    """Owner-local verification work, not a serializable/native caller grant."""
+
+    origin: object
+    project_id: str
+    provider: str
+    owner: tuple[int, bytes, str, int] | None
+    signer: bytes | None
+    rows: tuple[tuple[str, int, bytes, str, str, bytes | None], ...]
+    verified: frozenset[str]
+
+
 class LearningLedger:
     """The only SQLite writer. Callers receive scoped repositories, never its connection."""
 
@@ -1762,6 +1782,7 @@ class LearningLedger:
         # each decision; a caller-supplied policy is for tests only.
         self._admission_policy = admission_policy
         self._lock = threading.RLock()
+        self._attestation_origin = object()
         self._active_readers = 0
         self._client_capabilities = (
             client_capabilities
@@ -4125,6 +4146,9 @@ class LearningLedger:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 yield
+                # Check the fixed database/WAL paths before making the unit
+                # durable, so a mode/path refusal cannot lose a committed handle.
+                self.state.harden_database_files()
                 self._connection.commit()
             except BaseException:
                 with contextlib.suppress(sqlite3.Error):
@@ -4151,8 +4175,8 @@ class LearningLedger:
         process's environment; a denial is stored and raised before any binding.
         """
 
-        # evaluate_admission has its own connection context. Refuse an outer
-        # unit before that first call can commit it, not only at the final BEGIN.
+        # Refuse an outer unit before admission preparation, not only at the
+        # final BEGIN. Preparation must not do crypto inside a caller's writer.
         with self._lock:
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
@@ -4200,9 +4224,11 @@ class LearningLedger:
         provider = route.get("provider", "codex")
         # Admission runs on the ledger's clock, so a caller-chosen time cannot
         # make evidence look reset or stale.
+        prepared_attestations = self._prepare_attestations(project_id, provider)
         admitted_at = self._clock_ms()
         admission = self.evaluate_admission(
-            project_id, provider=provider, environ=os.environ, now_ms=admitted_at
+            project_id, provider=provider, environ=os.environ, now_ms=admitted_at,
+            _prepared_attestations=prepared_attestations,
         )
         run_handle = f"hrn_{secrets.token_hex(24)}"
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
@@ -4301,7 +4327,8 @@ class LearningLedger:
                 # lock is judged, and its decision stamped, at the time it holds it.
                 admitted_at = self._clock_ms()
                 admission = self._evaluate_admission_locked(
-                    project_id, provider=provider, environ=os.environ, timestamp=admitted_at
+                    project_id, provider=provider, environ=os.environ, timestamp=admitted_at,
+                    _prepared_attestations=prepared_attestations,
                 )
                 if admission["decision"] != "pass":
                     raise _RecheckDenied(admission)
@@ -4403,9 +4430,7 @@ class LearningLedger:
                     project_id, denied.decision, run_id=None,
                     timestamp=denied.decision["observed_at_ms"],
                 )
-            self.state.harden_database_files()
             raise AdmissionDenied(denied.decision["reason_code"]) from None
-        self.state.harden_database_files()
         return {
             "run_handle": run_handle,
             "admission": admission["reason_code"],
@@ -4997,6 +5022,99 @@ class LearningLedger:
             raise ContractError("host run recorded too many rate-limit events")
         return kept
 
+    def _owner_generation_locked(self) -> tuple[int, bytes, str, int] | None:
+        row = self._connection.execute(
+            "SELECT sequence,signer_line,reason,recorded_at_ms FROM owner_key_history "
+            "ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        if (
+            type(row[0]) is not int or row[0] < 1 or type(row[1]) is not bytes
+            or not 0 < len(row[1]) <= OWNER_SIGNERS_MAX_BYTES
+            or row[2] not in {"enrolled", "replaced"} or type(row[3]) is not int or row[3] < 0
+        ):
+            raise LedgerError("owner generation is incompatible")
+        return tuple(row)
+
+    def _attestation_rows_locked(
+        self, project_id: str, provider: str,
+    ) -> tuple[tuple[str, int, bytes, str, str, bytes | None], ...]:
+        rows = self._connection.execute(
+            "SELECT r.record_id,r.source_sequence,r.content,r.content_digest,r.source,a.signature "
+            "FROM records r LEFT JOIN owner_attestations a "
+            "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
+            "WHERE r.project_id=? AND r.record_type='billing_attestation' "
+            "AND json_extract(CAST(r.content AS TEXT),'$.provider')=? ORDER BY r.source_sequence",
+            (project_id, provider),
+        ).fetchall()
+        result = []
+        for row in rows:
+            if (
+                type(row[0]) is not str or type(row[1]) is not int or row[1] < 1
+                or type(row[2]) is not bytes or not 0 < len(row[2]) <= MAX_RECORD_BYTES
+                or type(row[3]) is not str or re.fullmatch(r"[0-9a-f]{64}", row[3]) is None
+                or hashlib.sha256(row[2]).hexdigest() != row[3] or type(row[4]) is not str
+                or (row[5] is not None and (type(row[5]) is not bytes or len(row[5]) > 16_384))
+            ):
+                raise LedgerError("admission attestation is incompatible")
+            result.append(tuple(row))
+        return tuple(result)
+
+    def _current_signer_bytes(self) -> bytes | None:
+        try:
+            return self.state._owner_signer_bytes()
+        except (StateError, OSError):
+            return None
+
+    def _prepare_attestations(self, project_id: str, provider: str) -> _PreparedAttestations:
+        """Verify immutable signature inputs outside the account lock/transaction.
+
+        This owner-only value never crosses a request API. It authenticates no
+        caller, cannot substitute a daemon's environment for launch facts, and
+        does not implement bounded service job scheduling or native enrollment.
+        """
+
+        from .learning_engine import OwnerGrantAuthority
+
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
+            owner = self._owner_generation_locked()
+            rows = self._attestation_rows_locked(project_id, provider)
+        signer = self._current_signer_bytes()
+        authority = None
+        if signer is not None and (owner is None or owner[1] == signer):
+            try:
+                authority = OwnerGrantAuthority(self.state.allowed_signers_path, signer_line=signer)
+            except (ContractError, OSError):
+                pass
+        verified = set()
+        if authority is not None:
+            for identifier, _, content, _, source, signature in rows:
+                if source != "owner" or not signature:
+                    continue
+                try:
+                    if authority.verify_owner_record(project_id, parse_bounded_json(content), signature):
+                        verified.add(identifier)
+                except (ContractError, TypeError, ValueError, OSError):
+                    pass
+        return _PreparedAttestations(self._attestation_origin, project_id, provider, owner, signer, rows, frozenset(verified))
+
+    def _prepared_attestations_locked(
+        self, prepared: _PreparedAttestations, project_id: str, provider: str,
+    ) -> list[tuple[dict[str, Any], str]]:
+        if (
+            type(prepared) is not _PreparedAttestations or prepared.origin is not self._attestation_origin
+            or prepared.project_id != project_id or prepared.provider != provider
+            or prepared.owner != self._owner_generation_locked()
+            or prepared.signer != self._current_signer_bytes()
+            or prepared.rows != self._attestation_rows_locked(project_id, provider)
+        ):
+            raise LedgerError("admission preparation is stale")
+        return [(parse_bounded_json(content), digest) for identifier, _, content, digest, source, _ in prepared.rows
+                if source == "owner" and identifier in prepared.verified]
+
     def _provider_records_locked(
         self, project_id: str, record_type: str, provider: str
     ) -> list[tuple[dict[str, Any], str]]:
@@ -5146,6 +5264,7 @@ class LearningLedger:
         environ: Any,
         timestamp: int,
         probe: bool = False,
+        _prepared_attestations: _PreparedAttestations | None = None,
     ) -> dict[str, Any]:
         from .providers import evaluate_admission
 
@@ -5155,8 +5274,10 @@ class LearningLedger:
         if not project or project["status"] != "active":
             raise LedgerError("project binding is not active")
         identities = self._provider_records_locked(project_id, "provider_identity", provider)
-        attestations = self._provider_records_locked(
-            project_id, "billing_attestation", provider
+        attestations = (
+            self._provider_records_locked(project_id, "billing_attestation", provider)
+            if _prepared_attestations is None
+            else self._prepared_attestations_locked(_prepared_attestations, project_id, provider)
         )
         billing, local_billing = self._account_records_locked(
             project_id, "provider_billing", provider
@@ -5192,6 +5313,7 @@ class LearningLedger:
         provider: str,
         environ: Any,
         now_ms: int | None = None,
+        _prepared_attestations: _PreparedAttestations | None = None,
     ) -> dict[str, Any]:
         """Evaluate admission from stored evidence; a denial is stored and raised.
 
@@ -5201,10 +5323,15 @@ class LearningLedger:
 
         from .providers import AdmissionDenied
 
+        prepared = (
+            self._prepare_attestations(project_id, provider)
+            if _prepared_attestations is None else _prepared_attestations
+        )
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
         with self._lock:
             decision = self._evaluate_admission_locked(
-                project_id, provider=provider, environ=environ, timestamp=timestamp
+                project_id, provider=provider, environ=environ, timestamp=timestamp,
+                _prepared_attestations=prepared,
             )
             if decision["decision"] == "deny":
                 # Denials are durable metadata too. Begin explicitly only for
@@ -5213,9 +5340,9 @@ class LearningLedger:
                     self._store_admission_locked(
                         project_id, decision, run_id=None, timestamp=timestamp
                     )
-        self.state.harden_database_files()
         if decision["decision"] == "deny":
             raise AdmissionDenied(decision["reason_code"])
+        self.state.harden_database_files()
         return decision
 
     def _store_admission_locked(
@@ -5344,7 +5471,6 @@ class LearningLedger:
             self._append_checked_locked(
                 project_id, record, producer="lifecycle", timestamp=timestamp
             )
-        self.state.harden_database_files()
         return {
             "bridge_run_id": bridge_run_id,
             "run_id": run_id,
@@ -5429,7 +5555,6 @@ class LearningLedger:
             self._append_checked_locked(
                 project_id, record, producer="lifecycle", timestamp=timestamp
             )
-        self.state.harden_database_files()
         return {"run_id": run_id, "bridge_run_id": bridge_run_id}
 
     def host_owner(

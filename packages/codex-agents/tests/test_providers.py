@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from copy import deepcopy
@@ -685,6 +686,228 @@ class AdmissionTests(unittest.TestCase):
         self.ledger.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         self.ledger._clock_ms = lambda: self.clock + 2
+
+    def _prepared_fixture_attestations(self):
+        identity = self.observe()[0]
+        self.attest("codex", identity["account_fingerprint"])
+        return self.ledger._prepare_attestations(self.project_id, "codex")
+
+    def test_open_prepares_signatures_without_a_write_transaction_and_does_not_reverify_at_commit(self) -> None:
+        self._prepared_fixture_attestations()
+        verify = OwnerGrantAuthority.verify_owner_record
+        observed = []
+
+        def checked(authority, project_id, record, signature):
+            observed.append(self.ledger._connection.in_transaction)
+            return verify(authority, project_id, record, signature)
+
+        with mock.patch.object(OwnerGrantAuthority, "verify_owner_record", autospec=True, side_effect=checked), \
+                mock.patch.object(self.ledger, "_attestation_signed_by_owner_locked", side_effect=AssertionError("locked crypto")):
+            self.assertEqual("admitted", self.open_run()["admission"])
+        self.assertEqual([False], observed)
+
+    def test_b_can_commit_registration_while_a_signature_verifier_is_blocked(self) -> None:
+        self._prepared_fixture_attestations()
+        entered, release, b_done = threading.Event(), threading.Event(), threading.Event()
+        errors, proofs, registrations = [], [], []
+        verify = OwnerGrantAuthority.verify_owner_record
+        other = Path(self.temporary.name) / "project-during-signature"
+        other.mkdir()
+
+        def blocked(authority, project_id, record, signature):
+            self.assertFalse(self.ledger._connection.in_transaction)
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("fixture verifier was not released")
+            return verify(authority, project_id, record, signature)
+
+        def prepare():
+            try:
+                proofs.append(self.ledger._prepare_attestations(self.project_id, "codex"))
+            except BaseException as exc:
+                errors.append(exc)
+
+        def register():
+            try:
+                registrations.append(self.ledger.register_project(other, now_ms=NOW))
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                b_done.set()
+
+        with mock.patch.object(OwnerGrantAuthority, "verify_owner_record", autospec=True, side_effect=blocked):
+            a = threading.Thread(target=prepare, daemon=True)
+            b = threading.Thread(target=register, daemon=True)
+            a.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                b.start()
+                self.assertTrue(b_done.wait(2), "B waited on A's signature verification")
+            finally:
+                release.set()
+                a.join(5)
+                if b.ident is not None:
+                    b.join(5)
+        self.assertFalse(a.is_alive())
+        self.assertFalse(b.is_alive())
+        self.assertEqual([], errors)
+        self.assertTrue(proofs[0].verified)
+        self.assertEqual(registrations[0], self.ledger.project_for_root(other))
+
+    def test_prepared_signature_inputs_cannot_change_before_admission(self) -> None:
+        prepared = self._prepared_fixture_attestations()
+        identifier, _, content, digest, source, signature = prepared.rows[0]
+        changed_record = json.loads(content)
+        changed_record["observed_at_ms"] += 1
+        changed_content = canonical_json(changed_record)
+        variants = (
+            ("signature", signature + b"fixture-change"),
+            ("source", "provider"),
+            ("content", changed_content),
+            ("signer", b""),
+        )
+        for field, changed in variants:
+            with self.subTest(field=field):
+                before = self._launch_rows()
+                with self.ledger._account_transaction():
+                    if field == "signature":
+                        self.ledger._connection.execute("UPDATE owner_attestations SET signature=? WHERE project_id=? AND subject_record_id=?",
+                                                        (changed, self.project_id, identifier))
+                    elif field == "source":
+                        self.ledger._connection.execute("UPDATE records SET source=? WHERE project_id=? AND record_id=?", (changed, self.project_id, identifier))
+                    elif field == "content":
+                        self.ledger._connection.execute("UPDATE records SET content=?,content_digest=? WHERE project_id=? AND record_id=?",
+                                                        (changed, hashlib.sha256(changed).hexdigest(), self.project_id, identifier))
+                    else:
+                        self.state.allowed_signers_path.write_bytes(changed)
+                try:
+                    with self.assertRaisesRegex(LedgerError, "preparation is stale"):
+                        self.ledger.evaluate_admission(self.project_id, provider="codex", environ=CLEAN,
+                                                       now_ms=self.clock + 1, _prepared_attestations=prepared)
+                finally:
+                    self.state.allowed_signers_path.write_bytes(prepared.signer)
+                    with self.ledger._account_transaction():
+                        self.ledger._connection.execute("UPDATE records SET content=?,content_digest=?,source=? WHERE project_id=? AND record_id=?",
+                                                        (content, digest, source, self.project_id, identifier))
+                        self.ledger._connection.execute("UPDATE owner_attestations SET signature=? WHERE project_id=? AND subject_record_id=?",
+                                                        (signature, self.project_id, identifier))
+                self.assertEqual(before, self._launch_rows())
+
+    def test_preparation_is_bound_to_owner_history_sequence_even_if_signer_bytes_repeat(self) -> None:
+        prepared = self._prepared_fixture_attestations()
+        self.assertTrue(prepared.verified)
+        with self.ledger._account_transaction():
+            # Fixture-only generation step, not a supported key-return operation.
+            self.ledger._connection.execute("INSERT INTO owner_key_history(signer_line,reason,recorded_at_ms) VALUES(?,'replaced',?)",
+                                            (prepared.owner[1], NOW))
+        with self.assertRaisesRegex(LedgerError, "preparation is stale"):
+            self.ledger.evaluate_admission(self.project_id, provider="codex", environ=CLEAN,
+                                           now_ms=self.clock + 1, _prepared_attestations=prepared)
+        self.assertEqual([], self._launch_rows()["host_run_bindings"])
+
+    def test_preparation_is_rejected_after_owner_reopen_and_json_is_not_a_preparation(self) -> None:
+        prepared = self._prepared_fixture_attestations()
+        other = Path(self.temporary.name) / "wrong-preparation-project"
+        other.mkdir()
+        other_id = self.ledger.register_project(other, now_ms=NOW)
+        for project, provider in ((other_id, "codex"), (self.project_id, "claude")):
+            with self.assertRaisesRegex(LedgerError, "preparation is stale"):
+                self.ledger.evaluate_admission(project, provider=provider, environ=CLEAN,
+                                               now_ms=self.clock + 1, _prepared_attestations=prepared)
+        self._reopen_launch_fixture()
+        for value in (prepared, {"verified": True, "project_id": self.project_id}):
+            with self.assertRaisesRegex(LedgerError, "preparation is stale"):
+                self.ledger.evaluate_admission(self.project_id, provider="codex", environ=CLEAN,
+                                               now_ms=self.clock + 1, _prepared_attestations=value)
+
+    def test_preparing_a_signature_does_not_cache_the_shared_account_run_cap(self) -> None:
+        self.limit("codex", max_admissions_per_window=1)
+        prepared = self._prepared_fixture_attestations()
+        other = Path(self.temporary.name) / "cap-project"
+        other.mkdir()
+        first = self.project_id
+        self.project_id = self.ledger.register_project(other, now_ms=NOW)
+        try:
+            identity = self.observe()[0]
+            self.attest("codex", identity["account_fingerprint"])
+            self.open_run()
+        finally:
+            self.project_id = first
+        with self.ledger._account_transaction():
+            decision = self.ledger._evaluate_admission_locked(self.project_id, provider="codex", environ=CLEAN,
+                                                             timestamp=self.clock + 1, _prepared_attestations=prepared)
+        self.assertEqual(("deny", "window_run_cap_reached"), (decision["decision"], decision["reason_code"]))
+
+    def test_preparing_a_signature_does_not_cache_restrictive_account_evidence(self) -> None:
+        prepared = self._prepared_fixture_attestations()
+        other = Path(self.temporary.name) / "restriction-project"
+        other.mkdir()
+        first = self.project_id
+        self.project_id = self.ledger.register_project(other, now_ms=NOW)
+        try:
+            self.observe(**{"rateLimits.spendControlReached": True})
+        finally:
+            self.project_id = first
+        with self.assertRaises(AdmissionDenied) as caught:
+            self.ledger.evaluate_admission(self.project_id, provider="codex", environ=CLEAN,
+                                           now_ms=self.clock + 1, _prepared_attestations=prepared)
+        self.assertEqual("codex_spend_control_reached", caught.exception.reason_code)
+
+    def test_database_mode_check_fault_rolls_back_open_intent_and_result_before_commit(self) -> None:
+        run, arguments = self._capture_open_arguments()
+        harden = self.state.harden_database_files
+
+        def refuse_writer():
+            if self.ledger._connection.in_transaction:
+                raise StateError("fixture database mode refusal")
+            harden()
+
+        before = self._launch_rows()
+        with mock.patch.object(self.state, "harden_database_files", side_effect=refuse_writer), \
+                self.assertRaisesRegex(StateError, "fixture database mode"):
+            self.ledger.open_host_run(self.project_id, **arguments)
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self._reopen_launch_fixture()
+        self.assertEqual(before, self._launch_rows())
+        intent_arguments = {key: arguments[key] for key in ("assignment", "task", "route")}
+        intent_arguments.update(run_handle=run["run_handle"], deadline_seconds=600)
+        with mock.patch.object(self.state, "harden_database_files", side_effect=refuse_writer), \
+                self.assertRaisesRegex(StateError, "fixture database mode"):
+            self.ledger.record_dispatch_intent(self.project_id, **intent_arguments)
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self._reopen_launch_fixture()
+        self.assertEqual(before, self._launch_rows())
+        intent = self.ledger.record_dispatch_intent(self.project_id, **intent_arguments)
+        before = self._launch_rows()
+        result_arguments = dict(run_handle=run["run_handle"], bridge_run_id=intent["bridge_run_id"],
+                                result={"fixture": "fenced"}, fenced=True, reviewed=False, terminal_state="failed",
+                                result_validation_reason_code="invalid_shape")
+        with mock.patch.object(self.state, "harden_database_files", side_effect=refuse_writer), \
+                self.assertRaisesRegex(StateError, "fixture database mode"):
+            self.ledger.record_dispatch_result(self.project_id, **result_arguments)
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self._reopen_launch_fixture()
+        self.assertEqual(before, self._launch_rows())
+        self.ledger.record_dispatch_result(self.project_id, **result_arguments)
+
+    def test_account_unit_rolls_back_base_exception_and_actual_commit_failure(self) -> None:
+        class FixtureStop(BaseException):
+            pass
+
+        before = self._launch_rows()
+        with self.assertRaises(FixtureStop), self.ledger._account_transaction():
+            self.ledger._connection.execute("UPDATE projects SET created_at_ms=2 WHERE project_id=?", (self.project_id,))
+            raise FixtureStop()
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertEqual(1, self.ledger._connection.execute("SELECT created_at_ms FROM projects WHERE project_id=?", (self.project_id,)).fetchone()[0])
+        with self.assertRaises(sqlite3.IntegrityError), self.ledger._account_transaction():
+            self.ledger._connection.execute("PRAGMA defer_foreign_keys=ON")
+            self.ledger._connection.execute("UPDATE projects SET created_at_ms=2 WHERE project_id=?", (self.project_id,))
+            self.ledger._connection.execute("INSERT INTO record_links VALUES(?,?,?,'derived_from')", (self.project_id, "missing-source", "missing-target"))
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self._reopen_launch_fixture()
+        self.assertEqual(before, self._launch_rows())
+        self.assertEqual(1, self.ledger._connection.execute("SELECT created_at_ms FROM projects WHERE project_id=?", (self.project_id,)).fetchone()[0])
 
     def test_late_open_failure_rolls_back_binding_provenance_events_and_admission(self) -> None:
         identity = self.observe()[0]
