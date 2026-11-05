@@ -126,11 +126,22 @@ class ServiceProtocolTests(unittest.TestCase):
         for payload in (b"CANARY", b"{}\n{}", b"",
                         wire(request()).replace(b'"supervisor_generation": 1', b'"supervisor_generation":NaN')):
             self.assert_rejected(payload, "invalid_json")
+        for constant in (b"Infinity", b"-Infinity"):
+            self.assert_rejected(wire(request()).replace(b'"supervisor_generation": 1', b'"supervisor_generation":' + constant), "invalid_json")
+        class PayloadSubclass(bytes):
+            def __len__(self):
+                return 1
+
+            def decode(self, *_args, **_options):
+                raise RuntimeError("CANARY-DECODE")
+
+        self.assert_rejected(PayloadSubclass(b"CANARY"), "invalid_envelope")
         # Python versions differ in parser recursion limits. Both the parser
         # rejection and rejection of a parsed non-object use fixed safe codes.
         with self.assertRaises(ServiceProtocolError) as caught:
             decode_service_request(b"[" * 10_000 + b"]" * 10_000)
         self.assertIn(caught.exception.reason_code, {"invalid_json", "invalid_envelope"})
+        self.assertIsNone(caught.exception.__context__)
         normal = wire(request())
         exact = normal + b" " * (MAX_CONTROL_REQUEST_BYTES - len(normal))
         self.assertEqual("request-1", decode_service_request(exact).request_id)
@@ -140,16 +151,16 @@ class ServiceProtocolTests(unittest.TestCase):
 
     def test_specific_identifiers_are_stricter_than_generic_opaque_ids(self) -> None:
         cases = {
-            "project_id": ("job_" + "1" * 32, "prj_" + "a" * 31, "prj_" + "A" * 32),
-            "runtime_digest": ("digest:" + "2" * 64, "2" * 63, "A" * 64),
+            "project_id": ("job_" + "1" * 32, "prj_" + "a" * 31, "prj_" + "a" * 33, "prj_" + "A" * 32),
+            "runtime_digest": ("digest:" + "2" * 64, "2" * 63, "2" * 65, "A" * 64),
         }
         for field, values in cases.items():
             for value in values:
                 with self.subTest(field=field, value=value):
                     self.assert_rejected(wire(request(**{field: value})), "invalid_envelope")
         for field, values in {
-            "orchestration_handle": ("run_" + "3" * 48, "orc_" + "3" * 47, "orc_" + "A" * 48),
-            "run_handle": ("orc_" + "4" * 48, "hrn_" + "4" * 47, "hrn_" + "A" * 48, [], {}, True),
+            "orchestration_handle": ("run_" + "3" * 48, "orc_" + "3" * 47, "orc_" + "3" * 49, "orc_" + "A" * 48, [], {}, True),
+            "run_handle": ("orc_" + "4" * 48, "hrn_" + "4" * 47, "hrn_" + "4" * 49, "hrn_" + "A" * 48, [], {}, True),
         }.items():
             for value in values:
                 target = {**request()["target"], "run_handle": "hrn_" + "4" * 48, "attempt": 1, field: value}
@@ -190,10 +201,25 @@ class ServiceProtocolTests(unittest.TestCase):
             service_request_digest(replace(run, target=replace(run.target, run_handle="hrn_" + "9" * 48))),
         )
 
+    def test_protocol_one_canonical_bytes_and_digest_are_pinned(self) -> None:
+        decoded = decode_service_request(wire(request()))
+        expected = (
+            b'{"operation":"project.status","primary_session_id":"session-1",'
+            b'"project_id":"prj_11111111111111111111111111111111","protocol_version":1,'
+            b'"request_id":"request-1",'
+            b'"runtime_digest":"2222222222222222222222222222222222222222222222222222222222222222",'
+            b'"supervisor_generation":1,"supervisor_instance_id":"instance-1",'
+            b'"target":{"attempt":null,'
+            b'"orchestration_handle":"orc_333333333333333333333333333333333333333333333333",'
+            b'"run_handle":null}}'
+        )
+        self.assertEqual(expected, canonical_request_bytes(decoded))
+        self.assertEqual("587ccd38f6347612dd0501fd296e20487bdbfdcf66ca06349efcf7f13e4c2edc", service_request_digest(decoded))
+
     def test_direct_construction_does_not_bypass_validation(self) -> None:
         decoded = decode_service_request(wire(request()))
         for changes in (
-            {"protocol_version": True}, {"operation": "sql"},
+            {"protocol_version": True}, {"operation": "sql"}, {"operation": "project.cancel"},
             {"supervisor_generation": False}, {"target": {}},
         ):
             with self.subTest(changes=changes), self.assertRaises(ServiceProtocolError):
@@ -217,6 +243,9 @@ class ServiceProtocolTests(unittest.TestCase):
         object.__setattr__(decoded, "protocol_version", True)
         with self.assertRaises(ServiceProtocolError):
             service_request_digest(decoded)
+        with self.assertRaises(ServiceProtocolError) as caught:
+            service_request_digest(object.__new__(type(decoded)))
+        self.assertIsNone(caught.exception.__context__)
         for reason in ("CANARY", [], {}, None):
             self.assertEqual("invalid_envelope", str(ServiceProtocolError(reason)))
         self.assertEqual(set(REASON_CODES), {str(ServiceProtocolError(code)) for code in REASON_CODES})

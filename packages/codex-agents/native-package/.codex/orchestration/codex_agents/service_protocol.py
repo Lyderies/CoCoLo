@@ -115,12 +115,21 @@ def _validate_fields(data: Any) -> None:
 
 
 def _request_data(request: ServiceRequest) -> dict[str, Any]:
-    if type(request) is not ServiceRequest or type(request.target) is not ServiceTarget:
+    if type(request) is not ServiceRequest:
         raise ServiceProtocolError("invalid_envelope")
-    return {
-        **{name: getattr(request, name) for name in _FIELDS if name != "target"},
-        "target": {name: getattr(request.target, name) for name in _TARGET_FIELDS},
-    }
+    incomplete = False
+    try:
+        if type(request.target) is not ServiceTarget:
+            raise ServiceProtocolError("invalid_envelope")
+        data = {
+            **{name: getattr(request, name) for name in _FIELDS if name != "target"},
+            "target": {name: getattr(request.target, name) for name in _TARGET_FIELDS},
+        }
+    except AttributeError:
+        incomplete = True
+    if incomplete:
+        raise ServiceProtocolError("invalid_envelope")
+    return data
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -143,7 +152,7 @@ def decode_service_request(payload: bytes) -> ServiceRequest:
     transport/server. A valid request is never proof of admission or ownership.
     """
 
-    if not isinstance(payload, bytes):
+    if type(payload) is not bytes:
         raise ServiceProtocolError("invalid_envelope")
     if len(payload) > MAX_CONTROL_REQUEST_BYTES:
         raise ServiceProtocolError("request_too_large")

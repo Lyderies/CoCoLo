@@ -51,6 +51,7 @@ from .learning_contracts import (
 )
 from .learning_adapters import HOOK_EVENTS, empty_usage, load_client_capabilities, reconcile_run
 from .runtime_files import ORCHESTRATION_PREFIX, RUNTIME_FILES, runtime_digest
+from .service_transport import ServiceTransportError, exchange_frame
 
 
 def _collector_runtime_digest() -> str:
@@ -9753,30 +9754,27 @@ class CollectorClient:
         self.timeout = timeout
 
     def _request(self, request: dict[str, Any]) -> dict[str, Any]:
-        payload = canonical_json(request) + b"\n"
-        if len(payload) > MAX_REQUEST_BYTES:
+        reason = None
+        try:
+            raw = exchange_frame(
+                self.socket_path, canonical_json(request), timeout=self.timeout,
+                request_limit=MAX_REQUEST_BYTES, response_limit=16_384,
+            )
+        except ServiceTransportError as exc:
+            reason = exc.reason_code
+        if reason == "request_too_large":
             raise CollectorError("collector request is oversized")
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.settimeout(self.timeout)
+        if reason == "response_too_large":
+            raise CollectorError("collector response is oversized")
+        if reason is not None:
+            raise CollectorError("collector is unavailable", code="transport_unavailable")
+        invalid_response = False
         try:
-            client.connect(str(self.socket_path))
-            client.sendall(payload)
-            raw = bytearray()
-            while b"\n" not in raw:
-                chunk = client.recv(8192)
-                if not chunk:
-                    break
-                raw.extend(chunk)
-                if len(raw) > 16_384:
-                    raise CollectorError("collector response is oversized")
-        except OSError as exc:
-            raise CollectorError("collector is unavailable", code="transport_unavailable") from exc
-        finally:
-            client.close()
-        try:
-            response = json.loads(bytes(raw).split(b"\n", 1)[0])
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise CollectorError("collector response is invalid", code="response_invalid") from exc
+            response = json.loads(raw)
+        except (ValueError, UnicodeError, RecursionError):
+            invalid_response = True
+        if invalid_response:
+            raise CollectorError("collector response is invalid", code="response_invalid")
         if not isinstance(response, dict) or response.get("ok") is not True:
             code = response.get("code", "unknown") if isinstance(response, dict) else "unknown"
             raise CollectorError(f"collector rejected request: {code}", code=code)

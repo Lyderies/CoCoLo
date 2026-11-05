@@ -34,3 +34,29 @@ Then the service implementation must prove bounded fair queues, reserved control
 independent timers and split-store recovery without duplicate launches or a direct-SQL fallback.
 The message limit is an initial control-contract bound, not a measured throughput or latency
 claim. Real admission, installed Claude probing and the complete release checks remain required.
+
+## Metadata transport increment
+
+`service_transport.exchange_frame` now supplies the existing collector client with one monotonic
+deadline across connect, send and all receives. Incoming fragments cannot renew that budget. The
+client still defaults to 0.25 seconds, now for the whole exchange. The helper accepts explicit
+positive budgets up to 60 seconds, without clamping; business operations must select their own
+bounded budgets. This ceiling is not a measured service latency claim.
+
+Metadata requests have a maximum frame size of 81,920 bytes and replies default to 16,384 bytes;
+the delimiter counts toward each limit. Only one request is sent, and only the first response
+frame is returned. The legacy collector also permits EOF after a complete JSON response. Its
+decoder still validates the response and checks runtime compatibility. A partial response is
+not success. The helper closes its socket and reports fixed transport codes without OS exception
+chaining. Legacy collector error-code mapping and admission/binding operations are retained.
+
+The transport never retries an ambiguous send, opens SQLite, starts another collector or falls
+back to a direct writer. Losing a reply does not prove that the server failed to commit; future
+project/account operations must reconcile scoped request IDs and immutable launch claims.
+Bulk worker-result transfer needs its own bounded contract rather than increasing these metadata
+limits or accepting an arbitrary caller-supplied path.
+
+This helper does not authenticate peers or enroll a caller. No new privileged endpoint is enabled.
+`CollectorClient` still lives in the persistence module, and normal CLI ledger ownership has not
+yet migrated. Independent supervisors, bounded server intake/queues, account coordination and
+cross-store migration/recovery remain required.

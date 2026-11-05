@@ -44,6 +44,10 @@
   revalidates their snapshot. Parser/decode exceptions are not chained onto fixed public errors.
   Adversarial checks distinguish specific identifier formats, enforce size checks before parsing,
   and independently bind run handles in request digests.
+- The collector client uses a database-free metadata transport with one deadline across connect,
+  send and response fragments. Slow replies cannot renew that deadline; ambiguous exchanges are
+  never retried automatically. Existing framing, error mapping and runtime checks are retained.
+  Project/account authorization, server queues and database ownership migration remain incomplete.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.
