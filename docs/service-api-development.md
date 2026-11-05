@@ -130,8 +130,12 @@ account-service implementation. Local control/timers must run independently of t
 
 The existing shared ledger now uses explicit account write transactions for host-run open,
 dispatch intent and dispatch result. A late error rolls back the complete unit, including
-binding/provenance, admission, records and lineage. These units refuse an outer transaction;
-open checks before its initial admission call can enter a connection context. A non-claiming
+binding/provenance, admission, records and lineage. These units refuse an outer transaction.
+Initial admission-denial recording also owns an explicit transaction and raises its denial
+only after that transaction commits. A failed denial append leaves no partial denial record.
+The lineage assertion uses a real outcome-to-host-event link inside the internal account unit;
+ordinary open/intent/result fixtures do not generate new lineage themselves.
+Open checks before its initial admission call can enter a connection context. A non-claiming
 intent preflight performs no write reservation. The existing shared-account admission and
 single-dispatch checks still own the decisions; this adds no launch or caller authority.
 Fault/reopen assertions and real SIGKILL cuts exercise the open commit boundary. They do not

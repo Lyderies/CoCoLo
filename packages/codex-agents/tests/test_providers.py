@@ -67,12 +67,14 @@ from tests.learning_support import (
     DIGEST_B,
     DIGEST_C,
     assignment,
+    event_record,
     attest_provider,
     fake_provider_tools,
     generate_test_owner_key,
     provider_fixture,
     trusted_tools,
     routing_fields,
+    verification_outcome,
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "providers"
@@ -679,6 +681,11 @@ class AdmissionTests(unittest.TestCase):
         self.addCleanup(clock.stop)
         return run, opened.call_args.kwargs
 
+    def _reopen_launch_fixture(self) -> None:
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.ledger._clock_ms = lambda: self.clock + 2
+
     def test_late_open_failure_rolls_back_binding_provenance_events_and_admission(self) -> None:
         identity = self.observe()[0]
         self.attest("codex", identity["account_fingerprint"])
@@ -705,6 +712,57 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual("admitted", run["admission"])
         self.assertEqual(1, len(self.ledger._prior_run_admissions_locked("codex", stamp)))
 
+    def test_initial_denial_append_fault_rolls_back_and_retry_commits_only_the_denial(self) -> None:
+        orchestration = self.ledger.open_orchestration(self.project_id, client_version="codex-host-v1", now_ms=NOW)
+        before = self._launch_rows()
+        append = self.ledger._append_checked_locked
+
+        def fail_after_append(*args, **kwargs):
+            append(*args, **kwargs)
+            raise sqlite3.OperationalError("fixture initial denial fault")
+
+        stamp = self.clock + 1
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=stamp), \
+                mock.patch.object(self.ledger, "_append_checked_locked", side_effect=fail_after_append), \
+                self.assertRaisesRegex(sqlite3.OperationalError, "fixture initial denial"):
+            self._open_run("codex", orchestration, stamp)
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertEqual(before, self._launch_rows())
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.assertEqual(before, self._launch_rows())
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=stamp), self.assertRaises(AdmissionDenied) as caught:
+            self._open_run("codex", orchestration, stamp)
+        self.assertEqual("provider_identity_missing", caught.exception.reason_code)
+        after = self._launch_rows()
+        self.assertEqual(before["host_run_bindings"], after["host_run_bindings"])
+        self.assertEqual(before["sessions"], after["sessions"])
+        self.assertEqual(before["run_provenance"], after["run_provenance"])
+        self.assertEqual(1, len(after["records"]) - len(before["records"]))
+        denial = json.loads(after["records"][-1][8])
+        self.assertEqual(("admission_decision", "deny", None), (denial["record_type"], denial["decision"], denial["run_id"]))
+        self.assertFalse(self.ledger._connection.in_transaction)
+
+    def test_account_unit_rolls_back_a_real_outcome_lineage_insert(self) -> None:
+        outcome = verification_outcome()
+        event = event_record("evt-account-lineage")
+        event.update(run_id=outcome["run_id"], assignment_id=outcome["assignment_id"],
+                     item_digest=outcome["evidence_digests"][0])
+        with self.ledger._account_transaction():
+            self.ledger._append_checked_locked(self.project_id, validate_learning_record(event), producer="host", timestamp=1000)
+        before = self._launch_rows()
+        with self.assertRaisesRegex(RuntimeError, "fixture lineage fault"), self.ledger._account_transaction():
+            self.ledger._append_checked_locked(self.project_id, validate_learning_record(outcome), producer="verifier", timestamp=1001)
+            links = self._launch_rows()["record_links"]
+            self.assertEqual(1, len(links) - len(before["record_links"]))
+            self.assertEqual((self.project_id, event["record_id"], outcome["record_id"], "derived_from"), links[-1])
+            raise RuntimeError("fixture lineage fault")
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertEqual(before, self._launch_rows())
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.assertEqual(before, self._launch_rows())
+
     def test_intent_and_result_append_faults_roll_back_before_retry(self) -> None:
         run, arguments = self._capture_open_arguments()
         intent_arguments = {key: arguments[key] for key in ("assignment", "task", "route")}
@@ -721,6 +779,9 @@ class AdmissionTests(unittest.TestCase):
             self.ledger.record_dispatch_intent(self.project_id, **intent_arguments)
         self.assertFalse(self.ledger._connection.in_transaction)
         self.assertEqual(before, self._launch_rows())
+        self._reopen_launch_fixture()
+        self.assertEqual(before, self._launch_rows())
+        append = self.ledger._append_checked_locked
         intent = self.ledger.record_dispatch_intent(self.project_id, **intent_arguments)
         with self.assertRaisesRegex(LedgerError, "already dispatched"):
             self.ledger.record_dispatch_intent(self.project_id, **intent_arguments)
@@ -732,6 +793,8 @@ class AdmissionTests(unittest.TestCase):
                 self.assertRaisesRegex(sqlite3.OperationalError, "fixture append"):
             self.ledger.record_dispatch_result(self.project_id, **result_arguments)
         self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertEqual(before, self._launch_rows())
+        self._reopen_launch_fixture()
         self.assertEqual(before, self._launch_rows())
         self.ledger.record_dispatch_result(self.project_id, **result_arguments)
         with self.assertRaisesRegex(LedgerError, "already recorded"):
@@ -746,6 +809,7 @@ class AdmissionTests(unittest.TestCase):
                 self.fail("nested account write entered")
             operations = (
                 lambda: self._open_run("codex", {"orchestration_handle": "x"}, self.clock + 1),
+                lambda: self.ledger.evaluate_admission(self.project_id, provider="codex", environ=CLEAN, now_ms=self.clock + 1),
                 lambda: self.ledger.record_dispatch_intent(self.project_id, run_handle="x", assignment={}, task={}, route={}, deadline_seconds=600),
                 lambda: self.ledger.record_dispatch_result(self.project_id, run_handle="x", bridge_run_id="x", result={}, fenced=True,
                                                           reviewed=False, terminal_state="failed"),
@@ -814,6 +878,8 @@ os.kill(os.getpid(), signal.SIGKILL)
         try:
             self.ledger.record_dispatch_intent(self.project_id, run_handle=run["run_handle"],
                                              deadline_seconds=600, claim=False, **intent_arguments)
+            decision = self.ledger.evaluate_admission(self.project_id, provider="codex", environ=CLEAN, now_ms=self.clock + 2)
+            self.assertEqual("pass", decision["decision"])
         finally:
             self.ledger._connection.set_trace_callback(None)
         self.assertEqual(before, self._launch_rows())

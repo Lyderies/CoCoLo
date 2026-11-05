@@ -5202,14 +5202,17 @@ class LearningLedger:
         from .providers import AdmissionDenied
 
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock, self._connection:
+        with self._lock:
             decision = self._evaluate_admission_locked(
                 project_id, provider=provider, environ=environ, timestamp=timestamp
             )
             if decision["decision"] == "deny":
-                self._store_admission_locked(
-                    project_id, decision, run_id=None, timestamp=timestamp
-                )
+                # Denials are durable metadata too. Begin explicitly only for
+                # their write; a successful informational evaluation stays read-only.
+                with self._account_transaction():
+                    self._store_admission_locked(
+                        project_id, decision, run_id=None, timestamp=timestamp
+                    )
         self.state.harden_database_files()
         if decision["decision"] == "deny":
             raise AdmissionDenied(decision["reason_code"])
