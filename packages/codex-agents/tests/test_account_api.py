@@ -144,6 +144,21 @@ class AccountApiTests(unittest.TestCase):
                 with self.assertRaisesRegex(AccountError, "account_not_authorized"):
                     self.call(self.request(operation), service=service)
 
+    def test_adapter_digest_runtime_and_operation_limits_are_checked_before_backend(self):
+        request = self.request("account.project")
+        for changed in ({"runtime_digest": "b" * 64}, {"request_digest": "c" * 64},
+                        {"allowed_operations": frozenset({"account.health"})}):
+            def authorize(command, context):
+                values = {"project_id": command.project_id, "runtime_digest": RUNTIME,
+                          "request_digest": account_request_digest(command), "source": "host",
+                          "allowed_operations": ACCOUNT_OPERATIONS}
+                return AccountAuthorization(**{**values, **changed})
+            service = AccountService(RUNTIME, self.views, authorizer=authorize)
+            self.addCleanup(service.close)
+            with mock.patch.object(self.views, "project", side_effect=AssertionError("backend read")), \
+                    self.assertRaisesRegex(AccountError, "account_not_authorized"):
+                self.call(request, service=service)
+
     def test_callback_mutation_is_refused_with_original_bound_labels(self):
         def mutate(command, context):
             digest = account_request_digest(command)
@@ -196,6 +211,24 @@ class AccountApiTests(unittest.TestCase):
             self.state.allowed_signers_path.write_bytes(line)
         self.assertEqual(first, self.call(request))
 
+    def test_owner_replacement_is_a_fresh_public_view_through_the_same_connection(self):
+        key = self.state.digest_key()
+        request = self.request("account.owner_key")
+        first = self.call(request)
+        directory = self.base / "replacement"
+        directory.mkdir()
+        _, public = generate_test_owner_key(directory)
+        self.ledger.replace_owner_key(public, now_ms=42)
+        changes = self.ledger._connection.total_changes
+        with mock.patch.object(self.state, "recorded_owner_key", side_effect=AssertionError("second DB connection")):
+            second = self.call(request)
+        self.assertEqual("ok", second["state"])
+        self.assertNotEqual(first["fingerprint"], second["fingerprint"])
+        self.assertEqual(first["sequence"] + 1, second["sequence"])
+        self.assertEqual((1, 42), (second["replacements"], second["last_replaced_at_ms"]))
+        self.assertEqual(changes, self.ledger._connection.total_changes)
+        self.assertEqual(key, self.state.digest_key())
+
     def test_wrong_sql_thread_is_refused_but_health_survives_a_blocked_owner(self):
         replies = []
         request = self.request("account.project")
@@ -234,6 +267,66 @@ class AccountApiTests(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual([], failures)
         self.assertEqual([{"transport_alive": True, "database_checked": False}], health)
+
+    def test_reconstructing_views_in_another_thread_cannot_adopt_the_ledger(self):
+        results = []
+        def read():
+            try:
+                AccountOwnerViews(self.ledger).project(self.projects[0])
+            except AccountError as exc:
+                results.append(exc.reason_code)
+            except BaseException:
+                results.append("unexpected")
+            else:
+                results.append("accepted")
+        worker = threading.Thread(target=read, daemon=True)
+        with self.ledger._lock:
+            worker.start()
+            worker.join(1)
+            refused_before_lock = not worker.is_alive()
+        worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(refused_before_lock, "reconstructed view reached a foreign owner lock")
+        self.assertEqual(["account_wrong_owner"], results)
+
+    def test_reconstructing_views_after_fork_cannot_adopt_the_ledger(self):
+        if not hasattr(os, "fork"):
+            self.skipTest("requires POSIX fork")
+        reader, writer = os.pipe()
+        child = None
+        raw = None
+        try:
+            with self.ledger._lock:
+                child = os.fork()
+                if child == 0:
+                    os.close(reader)
+                    try:
+                        AccountOwnerViews(self.ledger).project(self.projects[0])
+                    except AccountError as exc:
+                        message = exc.reason_code
+                    except BaseException:
+                        message = "unexpected"
+                    else:
+                        message = "accepted"
+                    os.write(writer, message.encode("ascii"))
+                    os.close(writer)
+                    os._exit(0)
+                os.close(writer)
+                writer = None
+                ready = bool(select.select([reader], [], [], 2)[0])
+                if ready:
+                    raw = os.read(reader, MAX_ACCOUNT_FRAME_BYTES)
+                else:
+                    os.kill(child, signal.SIGKILL)
+        finally:
+            os.close(reader)
+            if writer is not None:
+                os.close(writer)
+            if child is not None:
+                _, status = os.waitpid(child, 0)
+        self.assertTrue(ready, "reconstructed view waited on an inherited owner lock")
+        self.assertEqual(0, os.waitstatus_to_exitcode(status))
+        self.assertEqual(b"account_wrong_owner", raw)
 
     def test_forked_handler_has_no_backend_ownership(self):
         if not hasattr(os, "fork"):

@@ -1841,6 +1841,11 @@ class LearningLedger:
         connection.execute("PRAGMA secure_delete = ON")
         connection.execute("PRAGMA busy_timeout = 5000")
         self.state.harden_database_files()
+        # New service wrappers must inherit the connection's actual origin, not
+        # adopt it on their construction thread or after a fork. Legacy collector
+        # paths still serialize cross-thread use themselves; this stamp does not
+        # change their contract. A Thread object avoids recycled numeric IDs.
+        self._connection_origin = (os.getpid(), threading.current_thread())
         return connection
 
     def _record_first_owner_key(self) -> None:

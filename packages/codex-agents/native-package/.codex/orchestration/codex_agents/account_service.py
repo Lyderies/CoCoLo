@@ -58,10 +58,14 @@ class AccountOwnerViews:
         if not isinstance(ledger, LearningLedger):
             raise AccountError("account_incompatible")
         self._ledger = ledger
-        self._pid, self._thread = os.getpid(), threading.get_ident()
+        self._origin = getattr(ledger, "_connection_origin", None)
+        self._guard()
 
     def _guard(self) -> None:
-        if self._pid != os.getpid() or self._thread != threading.get_ident():
+        if (
+            self._origin != (os.getpid(), threading.current_thread())
+            or self._origin != self._ledger._connection_origin
+        ):
             raise AccountError("account_wrong_owner")
 
     def _project_locked(self, project_id: str) -> dict:

@@ -244,8 +244,11 @@ Authorization defaults to denial before backend work. The server-only adapter ou
 the full request digest, project, runtime and permitted operations; the handler rechecks it after
 the callback. Hook/app-server sources are limited to health. Health reports transport response
 only, explicitly `database_checked=false`, and avoids the persistence backend and its writer lock.
-SQL views require the owning process/thread. Forked handlers refuse before acquiring inherited
-locks; closing a handler leaves the shared persistence owner open.
+SQL views require the process/thread that opened the connection, stamped on the ledger rather
+than inferred when a wrapper is constructed. A newly constructed view cannot adopt another
+thread's or an inherited ledger. Views check this origin before each owner lock; forked handlers
+refuse before acquiring inherited locks. Closing a handler leaves the shared persistence owner
+open. The origin stamp does not change legacy collector thread handoff behavior.
 
 Both request and reply frames are at most 16 KiB including newline, with exact integer protocol
 versions, closed fields and operation-specific result types. Responses bind the full request;
