@@ -1303,11 +1303,21 @@ class LearningState:
         # One owner-only file with a single hard link: a second link (say, in a
         # project) would let whoever holds it replace the owner's key.
         _check_owner_mode(self.allowed_signers_path, directory=False)
+        expected = self.allowed_signers_path.lstat()
+        if not stat.S_ISREG(expected.st_mode):
+            raise StateError("owner allowed-signers path is unsafe")
         descriptor = os.open(
-            self.allowed_signers_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            self.allowed_signers_path,
+            os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0),
         )
         with os.fdopen(descriptor, "rb") as handle:
-            if os.fstat(handle.fileno()).st_nlink != 1:
+            actual = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(actual.st_mode) or actual.st_nlink != 1
+                or stat.S_IMODE(actual.st_mode) != 0o600
+                or (hasattr(os, "getuid") and actual.st_uid != os.getuid())
+                or (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino)
+            ):
                 raise StateError("owner allowed-signers path is unsafe")
             content = handle.read(OWNER_SIGNERS_MAX_BYTES + 1)
         if not content:
@@ -1879,15 +1889,10 @@ class LearningLedger:
                 "SELECT 1 FROM owner_key_history LIMIT 1"
             ).fetchone() is not None:
                 return
-            path = self.state.allowed_signers_path
-            if path.is_symlink() or not path.is_file():
-                return
             try:
-                content = path.read_bytes()[: OWNER_SIGNERS_MAX_BYTES + 1]
-            except OSError:
+                content = self.state._owner_signer_bytes()
+            except (StateError, OSError):
                 return  # opening the ledger must not depend on a damaged signer file
-            if OWNER_SIGNER_LINE.fullmatch(content) is None:
-                return
             self._connection.execute(
                 "INSERT INTO owner_key_history(signer_line,reason,recorded_at_ms) "
                 "VALUES(?,'enrolled',?)",

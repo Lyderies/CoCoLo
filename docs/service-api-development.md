@@ -240,6 +240,9 @@ public fingerprint, history sequence, replacement count/time and signer-file con
 through that same owner's connection. A mismatch stays visible without changing owner history.
 With empty history, only a missing or safely checked empty signer file is `not_configured`;
 malformed, unsafe or present-but-unrecorded signer material reports `mismatch`.
+Signer reads check regular-file type before opening, open nonblocking, and recheck descriptor
+type, owner, mode, link count and inode before a bounded read. A FIFO or replacement between
+inspection and open cannot stall this view. First-owner enrollment uses the same checked read.
 No key bytes, signatures, roots, paths, SQL or arbitrary methods are returned or selected by JSON.
 
 Authorization defaults to denial before backend work. The server-only adapter output must bind

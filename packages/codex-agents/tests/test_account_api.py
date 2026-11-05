@@ -24,6 +24,7 @@ from codex_agents.account_api import (
 from codex_agents.account_service import AccountAuthorization, AccountOwnerViews, AccountService
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.learning_store import LearningLedger, LearningState, authorize_collector_runtime
+from codex_agents.service_transport import ServiceTransportError
 
 RUNTIME = "a" * 64
 TOKEN = object()
@@ -132,6 +133,7 @@ class AccountApiTests(unittest.TestCase):
             self.assertNotIn(b"CANARY", response)
             reply = json.loads(response)
             self.assertFalse(reply["ready"])
+            self.assertIsNone(reply["request_id"])
             self.assertIsNone(reply["project_id"])
             self.assertIsNone(reply["runtime_digest"])
             self.assertIsNone(reply["request_digest"])
@@ -254,6 +256,28 @@ class AccountApiTests(unittest.TestCase):
         self.assertEqual(changes, ledger._connection.total_changes)
         self.assertEqual(0, ledger._connection.execute("SELECT COUNT(*) FROM owner_key_history").fetchone()[0])
 
+    def test_signer_fifo_cannot_stall_the_shared_owner(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("requires POSIX FIFOs")
+        for mode in ("fifo", "fifo-eof", "swap-at-open"):
+            with self.subTest(mode=mode):
+                try:
+                    completed = subprocess.run(
+                        [sys.executable, "-I", "-B", "-S", "-c",
+                         f"import sys;sys.path.insert(0,{str(ORCHESTRATION_ROOT)!r});" + FIFO_OWNER_FIXTURE,
+                         str(self.base / mode), str(ORCHESTRATION_ROOT), mode],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2, check=False,
+                    )
+                except subprocess.TimeoutExpired:
+                    self.fail("owner view blocked on a signer FIFO")
+                self.assertEqual(0, completed.returncode, completed.stderr.decode(errors="replace"))
+                data = json.loads(completed.stdout)
+                self.assertEqual("mismatch", data["owner"]["state"])
+                self.assertEqual(0, data["owner"]["sequence"])
+                self.assertEqual("active", data["project"]["status"])
+                self.assertEqual(0, data["history_count"])
+                self.assertNotIn(b"CANARY", completed.stdout)
+
     def test_owner_replacement_is_a_fresh_public_view_through_the_same_connection(self):
         key = self.state.digest_key()
         request = self.request("account.owner_key")
@@ -314,61 +338,86 @@ class AccountApiTests(unittest.TestCase):
         self.assertEqual([{"transport_alive": True, "database_checked": False}], health)
 
     def test_reconstructing_views_in_another_thread_cannot_adopt_the_ledger(self):
-        results = []
-        def read():
-            try:
-                AccountOwnerViews(self.ledger).project(self.projects[0])
-            except AccountError as exc:
-                results.append(exc.reason_code)
-            except BaseException:
-                results.append("unexpected")
-            else:
-                results.append("accepted")
-        worker = threading.Thread(target=read, daemon=True)
-        with self.ledger._lock:
-            worker.start()
-            worker.join(1)
-            refused_before_lock = not worker.is_alive()
-        worker.join(5)
-        self.assertFalse(worker.is_alive())
-        self.assertTrue(refused_before_lock, "reconstructed view reached a foreign owner lock")
-        self.assertEqual(["account_wrong_owner"], results)
+        for reconstruct in (False, True):
+            with self.subTest(reconstruct=reconstruct):
+                results = []
+                def read():
+                    try:
+                        if reconstruct:
+                            AccountOwnerViews(self.ledger).project(self.projects[0])
+                        else:
+                            self.views.owner_key(self.projects[0])
+                    except AccountError as exc:
+                        results.append(exc.reason_code)
+                    except BaseException:
+                        results.append("unexpected")
+                    else:
+                        results.append("accepted")
+                worker = threading.Thread(target=read, daemon=True)
+                with self.ledger._lock:
+                    worker.start()
+                    worker.join(1)
+                    refused_before_lock = not worker.is_alive()
+                worker.join(5)
+                self.assertFalse(worker.is_alive())
+                self.assertTrue(refused_before_lock, "view reached a foreign owner lock")
+                self.assertEqual(["account_wrong_owner"], results)
 
     def test_reconstructing_views_after_fork_cannot_adopt_the_ledger(self):
         if not hasattr(os, "fork"):
             self.skipTest("requires POSIX fork")
+        for reconstruct in (False, True):
+            with self.subTest(reconstruct=reconstruct):
+                self._fork_owner_read(reconstruct=reconstruct)
+
+    def _fork_owner_read(self, *, reconstruct):
         reader, writer = os.pipe()
         child = None
         raw = None
-        try:
+        held, release = threading.Event(), threading.Event()
+        def hold():
             with self.ledger._lock:
-                child = os.fork()
-                if child == 0:
-                    os.close(reader)
-                    try:
+                held.set()
+                release.wait(10)
+        # An RLock held by the forking thread is reentrant in its child. Another
+        # thread must hold it to expose any lock acquisition before the guard.
+        locker = threading.Thread(target=hold, daemon=True)
+        locker.start()
+        try:
+            self.assertTrue(held.wait(3))
+            child = os.fork()
+            if child == 0:
+                os.close(reader)
+                try:
+                    if reconstruct:
                         AccountOwnerViews(self.ledger).project(self.projects[0])
-                    except AccountError as exc:
-                        message = exc.reason_code
-                    except BaseException:
-                        message = "unexpected"
                     else:
-                        message = "accepted"
-                    os.write(writer, message.encode("ascii"))
-                    os.close(writer)
-                    os._exit(0)
-                os.close(writer)
-                writer = None
-                ready = bool(select.select([reader], [], [], 2)[0])
-                if ready:
-                    raw = os.read(reader, MAX_ACCOUNT_FRAME_BYTES)
+                        self.views.owner_key(self.projects[0])
+                except AccountError as exc:
+                    message = exc.reason_code
+                except BaseException:
+                    message = "unexpected"
                 else:
-                    os.kill(child, signal.SIGKILL)
+                    message = "accepted"
+                os.write(writer, message.encode("ascii"))
+                os.close(writer)
+                os._exit(0)
+            os.close(writer)
+            writer = None
+            ready = bool(select.select([reader], [], [], 2)[0])
+            if ready:
+                raw = os.read(reader, MAX_ACCOUNT_FRAME_BYTES)
+            else:
+                os.kill(child, signal.SIGKILL)
         finally:
             os.close(reader)
             if writer is not None:
                 os.close(writer)
             if child is not None:
                 _, status = os.waitpid(child, 0)
+            release.set()
+            locker.join(5)
+        self.assertFalse(locker.is_alive())
         self.assertTrue(ready, "reconstructed view waited on an inherited owner lock")
         self.assertEqual(0, os.waitstatus_to_exitcode(status))
         self.assertEqual(b"account_wrong_owner", raw)
@@ -408,6 +457,11 @@ class AccountApiTests(unittest.TestCase):
             self.assertEqual("ok", client.owner_key()["state"])
         self.assertEqual(2, wire.call_count)
         self.assertTrue(all(call.kwargs["response_limit"] == MAX_ACCOUNT_FRAME_BYTES for call in wire.call_args_list))
+        with mock.patch("codex_agents.account_api.exchange_frame", side_effect=ServiceTransportError("transport_unavailable")) as wire:
+            with self.assertRaisesRegex(AccountError, "account_unavailable") as caught:
+                client.health()
+        wire.assert_called_once()
+        self.assertIsNone(caught.exception.__context__)
         with self.assertRaisesRegex(AccountError, "account_unavailable") as caught:
             client.health()
         self.assertIsNone(caught.exception.__context__)
@@ -512,6 +566,53 @@ except AccountError as exc:
                 self._server_line(process, "seen-2")
             finally:
                 stop()
+
+
+FIFO_OWNER_FIXTURE = r'''
+import json,os,sys,threading
+from pathlib import Path
+from unittest import mock
+from codex_agents.account_service import AccountOwnerViews
+from codex_agents.learning_store import LearningLedger,LearningState,authorize_collector_runtime
+base,source,mode=sys.argv[1:]
+base=Path(base);base.mkdir(mode=0o700)
+state=LearningState(base/'state')
+authorize_collector_runtime(state,Path(source)/'cli.py')
+ledger=LearningLedger(state)
+try:
+ root=base/'project';root.mkdir()
+ project=ledger.register_project(root,now_ms=1)
+ views=AccountOwnerViews(ledger)
+ path=state.allowed_signers_path
+ path.unlink()
+ if mode in {'fifo','fifo-eof'}: os.mkfifo(path,0o600)
+ else:
+  path.write_bytes(b'CANARY-malformed');path.chmod(0o600)
+ original_open=os.open
+ stop=threading.Event();helper=None
+ def close_writer():
+  while not stop.wait(.01):
+   try: descriptor=original_open(path,os.O_WRONLY|os.O_NONBLOCK)
+   except OSError: continue
+   os.close(descriptor)
+   return
+ if mode=='fifo-eof':
+  helper=threading.Thread(target=close_writer,daemon=True);helper.start()
+ def swap(candidate,flags,*args,**kwargs):
+  if mode=='swap-at-open' and Path(candidate)==path:
+   path.unlink();os.mkfifo(path,0o600)
+  return original_open(candidate,flags,*args,**kwargs)
+ try:
+  with mock.patch('os.open',side_effect=swap):
+   owner=views.owner_key(project)
+ finally:
+  stop.set()
+  if helper is not None: helper.join(1)
+ print(json.dumps({'owner':owner,'project':views.project(project),
+                   'history_count':ledger._connection.execute('SELECT COUNT(*) FROM owner_key_history').fetchone()[0]}))
+finally:
+ ledger.close()
+'''
 
 
 ACCOUNT_SERVER_FIXTURE = r'''
