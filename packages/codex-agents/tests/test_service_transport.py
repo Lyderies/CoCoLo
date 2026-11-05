@@ -190,6 +190,8 @@ class ServiceTransportTests(unittest.TestCase):
         for changes, expected in (
             ({"runtime_version": "99.0.0"}, "runtime_newer"),
             ({"runtime_version": "0.0.0"}, "runtime_upgrade_required"),
+            ({"runtime_version": "\u00b2.0.0"}, "runtime_upgrade_required"),
+            ({"runtime_version": "\u0661.0.0"}, "runtime_upgrade_required"),
             ({"schema_version": learning_store.LEDGER_SCHEMA_VERSION + 1}, "runtime_newer"),
             ({"schema_version": True}, "runtime_upgrade_required"),
             ({"schema_version": None}, "runtime_upgrade_required"),
@@ -218,6 +220,31 @@ class ServiceTransportTests(unittest.TestCase):
             {"protocol": learning_store.COLLECTOR_PROTOCOL_VERSION, "op": "ingest",
              "binding_token": "bnd_fixture", "record": record},
         ], [json.loads(call.args[1]) for call in exchange.call_args_list])
+
+        for method, arguments, codes in (
+            (client.bind, (root, "session-fixture", "hook", "codex-hooks-v1"), ("client_unvalidated", "producer_rejected")),
+            (client.ingest, ("bnd_fixture", record), ("binding_invalid", "provenance_mismatch", "capability_mismatch")),
+        ):
+            for code in codes:
+                with self.subTest(method=method.__name__, code=code), mock.patch.object(
+                    learning_store, "exchange_frame", return_value=json.dumps({"ok": False, "code": code}).encode(),
+                ) as exchange:
+                    with self.assertRaises(CollectorError) as caught:
+                        method(*arguments)
+                    self.assertEqual(code, caught.exception.code)
+                    self.assertEqual(1, exchange.call_count)
+
+    def test_version_tuple_preserves_valid_versions_and_fences_conversion_failure(self) -> None:
+        self.assertEqual((0, 8, 13), learning_store._version_tuple("000.08.013"))
+        for value in (None, [], {}, 1, "", "1.2", "1.2.3.4", "\u00b2.0.0", "\u0661.0.0", "1.-2.3"):
+            with self.subTest(value=value):
+                self.assertIsNone(learning_store._version_tuple(value))
+        # Python's integer-string conversion limits are configurable; a
+        # conversion rejection must remain safe regardless of that setting.
+        with mock.patch.object(learning_store, "int", side_effect=ValueError("CANARY-CONVERSION"), create=True):
+            self.assertIsNone(learning_store._version_tuple("1.2.3"))
+
+
 class ServiceTransportSocketTests(unittest.TestCase):
     def test_slow_reply_cannot_extend_the_deadline(self) -> None:
         with tempfile.TemporaryDirectory(prefix="svc-wire-", dir=TEMP_ROOT) as directory:

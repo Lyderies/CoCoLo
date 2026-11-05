@@ -87,9 +87,12 @@ def _version_tuple(value: Any) -> tuple[int, int, int] | None:
     if not isinstance(value, str):
         return None
     parts = value.split(".")
-    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+    if len(parts) != 3 or not all(part.isascii() and part.isdigit() for part in parts):
         return None
-    return tuple(int(part) for part in parts)  # type: ignore[return-value]
+    try:
+        return (int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return None
 
 
 LEDGER_SCHEMA_VERSION = 6
