@@ -9,6 +9,9 @@ and `project.cancel`. It accepts one UTF-8 JSON message of at most 65,536 bytes.
 and target have closed field sets. Duplicate keys, unknown operations, arbitrary method/SQL
 fields, file paths and PID targets are rejected with fixed codes that contain no rejected text.
 Status may target an orchestration or an exact run/attempt. Cancellation requires the latter.
+Direct construction validates the same fields, including exact string/integer types.
+Canonicalization validates them again. Decoder errors discard parser/decoder exception chaining;
+diagnostic consumers use the fixed code and never serialize tracebacks or their local variables.
 
 Every request includes a protocol version, request ID, project ID, primary-session ID,
 supervisor instance/generation and runtime digest. These are **untrusted claims**, including

@@ -40,6 +40,10 @@
   project, primary session, supervisor instance/generation, runtime and exact attempt target.
   Valid requests confer no authority. Authenticated transport, responses, account operations,
   independent supervisors and database migration remain unimplemented; no endpoint is enabled.
+- Service-contract constructors enforce the same closed types as decoding; canonicalization
+  revalidates their snapshot. Parser/decode exceptions are not chained onto fixed public errors.
+  Adversarial checks distinguish specific identifier formats, enforce size checks before parsing,
+  and independently bind run handles in request digests.
 - Both-provider liveness, concurrent projects, database service APIs, the remaining reported
   usability fixes and release validation are still required. Write-capable children belong to
   0.4.0 and are excluded from this release.

@@ -39,7 +39,7 @@ class ServiceProtocolError(ValueError):
     """A fixed public code, never rejected fields, values or parser messages."""
 
     def __init__(self, reason_code: str) -> None:
-        if not isinstance(reason_code, str) or reason_code not in REASON_CODES:
+        if type(reason_code) is not str or reason_code not in REASON_CODES:
             reason_code = "invalid_envelope"
         self.reason_code = reason_code
         super().__init__(reason_code)
@@ -50,6 +50,9 @@ class ServiceTarget:
     orchestration_handle: str
     run_handle: str | None
     attempt: int | None
+
+    def __post_init__(self) -> None:
+        _validate_target({name: getattr(self, name) for name in _TARGET_FIELDS})
 
 
 @dataclass(frozen=True)
@@ -64,22 +67,37 @@ class ServiceRequest:
     runtime_digest: str
     target: ServiceTarget
 
+    def __post_init__(self) -> None:
+        _validate_fields(_request_data(self))
+
 
 def _matches(value: Any, pattern: re.Pattern[str]) -> bool:
-    return isinstance(value, str) and pattern.fullmatch(value) is not None
+    return type(value) is str and pattern.fullmatch(value) is not None
 
 
 def _positive_integer(value: Any, maximum: int) -> bool:
     return type(value) is int and 1 <= value <= maximum
 
 
-def _validate_request(data: Any) -> ServiceRequest:
+def _validate_target(target: Any) -> None:
+    if not isinstance(target, dict) or target.keys() != _TARGET_FIELDS:
+        raise ServiceProtocolError("invalid_target")
+    if not _matches(target["orchestration_handle"], _ORCHESTRATION):
+        raise ServiceProtocolError("invalid_target")
+    if target["run_handle"] is None:
+        if target["attempt"] is not None:
+            raise ServiceProtocolError("invalid_target")
+    elif not _matches(target["run_handle"], _RUN) or not _positive_integer(target["attempt"], MAX_ATTEMPT):
+        raise ServiceProtocolError("invalid_target")
+
+
+def _validate_fields(data: Any) -> None:
     if not isinstance(data, dict) or data.keys() != _FIELDS:
         raise ServiceProtocolError("invalid_envelope")
     if type(data["protocol_version"]) is not int or data["protocol_version"] != PROTOCOL_VERSION:
         raise ServiceProtocolError("unsupported_version")
     operation = data["operation"]
-    if not isinstance(operation, str) or operation not in OPERATIONS:
+    if type(operation) is not str or operation not in OPERATIONS:
         raise ServiceProtocolError("unsupported_operation")
     for name in ("request_id", "primary_session_id", "supervisor_instance_id"):
         if not _matches(data[name], _OPAQUE_ID):
@@ -91,18 +109,18 @@ def _validate_request(data: Any) -> ServiceRequest:
     if not _positive_integer(data["supervisor_generation"], MAX_GENERATION):
         raise ServiceProtocolError("invalid_envelope")
     target = data["target"]
-    if not isinstance(target, dict) or target.keys() != _TARGET_FIELDS:
+    _validate_target(target)
+    if target["run_handle"] is None and operation != "project.status":
         raise ServiceProtocolError("invalid_target")
-    if not _matches(target["orchestration_handle"], _ORCHESTRATION):
-        raise ServiceProtocolError("invalid_target")
-    if target["run_handle"] is None:
-        if target["attempt"] is not None or operation != "project.status":
-            raise ServiceProtocolError("invalid_target")
-    elif not _matches(target["run_handle"], _RUN) or not _positive_integer(
-        target["attempt"], MAX_ATTEMPT,
-    ):
-        raise ServiceProtocolError("invalid_target")
-    return ServiceRequest(**{**data, "target": ServiceTarget(**target)})
+
+
+def _request_data(request: ServiceRequest) -> dict[str, Any]:
+    if type(request) is not ServiceRequest or type(request.target) is not ServiceTarget:
+        raise ServiceProtocolError("invalid_envelope")
+    return {
+        **{name: getattr(request, name) for name in _FIELDS if name != "target"},
+        "target": {name: getattr(request.target, name) for name in _TARGET_FIELDS},
+    }
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -129,17 +147,25 @@ def decode_service_request(payload: bytes) -> ServiceRequest:
         raise ServiceProtocolError("invalid_envelope")
     if len(payload) > MAX_CONTROL_REQUEST_BYTES:
         raise ServiceProtocolError("request_too_large")
+    reason = None
     try:
         text = payload.decode("utf-8")
     except UnicodeError:
-        raise ServiceProtocolError("invalid_encoding") from None
+        reason = "invalid_encoding"
+    if reason is not None:
+        # Raise after leaving the handler: no UnicodeError.object or parser
+        # exception containing rejected input is chained onto the public error.
+        raise ServiceProtocolError(reason)
     try:
         data = json.loads(text, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
-    except ServiceProtocolError:
-        raise
+    except ServiceProtocolError as exc:
+        reason = exc.reason_code
     except (ValueError, RecursionError):
-        raise ServiceProtocolError("invalid_json") from None
-    return _validate_request(data)
+        reason = "invalid_json"
+    if reason is not None:
+        raise ServiceProtocolError(reason)
+    _validate_fields(data)
+    return ServiceRequest(**{**data, "target": ServiceTarget(**data["target"])})
 
 
 def canonical_request_bytes(request: ServiceRequest) -> bytes:
@@ -149,15 +175,8 @@ def canonical_request_bytes(request: ServiceRequest) -> bytes:
     request-conflict detection; it is neither a signature nor a capability.
     """
 
-    if not isinstance(request, ServiceRequest) or not isinstance(request.target, ServiceTarget):
-        raise ServiceProtocolError("invalid_envelope")
-    data = {
-        name: getattr(request, name) for name in _FIELDS if name != "target"
-    }
-    data["target"] = {
-        name: getattr(request.target, name) for name in _TARGET_FIELDS
-    }
-    _validate_request(data)
+    data = _request_data(request)
+    _validate_fields(data)
     encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
     if len(encoded) > MAX_CONTROL_REQUEST_BYTES:
         raise ServiceProtocolError("request_too_large")

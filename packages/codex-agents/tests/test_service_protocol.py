@@ -12,6 +12,7 @@ from tests.support import ORCHESTRATION_ROOT
 
 from codex_agents.service_protocol import (
     MAX_CONTROL_REQUEST_BYTES,
+    MAX_ATTEMPT,
     MAX_GENERATION,
     REASON_CODES,
     ServiceProtocolError,
@@ -44,6 +45,8 @@ class ServiceProtocolTests(unittest.TestCase):
         self.assertEqual(reason, caught.exception.reason_code)
         self.assertEqual((reason,), caught.exception.args)
         self.assertNotIn("CANARY", str(caught.exception))
+        self.assertIsNone(caught.exception.__context__)
+        self.assertIsNone(caught.exception.__cause__)
 
     def test_status_and_cancel_targets_round_trip_as_immutable_claims(self) -> None:
         for operation, target in (
@@ -114,6 +117,8 @@ class ServiceProtocolTests(unittest.TestCase):
         self.assert_rejected(duplicate, "duplicate_fields")
         nested = normal.replace(b'"attempt": null', b'"attempt":null,"attempt":1')
         self.assert_rejected(nested, "duplicate_fields")
+        escaped = b'{"oper\\u0061tion":"CANARY",' + normal[1:]
+        self.assert_rejected(escaped, "duplicate_fields")
 
     def test_transport_bytes_and_parser_failures_have_only_fixed_codes(self) -> None:
         self.assert_rejected("CANARY", "invalid_envelope")
@@ -130,12 +135,40 @@ class ServiceProtocolTests(unittest.TestCase):
         exact = normal + b" " * (MAX_CONTROL_REQUEST_BYTES - len(normal))
         self.assertEqual("request-1", decode_service_request(exact).request_id)
         self.assert_rejected(exact + b" ", "request_too_large")
+        self.assert_rejected(b"\xff" * (MAX_CONTROL_REQUEST_BYTES + 1), "request_too_large")
+        self.assert_rejected(b"CANARY" * MAX_CONTROL_REQUEST_BYTES, "request_too_large")
+
+    def test_specific_identifiers_are_stricter_than_generic_opaque_ids(self) -> None:
+        cases = {
+            "project_id": ("job_" + "1" * 32, "prj_" + "a" * 31, "prj_" + "A" * 32),
+            "runtime_digest": ("digest:" + "2" * 64, "2" * 63, "A" * 64),
+        }
+        for field, values in cases.items():
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    self.assert_rejected(wire(request(**{field: value})), "invalid_envelope")
+        for field, values in {
+            "orchestration_handle": ("run_" + "3" * 48, "orc_" + "3" * 47, "orc_" + "A" * 48),
+            "run_handle": ("orc_" + "4" * 48, "hrn_" + "4" * 47, "hrn_" + "A" * 48, [], {}, True),
+        }.items():
+            for value in values:
+                target = {**request()["target"], "run_handle": "hrn_" + "4" * 48, "attempt": 1, field: value}
+                with self.subTest(field=field, value=value):
+                    self.assert_rejected(wire(request(target=target)), "invalid_target")
+        decoded = decode_service_request(wire(request(
+            request_id="x" * 160, primary_session_id="y" * 160, supervisor_instance_id="z" * 160,
+            target={**request()["target"], "run_handle": "hrn_" + "4" * 48, "attempt": MAX_ATTEMPT},
+        )))
+        self.assertEqual(MAX_ATTEMPT, decoded.target.attempt)
+        self.assertEqual(160, len(decoded.request_id))
 
     def test_canonical_digest_binds_all_scope_and_target_fields(self) -> None:
         normal = request()
         decoded = decode_service_request(wire(normal))
         digest = service_request_digest(decoded)
         reordered = dict(reversed(list(normal.items())))
+        self.assertEqual(digest, service_request_digest(decode_service_request(wire(reordered))))
+        reordered["target"] = dict(reversed(list(normal["target"].items())))
         self.assertEqual(digest, service_request_digest(decode_service_request(wire(reordered))))
         for field, value in (
             ("request_id", "request-2"), ("project_id", "prj_" + "5" * 32),
@@ -152,16 +185,38 @@ class ServiceProtocolTests(unittest.TestCase):
         })))
         self.assertNotEqual(service_request_digest(run), service_request_digest(replace(run, operation="project.cancel")))
         self.assertNotEqual(service_request_digest(run), service_request_digest(replace(run, target=replace(run.target, attempt=2))))
+        self.assertNotEqual(
+            service_request_digest(run),
+            service_request_digest(replace(run, target=replace(run.target, run_handle="hrn_" + "9" * 48))),
+        )
 
     def test_direct_construction_does_not_bypass_validation(self) -> None:
         decoded = decode_service_request(wire(request()))
-        for changed in (
-            replace(decoded, protocol_version=True), replace(decoded, operation="sql"),
-            replace(decoded, supervisor_generation=False), replace(decoded, target={}),
-            replace(decoded, target=ServiceTarget("CANARY", None, None)),
+        for changes in (
+            {"protocol_version": True}, {"operation": "sql"},
+            {"supervisor_generation": False}, {"target": {}},
         ):
-            with self.subTest(changed=changed), self.assertRaises(ServiceProtocolError):
-                service_request_digest(changed)
+            with self.subTest(changes=changes), self.assertRaises(ServiceProtocolError):
+                replace(decoded, **changes)
+        with self.assertRaises(ServiceProtocolError):
+            ServiceTarget("CANARY", None, None)
+
+        class SpoofedOperation(str):
+            def __hash__(self):
+                return hash("project.status")
+
+            def __eq__(self, _other):
+                return True
+
+        with self.assertRaises(ServiceProtocolError):
+            replace(decoded, operation=SpoofedOperation("CANARY"))
+        with self.assertRaises(ServiceProtocolError):
+            replace(decoded, request_id=SpoofedOperation("CANARY"))
+        # A trusted consumer can subvert Python's frozen guard explicitly;
+        # canonicalization still validates the snapshot before hashing it.
+        object.__setattr__(decoded, "protocol_version", True)
+        with self.assertRaises(ServiceProtocolError):
+            service_request_digest(decoded)
         for reason in ("CANARY", [], {}, None):
             self.assertEqual("invalid_envelope", str(ServiceProtocolError(reason)))
         self.assertEqual(set(REASON_CODES), {str(ServiceProtocolError(code)) for code in REASON_CODES})
@@ -179,6 +234,25 @@ class ServiceProtocolTests(unittest.TestCase):
             if isinstance(node, ast.ImportFrom) and node.module is not None
         }
         self.assertEqual({"__future__", "hashlib", "json", "re", "dataclasses", "typing"}, imports)
+        self.assertFalse(self._impure_syntax(tree))
+        for source in ("from . import store", "__import__('sqlite3')", "open('db')",
+                       "importlib.import_module('socket')", "eval('CANARY')"):
+            with self.subTest(source=source):
+                self.assertTrue(self._impure_syntax(ast.parse(source)))
+
+    @staticmethod
+    def _impure_syntax(tree: ast.AST) -> bool:
+        # A source lint guard, not a proof of all possible Python side effects.
+        forbidden = {"__import__", "open", "eval", "exec", "compile", "globals", "locals"}
+        io_methods = {"open", "read_text", "read_bytes", "write_text", "write_bytes", "import_module", "connect", "execute"}
+        return any(
+            isinstance(node, ast.ImportFrom) and node.level != 0
+            or isinstance(node, ast.Call) and (
+                isinstance(node.func, ast.Name) and node.func.id in forbidden
+                or isinstance(node.func, ast.Attribute) and node.func.attr in io_methods
+            )
+            for node in ast.walk(tree)
+        )
 
 
 if __name__ == "__main__":
