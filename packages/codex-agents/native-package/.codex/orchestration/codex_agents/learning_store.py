@@ -4110,6 +4110,27 @@ class LearningLedger:
             },
         }
 
+    @contextlib.contextmanager
+    def _account_transaction(self) -> Iterator[None]:
+        """Own one explicit account write unit; never borrow an outer transaction.
+
+        This connection uses autocommit. A connection context alone does not
+        begin a transaction. Call only locked helpers without connection contexts
+        here: an inner context could otherwise commit the outer unit early.
+        """
+
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+                self._connection.commit()
+            except BaseException:
+                with contextlib.suppress(sqlite3.Error):
+                    self._connection.rollback()
+                raise
+
     def open_host_run(
         self,
         project_id: str,
@@ -4130,6 +4151,11 @@ class LearningLedger:
         process's environment; a denial is stored and raised before any binding.
         """
 
+        # evaluate_admission has its own connection context. Refuse an outer
+        # unit before that first call can commit it, not only at the final BEGIN.
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
         checked_assignment = validate_assignment_shape(assignment)
         checked_task = validate_task(task)
         checked_configuration = validate_execution_configuration(
@@ -4221,7 +4247,7 @@ class LearningLedger:
             }
         )
         try:
-            with self._lock, self._connection:
+            with self._account_transaction():
                 project = self._connection.execute(
                     "SELECT status FROM projects WHERE project_id=?", (project_id,)
                 ).fetchone()
@@ -4372,7 +4398,7 @@ class LearningLedger:
                     )
         except _RecheckDenied as denied:
             # The denial is stored like any other, after the open is abandoned.
-            with self._lock, self._connection:
+            with self._account_transaction():
                 self._store_admission_locked(
                     project_id, denied.decision, run_id=None,
                     timestamp=denied.decision["observed_at_ms"],
@@ -5254,7 +5280,10 @@ class LearningLedger:
         timestamp = self._clock_ms()
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
         bridge_run_id = f"brg_{secrets.token_hex(16)}"
-        with self._lock, self._connection:
+        if type(claim) is not bool:
+            raise LedgerError("dispatch claim flag is invalid")
+        # Preflight reads do not acquire SQLite's write reservation.
+        with self._account_transaction() if claim else self._lock:
             binding = self._connection.execute(
                 "SELECT run_id,binding_state,consumed_at_ms,assignment_digest,"
                 "task_digest,route_digest,expires_at_ms FROM host_run_bindings "
@@ -5343,7 +5372,7 @@ class LearningLedger:
 
         timestamp = self._clock_ms()
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
-        with self._lock, self._connection:
+        with self._account_transaction():
             binding = self._connection.execute(
                 "SELECT run_id,binding_state,consumed_at_ms FROM host_run_bindings "
                 "WHERE project_id=? AND handle_digest=?",

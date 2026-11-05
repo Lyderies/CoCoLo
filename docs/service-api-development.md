@@ -126,6 +126,22 @@ This schema has no legacy importer yet. Exact source sequences, expiry, links, s
 owner/account facts and cross-store authority ordering still need the drained migration and
 account-service implementation. Local control/timers must run independently of this writer.
 
+## Existing account transaction units
+
+The existing shared ledger now uses explicit account write transactions for host-run open,
+dispatch intent and dispatch result. A late error rolls back the complete unit, including
+binding/provenance, admission, records and lineage. These units refuse an outer transaction;
+open checks before its initial admission call can enter a connection context. A non-claiming
+intent preflight performs no write reservation. The existing shared-account admission and
+single-dispatch checks still own the decisions; this adds no launch or caller authority.
+Fault/reopen assertions and real SIGKILL cuts exercise the open commit boundary. They do not
+establish the distributed central/local claim protocol or an atomic SQL-to-OS launch.
+
+This remains the old in-process ledger path. Signature verification still needs extraction
+into immutable snapshots with generation revalidation before a short service write; a daemon
+also needs verified launch-caller facts instead of its own environment. Neither requirement
+is satisfied by adding a transaction, and no production account endpoint is enabled here.
+
 ## Closed history API increment
 
 `history_api` provides a pure codec and non-retrying client; `history_service` provides the
@@ -143,7 +159,8 @@ does not establish native enrollment: no production adapter, listener, protected
 normal CLI/hook/bridge migration is enabled by this increment.
 Every decoded-request reply also binds that complete request digest, including acknowledgement
 receipt/content parameters; a reply for different parameters cannot confirm the new request.
-Ordinary terminal commits require the binding runtime to match the pinned request runtime.
+Ordinary terminal commits and acknowledgements require the binding runtime to match the
+pinned request runtime; an ACK checks the persisted binding inside its transaction, even on retry.
 Pending history may retain older runtimes unchanged; cross-runtime terminal recovery requires
 its separately reviewed recovery protocol. Malformed/denied replies disclose no configured
 labels: they return null labels or only the validated labels supplied by that caller.

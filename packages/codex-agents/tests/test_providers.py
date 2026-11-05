@@ -8,6 +8,7 @@ import hashlib
 import base64
 import json
 import os
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -663,6 +664,163 @@ class AdmissionTests(unittest.TestCase):
             orchestration_handle=orchestration["orchestration_handle"],
             now_ms=stamp,
         )
+
+    def _launch_rows(self) -> dict[str, list[tuple]]:
+        return {name: [tuple(row) for row in self.ledger._connection.execute(f"SELECT * FROM {name} ORDER BY rowid")]
+                for name in ("host_run_bindings", "sessions", "run_provenance", "records", "record_links")}
+
+    def _capture_open_arguments(self) -> tuple[dict, dict]:
+        identity = self.observe()[0]
+        self.attest("codex", identity["account_fingerprint"])
+        with mock.patch.object(self.ledger, "open_host_run", wraps=self.ledger.open_host_run) as opened:
+            run = self.open_run()
+        clock = mock.patch.object(self.ledger, "_clock_ms", return_value=self.clock + 2)
+        clock.start()
+        self.addCleanup(clock.stop)
+        return run, opened.call_args.kwargs
+
+    def test_late_open_failure_rolls_back_binding_provenance_events_and_admission(self) -> None:
+        identity = self.observe()[0]
+        self.attest("codex", identity["account_fingerprint"])
+        orchestration = self.ledger.open_orchestration(self.project_id, client_version="codex-host-v1", now_ms=NOW)
+        before = self._launch_rows()
+        append = self.ledger._store_admission_locked
+
+        def fail_after_admission(*args, **kwargs):
+            append(*args, **kwargs)
+            raise sqlite3.OperationalError("fixture late admission fault")
+
+        stamp = self.clock + 1
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=stamp), \
+                mock.patch.object(self.ledger, "_store_admission_locked", side_effect=fail_after_admission), \
+                self.assertRaisesRegex(sqlite3.OperationalError, "fixture late"):
+            self._open_run("codex", orchestration, stamp)
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertEqual(before, self._launch_rows())
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.assertEqual(before, self._launch_rows())
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=stamp):
+            run = self._open_run("codex", orchestration, stamp)
+        self.assertEqual("admitted", run["admission"])
+        self.assertEqual(1, len(self.ledger._prior_run_admissions_locked("codex", stamp)))
+
+    def test_intent_and_result_append_faults_roll_back_before_retry(self) -> None:
+        run, arguments = self._capture_open_arguments()
+        intent_arguments = {key: arguments[key] for key in ("assignment", "task", "route")}
+        intent_arguments.update(run_handle=run["run_handle"], deadline_seconds=600)
+        append = self.ledger._append_checked_locked
+
+        def fail_after_append(*args, **kwargs):
+            append(*args, **kwargs)
+            raise sqlite3.OperationalError("fixture append fault")
+
+        before = self._launch_rows()
+        with mock.patch.object(self.ledger, "_append_checked_locked", side_effect=fail_after_append), \
+                self.assertRaisesRegex(sqlite3.OperationalError, "fixture append"):
+            self.ledger.record_dispatch_intent(self.project_id, **intent_arguments)
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertEqual(before, self._launch_rows())
+        intent = self.ledger.record_dispatch_intent(self.project_id, **intent_arguments)
+        with self.assertRaisesRegex(LedgerError, "already dispatched"):
+            self.ledger.record_dispatch_intent(self.project_id, **intent_arguments)
+        result_arguments = dict(run_handle=run["run_handle"], bridge_run_id=intent["bridge_run_id"],
+                                result={"fixture": "validated elsewhere"}, fenced=True, reviewed=False, terminal_state="failed",
+                                result_validation_reason_code="invalid_shape")
+        before = self._launch_rows()
+        with mock.patch.object(self.ledger, "_append_checked_locked", side_effect=fail_after_append), \
+                self.assertRaisesRegex(sqlite3.OperationalError, "fixture append"):
+            self.ledger.record_dispatch_result(self.project_id, **result_arguments)
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertEqual(before, self._launch_rows())
+        self.ledger.record_dispatch_result(self.project_id, **result_arguments)
+        with self.assertRaisesRegex(LedgerError, "already recorded"):
+            self.ledger.record_dispatch_result(self.project_id, **result_arguments)
+
+    def test_account_transaction_refuses_nesting_without_committing_or_rolling_back_outer_work(self) -> None:
+        connection = self.ledger._connection
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute("UPDATE projects SET created_at_ms=2 WHERE project_id=?", (self.project_id,))
+            with self.assertRaisesRegex(LedgerError, "already active"), self.ledger._account_transaction():
+                self.fail("nested account write entered")
+            operations = (
+                lambda: self._open_run("codex", {"orchestration_handle": "x"}, self.clock + 1),
+                lambda: self.ledger.record_dispatch_intent(self.project_id, run_handle="x", assignment={}, task={}, route={}, deadline_seconds=600),
+                lambda: self.ledger.record_dispatch_result(self.project_id, run_handle="x", bridge_run_id="x", result={}, fenced=True,
+                                                          reviewed=False, terminal_state="failed"),
+            )
+            for operation in operations:
+                with self.assertRaisesRegex(LedgerError, "already active"):
+                    operation()
+                self.assertTrue(connection.in_transaction)
+            self.assertTrue(connection.in_transaction)
+            self.assertEqual(2, connection.execute("SELECT created_at_ms FROM projects WHERE project_id=?", (self.project_id,)).fetchone()[0])
+        finally:
+            connection.rollback()
+        self.assertEqual(1, connection.execute("SELECT created_at_ms FROM projects WHERE project_id=?", (self.project_id,)).fetchone()[0])
+
+    def test_sigkill_before_and_after_open_commit_has_one_durable_boundary(self) -> None:
+        _, arguments = self._capture_open_arguments()
+        script = r'''
+import json, os, signal, sys
+from pathlib import Path
+import tests.support
+from codex_agents.learning_store import LearningLedger, LearningState
+arguments = json.loads(sys.stdin.buffer.read())
+ledger = LearningLedger(LearningState(Path(sys.argv[1])))
+ledger._clock_ms = lambda: arguments["now_ms"]
+append = ledger._store_admission_locked
+def cut(*args, **kwargs):
+    append(*args, **kwargs)
+    print("before-commit", flush=True)
+    os.kill(os.getpid(), signal.SIGKILL)
+if sys.argv[3] == "before-commit":
+    ledger._store_admission_locked = cut
+ledger.open_host_run(sys.argv[2], **arguments)
+print("after-commit", flush=True)
+os.kill(os.getpid(), signal.SIGKILL)
+'''
+        for phase in ("before-commit", "after-commit"):
+            with self.subTest(phase=phase):
+                before = self._launch_rows()
+                self.ledger.close()
+                try:
+                    child = subprocess.run([sys.executable, "-B", "-c", script, str(self.state.root), self.project_id, phase],
+                                           input=canonical_json(arguments), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                           cwd=Path(__file__).resolve().parent.parent, timeout=15, check=False)
+                finally:
+                    self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+                self.assertEqual(-signal.SIGKILL, child.returncode, child.stderr.decode(errors="replace"))
+                self.assertEqual(phase, child.stdout.decode().strip())
+                after = self._launch_rows()
+                if phase == "before-commit":
+                    self.assertEqual(before, after)
+                else:
+                    self.assertEqual(1, len(after["host_run_bindings"]) - len(before["host_run_bindings"]))
+                    self.assertEqual(1, len(after["sessions"]) - len(before["sessions"]))
+                    self.assertEqual(1, len(after["run_provenance"]) - len(before["run_provenance"]))
+                    new_records = [json.loads(row[8]) for row in after["records"][len(before["records"]):]]
+                    self.assertEqual(["event", "admission_decision"], [record["record_type"] for record in new_records])
+                    self.assertEqual(new_records[0]["run_id"], new_records[1]["run_id"])
+                self.assertFalse(self.ledger._connection.in_transaction)
+
+    def test_dispatch_preflight_never_takes_a_sqlite_write_reservation(self) -> None:
+        run, arguments = self._capture_open_arguments()
+        intent_arguments = {key: arguments[key] for key in ("assignment", "task", "route")}
+        statements = []
+        self.ledger._connection.set_trace_callback(statements.append)
+        before = self._launch_rows()
+        try:
+            self.ledger.record_dispatch_intent(self.project_id, run_handle=run["run_handle"],
+                                             deadline_seconds=600, claim=False, **intent_arguments)
+        finally:
+            self.ledger._connection.set_trace_callback(None)
+        self.assertEqual(before, self._launch_rows())
+        self.assertFalse(any(statement.startswith("BEGIN") for statement in statements))
+        with self.assertRaisesRegex(LedgerError, "claim flag"):
+            self.ledger.record_dispatch_intent(self.project_id, run_handle=run["run_handle"],
+                                             deadline_seconds=600, claim=1, **intent_arguments)
 
     def test_codex_denials_follow_the_fixed_order(self) -> None:
         self.assert_denied("provider_api_key_present", environ={"OPENAI_API_KEY": "x"})
