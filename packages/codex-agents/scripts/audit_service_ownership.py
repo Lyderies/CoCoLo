@@ -221,10 +221,15 @@ class Scanner(ast.NodeVisitor):
                 self._unknown(node, "dynamic_loading")
 
     def visit_Name(self, node):
-        if isinstance(node.ctx, ast.Load) and node.id in {"__import__", "eval", "exec"}:
-            self._unknown(node, "dynamic_loading")
+        if isinstance(node.ctx, ast.Load):
+            if node.id in {"__import__", "__builtins__", "eval", "exec"}:
+                self._unknown(node, "dynamic_loading")
+            if _forbidden(self._qualified(node)):
+                self._unknown(node, "persistence_reference")
 
     def visit_Attribute(self, node):
+        if _forbidden(self._qualified(node)):
+            self._unknown(node, "persistence_reference")
         if (
             node.attr in {"import_module", "exec_module", "load_module", "__import__", "run_path", "run_module"}
             or self._qualified(node) in {"builtins.eval", "builtins.exec"}
@@ -417,8 +422,8 @@ def audit_sources(sources: dict[str, str], client_roots=DEFAULT_CLIENT_ROOTS) ->
             "Not a flow-sensitive type/call graph or native authentication/OS security proof.",
             "Alias attribution is module-wide; dynamic object flows and external package internals are not resolved.",
             "Only the listed client roots are checked; this is not a completed normal-client census.",
-            "Recognized dynamic-loading references and possible SQL calls conservatively fail client conformance.",
-            "Call arguments and inspected code are never executed or included in the report.",
+            "Recognized dynamic loaders, known persistence namespace references and possible SQL calls conservatively fail client conformance.",
+            "Inspected source is never executed; source bodies and call arguments are excluded.",
         ],
         "counts": dict(sorted(counts.items())), "boundary_conformant": not any(v["violations"] for v in clients),
         "count_definitions": {

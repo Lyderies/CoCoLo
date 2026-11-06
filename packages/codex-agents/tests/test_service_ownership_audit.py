@@ -83,7 +83,7 @@ class OwnershipMemoryTests(unittest.TestCase):
                     self.assertIn("persistence_dependency", self.reasons(report))
 
     def test_aggregate_bytes_are_refused_before_parsing_any_module(self):
-        with mock.patch.object(audit, "MAX_TOTAL_BYTES", 3), \
+        with mock.patch.object(audit, "MAX_TOTAL_BYTES", 6), \
                 mock.patch.object(audit.ast, "parse", wraps=audit.ast.parse) as parse, \
                 self.assertRaisesRegex(audit.AuditError, "audit_source_limit"):
             self.check({"client.py": "x=1\n", "helper.py": "x=2\n"})
@@ -122,6 +122,8 @@ class OwnershipMemoryTests(unittest.TestCase):
             "run = eval\n",
             "import builtins as native\ngetattr(native, 'CANARY')()\n",
             "from builtins import getattr as lookup\nimport builtins\nlookup(builtins, 'CANARY')()\n",
+            "getattr(__builtins__, 'CANARY')('sqlite3')\n",
+            "__builtins__['CANARY']('sqlite3')\n",
             "def submit(connection): return connection.execute('CANARY')\n",
         ):
             with self.subTest(source_kind=source.splitlines()[0]):
@@ -135,6 +137,17 @@ class OwnershipMemoryTests(unittest.TestCase):
             report = self.check({"client.py": f"import codex_agents\n{owner}.Owner()\n"})
             self.assertFalse(report["boundary_conformant"])
             self.assertIn("persistence_call", self.reasons(report))
+
+    def test_known_owner_references_fail_before_alias_object_flow(self):
+        for owner in sorted(audit.PERSISTENCE_MODULES - {"sqlite3", "_sqlite3"}):
+            for source in (
+                f"import codex_agents\nOwner = {owner}.Owner\nOwner(None)\n",
+                f"from {owner} import Owner as Alias\nselected = Alias\n",
+            ):
+                with self.subTest(owner=owner):
+                    report = self.check({"client.py": source})
+                    self.assertFalse(report["boundary_conformant"])
+                    self.assertIn("persistence_reference", self.reasons(report))
 
     def test_parser_memory_error_has_a_fixed_cli_error(self):
         with mock.patch.object(audit, "load_sources", return_value={"client.py": ""}), \

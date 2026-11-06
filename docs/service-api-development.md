@@ -280,13 +280,13 @@ python3 -B packages/codex-agents/scripts/audit_service_ownership.py inventory
 python3 -B packages/codex-agents/scripts/audit_service_ownership.py check
 ```
 
-`inventory` returns source hashes and explicitly defined counts, plus conformance for the
+`inventory` returns a source-tree digest and explicitly defined counts, plus conformance for the
 listed client roots. `check` exits 1 when those roots have forbidden dependencies or
 unresolved static evidence; input/read/size errors exit 2. Current CLI, bridge and hook
 persistence dependencies remain findings that must be removed during migration. There is
 no baseline exception that makes those paths pass.
 
-The default JSON is compact. `--full` returns bounded module/import/call-site metadata;
+The default JSON is compact. `--full` adds per-module hashes and bounded import/call-site metadata;
 it includes no source text or call arguments and fails rather than truncating oversized
 output. Call counts are AST sites, not regex line counts or execution counts. The report
 labels module-wide alias attribution and unknown object/external-package flows explicitly.
