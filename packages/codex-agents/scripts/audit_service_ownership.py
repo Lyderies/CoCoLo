@@ -22,7 +22,7 @@ SOURCE_ROOT = Path(__file__).resolve().parents[1] / "native-package/.codex/orche
 DEFAULT_CLIENT_ROOTS = (
     "cli.py", "learning_hook.py", "codex_agents/bridge.py",
     "codex_agents/collector_client.py", "codex_agents/history_api.py",
-    "codex_agents/account_api.py", "codex_agents/result_read_api.py",
+    "codex_agents/account_api.py", "codex_agents/result_read_api.py", "codex_agents/control_api.py",
 )
 PERSISTENCE_MODULES = frozenset({
     "sqlite3", "_sqlite3", "codex_agents.learning_store", "codex_agents.project_history",

@@ -26,9 +26,10 @@ path or caller-supplied role cannot supply that proof.
 
 Canonical request bytes include all these fields and the complete target. Their digest is
 intended for parameter-conflict detection under a separately authorized request-ID scope.
-This increment does not implement request deduplication, a replay cache, transport framing,
-slow-sender deadlines, caller enrollment, responses, cancellation or persistence. In particular,
-accepting a future cancellation request must remain distinct from confirmed child cleanup.
+That pure request module alone does not implement deduplication, a replay cache, transport
+framing, slow-sender deadlines, caller enrollment, responses, cancellation or persistence.
+The later closed control increment below adds local observations and requested stops;
+accepting cancellation remains distinct from confirmed child cleanup.
 Account admission/claims, owner signatures and result-body transfer need separate bounded
 business-operation contracts; they cannot be passed through these control operations.
 
@@ -621,3 +622,55 @@ is still no enabled native listener or publication wire operation. File I/O can
 stall this persistence loop; independent live-control routing, reserved queues,
 durable publication intake and normal-client migration remain required. Local
 timers/cancellation must not be placed on this owner loop or await its work.
+
+## Closed local control service
+
+`control_api` and `control_service` add bounded status/cancel observations for the
+separate `ProjectMonitor` owner. Both frames are at most 16 KiB including newline.
+The existing complete scope and target are validated again. A deterministic
+metadata-only request ID binds every canonical operation/scope/target field;
+changed parameters cannot reuse that identity. Polling needs no growing receipt
+cache. Exact cancellation retries preserve the monitor's first serialized stop
+decision and original bounds; they cannot rearm or launch work.
+
+The handler defaults to denial and requires a separately authenticated current
+owning-primary context bound to the complete request digest, scope, operation and
+target. The trusted adapter must use bounded already verified in-memory state;
+native/signature verification belongs outside this owner loop. These injected
+authorization values do not establish native proof. The monitor resolves the
+target from its actual registered full binding. No arbitrary PID, path, activity,
+limit, terminal or cleanup assertion is a supported client operation.
+
+Attempt replies expose closed liveness metadata, stop reason, actual terminal and
+cleanup observations, and a distinct cancellation state. Orchestration replies
+contain bounded counts rather than an attempt list. A requested stop never claims
+the tree is gone. Cleanup is confirmed only after the trusted executor supplies
+the actual tracked-tree observation. Local ages freeze at a stop/terminal decision;
+publication carries its own monotonic timestamp. The client requires the same host
+clock domain, rejects publication outside its request interval or total explicit
+time budget, sends once and never starts an owner or falls back to persistence.
+
+Replies explicitly say `durable=false`: they are live local observations, not
+durable cancellation/outcome/account receipts. A lost/error cancel reply may follow
+a latched stop; explicit retry queries that same target and decision. Handler
+closure leaves the monitor and local safety work alive. Process restart needs the
+separate authoritative supervisor-generation/recovery protocol; these values do
+not reconstruct or reauthorize an old monitor. Publication-clock regression,
+reentry or interruption latches unavailable replies without replacing prior stops.
+
+Two disposable process fixtures stall a real result-publication callback and an
+injected SQLite writer transaction together while A/B control runs in separate
+owners. A's cancel is requested within the deterministic two-second bound; tracked
+root/descendant cleanup is acknowledged afterward. B remains unaffected until its
+own silence or hard-deadline decision. A trusted fixture-clock advance triggers
+that decision and actual cleanup without a status request, while publication is
+still stalled. Tests also cover stale/forged scopes, complete response binding,
+unavailable clocks, target conflicts, lost replies, scope summaries, import and
+process/thread boundaries. Fixtures use synthetic caller context and accelerated
+clocks, not real provider admission or timing calibration.
+
+There is no enabled native listener or normal CLI/hook/bridge migration here.
+Production fair intake, reserved control/terminal queues, authenticated native
+actors, executor/event adapters, watchdog integration, durable publication and
+restart recovery remain required. Slow admission/authentication and untrusted
+event floods still need end-to-end checks before the complete concurrency gate.

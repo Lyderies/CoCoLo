@@ -39,6 +39,8 @@ RUNTIME_FILES = (
     "codex_agents/collector_client.py",
     "codex_agents/collector_contracts.py",
     "codex_agents/contracts.py",
+    "codex_agents/control_api.py",
+    "codex_agents/control_service.py",
     "codex_agents/evaluation.py",
     "codex_agents/git_plumbing.py",
     "codex_agents/history_api.py",

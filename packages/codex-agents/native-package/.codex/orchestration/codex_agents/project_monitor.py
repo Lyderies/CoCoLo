@@ -178,6 +178,33 @@ class ProjectMonitor:
             raise ProjectMonitorError("monitor_binding_conflict")
         return entry
 
+    def scope(self) -> SupervisorScope:
+        """Return captured labels to trusted control code, never caller proof."""
+        self._owner()
+        return SupervisorScope(**dict(zip(_SCOPE_FIELDS, self._scope, strict=True)))
+
+    def lookup(self, target: ServiceTarget) -> AttemptBinding:
+        """Resolve an exact already registered target after service authorization."""
+        self._owner()
+        invalid = False
+        try:
+            if type(target) is not ServiceTarget:
+                raise ServiceProtocolError("invalid_target")
+            target = ServiceTarget(target.orchestration_handle, target.run_handle, target.attempt)
+            if target.run_handle is None:
+                raise ServiceProtocolError("invalid_target")
+        except (ServiceProtocolError, AttributeError):
+            invalid = True
+        if invalid:
+            raise ProjectMonitorError("monitor_invalid_input")
+        entry = self._attempts.get((target.run_handle, target.attempt))
+        if entry is None:
+            raise ProjectMonitorError("monitor_attempt_not_found")
+        binding = self._binding(AttemptBinding(**dict(zip(_BINDING_FIELDS, entry.binding, strict=True))))
+        if binding.orchestration_handle != target.orchestration_handle:
+            raise ProjectMonitorError("monitor_wrong_scope")
+        return binding
+
     def _sample_clock(self) -> int:
         """One shared failure latch and monotonic order for every attempt.
 
@@ -335,6 +362,27 @@ class ProjectMonitor:
         entry.cleanup_confirmed = True
         return self._observe(entry, "poll", final_cleanup_poll=first)
 
+    def _poll_entries(self, entries: tuple[_Attempt, ...]) -> tuple[AttemptStatus, ...]:
+        failed_before = self._clock_failed
+        statuses = tuple(self._observe(entry, "poll") for entry in entries)
+        if self._clock_failed and not failed_before:
+            return tuple(self._observe(entry, "poll") for entry in entries)
+        return statuses
+
+    def orchestration_status(self, orchestration_handle: str) -> tuple[AttemptStatus, ...]:
+        """Bounded internal observations for one already authorized orchestration."""
+        self._owner()
+        invalid = False
+        try:
+            ServiceTarget(orchestration_handle, None, None)
+        except ServiceProtocolError:
+            invalid = True
+        if invalid:
+            raise ProjectMonitorError("monitor_invalid_input")
+        entries = tuple(entry for entry in self._attempts.values()
+                        if entry.binding[_BINDING_FIELDS.index("orchestration_handle")] == orchestration_handle)
+        return self._poll_entries(entries)
+
     def tick(self) -> tuple[AttemptStatus, ...]:
         """Poll every bounded entry without persistence/auth/publication work.
 
@@ -343,14 +391,9 @@ class ProjectMonitor:
         internal tuple is not an unbounded or paginated external status reply.
         """
         self._owner()
-        failed_before = self._clock_failed
-        statuses = tuple(self._observe(entry, "poll") for entry in self._attempts.values())
-        if self._clock_failed and not failed_before:
-            # A later failed sample invalidates earlier undecided rows in this
-            # same batch. Rebuild without clock reads; retained decisions and
-            # known cleanup keep their original facts.
-            return tuple(self._observe(entry, "poll") for entry in self._attempts.values())
-        return statuses
+        # A later failed sample invalidates earlier undecided rows in this same
+        # batch; rebuild without reads, preserving known decisions and cleanup.
+        return self._poll_entries(tuple(self._attempts.values()))
 
     def pending_stops(self) -> tuple[AttemptStatus, ...]:
         """Repeated stop observations remain pending until actual cleanup."""
