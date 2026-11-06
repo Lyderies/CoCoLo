@@ -76,10 +76,14 @@ try:
     if time.monotonic()>=deadline: break
    reply=service.handle(bytes(raw).split(b'\n',1)[0],token)
    count+=1
-   if mode=='drop' and count==1:
+   if (mode=='drop' and count==1) or (mode=='drop-later' and count==2):
     print('dropped',flush=True)
     continue
    connection.sendall(reply+b'\n')
+   if mode=='corrupt-later' and count==1:
+    artifact=next(Path(directory).glob('.result-*.json'))
+    artifact.write_bytes(b'PRIVATE-LATER-CORRUPTION-CANARY')
+    print('corrupted',flush=True)
 finally:
  listener.close();service.close();Path(endpoint).unlink(missing_ok=True)
 '''
@@ -359,6 +363,29 @@ class ResultReadTests(unittest.TestCase):
             self.client.read_result(binding(), self.digest)
         self.assertEqual(2, wire.call_count)
 
+    def test_expiry_between_chunks_discards_the_partial_whole_read(self):
+        self.body, self.digest = self.prepare(size=20_000)
+        def expire(path, raw, **options):
+            if decode_result_read_request(raw).offset:
+                self.now = 121_000
+            return self.wire(path, raw, **options)
+        with mock.patch("codex_agents.result_read_api.exchange_frame", side_effect=expire) as wire, \
+                self.assertRaisesRegex(HistoryError, "history_result_expired"):
+            self.client.read_result(binding(), self.digest)
+        self.assertEqual(2, wire.call_count)
+        self.assertEqual([], list(self.directory.glob(".result-*")))
+
+    def test_noncanonical_base64_padding_bits_are_rejected(self):
+        command = result_read_request(binding(), self.digest)
+        reply = json.loads(self.service.handle(encode_result_read_request(command), CONTEXT))
+        # Python's strict base64 decoder permits unused nonzero padding bits.
+        # The codec additionally requires an exact canonical round trip. This
+        # synthetic codec value makes no claim of independently verifying HMAC.
+        self.assertEqual(b"a", base64.b64decode("YR==", validate=True))
+        reply["result"].update(body_size=1, data_base64="YR==")
+        with self.assertRaisesRegex(HistoryError, "history_invalid_response"):
+            decode_result_read_response(canonical_json(reply), command)
+
     def test_all_chunks_share_one_deadline_and_no_late_body_is_returned(self):
         self.body, self.digest = self.prepare(size=20_000)
         clock = [0.0]
@@ -523,6 +550,29 @@ except HistoryError as exc: print(json.dumps({'reason':exc.reason_code,'sqlite_l
             reservation = store.result_reservation(binding())
             self.assertEqual((1000, 121_000), (reservation.prepared_at_ms, reservation.expires_at_ms))
             self.assertEqual(1, len(store.pending_terminals()))
+
+        # One complete chunk has reached the client before the second reply is
+        # dropped. The whole-read API still returns no partial body; an explicit
+        # new read obtains the original result without extending retention.
+        process, stop = start("drop-later")
+        with self.assertRaisesRegex(HistoryError, "history_invalid_response"):
+            client.read_result(binding(), self.digest)
+        self.assertTrue(select.select([process.stdout], [], [], 5)[0])
+        self.assertEqual("dropped", process.stdout.readline().strip())
+        self.assertEqual(self.body, client.read_result(binding(), self.digest))
+        _, error = stop()
+        self.assertEqual(0, process.returncode, error)
+
+        # Actual corruption after the first successful socket reply is detected
+        # by the owner's keyed file check on the next chunk, rather than relying
+        # on a key in the client. No already accumulated partial body is returned.
+        process, stop = start("corrupt-later")
+        with self.assertRaisesRegex(HistoryError, "history_result_unavailable"):
+            client.read_result(binding(), self.digest)
+        self.assertTrue(select.select([process.stdout], [], [], 5)[0])
+        self.assertEqual("corrupted", process.stdout.readline().strip())
+        _, error = stop()
+        self.assertEqual(0, process.returncode, error)
 
 
 if __name__ == "__main__":
