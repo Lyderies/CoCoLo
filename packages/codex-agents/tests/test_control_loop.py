@@ -284,3 +284,151 @@ class ControlLoopTests(unittest.TestCase):
         self.addCleanup(listener.close)
         with self.assertRaisesRegex(ControlError, "control_invalid_input"):
             self.loop.attach(listener, CONTEXT)
+
+    def test_equality_overriding_foreign_thread_cannot_operate_or_close(self):
+        server, _ = self.pair()
+        extra, client = socket.socketpair()
+        self.addCleanup(extra.close)
+        self.addCleanup(client.close)
+        outcomes = []
+        loop = self.loop
+        class EqualThread(threading.Thread):
+            __hash__ = object.__hash__
+            def __eq__(self, other):
+                return True
+            def run(self):
+                for operation in (lambda: loop.attach(extra, CONTEXT), loop.run_once, loop.close):
+                    try:
+                        operation()
+                    except ControlError as error:
+                        outcomes.append(error.reason_code)
+                    except Exception as error:
+                        outcomes.append(type(error).__name__)
+                    else:
+                        outcomes.append("allowed")
+        worker = EqualThread()
+        worker.start()
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(["control_wrong_owner"] * 3, outcomes)
+        self.assertGreaterEqual(server.fileno(), 0)
+        self.assertTrue(extra.getblocking())
+
+    def test_constructor_checks_service_thread_identity_without_equality(self):
+        class EqualThread(threading.Thread):
+            __hash__ = object.__hash__
+            def __eq__(self, other):
+                return True
+        with mock.patch.object(self.service, "_thread", EqualThread()):
+            with self.assertRaisesRegex(ControlError, "control_wrong_owner"):
+                candidate = ControlLoop(self.monitor, self.service, self.limits)
+                self.addCleanup(candidate.close)
+
+    def test_attach_clock_callback_cannot_reenter_public_operations(self):
+        server, _ = self.pair()
+        added, client = socket.socketpair()
+        nested, nested_client = socket.socketpair()
+        for connection in (added, client, nested, nested_client):
+            self.addCleanup(connection.close)
+        outcomes = []
+        def clock():
+            for operation in (self.loop.close, self.loop.run_once, lambda: self.loop.attach(nested, CONTEXT)):
+                try:
+                    operation()
+                except ControlError as error:
+                    outcomes.append(error.reason_code)
+                else:
+                    outcomes.append("allowed")
+            return 0
+        with mock.patch.object(self.monitor, "_clock", clock):
+            self.loop.attach(added, CONTEXT)
+        self.assertEqual(["control_unavailable"] * 3, outcomes)
+        self.assertGreaterEqual(server.fileno(), 0)
+        self.assertTrue(nested.getblocking())
+        self.assertFalse(self.monitor._clock_failed)
+        self.assertEqual(2, len(self.loop._peers))
+
+    def test_context_finalizer_cannot_reenter_close(self):
+        loop = self.loop
+        outcomes = []
+        class Finalizer:
+            def __del__(self):
+                try:
+                    loop.close()
+                except ControlError as error:
+                    outcomes.append(error.reason_code)
+        first, _ = self.pair(context=Finalizer())
+        second, _ = self.pair()
+        loop.close()
+        self.assertEqual(["control_unavailable"], outcomes)
+        self.assertEqual((-1, -1), (first.fileno(), second.fileno()))
+
+    def test_failed_attach_preserves_timeout_and_refuses_an_aliased_descriptor(self):
+        for timeout in (None, 0, 0.25):
+            server, client = socket.socketpair()
+            self.addCleanup(server.close)
+            self.addCleanup(client.close)
+            server.settimeout(timeout)
+            with self.subTest(timeout=timeout), mock.patch.object(
+                self.loop._selector, "register", side_effect=OSError("synthetic registration failure")
+            ):
+                with self.assertRaisesRegex(ControlError, "control_invalid_input"):
+                    self.loop.attach(server, CONTEXT)
+                self.assertEqual(timeout, server.gettimeout())
+                self.assertEqual(0, len(self.loop._peers))
+                self.assertFalse(self.loop._running)
+        original, _ = self.pair()
+        alias = socket.socket(fileno=original.fileno())
+        try:
+            with self.assertRaisesRegex(ControlError, "control_invalid_input"):
+                self.loop.attach(alias, CONTEXT)
+            self.assertIsNone(alias.gettimeout())
+            self.assertGreaterEqual(original.fileno(), 0)
+        finally:
+            alias.detach()  # The original loop owns this fd; do not double-close.
+
+    def test_partial_registration_failure_rolls_back_without_touching_existing_peer(self):
+        original, _ = self.pair()
+        server, client = socket.socketpair()
+        self.addCleanup(server.close)
+        self.addCleanup(client.close)
+        server.settimeout(0.25)
+        register = self.loop._selector.register
+        def partial(connection, events):
+            register(connection, events)
+            raise OSError("synthetic failure after registration")
+        with mock.patch.object(self.loop._selector, "register", side_effect=partial):
+            with self.assertRaisesRegex(ControlError, "control_invalid_input"):
+                self.loop.attach(server, CONTEXT)
+        self.assertEqual(0.25, server.gettimeout())
+        self.assertEqual(1, len(self.loop._selector.get_map()))
+        self.assertGreaterEqual(original.fileno(), 0)
+        self.loop.attach(server, CONTEXT)
+        client.setblocking(False)
+        self.send(client)
+        self.assertEqual("starting", self.receive(client).result["health"])
+
+    def test_interrupted_registration_restores_caller_state_and_preserves_interrupt(self):
+        server, client = socket.socketpair()
+        self.addCleanup(server.close)
+        self.addCleanup(client.close)
+        with mock.patch.object(self.loop._selector, "register", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.loop.attach(server, CONTEXT)
+        self.assertIsNone(server.gettimeout())
+        self.assertGreaterEqual(server.fileno(), 0)
+        self.assertEqual(0, len(self.loop._peers))
+        self.assertFalse(self.loop._running)
+
+    def test_attach_clock_failure_closes_old_peers_without_taking_new_socket(self):
+        original, _ = self.pair()
+        server, client = socket.socketpair()
+        self.addCleanup(server.close)
+        self.addCleanup(client.close)
+        self.clock.value = ValueError("PRIVATE-CLOCK")
+        with self.assertRaisesRegex(ControlError, "control_unavailable"):
+            self.loop.attach(server, CONTEXT)
+        self.assertEqual(-1, original.fileno())
+        self.assertIsNone(server.gettimeout())
+        self.assertGreaterEqual(server.fileno(), 0)
+        self.assertFalse(self.loop._running)

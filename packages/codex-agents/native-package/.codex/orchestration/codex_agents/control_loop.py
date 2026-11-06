@@ -63,7 +63,7 @@ class ControlLoop:
             monitor._owner()
         except ProjectMonitorError:
             raise ControlError("control_wrong_owner") from None
-        if service._closed or (service._pid, service._thread) != (os.getpid(), threading.current_thread()):
+        if service._closed or service._pid != os.getpid() or service._thread is not threading.current_thread():
             raise ControlError("control_wrong_owner")
         self._monitor, self._service = monitor, service
         self._limits = ControlLoopLimits(limits.max_connections, limits.steps_per_cycle,
@@ -76,7 +76,7 @@ class ControlLoop:
         self._running = False
 
     def _owner(self, *, closing=False) -> None:
-        if (self._pid, self._thread) != (os.getpid(), threading.current_thread()):
+        if self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise ControlError("control_wrong_owner")
         if self._closed and not closing:
             raise ControlError("control_unavailable")
@@ -107,25 +107,50 @@ class ControlLoop:
 
     def attach(self, connection: socket.socket, context: object) -> None:
         self._owner()
+        self._running = True
+        try:
+            self._attach(connection, context)
+        finally:
+            self._running = False
+
+    def _attach(self, connection: socket.socket, context: object) -> None:
         if (type(connection) is not socket.socket or connection.family != socket.AF_UNIX
-                or connection.type != socket.SOCK_STREAM or connection in self._peers):
+                or connection.type != socket.SOCK_STREAM or connection in self._peers
+                or connection.fileno() < 0 or connection.fileno() in self._selector.get_map()):
             raise ControlError("control_invalid_input")
         if len(self._peers) >= self._limits.max_connections:
             raise ControlError("control_unavailable")
         now = self._now()
         if now > MAX_CLOCK_NS - self._limits.connection_timeout_ns:
             raise ControlError("control_unavailable")
-        failed = False
+        peer = _Peer(connection, context, now + self._limits.connection_timeout_ns)
+        previous_timeout = connection.gettimeout()
         try:
             connection.getpeername()
             connection.setblocking(False)
             self._selector.register(connection, selectors.EVENT_READ)
-        except (OSError, ValueError):
-            failed = True
-        if failed:
-            raise ControlError("control_invalid_input")
-        self._peers[connection] = _Peer(connection, context, now + self._limits.connection_timeout_ns)
-        self._rotation.append(connection)
+            self._peers[connection] = peer
+            self._rotation.append(connection)
+        except BaseException as error:
+            # Failed transfer leaves the socket with its caller, including its
+            # exact original timeout. Undo partial registration before returning.
+            self._peers.pop(connection, None)
+            try:
+                self._rotation.remove(connection)
+            except ValueError:
+                pass
+            try:
+                if self._selector.get_key(connection).fileobj is connection:
+                    self._selector.unregister(connection)
+            except (OSError, ValueError, KeyError):
+                pass
+            try:
+                connection.settimeout(previous_timeout)
+            except (OSError, ValueError):
+                pass  # External descriptor closure violates exclusive custody.
+            if isinstance(error, (OSError, ValueError, KeyError)):
+                raise ControlError("control_invalid_input") from None
+            raise
 
     def _expire(self, now: int) -> None:
         for connection, peer in tuple(self._peers.items()):
@@ -220,4 +245,8 @@ class ControlLoop:
 
     def close(self) -> None:
         self._owner(closing=True)
-        self._shutdown()
+        self._running = True
+        try:
+            self._shutdown()
+        finally:
+            self._running = False

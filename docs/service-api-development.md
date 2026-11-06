@@ -698,6 +698,14 @@ deadline. Trailing bytes received with the first frame are refused. No second
 request is executed. Deadline expiry after a cancel has latched can discard its
 reply without undoing the stop; delivery failure does not prove no effect.
 
+Thread ownership uses object identity, including the constructor's service check.
+Every public operation rejects reentry, including clock callbacks during attach
+and context finalizers during close. An already registered descriptor alias is
+refused before changing its mode. Failed attachment rolls back partial selector
+registration and restores the caller's exact timeout; it does not take ownership.
+The frontend must still transfer each socket exclusively: a descriptor number or
+its uniqueness in this selector does not prove native identity or exclusive access.
+
 Clock sampling shares the monitor's failure latch. Failure or interruption closes
 connections and preserves unavailable/previous-stop decisions and nonlocal
 interrupts. Process/thread checks precede operations and close. Closing the loop
