@@ -269,3 +269,31 @@ denial, scope, full-response binding, redaction, thread/fork guards and health w
 blocked. These fixture adapters are synthetic. No production listener, native caller enrollment,
 endpoint identity, mutation/launch-claim API or normal-client migration is enabled or proven by
 this increment. Those gates and the complete concurrency/release criteria remain mandatory.
+
+## Source ownership audit
+
+The repository-only audit reads Python syntax without importing the inspected modules or
+opening learning state:
+
+```sh
+python3 -B packages/codex-agents/scripts/audit_service_ownership.py inventory
+python3 -B packages/codex-agents/scripts/audit_service_ownership.py check
+```
+
+`inventory` returns source hashes and explicitly defined counts, plus conformance for the
+listed client roots. `check` exits 1 when those roots have forbidden dependencies or
+unresolved static evidence; input/read/size errors exit 2. Current CLI, bridge and hook
+persistence dependencies remain findings that must be removed during migration. There is
+no baseline exception that makes those paths pass.
+
+The default JSON is compact. `--full` returns bounded module/import/call-site metadata;
+it includes no source text or call arguments and fails rather than truncating oversized
+output. Call counts are AST sites, not regex line counts or execution counts. The report
+labels module-wide alias attribution and unknown object/external-package flows explicitly.
+
+`--client-root` selects explicit source-relative Python paths, for example the pure
+account/history/collector clients. A pass covers those listed roots only. The check
+includes relative and transitive imports, package initializers, recognized dynamic loaders,
+known SQLite/persistence modules and conservative SQL-like calls. It is static evidence
+alongside the complete client census, runtime integration and authority review; it does
+not establish native authentication, an OS boundary or complete C19 acceptance.
