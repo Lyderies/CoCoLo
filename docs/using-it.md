@@ -89,6 +89,21 @@ select exported content and do not provide per-path OS read isolation. Preflight
 configuration, and admission still checks the reviewed client and account before launch.
 Native routes are not supported by this bridge preview.
 
+To request a model-turn limit explicitly on a Claude bridge assignment, add
+`"execution_limits": {"max_model_turns": 3}`. It may only narrow the existing
+dispatch ceiling: the greater of one and the tighter routed/assigned legacy
+`bounds.max_tool_calls` value. Existing assignments keep that historical projection;
+they do not acquire an exact tool-call guarantee. Preflight and the dispatch
+report's `effective_bounds` show the requested units, effective value and source.
+
+An explicit `execution_limits.max_tool_calls` request, including zero, refuses
+before admission/export/launch because neither bridge can enforce that exact unit.
+Explicit model-turn requests also refuse on Codex and native routes. A single
+Claude agentic turn can contain multiple tool calls; a turn limit is not a tool-call
+limit. The option's documented unit is [agentic turns](https://code.claude.com/docs/en/cli-reference).
+Real-client enforcement/calibration and the remaining LIVE-3 disposition remain
+release gates; fake-client stream tests establish host behavior only.
+
 ## When a task is denied
 
 A denial comes back as a `reason_code`, and no child starts. Admission fails closed, for example on an

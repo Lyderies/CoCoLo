@@ -572,6 +572,50 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "permissions has unknown fields"):
             self.validate_assignment(assignment)
 
+    def test_explicit_execution_limits_have_closed_integer_units(self) -> None:
+        for limits in (None, {}, {"unknown": 1}, {"max_model_turns": True},
+                       {"max_tool_calls": False}, {"max_model_turns": 0},
+                       {"max_tool_calls": -1}, {"max_model_turns": 2**31},
+                       {"max_model_turns": 1.0}):
+            assigned = self.assignment()
+            assigned["execution_limits"] = limits
+            with self.subTest(limits=limits), self.assertRaises(ContractError) as caught:
+                self.validate_assignment(assigned)
+            self.assertTrue(caught.exception.field.startswith("assignment.execution_limits"))
+
+    def test_exact_tool_requests_refuse_including_zero_on_both_bridges(self) -> None:
+        task = self.task()
+        for provider in ("codex", "claude"):
+            route = {**route_task(task, self.policy), "provider": provider, "dispatch": "bridge"}
+            for count in (0, 1, 30):
+                assigned = self.assignment()
+                assigned["execution_limits"] = {"max_tool_calls": count}
+                with self.subTest(provider=provider, count=count), \
+                        self.assertRaisesRegex(ContractError, "exact tool-call limits") as caught:
+                    validate_assignment(assigned, task=task, route=route,
+                                        parent_grant=self.parent_grant())
+                self.assertEqual("assignment.execution_limits.max_tool_calls", caught.exception.field)
+
+    def test_explicit_turns_only_narrow_the_claude_bridge_legacy_ceiling(self) -> None:
+        task = self.task()
+        route = {**route_task(task, self.policy), "provider": "claude", "dispatch": "bridge"}
+        assigned = self.assignment()
+        assigned["bounds"]["max_tool_calls"] = 3
+        for turns in (1, 3):
+            assigned["execution_limits"] = {"max_model_turns": turns}
+            self.assertIs(assigned, validate_assignment(
+                assigned, task=task, route=route, parent_grant=self.parent_grant(),
+            ))
+        assigned["execution_limits"] = {"max_model_turns": 4}
+        with self.assertRaisesRegex(ContractError, "exceeds the legacy dispatch ceiling"):
+            validate_assignment(assigned, task=task, route=route, parent_grant=self.parent_grant())
+        assigned["execution_limits"] = {"max_model_turns": 1}
+        for changed in ({**route, "provider": "codex"}, {**route, "dispatch": "native"}):
+            with self.subTest(route=changed), \
+                    self.assertRaisesRegex(ContractError, "model-turn limits are unavailable"):
+                validate_assignment(assigned, task=task, route=changed,
+                                    parent_grant=self.parent_grant())
+
     def parent_grant(self) -> dict:
         return {
             "tools": ["shell"],

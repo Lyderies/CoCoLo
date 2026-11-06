@@ -450,6 +450,47 @@ def model_selection_slice(data: Any) -> str:
     )
 
 
+def _execution_limits_shape(limits: Any) -> dict[str, int]:
+    if not isinstance(limits, dict) or not limits or set(limits) - {
+        "max_model_turns", "max_tool_calls",
+    }:
+        raise ContractError("execution_limits must name supported bound units",
+                            field="assignment.execution_limits")
+    for name, value in limits.items():
+        minimum = 0 if name == "max_tool_calls" else 1
+        if type(value) is not int or not minimum <= value <= 2**31 - 1:
+            raise ContractError("execution limit is outside its integer range",
+                                field=f"assignment.execution_limits.{name}")
+    return limits
+
+
+def validate_assignment_execution_limits(
+    assignment: dict[str, Any], route: dict[str, Any],
+) -> dict[str, int]:
+    """Check optional exact-unit requests without widening legacy ceilings.
+
+    The historical bounds.max_tool_calls projection remains a compatibility
+    ceiling, not a tool-execution guarantee. An explicit request is never silently
+    projected to a different unit or treated as an observed-event cutoff.
+    """
+
+    if "execution_limits" not in assignment:
+        return {}
+    limits = _execution_limits_shape(assignment["execution_limits"])
+    if "max_tool_calls" in limits:
+        raise ContractError("exact tool-call limits are unavailable for this route",
+                            field="assignment.execution_limits.max_tool_calls")
+    if route.get("provider") != "claude" or route.get("dispatch") != "bridge":
+        raise ContractError("model-turn limits are unavailable for this route",
+                            field="assignment.execution_limits.max_model_turns")
+    ceiling = max(1, min(route["bounds"]["max_tool_calls"],
+                         assignment["bounds"]["max_tool_calls"]))
+    if limits["max_model_turns"] > ceiling:
+        raise ContractError("model-turn limit exceeds the legacy dispatch ceiling",
+                            field="assignment.execution_limits.max_model_turns")
+    return limits
+
+
 def validate_assignment_shape(data: Any) -> dict[str, Any]:
     """Validate the closed assignment contract without granting any authority."""
 
@@ -475,11 +516,13 @@ def validate_assignment_shape(data: Any) -> dict[str, Any]:
         "prohibited_actions",
     }
     _required(data, required, "assignment")
-    unknown = sorted(data.keys() - required - {"retry_of_assignment_id"})
+    unknown = sorted(data.keys() - required - {"retry_of_assignment_id", "execution_limits"})
     if unknown:
         raise ContractError(
             f"assignment has unknown fields: {', '.join(unknown)}", field="assignment"
         )
+    if "execution_limits" in data:
+        _execution_limits_shape(data["execution_limits"])
     for field in (
         "assignment_id",
         "task_id",
@@ -655,6 +698,7 @@ def validate_assignment(
             raise ContractError(
                 f"bounds.{field} exceeds routed policy bound", field=f"assignment.bounds.{field}"
             )
+    validate_assignment_execution_limits(data, route)
     task_paths = set(checked_task.get("owned_paths", []))
     if not set(data["owned_paths"]).issubset(task_paths):
         raise ContractError("owned_paths exceed task ownership", field="assignment.owned_paths")

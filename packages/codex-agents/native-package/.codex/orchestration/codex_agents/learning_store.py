@@ -50,6 +50,7 @@ from .contracts import (
     result_axes,
     routing_task_slice,
     validate_assignment_shape,
+    validate_assignment_execution_limits,
     validate_result,
     validate_task,
 )
@@ -4240,6 +4241,7 @@ class LearningLedger:
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
         checked_assignment = validate_assignment_shape(assignment)
+        validate_assignment_execution_limits(checked_assignment, route)
         checked_task = validate_task(task)
         checked_configuration = validate_execution_configuration(
             execution_configuration

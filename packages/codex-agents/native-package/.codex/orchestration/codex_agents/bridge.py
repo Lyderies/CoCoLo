@@ -34,6 +34,7 @@ from .contracts import (
     result_axes,
     result_preflight,
     validate_assignment,
+    validate_assignment_execution_limits,
     validate_result,
 )
 from .git_plumbing import git_executable as find_git
@@ -465,10 +466,34 @@ def effective_dispatch_limits(route: dict[str, Any], assignment: dict[str, Any])
     """
 
     route_bounds, assigned_bounds = route["bounds"], assignment["bounds"]
+    explicit = validate_assignment_execution_limits(assignment, route)
     return (
         max(1, min(int(route_bounds["timeout_seconds"]), int(assigned_bounds["timeout_seconds"]))),
-        max(1, min(int(route_bounds["max_tool_calls"]), int(assigned_bounds["max_tool_calls"]))),
+        explicit.get("max_model_turns", max(1, min(
+            int(route_bounds["max_tool_calls"]), int(assigned_bounds["max_tool_calls"]),
+        ))),
     )
+
+
+def effective_dispatch_bounds(route: dict[str, Any], assignment: dict[str, Any]) -> dict[str, Any]:
+    """The same requested/effective unit report for preflight and dispatch."""
+
+    deadline, turns = effective_dispatch_limits(route, assignment)
+    claude = route.get("provider") == "claude" and route.get("dispatch") == "bridge"
+    explicit = assignment.get("execution_limits", {})
+    return {
+        "execution_limit_contract": "explicit" if explicit else "legacy",
+        "requested_execution_limits": dict(explicit),
+        "hard_timeout_seconds": deadline,
+        "nominal_max_tool_calls": min(route["bounds"]["max_tool_calls"],
+                                      assignment["bounds"]["max_tool_calls"]),
+        "exact_tool_call_limit": None,
+        "model_turn_limit": turns if claude else None,
+        "model_turn_enforcement": "client --max-turns" if claude else "unavailable",
+        "model_turn_limit_source": (
+            "execution_limits.max_model_turns" if explicit else "legacy max_tool_calls projection"
+        ) if claude else "unavailable",
+    }
 
 
 def dispatch_preflight(
@@ -499,13 +524,12 @@ def dispatch_preflight(
     if (route.get("sandbox_mode") != "read-only" or permissions["network"] is not False
             or any(not item.endswith(":read") for item in permissions["filesystem"])):
         raise BridgeRefused("bridged children are read-only")
+    bound_report = effective_dispatch_bounds(route, assignment)
     worker_outcome = task.get("verification_for_outcome")
     paths = assignment_read_paths(assignment, worker_outcome_digest=worker_outcome)
     manifest = committed_export_manifest(repository_root, paths, expected_commit=expected_commit)
     if offset > manifest["file_count"]:
         raise BridgeRefused("export preview offset is outside the manifest")
-    deadline, model_turns = effective_dispatch_limits(route, assignment)
-    nominal_calls = min(int(route["bounds"]["max_tool_calls"]), int(assignment["bounds"]["max_tool_calls"]))
     report = {
         "ready": True, "preflight_only": True, "admission_created": False,
         "export_commit": manifest["commit"], "export_manifest_digest": manifest["manifest_digest"],
@@ -521,10 +545,7 @@ def dispatch_preflight(
             "client_tool_allowlist": list(CLAUDE_TOOLS) if provider == "claude" else None,
             "observed_item_allowlist": sorted(CODEX_ALLOWED_ITEMS) if provider == "codex" else None,
             "per_path_read_isolation": False, "network": False, "mcps": False,
-            "hard_timeout_seconds": deadline, "nominal_max_tool_calls": nominal_calls,
-            "exact_tool_call_limit": None,
-            "model_turn_limit": model_turns if provider == "claude" else None,
-            "model_turn_enforcement": "client --max-turns" if provider == "claude" else "unavailable",
+            **bound_report,
             "basis": "runtime configuration; not client readiness or admission",
         },
     }
@@ -1759,6 +1780,7 @@ def dispatch(
         client_diagnostics=report.get("client_diagnostics"),
     )
     report.update(
+        effective_bounds=effective_dispatch_bounds(route, assignment),
         bridge_run_id=intent["bridge_run_id"],
         export_file_count=file_count,
         export_commit=export_info["commit"],

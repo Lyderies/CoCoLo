@@ -20,6 +20,7 @@ from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 from tests.learning_support import assignment, routing_fields
 import cli
 from codex_agents import bridge, git_plumbing
+from codex_agents.contracts import ContractError
 from codex_agents.routing import load_policy, route_task
 
 
@@ -203,6 +204,27 @@ class DispatchPreflightTests(unittest.TestCase):
                     mock.patch.object(bridge, "_git", side_effect=AssertionError("git called")), \
                     self.assertRaises(bridge.BridgeRefused):
                 bridge.dispatch_preflight(self.root, self.task, route, self.assigned)
+
+    def test_explicit_turns_report_actual_units_and_unsupported_limits_precede_git(self) -> None:
+        self.route.update(provider="claude", dispatch="bridge")
+        self.assigned["bounds"]["max_tool_calls"] = 7
+        self.assigned["execution_limits"] = {"max_model_turns": 2}
+        caps = self.preview()["capabilities"]
+        self.assertEqual((7, 2, None), (caps["nominal_max_tool_calls"],
+                                      caps["model_turn_limit"], caps["exact_tool_call_limit"]))
+        self.assertEqual("explicit", caps["execution_limit_contract"])
+        self.assertEqual({"max_model_turns": 2}, caps["requested_execution_limits"])
+        self.assertEqual("execution_limits.max_model_turns", caps["model_turn_limit_source"])
+        for provider, limits in (("codex", {"max_model_turns": 1}),
+                                 ("codex", {"max_tool_calls": 0}),
+                                 ("claude", {"max_tool_calls": 0}),
+                                 ("claude", {"max_model_turns": 8})):
+            self.route["provider"] = provider
+            self.assigned["execution_limits"] = limits
+            with self.subTest(provider=provider, limits=limits), \
+                    mock.patch.object(bridge, "_git", side_effect=AssertionError("git called")), \
+                    self.assertRaises(ContractError):
+                self.preview()
 
     def test_reserved_worker_input_is_indicated_without_a_repository_path_or_body(self) -> None:
         self.task["verification_for_outcome"] = "f" * 64

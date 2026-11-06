@@ -1146,6 +1146,70 @@ class ReviewHardeningTests(BridgeTestCase):
         argv = [i for i in self.invocations("claude") if "-p" in i["argv"]][0]["argv"]
         self.assertEqual("3", argv[argv.index("--max-turns") + 1])
 
+    def test_explicit_turn_limit_does_not_claim_an_exact_tool_call_limit(self) -> None:
+        self.claude_run()
+        route = self.bridged_route("claude")
+        assigned = self.assignment_for(route)
+        assigned["bounds"]["max_tool_calls"] = 1
+        assigned["execution_limits"] = {"max_model_turns": 1}
+        handle = self.open(route, assigned)
+        # A fake single assistant frame has two tool-use blocks. This verifies
+        # host parsing/reporting, not that a real client executed or bounded them.
+        self.frames("claude", [init_frame(), {
+            "type": "assistant", "message": {"model": route["model"], "content": [
+                {"type": "tool_use", "id": "read-1", "name": "Read",
+                 "input": {"file_path": "PRIVATE-TOOL-CONTENT-1"}},
+                {"type": "tool_use", "id": "read-2", "name": "Read",
+                 "input": {"file_path": "PRIVATE-TOOL-CONTENT-2"}},
+            ]},
+        }, result_frame()])
+        preview = bridge.dispatch_preflight(self.project, self.task(), route, assigned)
+        output = self.dispatch(route, assigned, handle)
+        report = output["bridge_report"]
+        self.assertEqual("result", report["outcome"])
+        self.assertEqual(result(), output["result"])
+        self.assertNotIn("PRIVATE-TOOL-CONTENT", json.dumps(output))
+        for key, value in report["effective_bounds"].items():
+            self.assertEqual(value, preview["capabilities"][key])
+        self.assertIsNone(report["effective_bounds"]["exact_tool_call_limit"])
+        self.assertEqual(1, report["effective_bounds"]["model_turn_limit"])
+        argv = [i for i in self.invocations("claude") if "-p" in i["argv"]][0]["argv"]
+        self.assertEqual("1", argv[argv.index("--max-turns") + 1])
+
+    def test_explicit_limit_is_bound_at_open_and_refusal_does_not_consume_launch(self) -> None:
+        self.claude_run()
+        route = self.bridged_route("claude")
+        assigned = self.assignment_for(route, execution_limits={"max_model_turns": 3})
+        handle = self.open(route, assigned)
+        assigned["execution_limits"]["max_model_turns"] = 1
+        with mock.patch.object(bridge, "private_workspace", side_effect=AssertionError("export created")), \
+                self.assertRaises(LedgerError):
+            self.dispatch(route, assigned, handle)
+        self.assertFalse(any("-p" in i["argv"] for i in self.invocations("claude")))
+        assigned["execution_limits"]["max_model_turns"] = 3
+        self.frames("claude", [init_frame(), result_frame()])
+        self.assertEqual("result", self.dispatch(route, assigned, handle)["bridge_report"]["outcome"])
+
+    def test_unsupported_exact_limit_refuses_before_ledger_or_export(self) -> None:
+        route = self.bridged_route("codex")
+        assigned = self.assignment_for(route, execution_limits={"max_tool_calls": 0})
+        ledger = mock.Mock()
+        ledger.host_run_admission.side_effect = AssertionError("admission contacted")
+        with mock.patch.object(bridge, "private_workspace", side_effect=AssertionError("export created")), \
+                self.assertRaisesRegex(ContractError, "exact tool-call limits"):
+            dispatch(ledger, self.project_id, project_root=self.project, bundle_root=self.bundle,
+                     task=self.task(), route=route, assignment=assigned, parent_grant=PARENT_GRANT,
+                     run_handle="not-opened", result_schema=RESULT_SCHEMA, environ=CLEAN)
+        self.assertEqual([], ledger.mock_calls)
+
+    def test_open_refuses_unsupported_explicit_limits_before_admission(self) -> None:
+        route = self.bridged_route("codex")
+        assigned = self.assignment_for(route, execution_limits={"max_tool_calls": 0})
+        with mock.patch.object(self.ledger, "_prepare_attestations",
+                               side_effect=AssertionError("admission prepared")), \
+                self.assertRaisesRegex(ContractError, "exact tool-call limits"):
+            self.open(route, assigned)
+
     def test_line_cap_applies_to_complete_lines(self) -> None:
         def line(size: int) -> str:
             text = json.dumps({"p": ""})
