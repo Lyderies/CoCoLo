@@ -617,6 +617,42 @@ print(json.dumps(observed))
             self.state.allowed_signers_path.write_bytes(line)
         self.assertEqual(changes, self.ledger._connection.total_changes)
 
+    def test_public_owner_view_missing_or_different_valid_signer_keeps_recorded_generation(self):
+        service = self.owner_service()
+        request = self.request("account.owner_public_key")
+        before = self.call(request, service=service)
+        path = self.state.allowed_signers_path
+        line = path.read_bytes()
+        history = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_key_history")]
+        changes = self.ledger._connection.total_changes
+        digest_key = self.state.digest_key()
+        directory = self.base / "other-valid-signer"
+        directory.mkdir()
+        _, public = generate_test_owner_key(directory)
+        other_line = self.state._owner_signer_content(public)
+        self.assertNotEqual(line, other_line)
+        expected = {**before, "state": "mismatch", "public_key": None}
+        try:
+            for content in (None, other_line):
+                with self.subTest(signer="missing" if content is None else "different-valid"):
+                    path.unlink(missing_ok=True)
+                    if content is not None:
+                        path.write_bytes(content)
+                        path.chmod(0o600)
+                    self.assertEqual(expected, self.call(request, service=service))
+                    if content is None:
+                        self.assertFalse(path.exists())
+                    else:
+                        self.assertEqual(content, path.read_bytes())
+                    self.assertEqual(history, [tuple(row) for row in self.ledger._connection.execute(
+                        "SELECT * FROM owner_key_history")])
+                    self.assertEqual(changes, self.ledger._connection.total_changes)
+                    self.assertEqual(digest_key, self.state.digest_key())
+        finally:
+            path.write_bytes(line)
+            path.chmod(0o600)
+        self.assertEqual(before, self.call(request, service=service))
+
     def test_unconfigured_public_owner_view_has_no_key_or_implicit_enrollment(self):
         state = LearningState(self.base / "unconfigured-owner")
         authorize_collector_runtime(state, ORCHESTRATION_ROOT / "cli.py")
@@ -626,12 +662,28 @@ print(json.dumps(observed))
         root.mkdir()
         project = ledger.register_project(root, now_ms=1)
         views = AccountOwnerViews(ledger)
+
+        def authorize(request, context):
+            # Synthetic owner context, not a native caller/endpoint proof.
+            if context is TOKEN and request.project_id == project:
+                return AccountAuthorization(project, RUNTIME, account_request_digest(request),
+                                            "owner", ACCOUNT_OPERATIONS)
+            return None
+
+        service = AccountService(RUNTIME, views, authorizer=authorize)
+        self.addCleanup(service.close)
+        request = self.request("account.owner_public_key", project=project)
         expected = {"state": "not_configured", "fingerprint": None, "sequence": 0,
                     "replacements": 0, "last_replaced_at_ms": None, "public_key": None}
         changes = ledger._connection.total_changes
-        self.assertEqual(expected, views.owner_public_key(project))
+        self.assertEqual(expected, self.call(request, service=service))
+        state.allowed_signers_path.unlink()
+        self.assertEqual(expected, self.call(request, service=service))
+        self.assertFalse(state.allowed_signers_path.exists())
         state.allowed_signers_path.write_bytes(b"CANARY-INVALID-SIGNER")
-        self.assertEqual({**expected, "state": "mismatch"}, views.owner_public_key(project))
+        state.allowed_signers_path.chmod(0o600)
+        self.assertEqual({**expected, "state": "mismatch"}, self.call(request, service=service))
+        self.assertEqual(b"CANARY-INVALID-SIGNER", state.allowed_signers_path.read_bytes())
         self.assertEqual(0, ledger._connection.execute("SELECT COUNT(*) FROM owner_key_history").fetchone()[0])
         self.assertEqual(changes, ledger._connection.total_changes)
 
