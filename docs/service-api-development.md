@@ -502,3 +502,45 @@ includes relative and transitive imports, package initializers, recognized dynam
 known SQLite/persistence modules and conservative SQL-like calls. It is static evidence
 alongside the complete client census, runtime integration and authority review; it does
 not establish native authentication, an OS boundary or complete C19 acceptance.
+
+## Bounded retained-result reads
+
+`result_read_api` and `result_read_service` add the single closed operation
+`result.read_chunk`. Each request names the complete `AttemptBinding`, the expected
+owner-keyed result digest and an aligned offset. Its read identity includes the
+digest and offset within that binding scope. Each reply binds the entire request
+and includes the immutable body size, terminal record ID and retention deadline.
+There are no producer, role, filename, SQL, publication or acknowledgement fields.
+This is a read operation, with no durable transfer acceptance or snapshot receipt.
+
+Chunks contain at most 8192 raw bytes, represented as canonical base64. Both wire
+frames, including newline, are capped at 16 KiB; maximal valid identities and
+integer values are covered by an envelope-size test. The existing 1 MiB body limit
+therefore needs at most 128 exchanges. Whole reads share one explicit caller time
+budget, reject changed metadata or malformed chunks and return no partial body on
+failure. The client never automatically resends a request, starts an owner, reads
+the digest key or falls back to persistence. An explicit new read can retry the
+same retained body; it cannot repeat model work or refresh its retention.
+
+The handler defaults to denial before opening a store. A trusted server adapter
+must authorize the complete read and current owning primary, and must check again
+after file I/O. The handler also rechecks the reservation after reply construction
+and final authorization; observed retirement or expiry prevents release of cached
+bytes. Every chunk reads through the existing owner integrity/retention checks;
+there is no cross-request content cache. This verifies the complete bounded body
+for each chunk, so a full-size read may check up to 128 MiB of file content. No
+throughput or production scheduling guarantee is claimed by this implementation.
+
+The client verifies framing, closed fields, complete response binding and stable
+metadata. It cannot independently verify the private keyed digest without its
+withheld key. It requires an already trusted endpoint; neither JSON labels, a
+socket path nor the authorization dataclass authenticate an endpoint or caller.
+No production listener or native enrollment adapter is enabled here. Publication,
+original execution-output custody, control/terminal queue isolation, native caller
+authority and migration of the legacy normal clients remain separate required work.
+
+Disposable fixtures cover full-size delivery, unchanged negative/fenced bodies,
+actual Unix-socket lost replies and owner restart, scope forgery, post-I/O
+revocation, expiry/retirement between chunks, corrupt artifacts, strict response
+types and process/thread affinity. An import guard and the source ownership audit
+cover this client without authorizing persistence fallback or completing C19.
