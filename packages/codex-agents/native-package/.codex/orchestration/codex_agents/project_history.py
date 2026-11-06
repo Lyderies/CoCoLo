@@ -137,6 +137,7 @@ class ProjectHistory:
         self._directory_fd = self._writer_fd = None
         self._result_key = None
         self._result_capacity = None
+        self._result_expiry_cursor: int | None = None
         self._result_clock = result_clock_ms if result_clock_ms is not None else (lambda: time.time_ns() // 1_000_000)
         if (
             type(allow_schema_upgrade) is not bool
@@ -876,17 +877,58 @@ class ProjectHistory:
 
     @_operation
     def expire_results(self, *, limit: int = 10) -> int:
+        """Bounded fair cleanup; failures stay charged and do not starve peers.
+
+        The owner-local cursor is scheduling state, not a durable receipt or a
+        business identity. Durable retiring/expired state still controls reads
+        and capacity. A restart can repeat cleanup, never revive an identity.
+        """
         now = self._result_now()
         if not valid_integer(limit, minimum=1, maximum=100):
             raise HistoryError("history_invalid_input")
-        rows = self._connection.execute(
-            "SELECT * FROM result_reservations WHERE project_id=? AND state!='expired' "
-            "AND (expires_at_ms<=? OR state='retiring') ORDER BY created_at_ms,claim_id LIMIT ?",
-            (self.project_id, now, limit),
-        ).fetchall()
-        for row in rows:
-            self._retire_result(self._reservation(row).binding)
-        return len(rows)
+        def candidates(after):
+            statement = (
+                "SELECT rowid FROM result_reservations WHERE project_id=? AND state!='expired' "
+                "AND (expires_at_ms<=? OR state='retiring')"
+            )
+            arguments = [self.project_id, now]
+            if after is not None:
+                statement += " AND rowid>?"
+                arguments.append(after)
+            return self._connection.execute(statement + " ORDER BY rowid LIMIT ?", (*arguments, limit)).fetchall()
+
+        # Select only bounded scalar positions first. One oversized/corrupt
+        # reservation must not make the entire batch fail before progression.
+        rows = candidates(self._result_expiry_cursor)
+        if not rows and self._result_expiry_cursor is not None:
+            self._result_expiry_cursor = None
+            rows = candidates(None)
+        failure = None
+        retired = 0
+        for candidate in rows:
+            position = candidate[0]
+            if not valid_integer(position, minimum=-MAX_SEQUENCE - 1):
+                raise HistoryError("history_incompatible")
+            self._result_expiry_cursor = position
+            try:
+                row = self._connection.execute(
+                    "SELECT * FROM result_reservations WHERE project_id=? AND rowid=?", (self.project_id, position),
+                ).fetchone()
+                if row is None:
+                    raise HistoryError("history_incompatible")
+                self._retire_result(self._reservation(row).binding)
+                retired += 1
+            except HistoryError as exc:
+                if failure is None:
+                    failure = exc.reason_code
+            except (sqlite3.Error, OSError):
+                if failure is None:
+                    failure = "history_unavailable"
+        if failure is not None:
+            # Preserve failure visibility, without chaining private file/SQL
+            # details, after other selected rows have had their cleanup turn.
+            raise HistoryError(failure)
+        return retired
 
     @_operation
     def pending_terminals(self, *, after_sequence: int = 0, limit: int = 10) -> tuple[TerminalDelivery, ...]:

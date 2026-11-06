@@ -116,6 +116,12 @@ that cap refuses new storage work. No automatic tombstone eviction or identifier
 reuse is implemented. Future drained generation retirement remains a migration gate.
 The future persistence-owner event loop must schedule bounded expiry sweeps and
 restart cleanup; this internal store does not start a background collector or timer.
+An owner-local expiry cursor gives each due reservation a turn, including across
+one-row batches. Failed or corrupt rows stay charged and report a fixed failure,
+while other selected rows can finish cleanup. Candidate selection reads only
+bounded SQLite row positions before fetching each reservation, so one oversized
+row does not abort the entire batch. The cursor wraps and retries failures; it is
+scheduling state, grants no authority and is not a durable cleanup receipt.
 
 Reads recheck the exact binding, retention, private file ownership/type/mode/link
 count, byte count and keyed digest. Trusted time is checked again after artifact I/O;

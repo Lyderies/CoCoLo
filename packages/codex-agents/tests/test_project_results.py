@@ -448,6 +448,95 @@ class ProjectResultTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, "history_result_expired"):
             self.reserve()
 
+    def prepare_expired_results(self, count=2):
+        if count > 2:
+            self.store.close()
+            self.capacity = replace(self.capacity, max_reserved_bytes=count * MAX_RESULT_BODY_BYTES)
+            self.store = self.open()
+        for number in range(1, count + 1):
+            self.reserve(number)
+            self.commit(number)
+        self.now = 121_000
+        unlink = os.unlink
+        def fail_for(*numbers):
+            blocked = {name for number in numbers for name in self.store._result_names(binding(number))}
+            def guarded(name, *args, **kwargs):
+                if name in blocked:
+                    raise PermissionError("CANARY-private-expiry-detail")
+                return unlink(name, *args, **kwargs)
+            return guarded
+        return fail_for
+
+    def test_failed_expiry_does_not_skip_healthy_rows_in_the_same_batch(self):
+        fail_for = self.prepare_expired_results()
+        with mock.patch.object(project_history.os, "unlink", side_effect=fail_for(1)):
+            with self.assertRaisesRegex(HistoryError, "history_unavailable") as caught:
+                self.store.expire_results(limit=2)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("CANARY", str(caught.exception))
+        rows = self.store._connection.execute("SELECT claim_id,state FROM result_reservations ORDER BY claim_id").fetchall()
+        self.assertEqual([("claim-1", "retiring"), ("claim-2", "expired")], [tuple(row) for row in rows])
+        self.assertEqual(1, len(self.files()))
+
+    def test_limit_one_expiry_rotates_then_wraps_and_retries_the_failed_row(self):
+        fail_for = self.prepare_expired_results()
+        with mock.patch.object(project_history.os, "unlink", side_effect=fail_for(1)):
+            with self.assertRaisesRegex(HistoryError, "history_unavailable"):
+                self.store.expire_results(limit=1)
+            self.assertEqual(1, self.store.expire_results(limit=1))
+            with self.assertRaisesRegex(HistoryError, "history_unavailable"):
+                self.store.expire_results(limit=1)
+        self.assertEqual(1, len(self.files()))
+        self.assertEqual(1, self.store.expire_results(limit=1))
+        self.assertEqual(0, self.store.expire_results(limit=1))
+        self.assertEqual([], self.files())
+        self.assertEqual(2, self.store._connection.execute("SELECT COUNT(*) FROM result_reservations WHERE state='expired'").fetchone()[0])
+
+    def test_multiple_bad_expirations_cannot_starve_a_later_candidate(self):
+        fail_for = self.prepare_expired_results(3)
+        with mock.patch.object(project_history.os, "unlink", side_effect=fail_for(1, 2)):
+            for _ in range(2):
+                with self.assertRaisesRegex(HistoryError, "history_unavailable"):
+                    self.store.expire_results(limit=1)
+            self.assertEqual(1, self.store.expire_results(limit=1))
+        rows = self.store._connection.execute("SELECT claim_id,state FROM result_reservations ORDER BY claim_id").fetchall()
+        self.assertEqual([("claim-1", "retiring"), ("claim-2", "retiring"), ("claim-3", "expired")],
+                         [tuple(row) for row in rows])
+        self.assertEqual(2, len(self.files()))
+
+    def test_corrupt_expiry_metadata_keeps_its_charge_without_blocking_healthy_cleanup(self):
+        self.prepare_expired_results()
+        self.store._connection.execute("UPDATE result_reservations SET binding=? WHERE claim_id='claim-1'", (1_000_000_000,))
+        with self.assertRaisesRegex(HistoryError, "history_incompatible") as caught:
+            self.store.expire_results(limit=2)
+        self.assertIsNone(caught.exception.__context__)
+        rows = self.store._connection.execute("SELECT claim_id,state FROM result_reservations ORDER BY claim_id").fetchall()
+        self.assertEqual([("claim-1", "committed"), ("claim-2", "expired")], [tuple(row) for row in rows])
+        self.assertEqual(1, len(self.files()))
+
+    def test_oversized_row_cannot_prevent_bounded_candidate_selection_and_other_cleanup(self):
+        self.prepare_expired_results()
+        original = self.store._connection.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
+        self.store._connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, original * 4)
+        self.store._connection.execute("UPDATE result_reservations SET binding=? WHERE claim_id='claim-1'", (b"x" * (original * 2),))
+        self.store._connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, original)
+        with self.assertRaisesRegex(HistoryError, "history_unavailable"):
+            self.store.expire_results(limit=2)
+        rows = self.store._connection.execute("SELECT claim_id,state FROM result_reservations ORDER BY claim_id").fetchall()
+        self.assertEqual([("claim-1", "committed"), ("claim-2", "expired")], [tuple(row) for row in rows])
+        self.assertEqual(1, len(self.files()))
+
+    def test_expiry_cursor_covers_the_full_sqlite_signed_row_id_domain(self):
+        fail_for = self.prepare_expired_results()
+        self.store._connection.execute("UPDATE result_reservations SET rowid=? WHERE claim_id='claim-1'", (-(1 << 63),))
+        with mock.patch.object(project_history.os, "unlink", side_effect=fail_for(1)):
+            with self.assertRaisesRegex(HistoryError, "history_unavailable"):
+                self.store.expire_results(limit=1)
+            self.assertEqual(1, self.store.expire_results(limit=1))
+        self.assertEqual(1, self.store.expire_results(limit=1))
+        self.assertEqual(0, self.store.expire_results(limit=1))
+        self.assertEqual([], self.files())
+
     def test_wrong_key_and_backward_clock_fail_closed_across_reopen(self):
         self.reserve()
         self.commit()
