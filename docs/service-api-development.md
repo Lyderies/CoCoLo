@@ -772,13 +772,20 @@ Explicit trusted limits bound the row count and copied field bytes. Their finite
 ceilings of 4,096 rows and 64 MiB are configuration ceilings, not installed defaults
 or measured operating limits.
 
-The preliminary query returns only type, length and integer metadata for at most
+Owner-history types, signer length and base field cost are checked before the
+legacy owner helper fetches recorded signer bytes. Invalid stored types or an
+oversized signer refuse without fetching that field. Integer projections use a
+storage-type check, so malformed TEXT/BLOB values cannot cross as metadata.
+
+The preliminary billing query returns only type, length and integer metadata for at most
 the row limit plus one. It charges all of that project's billing attestations,
 including other providers, before applying the legacy provider filter or copying
 content/signature bodies. An extra row or excessive aggregate size refuses the
 capture; nothing is silently truncated. Encoded metadata, content, signatures,
 recorded/current signer bytes and fixed-width integers are counted. The original
 provider, digest, type and sequence checks then construct the immutable inputs.
+Fixtures inspect preliminary cursor values, maximal valid raw fields, independent
+other-provider byte charges and post-copy underestimates as well as row limits.
 
 The owner-local value has no verification result or admission status. Existing
 signature preparation does not accept its type as proof. Reads remain fresh and

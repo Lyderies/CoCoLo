@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import tempfile
 import threading
 import unittest
@@ -16,11 +17,46 @@ from codex_agents.account_api import ACCOUNT_OPERATIONS, AccountError
 from codex_agents.account_service import AccountOwnerViews
 from codex_agents.learning_contracts import MAX_RECORD_BYTES
 from codex_agents.learning_engine import OwnerGrantAuthority
-from codex_agents.learning_store import LearningLedger, LearningState, LedgerError, authorize_collector_runtime
+from codex_agents.learning_store import (
+    OWNER_SIGNERS_MAX_BYTES, LearningLedger, LearningState, LedgerError, authorize_collector_runtime,
+)
 from codex_agents.signature_inputs import (
     MAX_SIGNATURE_CAPTURE_BYTES, MAX_SIGNATURE_CAPTURE_ROWS,
     SignatureCaptureError, SignatureCaptureLimits, signature_input_size,
 )
+
+
+class _CaptureConnectionTap:
+    """Observe fetched preliminary values without hiding assertion failures."""
+
+    def __init__(self, connection):
+        self.connection = connection
+        self.headers = []
+        self.owner_headers = []
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+    def execute(self, sql, parameters=()):
+        cursor = self.connection.execute(sql, parameters)
+        owner_metadata = sql.startswith("SELECT CASE WHEN typeof(sequence)")
+        if not owner_metadata and not sql.startswith("SELECT typeof(r.record_id)"):
+            return cursor
+        headers = self.headers
+        owner_headers = self.owner_headers
+
+        class Cursor:
+            def fetchone(self):
+                row = cursor.fetchone()
+                owner_headers.append(None if row is None else tuple(row))
+                return row
+
+            def fetchall(self):
+                rows = cursor.fetchall()
+                headers.extend(tuple(row) for row in rows)
+                return rows
+
+        return Cursor()
 
 
 class SignatureCaptureLimitTests(unittest.TestCase):
@@ -176,6 +212,114 @@ class SignatureInputOwnerTests(unittest.TestCase):
         self.ledger._connection.execute("UPDATE records SET content_digest=? WHERE project_id=? AND record_id=?",
                                         ("0" * 64, self.projects[0], self.record["record_id"]))
         self.assert_capture_error("signature_capture_incompatible", self.capture)
+
+    def test_malformed_sequence_never_returns_variable_data_from_preliminary_cursor(self):
+        connection = self.ledger._connection
+        for value in (b"CANARY" * 11_000, "CANARY" * 11_000, 1.5, 0, -1):
+            with self.subTest(kind=type(value).__name__):
+                connection.execute("UPDATE records SET source_sequence=? WHERE project_id=? AND record_id=?",
+                                   (value, self.projects[0], self.record["record_id"]))
+                tap = _CaptureConnectionTap(connection)
+                with mock.patch.object(self.ledger, "_connection", tap), mock.patch.object(
+                        self.ledger, "_attestation_rows_locked", side_effect=AssertionError("body copy")) as copy:
+                    self.assert_capture_error("signature_capture_incompatible", self.capture)
+                copy.assert_not_called()
+                self.assertEqual(1, len(tap.headers))
+                if type(value) is int:
+                    self.assertEqual(value, tap.headers[0][8])
+                else:
+                    self.assertIsNone(tap.headers[0][8])
+
+    def test_invalid_owner_history_refuses_before_fetching_signer_bytes(self):
+        connection = self.ledger._connection
+        for sequence, (line, timestamp) in enumerate((
+                (b"CANARY" * 11_000, 42), ("CANARY-TEXT", 42), (b"", 42),
+                (b"CANARY", "CANARY" * 11_000)), start=2):
+            with self.subTest(sequence=sequence):
+                connection.execute(
+                    "INSERT INTO owner_key_history(sequence,signer_line,reason,recorded_at_ms) "
+                    "VALUES(?,?,'replaced',?)", (sequence, line, timestamp))
+                tap = _CaptureConnectionTap(connection)
+                with mock.patch.object(self.ledger, "_connection", tap), \
+                        mock.patch.object(self.ledger, "_owner_generation_locked") as owner, mock.patch.object(
+                        self.ledger, "_current_signer_bytes") as signer:
+                    self.assert_capture_error("signature_capture_incompatible", self.capture)
+                owner.assert_not_called()
+                signer.assert_not_called()
+                self.assertEqual(1, len(tap.owner_headers))
+                self.assertEqual(5, len(tap.owner_headers[0]))
+                self.assertTrue(all(type(value) is not bytes and (type(value) is not str or len(value) < 16)
+                                    for value in tap.owner_headers[0]))
+        self.assertGreater(66_000, OWNER_SIGNERS_MAX_BYTES)
+
+    def test_maximal_raw_owner_signer_is_captured_without_canonicalization(self):
+        line = b"CANARY".ljust(OWNER_SIGNERS_MAX_BYTES, b"x")
+        self.ledger._connection.execute(
+            "INSERT INTO owner_key_history(sequence,signer_line,reason,recorded_at_ms) VALUES(2,?,'replaced',42)",
+            (line,))
+        self.assertEqual(line, self.capture().owner[1])
+
+    def test_nontext_record_metadata_refuses_before_copy(self):
+        connection = self.ledger._connection
+        original = dict(connection.execute("SELECT * FROM records WHERE project_id=?",
+                                           (self.projects[0],)).fetchone())
+        for sequence, column in enumerate(("record_id", "content_digest", "source"), start=100):
+            with self.subTest(column=column):
+                row = {**original, "record_id": "CANARY-" + column, "source_sequence": sequence, column: b"CANARY"}
+                connection.execute("INSERT INTO records(" + ",".join(row) + ") VALUES(" +
+                                   ",".join("?" for _ in row) + ")", tuple(row.values()))
+                try:
+                    with mock.patch.object(self.ledger, "_attestation_rows_locked") as copy:
+                        self.assert_capture_error("signature_capture_incompatible", self.capture)
+                    copy.assert_not_called()
+                finally:
+                    connection.execute("DELETE FROM records WHERE project_id=? AND record_id=?",
+                                       (self.projects[0], row["record_id"]))
+
+    def test_owner_base_quota_refuses_before_fetching_signer_bytes(self):
+        with mock.patch.object(self.ledger, "_owner_generation_locked") as owner, mock.patch.object(
+                self.ledger, "_current_signer_bytes") as signer:
+            self.assert_capture_error("signature_capture_limit", lambda: self.capture(
+                limits=SignatureCaptureLimits(1, 1)))
+        owner.assert_not_called()
+        signer.assert_not_called()
+
+    def test_exact_maximal_body_is_captured_without_crypto(self):
+        prefix, suffix = b'{"provider":"codex","padding":"', b'"}'
+        body = prefix + b"x" * (MAX_RECORD_BYTES - len(prefix) - len(suffix)) + suffix
+        self.assertEqual(MAX_RECORD_BYTES, len(body))
+        self.ledger._connection.execute(
+            "UPDATE records SET content=?,content_digest=? WHERE project_id=? AND record_id=?",
+            (body, hashlib.sha256(body).hexdigest(), self.projects[0], self.record["record_id"]))
+        with mock.patch.object(OwnerGrantAuthority, "verify_owner_record", side_effect=AssertionError("crypto")):
+            captured = self.capture(limits=SignatureCaptureLimits(1, MAX_SIGNATURE_CAPTURE_BYTES))
+        self.assertEqual(body, captured.rows[0][2])
+
+    def test_other_provider_bytes_are_charged_independently_of_row_limit(self):
+        attest_provider(self.ledger, self.projects[0], self.key, "claude", "b" * 64, issued_at=2)
+        captured = self.capture()
+        other = self.ledger._attestation_rows_locked(self.projects[0], "claude")
+        total = signature_input_size(self.projects[0], "codex", captured.owner, captured.signer, captured.rows + other)
+        self.assertEqual(captured.rows, self.capture(limits=SignatureCaptureLimits(2, total)).rows)
+        with mock.patch.object(self.ledger, "_attestation_rows_locked") as copy:
+            self.assert_capture_error("signature_capture_limit", lambda: self.capture(
+                limits=SignatureCaptureLimits(2, total - 1)))
+        copy.assert_not_called()
+
+    def test_postcopy_underestimate_and_extra_rows_are_rejected(self):
+        row = self.capture().rows[0]
+        bigger = (*row[:4], row[4] + "CANARY", row[5])
+        for rows in ((bigger,), (row, row)):
+            with self.subTest(count=len(rows)), mock.patch.object(
+                    self.ledger, "_attestation_rows_locked", return_value=rows):
+                self.assert_capture_error("signature_capture_incompatible", lambda: self.capture(
+                    limits=SignatureCaptureLimits(1, 65_536)))
+
+    def test_unsafe_database_hardening_refuses_before_owner_access(self):
+        with mock.patch.object(self.state, "harden_database_files", side_effect=RuntimeError("CANARY-PATH")), \
+                mock.patch.object(self.ledger, "_owner_generation_locked") as owner:
+            self.assert_capture_error("signature_capture_unavailable", self.capture)
+        owner.assert_not_called()
 
     def test_missing_or_empty_signer_is_not_recreated_or_implicitly_verified(self):
         path = self.state.allowed_signers_path

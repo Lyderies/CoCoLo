@@ -20,7 +20,7 @@ from .account_api import (
 )
 from .learning_contracts import MAX_RECORD_BYTES, canonical_json
 from .learning_store import (
-    OWNER_SIGNER_LINE, LearningLedger, LedgerError, OwnerSignerNotConfigured, StateError,
+    OWNER_SIGNER_LINE, OWNER_SIGNERS_MAX_BYTES, LearningLedger, LedgerError, OwnerSignerNotConfigured, StateError,
     _owner_key_identity, _signer_fingerprint,
 )
 from .owner_key_contracts import owner_public_key_from_line
@@ -123,6 +123,29 @@ class AccountOwnerViews:
                     raise SignatureCaptureError("signature_capture_unavailable")
                 self._ledger.state.harden_database_files()
                 self._project_locked(project_id)
+                # Validate stored owner metadata before the legacy helper can
+                # fetch its signer BLOB. Non-STRICT integer columns must never
+                # return variable TEXT/BLOB values as preliminary metadata.
+                owner_header = self._ledger._connection.execute(
+                    "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END,"
+                    "typeof(signer_line),length(signer_line),"
+                    "CASE reason WHEN 'enrolled' THEN 'enrolled' WHEN 'replaced' THEN 'replaced' END,"
+                    "CASE WHEN typeof(recorded_at_ms)='integer' THEN recorded_at_ms END "
+                    "FROM owner_key_history ORDER BY sequence DESC LIMIT 1"
+                ).fetchone()
+                minimum = signature_input_size(project_id, provider, None, None, ())
+                if owner_header is not None:
+                    sequence, line_type, line_bytes, reason, timestamp = owner_header
+                    if (
+                        type(sequence) is not int or sequence < 1 or line_type != "blob"
+                        or type(line_bytes) is not int or not 0 < line_bytes <= OWNER_SIGNERS_MAX_BYTES
+                        or reason not in {"enrolled", "replaced"}
+                        or type(timestamp) is not int or timestamp < 0
+                    ):
+                        raise SignatureCaptureError("signature_capture_incompatible")
+                    minimum += 16 + line_bytes + len(reason)
+                if minimum > limits.max_bytes:
+                    raise SignatureCaptureError("signature_capture_limit")
                 try:
                     owner = self._ledger._owner_generation_locked()
                 except LedgerError:
@@ -142,7 +165,8 @@ class AccountOwnerViews:
                     "SELECT typeof(r.record_id),length(CAST(r.record_id AS BLOB)),"
                     "typeof(r.content),length(r.content),"
                     "typeof(r.content_digest),length(CAST(r.content_digest AS BLOB)),"
-                    "typeof(r.source),length(CAST(r.source AS BLOB)),r.source_sequence,"
+                    "typeof(r.source),length(CAST(r.source AS BLOB)),"
+                    "CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,"
                     "typeof(a.signature),length(a.signature) "
                     "FROM records r LEFT JOIN owner_attestations a "
                     "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
