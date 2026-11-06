@@ -738,3 +738,26 @@ deadline expiry, valid request pressure, malformed frames and ownership/clock
 failures. They do not establish a native frontend, connection-admission fairness,
 reserved native-event/terminal lanes, actual provider observation, cleanup or
 full C5/C16. Independent review remains required before installation or activation.
+
+## Detached watchdog process ownership
+
+The bridge retains its exact detached watchdog process handle before waiting for
+startup acknowledgement. Interrupted acknowledgement therefore leaves the handle
+available for finalization. The original isolated command, birth binding, ready
+handshake and absolute deadline remain in force. A failed acknowledgement still
+aborts the child; no child proceeds without the verified backstop.
+
+After child-tree cleanup, finalization waits once for at most five seconds to reap
+the already owned watchdog. It never signals the watchdog at this stage, so an
+unfinished helper retains its independent deadline. A failed wait or unsuccessful
+helper exit fences an otherwise successful run with `watchdog_unavailable`.
+An earlier specific abort remains unchanged, and an interrupt still propagates.
+Active-child bookkeeping and stream closure run before the final helper wait.
+No reaper thread, shared registry, persistence or additional process is introduced.
+
+Two real simple-child fixtures reproduce the prior process-handle warning on
+normal completion and timeout. Separate checks cover acknowledgement interruption,
+bounded reap failures, error precedence and unchanged absolute-deadline arguments.
+These concern the detached watchdog handle; they do not establish the cause of all
+subprocess warnings or change the detached collector's ownership. This preparation
+does not complete native control, provider liveness or release acceptance.

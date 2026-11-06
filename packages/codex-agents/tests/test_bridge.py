@@ -1267,7 +1267,7 @@ class DeadlineArgumentTests(unittest.TestCase):
                 mock.patch.object(bridge.time, "monotonic", side_effect=[100.0, 110.0, 110.0]), \
                 mock.patch.object(bridge.time, "time", side_effect=AssertionError("wall time consulted")), \
                 mock.patch.object(bridge.selectors, "DefaultSelector"), \
-                mock.patch.object(bridge, "_start_watchdog") as start, \
+                mock.patch.object(bridge._WatchdogOwner, "start") as start, \
                 mock.patch.object(bridge, "_stop_child") as stop:
             outcome = bridge.run_child(
                 ["fixture-client"], environment={}, cwd=Path.cwd(), deadline_seconds=5,

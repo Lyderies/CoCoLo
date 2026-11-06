@@ -193,6 +193,7 @@ WORKSPACE_PARENT: str | None = None
 # `dispatch`.
 SCRATCH_CONTAINER = BRIDGE_SCRATCH_CONTAINER
 WATCHDOG_GRACE_SECONDS = 2
+WATCHDOG_REAP_SECONDS = 5
 # The verifier of a write result gets the bridge-owned envelope here, at the top
 # of its read-only export. The name is not a repository path: no assignment may
 # name it, a write child may never create it, and the bridge creates it after
@@ -574,40 +575,59 @@ _ACTIVE_CHILDREN: dict[int, tuple[Any, ProcessTree]] = {}
 WATCHDOG_SCRIPT = Path(__file__).resolve().with_name("process_tree.py")
 
 
-def _start_watchdog(root: int, birth: str, deadline_monotonic: float) -> None:
-    """Start the watchdog and wait until it has verified the child.
+class _WatchdogOwner:
+    """Retain the exact detached helper through startup and child cleanup.
 
-    The child stays unreaped meanwhile, so its pid cannot pass to another
-    process. Without the acknowledgement the run is aborted: no child runs on
-    without a verified watchdog.
+    Allocate before launch, so interrupted acknowledgement still leaves the
+    helper available for a bounded reap after the child's cleanup. Finalization
+    never signals the helper or disables its independent deadline backstop.
     """
 
-    try:
-        watchdog = subprocess.Popen(
-            [
-                sys.executable, *PYTHON_ISOLATION_FLAGS, str(WATCHDOG_SCRIPT),
-                str(root), birth, repr(deadline_monotonic),
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-            env={"PATH": os.defpath},
-        )
-    except OSError as exc:
-        raise _Abort("watchdog_unavailable") from exc
-    try:
-        ready = await_ready(watchdog.stdout, WATCHDOG_READY_SECONDS)
-    finally:
-        watchdog.stdout.close()
-    if not ready:
-        # Still unreaped, so this pid is the watchdog's.
-        with contextlib.suppress(OSError):
-            watchdog.kill()
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            watchdog.wait(timeout=5)
-        raise _Abort("watchdog_unavailable")
+    __slots__ = ("_process",)
+
+    def __init__(self) -> None:
+        self._process: subprocess.Popen | None = None
+
+    def start(self, root: int, birth: str, deadline_monotonic: float) -> None:
+        # The child remains unreaped through the acknowledgement, so its pid
+        # cannot pass to another process. No child runs without verification.
+        try:
+            self._process = subprocess.Popen(
+                [
+                    sys.executable, *PYTHON_ISOLATION_FLAGS, str(WATCHDOG_SCRIPT),
+                    str(root), birth, repr(deadline_monotonic),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+                env={"PATH": os.defpath},
+            )
+        except OSError as exc:
+            raise _Abort("watchdog_unavailable") from exc
+        watchdog = self._process
+        try:
+            ready = await_ready(watchdog.stdout, WATCHDOG_READY_SECONDS)
+        finally:
+            watchdog.stdout.close()
+        if not ready:
+            # Still unreaped, so this pid is the watchdog's. The enclosing
+            # child cleanup reaps this handle after stopping the child tree.
+            with contextlib.suppress(OSError):
+                watchdog.kill()
+            raise _Abort("watchdog_unavailable")
+
+    def reap(self) -> bool:
+        """Wait once after child cleanup; leave a stuck backstop running."""
+        if self._process is None:
+            return True
+        try:
+            return self._process.wait(timeout=WATCHDOG_REAP_SECONDS) == 0
+        except Exception:
+            # Never replace an earlier abort with a raw cleanup failure or
+            # silence it by killing a helper that may still protect the tree.
+            return False
 
 
 class BridgeInterrupted(SystemExit):
@@ -678,6 +698,7 @@ def run_child(
     outcome: dict[str, Any] = {"returncode": None, "abort": None}
     if not tracking_available():
         return {"returncode": None, "abort": "process_tracking_unavailable"}
+    watchdog = _WatchdogOwner()
     try:
         process = popen(
             arguments,
@@ -698,7 +719,7 @@ def run_child(
     try:
         if not tree.identify(process_table()):
             raise _Abort("process_tracking_unavailable")
-        _start_watchdog(
+        watchdog.start(
             process.pid, tree.root_birth,
             deadline + WATCHDOG_GRACE_SECONDS,
         )
@@ -747,9 +768,15 @@ def run_child(
     except _Abort as abort:
         outcome["abort"] = abort.reason
     finally:
-        _stop_child(process, tree)
-        _ACTIVE_CHILDREN.pop(process.pid, None)
-        process.stdout.close()
+        try:
+            _stop_child(process, tree)
+        finally:
+            _ACTIVE_CHILDREN.pop(process.pid, None)
+            try:
+                process.stdout.close()
+            finally:
+                if not watchdog.reap() and outcome["abort"] is None:
+                    outcome["abort"] = "watchdog_unavailable"
     if outcome["abort"] is None:
         outcome["returncode"] = process.returncode
     return outcome
