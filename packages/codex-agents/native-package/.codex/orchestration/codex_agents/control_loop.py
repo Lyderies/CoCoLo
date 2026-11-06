@@ -229,11 +229,15 @@ class ControlLoop:
                         self._step(connection, events[connection])
             finally:
                 self._monitor.tick()
+                if self._monitor._clock_failed:
+                    self._shutdown()
         except BaseException:
             self._shutdown()
             raise
         finally:
             self._running = False
+        if self._closed:
+            raise ControlError("control_unavailable")
         return len(self._peers)
 
     def _shutdown(self) -> None:

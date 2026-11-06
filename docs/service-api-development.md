@@ -706,9 +706,12 @@ registration and restores the caller's exact timeout; it does not take ownership
 The frontend must still transfer each socket exclusively: a descriptor number or
 its uniqueness in this selector does not prove native identity or exclusive access.
 
-Clock sampling shares the monitor's failure latch. Failure or interruption closes
-connections and preserves unavailable/previous-stop decisions and nonlocal
-interrupts. Process/thread checks precede operations and close. Closing the loop
+Clock sampling shares the monitor's failure latch. A monitor-clock failure or
+interruption closes connections, including when first detected by the final timer
+poll. It preserves unavailable/previous-stop decisions and any propagating nonlocal
+interrupt. The service's publication-clock latch is separate: it can return fixed
+unavailable replies while monitor polling continues. Process/thread checks precede
+operations and close. Closing the loop
 leaves the service and monitor intact. The trusted outer owner must keep polling
 and run its separate actual cleanup executor and watchdog.
 

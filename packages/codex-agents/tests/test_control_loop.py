@@ -432,3 +432,68 @@ class ControlLoopTests(unittest.TestCase):
         self.assertIsNone(server.gettimeout())
         self.assertGreaterEqual(server.fileno(), 0)
         self.assertFalse(self.loop._running)
+
+    def test_idle_cycle_clock_failures_at_each_sample_close_peers_and_preserve_interrupts(self):
+        for position in range(1, 6):
+            for failure in (ValueError, KeyboardInterrupt):
+                with self.subTest(position=position, failure=failure.__name__):
+                    clock = FakeClock()
+                    monitor = ProjectMonitor(scope(), limits(), max_tracked_attempts=4, clock_ns=clock)
+                    monitor.register(binding(), hard_deadline_ns=100 * SECOND)
+                    service = ControlService(monitor, authorizer=self.authorize, clock_ns=clock)
+                    self.addCleanup(service.close)
+                    loop = ControlLoop(monitor, service, self.limits)
+                    self.addCleanup(loop.close)
+                    server, _ = self.pair(loop=loop)
+                    with mock.patch.object(monitor, "_clock", side_effect=[0] * (position - 1) + [failure()]):
+                        expected = KeyboardInterrupt if failure is KeyboardInterrupt else ControlError
+                        with self.assertRaises(expected) as raised:
+                            loop.run_once()
+                    if failure is ValueError:
+                        self.assertEqual("control_unavailable", raised.exception.reason_code)
+                    self.assertEqual(-1, server.fileno())
+                    self.assertTrue(loop._closed)
+
+    def test_final_poll_ordinary_failure_does_not_replace_an_earlier_interrupt(self):
+        server, client = self.pair()
+        self.send(client)
+        first = KeyboardInterrupt("FIRST-INTERRUPT")
+        with mock.patch.object(self.service, "handle", side_effect=first), mock.patch.object(
+            self.monitor, "_clock", side_effect=[0] * 5 + [ValueError("FINAL-POLL")]
+        ):
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                self.loop.run_once()
+        self.assertIs(first, raised.exception)
+        self.assertEqual(-1, server.fileno())
+        self.assertTrue(self.monitor._clock_failed)
+
+    def test_final_poll_failure_preserves_an_earlier_stop(self):
+        prior = self.monitor.cancel(binding())
+        self.monitor.register(binding(2), hard_deadline_ns=100 * SECOND)
+        server, _ = self.pair()
+        original = self.monitor.tick
+        calls = 0
+        def tick():
+            nonlocal calls
+            calls += 1
+            if calls >= 3:
+                self.clock.value = ValueError("FINAL-POLL")
+            return original()
+        with mock.patch.object(self.monitor, "tick", side_effect=tick):
+            with self.assertRaisesRegex(ControlError, "control_unavailable"):
+                self.loop.run_once()
+        self.assertEqual(-1, server.fileno())
+        self.assertEqual(prior, self.monitor.status(binding()))
+        self.assertEqual("monitor_unavailable", self.monitor._attempts[(binding(2).run_handle, 1)].stop_reason)
+
+    def test_service_publication_clock_failure_keeps_monitor_timers_running(self):
+        _, client = self.pair()
+        self.send(client)
+        with mock.patch.object(self.service, "_clock", side_effect=ValueError("PUBLICATION-CLOCK")):
+            with self.assertRaisesRegex(ControlError, "control_unavailable"):
+                self.receive(client)
+        self.assertFalse(self.loop._closed)
+        self.assertFalse(self.monitor._clock_failed)
+        self.clock.at(18)
+        self.loop.run_once()
+        self.assertEqual("startup_silence", self.monitor._attempts[(binding().run_handle, 1)].stop_reason)
