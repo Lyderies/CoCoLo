@@ -745,7 +745,8 @@ The bridge retains its exact detached watchdog process handle before waiting for
 startup acknowledgement. Interrupted acknowledgement therefore leaves the handle
 available for finalization. The original isolated command, birth binding, ready
 handshake and absolute deadline remain in force. A failed acknowledgement still
-aborts the child; no child proceeds without the verified backstop.
+aborts the child. The child process already exists during this handshake; the
+bridge processes no child output before the backstop acknowledges.
 
 After child-tree cleanup, finalization waits once for at most five seconds to reap
 the already owned watchdog. It never signals the watchdog at this stage, so an

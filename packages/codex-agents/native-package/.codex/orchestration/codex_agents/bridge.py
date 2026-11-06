@@ -590,7 +590,7 @@ class _WatchdogOwner:
 
     def start(self, root: int, birth: str, deadline_monotonic: float) -> None:
         # The child remains unreaped through the acknowledgement, so its pid
-        # cannot pass to another process. No child runs without verification.
+        # cannot pass to another process. Output processing waits for verification.
         try:
             self._process = subprocess.Popen(
                 [
