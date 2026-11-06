@@ -1,4 +1,4 @@
-"""Closed history-owner handler with no enabled native endpoint.
+"""Closed history/result-read owner with no enabled native endpoint.
 
 This runs on the persistence owner's thread, outside local control/timer processes.
 The default authorization adapter denies without opening a store. A real adapter
@@ -22,6 +22,8 @@ from .history_api import (
 from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGEST, _PROJECT, matches
 from .learning_contracts import canonical_json, parse_bounded_json
 from .project_history import ProjectHistory
+from .result_read_api import RESULT_READ_OPERATION, ResultReadRequest
+from .result_read_service import ResultReadAuthorization, ResultReadService
 from .service_transport import MAX_FRAME_BYTES
 
 
@@ -59,16 +61,20 @@ class HistoryService:
     Neither the trusted factory nor authorizer can be selected in JSON. Default
     denial is deliberately not a usable native-enrollment implementation. A real
     front end must finish its bounded auth/business checks before writer work.
+    Metadata and result reads share exactly one connection, with independent
+    authorization adapters; live control/timers never belong on this owner loop.
     """
 
     def __init__(
         self, project_id: str, runtime_digest: str, open_history: Callable[[], ProjectHistory], *,
         authorizer: Callable[[HistoryRequest, object], HistoryAuthorization | None] | None = None,
+        result_authorizer: Callable[[ResultReadRequest, object], ResultReadAuthorization | None] | None = None,
         clock_ms: Callable[[], int] | None = None,
     ) -> None:
         if (
             not matches(project_id, _PROJECT) or not matches(runtime_digest, _DIGEST)
             or not callable(open_history) or (authorizer is not None and not callable(authorizer))
+            or (result_authorizer is not None and not callable(result_authorizer))
             or (clock_ms is not None and not callable(clock_ms))
         ):
             raise HistoryError("history_invalid_input")
@@ -78,6 +84,39 @@ class HistoryService:
         self._thread = threading.current_thread()
         self._store: ProjectHistory | None = None
         self._closed = False
+        self._reader = ResultReadService(project_id, runtime_digest, self._history,
+                                         authorizer=result_authorizer, close_history=False)
+
+    def _history(self) -> ProjectHistory:
+        """Lend the same connection after each handler's own authorization.
+
+        No normal client receives this callable or the connection. Both handlers
+        run on the persistence owner's thread; live control remains elsewhere.
+        """
+        if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
+            raise HistoryError("history_wrong_owner")
+        if self._store is None:
+            store = self._open()
+            if not isinstance(store, ProjectHistory):
+                raise HistoryError("history_service_unavailable")
+            store._require_owner()
+            if store.project_id != self._project:
+                store.close()
+                raise HistoryError("history_service_unavailable")
+            self._store = store
+        return self._store
+
+    @staticmethod
+    def _result_read(raw: bytes) -> bool:
+        # This bounded peek selects a codec only. Each handler still validates
+        # its entire closed frame and independently authorizes the operation.
+        if type(raw) is not bytes or len(raw) + 1 > MAX_FRAME_BYTES:
+            return False
+        try:
+            value = parse_bounded_json(raw, max_bytes=MAX_FRAME_BYTES - 1)
+            return type(value) is dict and value.get("operation") == RESULT_READ_OPERATION
+        except Exception:
+            return False
 
     def _reply(self, identity: str | None, *, request_digest: str | None = None,
                project_id: str | None = None, runtime_digest: str | None = None,
@@ -98,6 +137,8 @@ class HistoryService:
         try:
             if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
                 raise HistoryError("history_wrong_owner")
+            if self._result_read(raw):
+                return self._reader.handle(raw, transport_context)
             request = decode_history_request(raw)
             identity = request.request_id
             digest = history_request_digest(request)
@@ -118,13 +159,7 @@ class HistoryService:
                 or (authorization.source != "host" and request.operation != "history.record_event")
             ):
                 raise HistoryError("history_not_authorized")
-            if self._store is None:
-                store = self._open()
-                if not isinstance(store, ProjectHistory) or store.project_id != self._project:
-                    if isinstance(store, ProjectHistory):
-                        store.close()
-                    raise HistoryError("history_service_unavailable")
-                self._store = store
+            self._history()
             result = self._execute(request, authorization)
             reply = self._reply(identity, request_digest=digest, project_id=project, runtime_digest=runtime, result=result)
             if request.operation == "history.pending_terminals":
@@ -179,6 +214,11 @@ class HistoryService:
     def close(self) -> None:
         if self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise HistoryError("history_wrong_owner")
+        if self._closed:
+            return
         self._closed = True
-        if self._store is not None:
-            self._store.close()
+        try:
+            self._reader.close()
+        finally:
+            if self._store is not None:
+                self._store.close()

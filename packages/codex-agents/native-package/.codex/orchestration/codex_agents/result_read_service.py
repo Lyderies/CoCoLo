@@ -43,14 +43,19 @@ class ResultReadService:
     def __init__(
         self, project_id: str, runtime_digest: str, open_history: Callable[[], ProjectHistory], *,
         authorizer: Callable[[ResultReadRequest, object], ResultReadAuthorization | None] | None = None,
+        close_history: bool = True,
     ) -> None:
         if (
             not matches(project_id, _PROJECT) or not matches(runtime_digest, _DIGEST)
             or not callable(open_history) or (authorizer is not None and not callable(authorizer))
+            or type(close_history) is not bool
         ):
             raise HistoryError("history_invalid_input")
         self._project, self._runtime, self._open = project_id, runtime_digest, open_history
         self._authorizer = authorizer
+        # A composite project owner may lend its one connection. Lifetime policy
+        # is supplied only by trusted construction, never by request JSON.
+        self._close_history = close_history
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._store: ProjectHistory | None = None
         self._closed = False
@@ -93,7 +98,7 @@ class ResultReadService:
             if self._store is None:
                 store = self._open()
                 if not isinstance(store, ProjectHistory) or store.project_id != self._project:
-                    if isinstance(store, ProjectHistory):
+                    if isinstance(store, ProjectHistory) and self._close_history:
                         store.close()
                     raise HistoryError("history_service_unavailable")
                 self._store = store
@@ -139,5 +144,5 @@ class ResultReadService:
         if self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise HistoryError("history_wrong_owner")
         self._closed = True
-        if self._store is not None:
+        if self._store is not None and self._close_history:
             self._store.close()

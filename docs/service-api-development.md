@@ -589,3 +589,35 @@ custody, original assignment and captured host facts. The protected completion
 outbox/intake design, native authority, control/terminal queue isolation and legacy
 normal-client migration remain required. Earlier failed/exhausted review gates
 remain unchanged until a genuine combined integration review can cover the work.
+
+## One owner for metadata and retained-result reads
+
+`HistoryService` now composes its eight existing metadata operations with the
+separately closed `result.read_chunk` handler. Both borrow the same lazy project
+connection; one successful authorized request opens it once. Previously composing
+two standalone handlers against the same project directory made the second one
+fail with `history_writer_busy`. Both request orders reproduce that failure
+before the correction and succeed through the composed owner afterward.
+
+The metadata and result-read authorizers remain independent and default to denial.
+Granting metadata operations does not grant result reading, and a read context
+cannot append records or gain metadata authority from sharing a connection. The
+bounded operation peek selects a codec only; the chosen handler validates and
+authorizes its complete request before accessing the common backend. Result reads
+retain their 16 KiB frame and post-I/O authorization/retention checks; the metadata
+operation set and limits are unchanged. Unknown fields cannot select lifetime,
+factory, connection or authorization policy.
+
+The result reader's borrowed-connection lifetime is trusted constructor state.
+Closing that facade leaves the owner open; closing the composed owner closes its
+common connection once. Process/thread guards run before routing or backend work.
+Disposable shared-socket tests mix metadata reads/appends and exact result reads,
+lose a body reply, retry explicitly and restart the owner, asserting one factory
+open per owner and unchanged original metadata. Separate tests exercise default
+denial, context separation, factory faults and closing a misbound backend.
+
+These fixtures use synthetic transport context, not native caller proof. There
+is still no enabled native listener or publication wire operation. File I/O can
+stall this persistence loop; independent live-control routing, reserved queues,
+durable publication intake and normal-client migration remain required. Local
+timers/cancellation must not be placed on this owner loop or await its work.
