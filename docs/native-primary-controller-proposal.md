@@ -188,6 +188,27 @@ or an exec counter. Continuous native generation, queued frames, event delivery
 races and loss of monitoring still need a fail-closed protocol. A birth-time check
 alone cannot satisfy the exec-revocation requirement.
 
+A further owned no-exec/self-exec fixture measures the audit-token generation
+through `TASK_AUDIT_TOKEN` and `audit_token_to_pidversion`. PID and process birth
+stay unchanged in both cases; the audit generation stays stable without exec and
+changes after direct self-exec. Fresh parent `task_name_for_pid` queries match
+the child's generation, while the held pre-exec task-name port no longer permits
+an audit read after exec. This agrees with the identity-version update in the
+[pinned Apple XNU exec source](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_exec.c#L7096).
+That source pin does not attest the installed kernel; the runtime observations
+are separate private evidence.
+
+Additional metadata-only probes obtain current audit generations for the actual
+owned reviewed Codex and Claude clients after matched initialization. The native
+startup guards are unchanged. Codex also creates one ephemeral read-only root;
+Claude receives no user message. Neither starts model or business work. The
+Codex logger reaches its existing output cap during teardown, and the bounded
+birth-verified cleanup reaps the native process; this is not a clean-exit or
+cadence measurement. No raw tokens or generation values are retained. These
+queries demonstrate native API availability, not code/script identity, actual
+root/child authority, per-message attribution, continuous freshness or atomic
+query/commit revocation. The controller, custody and enrollment gates remain.
+
 No production profile, owner signing purpose, primary workflow or service authority
 is selected by these experiments. The fixed controller, independent native identity,
 descriptor custody, actual child attribution and both primary-host paths remain
