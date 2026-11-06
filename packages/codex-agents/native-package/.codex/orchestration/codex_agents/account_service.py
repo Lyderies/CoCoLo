@@ -129,7 +129,8 @@ class AccountOwnerViews:
                     work_limits, lambda: self._capture_signature_inputs_locked(project_id, provider, limits),
                 )
         except (AccountError, SignatureCaptureError):
-            raise
+            if getattr(self._ledger._connection, "_sql_unusable", False) is not True:
+                raise
         except SQLReadError as error:
             if error.reason_code == "sql_read_invalid_limits":
                 reason = "signature_capture_invalid_request"

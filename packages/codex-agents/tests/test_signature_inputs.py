@@ -388,6 +388,25 @@ class SignatureInputOwnerTests(unittest.TestCase):
         self.assertEqual(5000, connection.execute("PRAGMA busy_timeout").fetchone()[0])
         self.assertEqual(1, len(self.capture().rows))
 
+    def test_capture_poisoning_overrides_a_domain_field_quota_refusal(self):
+        connection = self.ledger._connection
+        original = connection._pragma_integer
+        reached = []
+
+        def pragma(name, value=None):
+            if name == "busy_timeout" and value == 5000:
+                reached.append(name)
+                raise sqlite3.OperationalError("CANARY-RESTORE")
+            return original(name, value)
+
+        with mock.patch.object(connection, "_pragma_integer", side_effect=pragma):
+            self.assert_capture_error("signature_capture_unavailable", lambda: self.capture(
+                limits=SignatureCaptureLimits(1, 1)))
+        self.assertEqual(["busy_timeout"], reached)
+        self.assertTrue(connection._sql_unusable)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            sqlite3.Connection.execute(connection, "SELECT 1")
+
     def test_capture_reports_unavailable_when_deadline_and_actual_restore_step_fail(self):
         connection = self.ledger._connection
         original_harden, original_pragma = self.state.harden_database_files, connection._pragma_integer

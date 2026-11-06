@@ -830,6 +830,9 @@ failure makes the exact connection unusable and closes it. Backend failures are
 converted outside exception handlers so fixed errors retain no raw cause/context.
 An existing `SQLReadError` contributes only its validated reason to a fresh fixed
 error. Restoration failure overrides an earlier fixed refusal with unavailable.
+Capture also reports unavailable if a domain refusal coincides with a poisoned
+connection. A read function that leaves a transaction open fails closed and its
+connection is closed; a later operation cannot inherit that transaction.
 The whole progress callback catches interruption faults and propagates a stored
 `KeyboardInterrupt` after restoring the owner, rather than letting SQLite swallow
 that callback exception.

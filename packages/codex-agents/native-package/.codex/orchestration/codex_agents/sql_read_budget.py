@@ -249,6 +249,8 @@ class SQLReadConnection(sqlite3.Connection):
         for cursor in scope.cursors:
             cursor.close()
         super().set_progress_handler(None, 0)
+        if self.in_transaction:
+            raise ValueError("read operation left a transaction open")
         query_only, busy_timeout, value_limit = prior
         self.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, value_limit)
         if self.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) != value_limit:

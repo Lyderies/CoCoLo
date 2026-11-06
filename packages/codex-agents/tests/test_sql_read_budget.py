@@ -460,6 +460,14 @@ class SQLReadBudgetTests(unittest.TestCase):
         with self.assertRaises(sqlite3.ProgrammingError):
             sqlite3.Connection.execute(self.connection, "SELECT 1")
 
+    def test_fixed_read_cannot_leave_a_transaction_open(self):
+        self.assert_fixed("sql_read_unavailable", lambda: self.connection.read_call(
+            self.limits, lambda: self.connection.execute("BEGIN")))
+        self.assertTrue(self.connection._sql_unusable)
+        self.assert_fixed("sql_read_unavailable", lambda: self.connection.execute("SELECT 1"))
+        with self.assertRaises(sqlite3.ProgrammingError):
+            sqlite3.Connection.execute(self.connection, "SELECT 1")
+
     def test_interrupt_at_callback_counter_increment_propagates_after_restore(self):
         class InterruptAtCount:
             def __add__(self, other):
