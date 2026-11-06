@@ -63,7 +63,8 @@ class LivenessLimits:
         """Accept only a valid, no-wider set; the hard deadline is not a field."""
         if type(requested) is not LivenessLimits:
             raise LivenessClockError("liveness_invalid_limits")
-        requested.__post_init__()
+        requested = LivenessLimits(requested.startup_ns, requested.quiet_ns,
+                                   requested.stale_ns, requested.silence_ns)
         if any(getattr(requested, field) > getattr(self, field) for field in
                ("startup_ns", "quiet_ns", "stale_ns", "silence_ns")):
             raise LivenessClockError("liveness_invalid_limits")
@@ -109,7 +110,9 @@ class LivenessClock:
     ) -> None:
         if type(limits) is not LivenessLimits:
             raise LivenessClockError("liveness_invalid_limits")
-        limits.__post_init__()
+        # Retain validated values, not a caller's policy object. Even frozen
+        # dataclasses can be changed through Python's object mutation escape.
+        limits = LivenessLimits(limits.startup_ns, limits.quiet_ns, limits.stale_ns, limits.silence_ns)
         if not _integer(hard_deadline_ns):
             raise LivenessClockError("liveness_invalid_deadline")
         if not callable(clock_ns):
@@ -136,6 +139,9 @@ class LivenessClock:
         self._owner()
         if self._clock_failed:
             raise LivenessClockError("liveness_invalid_clock")
+        # Preserve nonlocal interrupts without allowing a later healthy sample.
+        # Also refuse a clock callback that re-enters this clock.
+        self._clock_failed = True
         try:
             value = self._clock()
         except Exception:
@@ -145,9 +151,9 @@ class LivenessClock:
         if invalid:
             # Recovery cannot restore an active label after losing the clock.
             # The owner reports monitoring unavailable and retains the watchdog.
-            self._clock_failed = True
             raise LivenessClockError("liveness_invalid_clock")
         self._last_sample = value
+        self._clock_failed = False
         return value
 
     def _evaluate(self) -> int:

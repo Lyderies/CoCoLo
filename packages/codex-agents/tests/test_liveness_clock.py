@@ -217,6 +217,42 @@ class LivenessClockTests(unittest.TestCase):
                 LivenessClock(LivenessLimits(18, 2, 5, 10), hard_deadline_ns=100, clock_ns=FakeClock(value))
             self.assertIsNone(caught.exception.__context__)
 
+    def test_nonlocal_clock_interrupts_latch_failure_without_swallowing_interrupt(self):
+        for failure in (KeyboardInterrupt("CANARY"), SystemExit("CANARY"), GeneratorExit("CANARY")):
+            with self.subTest(kind=type(failure).__name__):
+                samples = iter((0, 0, failure, SECOND))
+
+                def sample():
+                    value = next(samples)
+                    if isinstance(value, BaseException):
+                        raise value
+                    return value
+
+                timer = LivenessClock(LivenessLimits(18 * SECOND, 2 * SECOND, 5 * SECOND, 10 * SECOND),
+                                      hard_deadline_ns=100 * SECOND, clock_ns=sample)
+                timer.startup()
+                with self.assertRaises(type(failure)):
+                    timer.poll()
+                with self.assertRaisesRegex(LivenessClockError, "^liveness_invalid_clock$") as caught:
+                    timer.poll()
+                self.assertIsNone(caught.exception.__context__)
+                self.assertNotIn("CANARY", str(caught.exception))
+
+    def test_caller_policy_object_changes_cannot_extend_an_existing_clock(self):
+        for startup in (False, True):
+            with self.subTest(startup=startup):
+                limits = LivenessLimits(18 * SECOND, 2 * SECOND, 5 * SECOND, 10 * SECOND)
+                source, timer = self.make_clock(limits=limits, deadline=1000)
+                if startup:
+                    timer.startup()
+                # A frozen dataclass is not an immutable storage boundary. This
+                # caller-owned object must no longer control an existing attempt.
+                for field, value in (("startup_ns", 180 * SECOND), ("quiet_ns", 20 * SECOND),
+                                     ("stale_ns", 50 * SECOND), ("silence_ns", 100 * SECOND)):
+                    object.__setattr__(limits, field, value)
+                source.at(10 if startup else 18)
+                self.assertEqual("work_silence" if startup else "startup_silence", timer.poll().stop_reason)
+
     def test_limits_are_strict_ordered_frozen_and_can_only_narrow(self):
         limits = LivenessLimits(18, 2, 5, 10)
         fields = ("startup_ns", "quiet_ns", "stale_ns", "silence_ns")
@@ -236,6 +272,16 @@ class LivenessClockTests(unittest.TestCase):
             limits.silence_ns = 100
         with self.assertRaisesRegex(LivenessClockError, "liveness_invalid_limits"):
             limits.narrowed({"silence_ns": 1})
+
+    def test_narrowing_captures_values_before_caller_changes_requested_policy(self):
+        installed = LivenessLimits(18 * SECOND, 2 * SECOND, 5 * SECOND, 10 * SECOND)
+        requested = LivenessLimits(17 * SECOND, SECOND, 4 * SECOND, 9 * SECOND)
+        effective = installed.narrowed(requested)
+        object.__setattr__(requested, "silence_ns", 100 * SECOND)
+        source, timer = self.make_clock(limits=effective)
+        timer.startup()
+        source.at(9)
+        self.assertEqual("work_silence", timer.poll().stop_reason)
 
     def test_invalid_constructor_inputs_have_fixed_reasons(self):
         for deadline in (True, -1, None, 1.0, MAX_CLOCK_NS + 1, "CANARY"):

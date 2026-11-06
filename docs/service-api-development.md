@@ -89,7 +89,9 @@ integration, measurement and recovery checks remain required; queued memory is l
 event loop without database, RPC or filesystem work. The owner supplies explicit
 installed startup/quiet/stale/silence durations and the original absolute deadline;
 there are no enabled provisional defaults. Assignment narrowing cannot widen any
-duration or change that deadline. Native event validation and run attribution must
+duration or change that deadline. Narrowing and clock construction each capture a
+validated copy, so later changes to a caller's policy object cannot extend a run.
+Native event validation and run attribution must
 finish before the owner invokes its startup or qualifying-activity callback.
 
 The first startup starts the work-silence clock; repeats and polling never refresh
@@ -102,8 +104,9 @@ without claiming a cancelled result or confirmed process cleanup.
 Snapshots contain fixed categories, bounded counts and millisecond ages/remainders.
 They freeze at the stop/terminal observation; publication freshness and later cleanup
 need separate reporting. No provider timestamp or event content enters this core.
-Clock failure/regression latches a fixed error so later reads cannot report healthy
-activity. The owner must report monitoring unavailable and retain the detached hard
+Clock failure/regression latches unavailability so later reads cannot report healthy
+activity. Ordinary clock exceptions yield a fixed code; nonlocal interrupts propagate
+with the failure latch set. The owner must report monitoring unavailable and retain the detached hard
 watchdog. Process/thread ownership prevents foreign callbacks from sampling or
 mutating the clock; it is not external caller authentication.
 
