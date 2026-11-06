@@ -4,6 +4,10 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; the source codec does not enable a service.
 
+The [native caller enrollment proposal](native-caller-enrollment-design.md) maps the
+retained entry checks and the bootstrap, actual-primary and descriptor-custody proofs
+needed before privileged integration. It does not enable the authorization adapters.
+
 The first increment, `codex_agents.service_protocol`, is a pure contract for `project.status`
 and `project.cancel`. It accepts one UTF-8 JSON message of at most 65,536 bytes. The envelope
 and target have closed field sets. Duplicate keys, unknown operations, arbitrary method/SQL
