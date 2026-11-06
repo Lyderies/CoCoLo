@@ -257,6 +257,27 @@ class DispatchPreflightTests(unittest.TestCase):
         with mock.patch.object(bridge, "_git", side_effect=listing_as("docs/CLAU\u200bDE.md")):
             self.assertEqual(0, bridge.committed_export_manifest(self.root, ["docs"])["file_count"])
 
+    def test_cli_refuses_explicit_limits_before_collector_maintenance(self) -> None:
+        self.assigned["execution_limits"] = {"max_tool_calls": 0}
+        for name, data in (("task", self.task), ("route", self.route),
+                           ("assignment", self.assigned), ("grant", self.grant)):
+            (self.base / f"{name}.json").write_text(json.dumps(data))
+        for command, binding in (("dispatch", ["--run-handle", "not-opened"]),
+                                 ("learning-open-host-run", ["--orchestration-handle", "not-opened"])):
+            argv = ["cli.py", command, "--project-root", str(self.root),
+                    "--task", str(self.base / "task.json"),
+                    "--route", str(self.base / "route.json"),
+                    "--assignment", str(self.base / "assignment.json"),
+                    "--parent-grant", str(self.base / "grant.json"), *binding]
+            output = io.StringIO()
+            with self.subTest(command=command), mock.patch.object(sys, "argv", argv), \
+                    contextlib.redirect_stdout(output), \
+                    mock.patch.object(cli, "_learning_ledger",
+                                      side_effect=AssertionError("collector maintenance contacted")):
+                self.assertEqual(2, cli.main())
+            self.assertEqual("assignment.execution_limits.max_tool_calls",
+                             json.loads(output.getvalue())["field"])
+
     def test_cli_preflight_does_not_create_learning_state(self) -> None:
         for name, data in (("task", self.task), ("assignment", self.assigned), ("grant", self.grant)):
             (self.base / f"{name}.json").write_text(json.dumps(data))

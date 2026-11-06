@@ -480,9 +480,17 @@ def validate_assignment_execution_limits(
     if "max_tool_calls" in limits:
         raise ContractError("exact tool-call limits are unavailable for this route",
                             field="assignment.execution_limits.max_tool_calls")
+    if not isinstance(route, dict):
+        raise ContractError("route must be an object", field="route")
     if route.get("provider") != "claude" or route.get("dispatch") != "bridge":
         raise ContractError("model-turn limits are unavailable for this route",
                             field="assignment.execution_limits.max_model_turns")
+    for label, item in (("route", route), ("assignment", assignment)):
+        bounds = item.get("bounds")
+        if (not isinstance(bounds, dict) or type(bounds.get("max_tool_calls")) is not int
+                or bounds["max_tool_calls"] < 0):
+            raise ContractError("legacy ceiling must be a nonnegative integer",
+                                field=f"{label}.bounds.max_tool_calls")
     ceiling = max(1, min(route["bounds"]["max_tool_calls"],
                          assignment["bounds"]["max_tool_calls"]))
     if limits["max_model_turns"] > ceiling:

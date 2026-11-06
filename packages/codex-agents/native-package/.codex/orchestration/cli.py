@@ -1824,6 +1824,12 @@ def main() -> int:
         elif args.command == "learning-open-host-run":
             task = _json_input(args.task)
             supplied_route = _json_input(args.route)
+            assignment = _json_input(args.assignment)
+            parent_grant = _json_input(args.parent_grant)
+            # This only rejects malformed/unsupported requests. The supplied
+            # route remains untrusted until the ledger resolves and compares it.
+            validate_assignment(assignment, task=task, route=supplied_route,
+                                parent_grant=parent_grant)
             ledger, project_id = _learning_ledger(args)
             try:
                 host = _require_host_owner(
@@ -1839,10 +1845,10 @@ def main() -> int:
                 if supplied_route != route:
                     raise ContractError("supplied route does not match the installed route")
                 assignment = validate_assignment(
-                    _json_input(args.assignment),
+                    assignment,
                     task=task,
                     route=route,
-                    parent_grant=_json_input(args.parent_grant),
+                    parent_grant=parent_grant,
                 )
                 verification_input = ledger.verification_worker_result(
                     project_id, task, orchestration_handle=args.orchestration_handle
@@ -1897,6 +1903,9 @@ def main() -> int:
             route = _json_input(args.route)
             if not isinstance(route, dict):
                 raise ContractError("route must be an object")
+            assignment = _json_input(args.assignment)
+            parent_grant = _json_input(args.parent_grant)
+            validate_assignment(assignment, task=task, route=route, parent_grant=parent_grant)
             ledger, project_id = _learning_ledger(args)
             try:
                 _require_host_owner(
@@ -1914,8 +1923,8 @@ def main() -> int:
                             bundle_root=BUNDLE_ROOT,
                             task=task,
                             route=route,
-                            assignment=_json_input(args.assignment),
-                            parent_grant=_json_input(args.parent_grant),
+                            assignment=assignment,
+                            parent_grant=parent_grant,
                             run_handle=args.run_handle,
                             expected_export_commit=args.expected_export_commit,
                             result_schema=(

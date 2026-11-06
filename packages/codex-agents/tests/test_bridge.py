@@ -1181,6 +1181,11 @@ class ReviewHardeningTests(BridgeTestCase):
         route = self.bridged_route("claude")
         assigned = self.assignment_for(route, execution_limits={"max_model_turns": 3})
         handle = self.open(route, assigned)
+        assigned["execution_limits"] = {"max_tool_calls": 0}
+        with mock.patch.object(bridge, "private_workspace", side_effect=AssertionError("export created")), \
+                self.assertRaisesRegex(ContractError, "exact tool-call limits"):
+            self.dispatch(route, assigned, handle)
+        assigned["execution_limits"] = {"max_model_turns": 3}
         assigned["execution_limits"]["max_model_turns"] = 1
         with mock.patch.object(bridge, "private_workspace", side_effect=AssertionError("export created")), \
                 self.assertRaises(LedgerError):
@@ -1209,6 +1214,25 @@ class ReviewHardeningTests(BridgeTestCase):
                                side_effect=AssertionError("admission prepared")), \
                 self.assertRaisesRegex(ContractError, "exact tool-call limits"):
             self.open(route, assigned)
+
+    def test_explicit_turn_limit_keeps_fenced_result_and_safe_diagnostics(self) -> None:
+        self.claude_run()
+        route = self.bridged_route("claude")
+        assigned = self.assignment_for(route, execution_limits={"max_model_turns": 1})
+        handle = self.open(route, assigned)
+        self.frames("claude", [init_frame(), {
+            **result_frame("PRIVATE-LIMIT-ERROR-CONTENT"),
+            "subtype": "error_max_turns", "is_error": True,
+        }])
+        output = self.dispatch(route, assigned, handle)
+        report = output["bridge_report"]
+        self.assertEqual("child_reported_error", report["outcome"])
+        self.assertEqual("failed", report["terminal_state"])
+        self.assertEqual("failed", output["result"]["status"])
+        self.assertEqual("error_max_turns", report["client_diagnostics"]["result_subtype"])
+        self.assertEqual(1, report["effective_bounds"]["model_turn_limit"])
+        self.assertIsNone(report["effective_bounds"]["exact_tool_call_limit"])
+        self.assertNotIn("PRIVATE-LIMIT-ERROR-CONTENT", json.dumps(output))
 
     def test_line_cap_applies_to_complete_lines(self) -> None:
         def line(size: int) -> str:
