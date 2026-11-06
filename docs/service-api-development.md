@@ -83,6 +83,35 @@ routine work. This helper does not start a service, choose installed capacity de
 in-flight workers, coalesce updates or make a blocked writer safe for local timers. Those
 integration, measurement and recovery checks remain required; queued memory is lost on a crash.
 
+## Local timer foundation
+
+`liveness_clock.LivenessClock` makes monotonic decisions for one trusted supervisor
+event loop without database, RPC or filesystem work. The owner supplies explicit
+installed startup/quiet/stale/silence durations and the original absolute deadline;
+there are no enabled provisional defaults. Assignment narrowing cannot widen any
+duration or change that deadline. Native event validation and run attribution must
+finish before the owner invokes its startup or qualifying-activity callback.
+
+The first startup starts the work-silence clock; repeats and polling never refresh
+it. Activity strictly before cutoff can recover quiet/stale state. Each callback
+first evaluates the earliest elapsed timer, with the hard deadline winning a tie.
+Before a timer elapses, the first serialized cancellation or authoritative terminal
+wins. No late event can replace the decision. Cancellation reports a stop request,
+without claiming a cancelled result or confirmed process cleanup.
+
+Snapshots contain fixed categories, bounded counts and millisecond ages/remainders.
+They freeze at the stop/terminal observation; publication freshness and later cleanup
+need separate reporting. No provider timestamp or event content enters this core.
+Clock failure/regression latches a fixed error so later reads cannot report healthy
+activity. The owner must report monitoring unavailable and retain the detached hard
+watchdog. Process/thread ownership prevents foreign callbacks from sampling or
+mutating the clock; it is not external caller authentication.
+
+This foundation does not activate a monitor, choose a Codex event allowlist, select
+calibrated thresholds, enforce OS cleanup or implement Claude liveness. Real-client
+cadence, independent status/cancel during dispatch, persistence-stall/flood tests,
+native authority and both Codex-child paths remain required before the Claude phase.
+
 ## Project history persistence owner
 
 `project_history.ProjectHistory` now owns one project's SQLite connection and writer lock in
