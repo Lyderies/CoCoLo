@@ -23,11 +23,13 @@ MAX_TRACKED_ATTEMPTS = 4096
 MONITOR_REASON_CODES = frozenset({
     "monitor_invalid_input", "monitor_wrong_scope", "monitor_attempt_not_found",
     "monitor_binding_conflict", "monitor_capacity_exceeded", "monitor_wrong_owner",
+    "monitor_unavailable",
 })
 _BINDING_FIELDS = tuple(AttemptBinding.__dataclass_fields__)
 _SCOPE_FIELDS = ("project_id", "primary_session_id", "runtime_digest",
                  "supervisor_instance_id", "supervisor_generation")
 _LIMIT_FIELDS = ("startup_ns", "quiet_ns", "stale_ns", "silence_ns")
+_SNAPSHOT_FIELDS = tuple(LivenessSnapshot.__dataclass_fields__)
 
 
 class ProjectMonitorError(RuntimeError):
@@ -73,6 +75,9 @@ class AttemptStatus:
 
     Liveness ages freeze at a stop/terminal decision. Publication freshness must
     be supplied separately by the actual transport/monitor, not inferred here.
+    Known cleanup reports cleaned health with no live liveness snapshot. The
+    first actual terminal still classifies the original bounds after cleanup;
+    neither cleanup nor a null stop reason proves a successful/accepted result.
     """
 
     binding: AttemptBinding
@@ -83,6 +88,8 @@ class AttemptStatus:
 
     @property
     def health(self) -> str:
+        if self.cleanup_confirmed:
+            return "cleaned"
         return "unavailable" if self.liveness is None else self.liveness.health
 
     @property
@@ -96,7 +103,8 @@ class _Attempt:
     deadline: int
     limits: tuple[int, int, int, int]
     clock: LivenessClock
-    monitor_failed: bool = False
+    decision: tuple | None = None
+    stop_reason: str | None = None
     terminal_observed: bool = False
     cleanup_confirmed: bool = False
 
@@ -144,6 +152,9 @@ class ProjectMonitor:
         self._limits = limits
         self._maximum = max_tracked_attempts
         self._clock = clock_ns
+        self._last_clock_sample: int | None = None
+        self._clock_failed = False
+        self._sampling_clock = False
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._attempts: dict[tuple[str, int], _Attempt] = {}
 
@@ -167,21 +178,75 @@ class ProjectMonitor:
             raise ProjectMonitorError("monitor_binding_conflict")
         return entry
 
-    @staticmethod
-    def _observe(entry: _Attempt, operation: str) -> AttemptStatus:
+    def _sample_clock(self) -> int:
+        """One shared failure latch and monotonic order for every attempt.
+
+        Preserve nonlocal interrupts. Their failure latch must cover other
+        attempts too, including registrations made after the failed sample.
+        """
+        self._owner()
+        if self._clock_failed or self._sampling_clock:
+            self._clock_failed = True
+            raise LivenessClockError("liveness_invalid_clock")
+        self._sampling_clock = True
+        try:
+            try:
+                value = self._clock()
+            except Exception:
+                invalid = True
+            else:
+                invalid = (
+                    self._clock_failed or type(value) is not int or not 0 <= value <= MAX_CLOCK_NS
+                    or (self._last_clock_sample is not None and value < self._last_clock_sample)
+                )
+            if invalid:
+                self._clock_failed = True
+                raise LivenessClockError("liveness_invalid_clock")
+            self._last_clock_sample = value
+            return value
+        except BaseException:
+            self._clock_failed = True
+            raise
+        finally:
+            self._sampling_clock = False
+
+    def _observe(
+        self, entry: _Attempt, operation: str, *, final_cleanup_poll: bool = False,
+        final_terminal_poll: bool = False,
+    ) -> AttemptStatus:
+        self._owner()
         snapshot = None
-        if not entry.monitor_failed:
+        if entry.decision is not None:
+            # Cache scalar values, never an outward mutable dataclass reference.
+            snapshot = LivenessSnapshot(**dict(zip(_SNAPSHOT_FIELDS, entry.decision, strict=True)))
+        elif entry.cleanup_confirmed and not (final_cleanup_poll or final_terminal_poll):
+            # No later observation can reactivate a confirmed cleaned tree.
+            pass
+        elif self._clock_failed:
+            entry.stop_reason = entry.stop_reason or "monitor_unavailable"
+        else:
             try:
                 snapshot = getattr(entry.clock, operation)()
             except LivenessClockError as exc:
                 if exc.reason_code != "liveness_invalid_clock":
                     raise
-                entry.monitor_failed = True
-        # Never retain or return a healthy snapshot after clock failure. Cleanup
-        # must still be requested; the detached watchdog remains independent.
+                self._clock_failed = True
+                entry.stop_reason = entry.stop_reason or "monitor_unavailable"
+            except BaseException:
+                if self._clock_failed:
+                    entry.stop_reason = entry.stop_reason or "monitor_unavailable"
+                raise
+            if snapshot is not None:
+                if snapshot.stop_reason is not None:
+                    entry.stop_reason = snapshot.stop_reason
+                if snapshot.stop_requested or snapshot.terminal:
+                    entry.decision = tuple(getattr(snapshot, field) for field in _SNAPSHOT_FIELDS)
+        # Keep historical terminal/stop decisions, never a healthy snapshot
+        # after shared-clock failure. Known cleanup has its own final health;
+        # it does not fabricate a completed result or a cancellation reason.
         return AttemptStatus(
             AttemptBinding(**dict(zip(_BINDING_FIELDS, entry.binding, strict=True))),
-            snapshot, "monitor_unavailable" if entry.monitor_failed else snapshot.stop_reason,
+            None if entry.cleanup_confirmed else snapshot, entry.stop_reason,
             entry.terminal_observed, entry.cleanup_confirmed,
         )
 
@@ -213,9 +278,19 @@ class ProjectMonitor:
             if (entry.binding, entry.deadline, entry.limits) != (values, hard_deadline_ns, durations):
                 raise ProjectMonitorError("monitor_binding_conflict")
             return self._observe(entry, "poll")
+        if self._clock_failed:
+            raise ProjectMonitorError("monitor_unavailable")
         if len(self._attempts) >= self._maximum:
             raise ProjectMonitorError("monitor_capacity_exceeded")
-        timer = LivenessClock(effective, hard_deadline_ns=hard_deadline_ns, clock_ns=self._clock)
+        unavailable = False
+        try:
+            timer = LivenessClock(effective, hard_deadline_ns=hard_deadline_ns, clock_ns=self._sample_clock)
+        except LivenessClockError as exc:
+            if exc.reason_code != "liveness_invalid_clock":
+                raise
+            unavailable = True
+        if unavailable:
+            raise ProjectMonitorError("monitor_unavailable")
         entry = _Attempt(values, hard_deadline_ns, durations, timer)
         self._attempts[key] = entry
         return self._observe(entry, "poll")
@@ -242,9 +317,12 @@ class ProjectMonitor:
         release. A late terminal preserves the original timer/cancellation stop.
         """
         entry = self._entry(binding)
-        status = self._observe(entry, "finish")
+        first = not entry.terminal_observed
         entry.terminal_observed = True
-        return AttemptStatus(status.binding, status.liveness, status.stop_reason, True, status.cleanup_confirmed)
+        # Cleanup ends live activity, not the original result deadline. The
+        # first actual terminal still classifies that bound if no decision was
+        # already latched. Later terminal repeats never read the clock again.
+        return self._observe(entry, "finish", final_terminal_poll=first)
 
     def observe_cleanup(self, binding: AttemptBinding) -> AttemptStatus:
         """Record actual tracked-tree cleanup already confirmed by trusted code.
@@ -253,14 +331,15 @@ class ProjectMonitor:
         This does not commit a result or return/reissue an account launch claim.
         """
         entry = self._entry(binding)
-        status = self._observe(entry, "poll")
+        first = not entry.cleanup_confirmed
         entry.cleanup_confirmed = True
-        return AttemptStatus(status.binding, status.liveness, status.stop_reason, status.terminal_observed, True)
+        return self._observe(entry, "poll", final_cleanup_poll=first)
 
     def tick(self) -> tuple[AttemptStatus, ...]:
         """Poll every bounded entry without persistence/auth/publication work.
 
-        A bad clock on one attempt does not prevent polling the others. This
+        Shared-clock failure produces unavailable metadata for other undecided
+        attempts too. Nonlocal interrupts propagate with that failure latched. This
         internal tuple is not an unbounded or paginated external status reply.
         """
         self._owner()
@@ -269,3 +348,8 @@ class ProjectMonitor:
     def pending_stops(self) -> tuple[AttemptStatus, ...]:
         """Repeated stop observations remain pending until actual cleanup."""
         return tuple(status for status in self.tick() if status.stop_requested and not status.cleanup_confirmed)
+
+    def pending_cleanup(self) -> tuple[AttemptStatus, ...]:
+        """Include normal terminal observations without inventing cancellation."""
+        return tuple(status for status in self.tick()
+                     if (status.stop_requested or status.terminal_observed) and not status.cleanup_confirmed)

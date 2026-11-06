@@ -115,7 +115,7 @@ calibrated thresholds, enforce OS cleanup or implement Claude liveness. Real-cli
 cadence, independent status/cancel during dispatch, persistence-stall/flood tests,
 native authority and both Codex-child paths remain required before the Claude phase.
 
-## Project history persistence owner
+## Project attempt monitor
 
 `project_monitor.ProjectMonitor` now connects the local timer to a bounded internal
 registry of exact `AttemptBinding` values. One project/primary/runtime/supervisor
@@ -127,12 +127,27 @@ values are captured rather than retaining caller-owned objects.
 
 Trusted startup/activity/status/cancel calls use the complete immutable binding.
 Wrong scope/process/thread refuses before clock sampling. Tick and pending-stop
-reads perform no persistence, RPC, authorization or publication callback. A failed
-clock yields unavailable metadata and a sticky `monitor_unavailable` stop request
-while other attempts continue polling. The detached watchdog remains required.
+reads perform no persistence, RPC, authorization or publication callback. A shared
+sampling wrapper checks strict integer/range/monotonic values across all attempts.
+Failure is sticky: undecided attempts yield unavailable metadata and request
+`monitor_unavailable`, and new registrations refuse. Other entries still report
+bounded metadata; existing frozen stop/terminal decisions retain their original
+reason. Cached decisions use scalar tuples, so outward snapshot mutation cannot
+alter them. The detached watchdog remains required.
 Stop requests, actual authoritative terminal observations and confirmed tracked-tree
 cleanup are separate facts; late terminal/cleanup observations retain the original
-stop decision. Stop observations remain pending until actual cleanup is confirmed.
+stop decision. Trusted terminal/cleanup facts are saved before the fallible clock
+read, so nonlocal interrupts propagate without losing them. A nonlocal interrupt
+can abort that tick; shared failure stays latched for subsequent observations.
+
+Known cleanup has final `cleaned` health and a null liveness snapshot, without
+asserting a completed result. Startup/activity/status/cancel and repeated cleanup
+cannot sample or reactivate it. The first cleanup attempts one final timer poll;
+the first actual terminal observation still classifies the original bounds after
+cleanup when no prior decision exists. Cleanup and a null stop reason never prove
+that a result passed its deadline or validators. `pending_stops` retains requested
+stops until cleanup; `pending_cleanup` also includes normal authoritative terminal
+observations without inventing a cancellation. Neither view releases account capacity.
 
 This registry starts no event loop or native process and exposes no public endpoint
 or caller credential. Trusted callers must establish native identity/authorization,
@@ -142,6 +157,8 @@ local control/timers while a separate process holds a real SQLite write lock;
 it is not the authenticated service integration, full C16, real-client cadence,
 cross-store recovery or two-project release proof. Internal snapshot tuples are
 bounded by explicit capacity; they are not external paginated API responses.
+
+## Project history persistence owner
 
 `project_history.ProjectHistory` now owns one project's SQLite connection and writer lock in
 an existing protected directory. A descriptor walk rejects replaceable ancestry and aliases;

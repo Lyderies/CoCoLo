@@ -17,7 +17,7 @@ from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 from tests.test_liveness_clock import FakeClock, SECOND
 
 from codex_agents.history_contracts import AttemptBinding
-from codex_agents.liveness_clock import LivenessClockError, LivenessLimits
+from codex_agents.liveness_clock import MAX_CLOCK_NS, LivenessClockError, LivenessLimits
 from codex_agents.project_monitor import MAX_TRACKED_ATTEMPTS, ProjectMonitor, ProjectMonitorError, SupervisorScope
 
 
@@ -33,6 +33,13 @@ def scope(*, project="a"):
 
 def limits():
     return LivenessLimits(18 * SECOND, 2 * SECOND, 5 * SECOND, 10 * SECOND)
+
+
+class InterruptClock(FakeClock):
+    def __call__(self):
+        if isinstance(self.value, BaseException):
+            raise self.value
+        return super().__call__()
 
 
 class ProjectMonitorTests(unittest.TestCase):
@@ -66,7 +73,8 @@ class ProjectMonitorTests(unittest.TestCase):
                              ("runtime_digest", "b" * 64), ("supervisor_instance_id", "other"),
                              ("supervisor_generation", 2)):
             for operation in (owner.status, owner.startup, owner.activity, owner.cancel,
-                              owner.observe_terminal, owner.observe_cleanup):
+                              owner.observe_terminal, owner.observe_cleanup,
+                              lambda target: owner.register(target, hard_deadline_ns=100 * SECOND)):
                 with self.subTest(field=field, operation=operation.__name__):
                     before = source.calls
                     with self.assertRaisesRegex(ProjectMonitorError, "monitor_wrong_scope"):
@@ -195,13 +203,15 @@ class ProjectMonitorTests(unittest.TestCase):
         first, second = owner.tick()
         self.assertEqual(("unavailable", None, "monitor_unavailable"),
                          (first.health, first.liveness, first.stop_reason))
-        self.assertEqual("stale", second.health)
+        self.assertEqual(("unavailable", "monitor_unavailable"), (second.health, second.stop_reason))
         self.assertEqual("unavailable", owner.cancel(binding()).health)
         terminal = owner.observe_terminal(binding())
         self.assertEqual((True, False, "monitor_unavailable"),
                          (terminal.terminal_observed, terminal.cleanup_confirmed, terminal.stop_reason))
-        self.assertEqual(1, len(owner.pending_stops()))
+        self.assertEqual(2, len(owner.pending_stops()))
         owner.observe_cleanup(binding())
+        self.assertEqual((binding(2),), tuple(status.binding for status in owner.pending_stops()))
+        owner.observe_cleanup(binding(2))
         self.assertEqual((), owner.pending_stops())
         self.assertNotIn("CANARY", str(asdict(first)))
 
@@ -242,14 +252,19 @@ class ProjectMonitorTests(unittest.TestCase):
                          (status.health, status.stop_reason, status.terminal_observed, status.cleanup_confirmed))
 
     def test_foreign_equal_thread_and_changed_pid_refuse_before_validation_or_sampling(self):
+        for phase in ("cancel", "observe_terminal", "observe_cleanup"):
+            with self.subTest(phase=phase):
+                self.check_foreign_owner(phase)
+
+    def check_foreign_owner(self, phase):
         source, owner = self.make_monitor()
         owner.register(binding(), hard_deadline_ns=100 * SECOND)
-        owner.cancel(binding())
+        getattr(owner, phase)(binding())
         calls = source.calls
         operations = (lambda: owner.register(object(), hard_deadline_ns=True), lambda: owner.status(object()),
                       lambda: owner.startup(object()), lambda: owner.activity(object()),
                       lambda: owner.cancel(object()), lambda: owner.observe_terminal(object()),
-                      lambda: owner.observe_cleanup(object()), owner.tick, owner.pending_stops)
+                      lambda: owner.observe_cleanup(object()), owner.tick, owner.pending_stops, owner.pending_cleanup)
         results = []
 
         def attempt():
@@ -273,6 +288,177 @@ class ProjectMonitorTests(unittest.TestCase):
             attempt()
         self.assertEqual(["monitor_wrong_owner"] * (2 * len(operations)), results)
         self.assertEqual(calls, source.calls)
+
+    def regressed_monitor(self):
+        source = FakeClock(50 * SECOND)
+        owner = ProjectMonitor(scope(), LivenessLimits(180 * SECOND, 120 * SECOND, 300 * SECOND, 600 * SECOND),
+                               max_tracked_attempts=3, clock_ns=source)
+        owner.register(binding(2), hard_deadline_ns=1000 * SECOND)
+        owner.startup(binding(2))
+        source.at(100)
+        owner.register(binding(), hard_deadline_ns=1000 * SECOND)
+        owner.startup(binding())
+        source.at(70)
+        owner.tick()
+        return source, owner
+
+    def test_shared_regression_invalidates_all_undecided_attempts_and_future_registration(self):
+        source, owner = self.regressed_monitor()
+        self.assertEqual(("unavailable", "unavailable"), tuple(status.health for status in owner.tick()))
+        before = source.calls
+        with self.assertRaisesRegex(ProjectMonitorError, "monitor_unavailable"):
+            owner.register(binding(3), hard_deadline_ns=1000 * SECOND)
+        self.assertEqual(before, source.calls)
+
+    def test_every_invalid_shared_sample_latches_all_attempts_without_resampling(self):
+        for value in (True, -1, 1.0, None, MAX_CLOCK_NS + 1, OSError("CANARY-private-clock")):
+            with self.subTest(value_type=type(value)):
+                source, owner = self.make_monitor()
+                for target in (binding(), binding(2)):
+                    owner.register(target, hard_deadline_ns=100 * SECOND)
+                    owner.startup(target)
+                before = source.calls
+                source.value = value
+                statuses = owner.tick()
+                self.assertEqual(("unavailable", "unavailable"), tuple(s.health for s in statuses))
+                self.assertTrue(all(s.liveness is None and s.stop_reason == "monitor_unavailable" for s in statuses))
+                self.assertNotIn("CANARY", str(asdict(statuses[0])))
+                self.assertEqual(before + 1, source.calls)
+                source.at(1)
+                owner.tick()
+                self.assertEqual(before + 1, source.calls)
+
+    def test_registration_clock_failure_aborts_tracking_and_cannot_restart_health(self):
+        source, owner = self.make_monitor()
+        source.value = OSError("CANARY-private-clock")
+        with self.assertRaisesRegex(ProjectMonitorError, "monitor_unavailable") as caught:
+            owner.register(binding(), hard_deadline_ns=100 * SECOND)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertEqual((), owner.tick())
+        source.at(1)
+        with self.assertRaisesRegex(ProjectMonitorError, "monitor_unavailable"):
+            owner.register(binding(), hard_deadline_ns=100 * SECOND)
+        self.assertEqual(1, source.calls)
+
+    def test_reentrant_shared_clock_cannot_clear_an_inner_failure(self):
+        class ReentrantClock(FakeClock):
+            callback = None
+
+            def __call__(self):
+                value = super().__call__()
+                callback, self.callback = self.callback, None
+                if callback is not None:
+                    callback()
+                return value
+
+        source, owner = self.make_monitor(clock=ReentrantClock())
+        for target in (binding(), binding(2)):
+            owner.register(target, hard_deadline_ns=100 * SECOND)
+        source.callback = lambda: owner.status(binding(2))
+        self.assertEqual("unavailable", owner.status(binding()).health)
+        self.assertEqual(("unavailable", "unavailable"), tuple(s.health for s in owner.tick()))
+
+    def test_nonlocal_interrupt_preserves_each_valid_terminal_or_cleanup_observation(self):
+        for operation, field in (("observe_terminal", "terminal_observed"), ("observe_cleanup", "cleanup_confirmed")):
+            for exception in (KeyboardInterrupt, SystemExit, GeneratorExit):
+                with self.subTest(operation=operation, exception=exception.__name__):
+                    source, owner = self.make_monitor(clock=InterruptClock())
+                    owner.register(binding(), hard_deadline_ns=100 * SECOND)
+                    source.value = exception()
+                    with self.assertRaises(exception):
+                        getattr(owner, operation)(binding())
+                    source.at(1)
+                    status = owner.status(binding())
+                    self.assertTrue(getattr(status, field))
+                    self.assertIsNone(status.liveness)
+                    self.assertEqual("monitor_unavailable", status.stop_reason)
+                    self.assertEqual("cleaned" if operation == "observe_cleanup" else "unavailable", status.health)
+
+    def test_nonlocal_tick_interrupt_propagates_with_monitor_wide_failure_latched(self):
+        source, owner = self.make_monitor(clock=InterruptClock())
+        for target in (binding(), binding(2)):
+            owner.register(target, hard_deadline_ns=100 * SECOND)
+            owner.startup(target)
+        source.value = KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            owner.tick()
+        source.at(1)
+        self.assertEqual(("unavailable", "unavailable"), tuple(s.health for s in owner.tick()))
+        self.assertEqual(2, len(owner.pending_cleanup()))
+
+    def test_frozen_stop_and_terminal_decisions_survive_shared_failure_and_output_mutation(self):
+        source, owner = self.make_monitor()
+        for target in (binding(), binding(2), binding(3)):
+            owner.register(target, hard_deadline_ns=100 * SECOND)
+        cancelled = owner.cancel(binding())
+        owner.observe_terminal(binding(2))
+        object.__setattr__(cancelled.liveness, "health", "active")
+        object.__setattr__(cancelled.liveness, "stop_reason", "mutated")
+        source.value = OSError("CANARY-private-clock")
+        statuses = owner.tick()
+        self.assertEqual(("stopping", "terminal", "unavailable"), tuple(s.health for s in statuses))
+        self.assertEqual(("cancel_requested", None, "monitor_unavailable"), tuple(s.stop_reason for s in statuses))
+        self.assertEqual(3, len(owner.pending_cleanup()))
+
+    def test_cleanup_before_startup_is_final_without_fabricating_terminal(self):
+        source, owner = self.make_monitor()
+        owner.register(binding(), hard_deadline_ns=100 * SECOND)
+        cleaned = owner.observe_cleanup(binding())
+        self.assertEqual(("cleaned", None, None, False, True),
+                         (cleaned.health, cleaned.liveness, cleaned.stop_reason,
+                          cleaned.terminal_observed, cleaned.cleanup_confirmed))
+        calls = source.calls
+        for operation in (owner.startup, owner.activity, owner.status, owner.cancel, owner.observe_cleanup):
+            source.value = KeyboardInterrupt()
+            self.assertEqual(cleaned, operation(binding()))
+        self.assertEqual(calls, source.calls)
+        source.at(1)
+        terminal = owner.observe_terminal(binding())
+        self.assertEqual(("cleaned", None, True, True),
+                         (terminal.health, terminal.stop_reason, terminal.terminal_observed, terminal.cleanup_confirmed))
+        self.assertEqual(calls + 1, source.calls)
+        source.value = KeyboardInterrupt()
+        self.assertEqual(terminal, owner.observe_terminal(binding()))
+        self.assertEqual(calls + 1, source.calls)
+        self.assertEqual((), owner.pending_cleanup())
+
+    def test_early_cleanup_does_not_suppress_late_authoritative_terminal_deadline(self):
+        source, owner = self.make_monitor()
+        owner.register(binding(), hard_deadline_ns=10 * SECOND)
+        owner.startup(binding())
+        source.at(1)
+        owner.observe_cleanup(binding())
+        source.at(10)
+        terminal = owner.observe_terminal(binding())
+        self.assertEqual(("cleaned", "absolute_deadline", True, True, None),
+                         (terminal.health, terminal.stop_reason, terminal.terminal_observed,
+                          terminal.cleanup_confirmed, terminal.liveness))
+        self.assertEqual((), owner.pending_stops())
+
+    def test_first_cleanup_classifies_elapsed_cutoff_and_never_resamples_it(self):
+        source, owner = self.make_monitor()
+        owner.register(binding(), hard_deadline_ns=10 * SECOND)
+        owner.startup(binding())
+        source.at(10)
+        cleaned = owner.observe_cleanup(binding())
+        self.assertEqual(("cleaned", "absolute_deadline", None, False),
+                         (cleaned.health, cleaned.stop_reason, cleaned.liveness, cleaned.terminal_observed))
+        calls = source.calls
+        source.value = KeyboardInterrupt()
+        self.assertEqual(cleaned, owner.register(binding(), hard_deadline_ns=10 * SECOND))
+        self.assertEqual(cleaned, owner.observe_cleanup(binding()))
+        self.assertEqual(calls, source.calls)
+
+    def test_normal_terminal_has_pending_cleanup_without_a_stop_request(self):
+        _, owner = self.make_monitor()
+        owner.register(binding(), hard_deadline_ns=100 * SECOND)
+        status = owner.observe_terminal(binding())
+        self.assertEqual((True, False, False),
+                         (status.terminal_observed, status.stop_requested, status.cleanup_confirmed))
+        self.assertEqual((), owner.pending_stops())
+        self.assertEqual((status,), owner.pending_cleanup())
+        owner.observe_cleanup(binding())
+        self.assertEqual((), owner.pending_cleanup())
 
     @unittest.skipUnless(hasattr(os, "fork"), "requires inherited process fixture")
     def test_actual_fork_refuses_inherited_monitor_before_sampling(self):
