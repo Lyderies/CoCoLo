@@ -13,7 +13,7 @@ MAX_SIGNATURE_CAPTURE_ROWS = 4096
 MAX_SIGNATURE_CAPTURE_BYTES = 64 * 1_048_576
 SIGNATURE_CAPTURE_REASONS = frozenset({
     "signature_capture_invalid_request", "signature_capture_limit",
-    "signature_capture_incompatible", "signature_capture_unavailable",
+    "signature_capture_incompatible", "signature_capture_unavailable", "signature_capture_work_limit",
 })
 
 

@@ -24,6 +24,7 @@ from .learning_store import (
     _owner_key_identity, _signer_fingerprint,
 )
 from .owner_key_contracts import owner_public_key_from_line
+from .sql_read_budget import SQLReadError, SQLReadLimits
 from .signature_inputs import (
     SignatureCaptureError, SignatureCaptureLimits, SignatureInputSnapshot, signature_input_size,
 )
@@ -105,116 +106,130 @@ class AccountOwnerViews:
 
     def capture_signature_inputs(
         self, project_id: str, provider: str, limits: SignatureCaptureLimits,
+        work_limits: SQLReadLimits,
     ) -> SignatureInputSnapshot:
-        """Bound copied inputs over this owner, without verifying or admitting.
+        """Capture unverified inputs within explicit field and SQL work limits.
 
-        The preliminary quota covers ALL project billing attestations before
-        the legacy provider filter copies any bodies. It never truncates them.
-        This does not bound SQL scan work/time or reserve global job capacity.
-        No RPC operation or worker is activated by this owner-only method.
+        All project billing rows are charged before the legacy provider filter.
+        The cooperative callback budget does not bound OS I/O or global job
+        capacity. No RPC, worker or installed defaults are activated here.
         """
         self._guard()
-        if type(provider) is not str or provider not in {"codex", "claude"} or type(limits) is not SignatureCaptureLimits:
+        if (type(provider) is not str or provider not in {"codex", "claude"}
+                or type(limits) is not SignatureCaptureLimits or type(work_limits) is not SQLReadLimits):
             raise SignatureCaptureError("signature_capture_invalid_request")
         limits.__post_init__()
+        reason = "signature_capture_unavailable"
         try:
+            work_limits.__post_init__()
             with self._ledger._lock:
                 if self._ledger._connection.in_transaction:
                     raise SignatureCaptureError("signature_capture_unavailable")
-                self._ledger.state.harden_database_files()
-                self._project_locked(project_id)
-                # Validate stored owner metadata before the legacy helper can
-                # fetch its signer BLOB. Non-STRICT integer columns must never
-                # return variable TEXT/BLOB values as preliminary metadata.
-                owner_header = self._ledger._connection.execute(
-                    "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END,"
-                    "typeof(signer_line),length(signer_line),"
-                    "CASE reason WHEN 'enrolled' THEN 'enrolled' WHEN 'replaced' THEN 'replaced' END,"
-                    "CASE WHEN typeof(recorded_at_ms)='integer' THEN recorded_at_ms END "
-                    "FROM owner_key_history ORDER BY sequence DESC LIMIT 1"
-                ).fetchone()
-                minimum = signature_input_size(project_id, provider, None, None, ())
-                if owner_header is not None:
-                    sequence, line_type, line_bytes, reason, timestamp = owner_header
-                    if (
-                        type(sequence) is not int or sequence < 1 or line_type != "blob"
-                        or type(line_bytes) is not int or not 0 < line_bytes <= OWNER_SIGNERS_MAX_BYTES
-                        or reason not in {"enrolled", "replaced"}
-                        or type(timestamp) is not int or timestamp < 0
-                    ):
-                        raise SignatureCaptureError("signature_capture_incompatible")
-                    minimum += 16 + line_bytes + len(reason)
-                if minimum > limits.max_bytes:
-                    raise SignatureCaptureError("signature_capture_limit")
-                try:
-                    owner = self._ledger._owner_generation_locked()
-                except LedgerError:
-                    incompatible = True
-                else:
-                    incompatible = False
-                if incompatible:
-                    raise SignatureCaptureError("signature_capture_incompatible")
-                signer = self._ledger._current_signer_bytes()
-                size = signature_input_size(project_id, provider, owner, signer, ())
-                if size > limits.max_bytes:
-                    raise SignatureCaptureError("signature_capture_limit")
-                # Only type/length/integer metadata is returned. In particular,
-                # no JSON expression or content/signature value is selected.
-                # LIMIT bounds returned metadata, not the underlying scan work.
-                headers = self._ledger._connection.execute(
-                    "SELECT typeof(r.record_id),length(CAST(r.record_id AS BLOB)),"
-                    "typeof(r.content),length(r.content),"
-                    "typeof(r.content_digest),length(CAST(r.content_digest AS BLOB)),"
-                    "typeof(r.source),length(CAST(r.source AS BLOB)),"
-                    "CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,"
-                    "typeof(a.signature),length(a.signature) "
-                    "FROM records r LEFT JOIN owner_attestations a "
-                    "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
-                    "WHERE r.project_id=? AND r.record_type='billing_attestation' "
-                    "ORDER BY r.source_sequence LIMIT ?",
-                    (project_id, limits.max_rows + 1),
-                ).fetchall()
-                if len(headers) > limits.max_rows:
-                    raise SignatureCaptureError("signature_capture_limit")
-                for header in headers:
-                    identifier_type, identifier_bytes, content_type, content_bytes, digest_type, digest_bytes, \
-                        source_type, source_bytes, sequence, signature_type, signature_bytes = header
-                    if (
-                        identifier_type != "text" or content_type != "blob" or digest_type != "text" or source_type != "text"
-                        or any(type(value) is not int or value < 0
-                               for value in (identifier_bytes, content_bytes, digest_bytes, source_bytes))
-                        or not 0 < content_bytes <= MAX_RECORD_BYTES or digest_bytes != 64
-                        or type(sequence) is not int or sequence < 1
-                        or (signature_type == "null" and signature_bytes is not None)
-                        or (signature_type == "blob" and
-                            (type(signature_bytes) is not int or not 0 <= signature_bytes <= 16_384))
-                        or signature_type not in {"null", "blob"}
-                    ):
-                        raise SignatureCaptureError("signature_capture_incompatible")
-                    size += 8 + identifier_bytes + content_bytes + digest_bytes + source_bytes + (signature_bytes or 0)
-                    if size > limits.max_bytes:
-                        raise SignatureCaptureError("signature_capture_limit")
-                try:
-                    rows = self._ledger._attestation_rows_locked(project_id, provider)
-                except LedgerError:
-                    incompatible = True
-                else:
-                    incompatible = False
-                if incompatible:
-                    raise SignatureCaptureError("signature_capture_incompatible")
-                retained = signature_input_size(project_id, provider, owner, signer, rows)
-                if len(rows) > limits.max_rows or retained > size or retained > limits.max_bytes:
-                    raise SignatureCaptureError("signature_capture_incompatible")
-                return SignatureInputSnapshot(
-                    self._ledger._attestation_origin, project_id, provider, owner, signer, rows, retained,
+                return self._ledger._connection.read_call(
+                    work_limits, lambda: self._capture_signature_inputs_locked(project_id, provider, limits),
                 )
         except (AccountError, SignatureCaptureError):
             raise
+        except SQLReadError as error:
+            if error.reason_code == "sql_read_invalid_limits":
+                reason = "signature_capture_invalid_request"
+            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit", "sql_read_busy"}:
+                reason = "signature_capture_work_limit"
         except Exception:
             pass
-        # Raise outside the handler so neither SQL/path text nor its exception
-        # object becomes the public fixed error's cause or context.
-        raise SignatureCaptureError("signature_capture_unavailable")
+        # Outside every handler: no raw SQL/path exception cause or context.
+        raise SignatureCaptureError(reason)
+
+    def _capture_signature_inputs_locked(
+        self, project_id: str, provider: str, limits: SignatureCaptureLimits,
+    ) -> SignatureInputSnapshot:
+        self._ledger.state.harden_database_files()
+        self._project_locked(project_id)
+        # Validate stored owner metadata before the legacy helper can
+        # fetch its signer BLOB. Non-STRICT integer columns must never
+        # return variable TEXT/BLOB values as preliminary metadata.
+        owner_header = self._ledger._connection.execute(
+            "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END,"
+            "typeof(signer_line),length(signer_line),"
+            "CASE reason WHEN 'enrolled' THEN 'enrolled' WHEN 'replaced' THEN 'replaced' END,"
+            "CASE WHEN typeof(recorded_at_ms)='integer' THEN recorded_at_ms END "
+            "FROM owner_key_history ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        minimum = signature_input_size(project_id, provider, None, None, ())
+        if owner_header is not None:
+            sequence, line_type, line_bytes, reason, timestamp = owner_header
+            if (
+                type(sequence) is not int or sequence < 1 or line_type != "blob"
+                or type(line_bytes) is not int or not 0 < line_bytes <= OWNER_SIGNERS_MAX_BYTES
+                or reason not in {"enrolled", "replaced"}
+                or type(timestamp) is not int or timestamp < 0
+            ):
+                raise SignatureCaptureError("signature_capture_incompatible")
+            minimum += 16 + line_bytes + len(reason)
+        if minimum > limits.max_bytes:
+            raise SignatureCaptureError("signature_capture_limit")
+        try:
+            owner = self._ledger._owner_generation_locked()
+        except LedgerError:
+            incompatible = True
+        else:
+            incompatible = False
+        if incompatible:
+            raise SignatureCaptureError("signature_capture_incompatible")
+        signer = self._ledger._current_signer_bytes()
+        size = signature_input_size(project_id, provider, owner, signer, ())
+        if size > limits.max_bytes:
+            raise SignatureCaptureError("signature_capture_limit")
+        # Only type/length/integer metadata is returned. In particular,
+        # no JSON expression or content/signature value is selected.
+        # LIMIT bounds returned metadata, not the underlying scan work.
+        headers = self._ledger._connection.execute(
+            "SELECT typeof(r.record_id),length(CAST(r.record_id AS BLOB)),"
+            "typeof(r.content),length(r.content),"
+            "typeof(r.content_digest),length(CAST(r.content_digest AS BLOB)),"
+            "typeof(r.source),length(CAST(r.source AS BLOB)),"
+            "CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,"
+            "typeof(a.signature),length(a.signature) "
+            "FROM records r LEFT JOIN owner_attestations a "
+            "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
+            "WHERE r.project_id=? AND r.record_type='billing_attestation' "
+            "ORDER BY r.source_sequence LIMIT ?",
+            (project_id, limits.max_rows + 1),
+        ).fetchall()
+        if len(headers) > limits.max_rows:
+            raise SignatureCaptureError("signature_capture_limit")
+        for header in headers:
+            identifier_type, identifier_bytes, content_type, content_bytes, digest_type, digest_bytes, \
+                source_type, source_bytes, sequence, signature_type, signature_bytes = header
+            if (
+                identifier_type != "text" or content_type != "blob" or digest_type != "text" or source_type != "text"
+                or any(type(value) is not int or value < 0
+                       for value in (identifier_bytes, content_bytes, digest_bytes, source_bytes))
+                or not 0 < content_bytes <= MAX_RECORD_BYTES or digest_bytes != 64
+                or type(sequence) is not int or sequence < 1
+                or (signature_type == "null" and signature_bytes is not None)
+                or (signature_type == "blob" and
+                    (type(signature_bytes) is not int or not 0 <= signature_bytes <= 16_384))
+                or signature_type not in {"null", "blob"}
+            ):
+                raise SignatureCaptureError("signature_capture_incompatible")
+            size += 8 + identifier_bytes + content_bytes + digest_bytes + source_bytes + (signature_bytes or 0)
+            if size > limits.max_bytes:
+                raise SignatureCaptureError("signature_capture_limit")
+        try:
+            rows = self._ledger._attestation_rows_locked(project_id, provider)
+        except LedgerError:
+            incompatible = True
+        else:
+            incompatible = False
+        if incompatible:
+            raise SignatureCaptureError("signature_capture_incompatible")
+        retained = signature_input_size(project_id, provider, owner, signer, rows)
+        if len(rows) > limits.max_rows or retained > size or retained > limits.max_bytes:
+            raise SignatureCaptureError("signature_capture_incompatible")
+        return SignatureInputSnapshot(
+            self._ledger._attestation_origin, project_id, provider, owner, signer, rows, retained,
+        )
 
     def _owner_key_view(self, project_id: str, *, include_public_key: bool) -> dict:
         self._guard()

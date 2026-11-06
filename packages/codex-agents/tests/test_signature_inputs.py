@@ -24,6 +24,7 @@ from codex_agents.signature_inputs import (
     MAX_SIGNATURE_CAPTURE_BYTES, MAX_SIGNATURE_CAPTURE_ROWS,
     SignatureCaptureError, SignatureCaptureLimits, signature_input_size,
 )
+from codex_agents.sql_read_budget import SQLReadLimits
 
 
 class _CaptureConnectionTap:
@@ -95,11 +96,13 @@ class SignatureInputOwnerTests(unittest.TestCase):
         self.record = attest_provider(self.ledger, self.projects[0], self.key, "codex", "a" * 64)
         self.views = AccountOwnerViews(self.ledger)
         self.limits = SignatureCaptureLimits(8, 65_536)
+        self.work_limits = SQLReadLimits(10_000, 1000, MAX_SIGNATURE_CAPTURE_BYTES)
 
-    def capture(self, *, project=None, provider="codex", limits=None):
+    def capture(self, *, project=None, provider="codex", limits=None, work_limits=None):
         return self.views.capture_signature_inputs(
             self.projects[0] if project is None else project, provider,
             self.limits if limits is None else limits,
+            self.work_limits if work_limits is None else work_limits,
         )
 
     def assert_capture_error(self, reason, action):
@@ -321,6 +324,38 @@ class SignatureInputOwnerTests(unittest.TestCase):
             self.assert_capture_error("signature_capture_unavailable", self.capture)
         owner.assert_not_called()
 
+    def test_unrelated_history_scan_exhausts_work_before_body_copy_then_recovers(self):
+        captured = self.capture()
+        connection = self.ledger._connection
+        original = dict(connection.execute("SELECT * FROM records WHERE project_id=?",
+                                           (self.projects[0],)).fetchone())
+        rows = [{**original, "record_id": "CANARY-event-" + str(i), "record_type": "event", "source_sequence": i}
+                for i in range(100, 5100)]
+        connection.executemany("INSERT INTO records(" + ",".join(original) + ") VALUES(" +
+                               ",".join("?" for _ in original) + ")", [tuple(row.values()) for row in rows])
+        before = connection.total_changes
+        with mock.patch.object(self.ledger, "_attestation_rows_locked") as copy:
+            self.assert_capture_error("signature_capture_work_limit", lambda: self.capture(
+                work_limits=SQLReadLimits(4, 1000, MAX_SIGNATURE_CAPTURE_BYTES)))
+        copy.assert_not_called()
+        self.assertEqual(captured.rows, self.capture().rows)
+        self.assertEqual(before, connection.total_changes)
+        self.assertEqual(5000, connection.execute("PRAGMA busy_timeout").fetchone()[0])
+
+    def test_foreign_progress_handler_is_preserved_before_any_capture_read(self):
+        connection = self.ledger._connection
+        observed = []
+        connection.set_progress_handler(lambda: observed.append(1) or 0, 1)
+        try:
+            with mock.patch.object(self.ledger, "_owner_generation_locked") as owner:
+                self.assert_capture_error("signature_capture_unavailable", self.capture)
+            owner.assert_not_called()
+            connection.execute("SELECT 1").fetchone()
+            self.assertGreater(len(observed), 0)
+        finally:
+            connection.set_progress_handler(None, 0)
+        self.assertEqual(1, len(self.capture().rows))
+
     def test_missing_or_empty_signer_is_not_recreated_or_implicitly_verified(self):
         path = self.state.allowed_signers_path
         line = path.read_bytes()
@@ -372,7 +407,8 @@ class SignatureInputOwnerTests(unittest.TestCase):
             for provider in (None, True, "CANARY", {}):
                 self.assert_capture_error("signature_capture_invalid_request", lambda: self.capture(provider=provider))
             self.assert_capture_error("signature_capture_invalid_request", lambda: self.views.capture_signature_inputs(
-                self.projects[0], "codex", {}))
+                self.projects[0], "codex", {}, self.work_limits))
+            self.assert_capture_error("signature_capture_invalid_request", lambda: self.capture(work_limits={}))
             self.ledger._connection.execute("UPDATE projects SET status='deleted' WHERE project_id=?", (self.projects[0],))
             with self.assertRaisesRegex(AccountError, "account_project_not_found"):
                 self.capture()
@@ -421,7 +457,7 @@ class SignatureInputOwnerTests(unittest.TestCase):
         views = AccountOwnerViews(ledger)
         state.allowed_signers_path.unlink()
         before = ledger._connection.total_changes
-        captured = views.capture_signature_inputs(project, "codex", self.limits)
+        captured = views.capture_signature_inputs(project, "codex", self.limits, self.work_limits)
         self.assertIsNone(captured.owner)
         self.assertIsNone(captured.signer)
         self.assertEqual((), captured.rows)

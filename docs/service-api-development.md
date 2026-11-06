@@ -793,10 +793,43 @@ preserve raw historical signer bytes, including older encodings. Missing signer
 files stay missing. No key/history mutation, crypto verification, second database
 connection, new RPC operation, executor or normal-client migration is enabled.
 
-These limits bound returned/copied fields per capture. They do not bound SQLite
-scan work, SQLite/Python heap use, wall time or retained job capacity. The legacy
-normal preparation still needs migration. Indexed or otherwise bounded SQL work,
+These field limits bound returned/copied fields per capture. They do not bound
+SQLite/Python heap use, wall time or retained job capacity. The legacy normal
+preparation still needs migration. Indexed or otherwise bounded SQL work,
 capacity reservation before capture, fair worker intake, fixed verifier custody,
 fresh bounded commit rechecks and native authenticated endpoints remain required.
 This increment does not complete C5, C18, C19 or release acceptance; earlier
 failed/exhausted reviews and the failed planning run remain unchanged.
+
+### Cooperative owner SQL work
+
+Capture also requires explicit `SQLReadLimits`. The existing ledger connection is
+constructed with `SQLReadConnection`; no second connection is created. Ordinary
+legacy operations retain their existing serialized use. A bounded read call checks
+the actual construction process/thread, refuses a transaction or nested scope, and
+refuses an existing foreign progress callback without replacing it.
+
+One fixed trusted owner function runs with query-only mode, no SQLite busy-handler
+sleep, a narrowed existing value limit and a progress callback every 256 approximate
+VM steps. A callback-count ceiling and monotonic deadline latch refusal. Clock
+failure or regression refuses; no callback performs SQL or asynchronous interrupt.
+Entry/exit checks also cover short reads that never invoke the progress callback.
+The function and SQL are owner code, never caller-supplied RPC callbacks or SQL.
+
+Scope-owned cursors close before the callback is removed. Prior query-only mode,
+built-in busy timeout and value limits are restored and checked. Restoration
+failure makes the exact connection unusable and closes it. Backend failures are
+converted outside exception handlers so fixed errors retain no raw cause/context.
+Capture reports cooperative work, deadline, value-limit or lock refusal through
+`signature_capture_work_limit`; no capture RPC is enabled.
+
+This factory tracks the trusted Python owner's handler changes. It does not defend
+against arbitrary native/base-class calls holding the same database capability or
+restore an unknown native custom busy handler. Progress callbacks do not promise
+an exact executed-instruction count, hard OS-I/O deadline, total heap bound or
+installed service latency. Numeric ceilings are configuration limits, not measured
+operating defaults. A billing-only index remains a private optimization candidate
+requiring an explicit migration/drain contract; no index build is added to requests.
+Reserved capacity, fair worker custody, independent health/control, bounded final
+commit rechecks, native authentication, normal-client migration and release gates
+remain required. This SQL preparation does not complete C3, C5, C18 or C19.

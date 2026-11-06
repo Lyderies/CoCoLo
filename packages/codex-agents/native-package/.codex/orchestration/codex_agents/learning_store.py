@@ -80,6 +80,7 @@ from .owner_key_contracts import (
 )
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .runtime_files import ORCHESTRATION_PREFIX, RUNTIME_FILES, runtime_digest
+from .sql_read_budget import SQLReadConnection
 
 COLLECTOR_AUTHORIZATION_SCHEMA_VERSION = 1
 # The one line `install_owner_public_key` writes; the allowed-signers file holds nothing else.
@@ -1781,6 +1782,7 @@ class LearningLedger:
             timeout=5,
             isolation_level=None,
             check_same_thread=False,
+            factory=SQLReadConnection,
         )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
