@@ -124,10 +124,12 @@ startup/library-injection constraints and protected runtime binding before an
 issuer's observations can be trusted. No caller-provided `sandbox_ok`, `no_api_keys`
 or `native=true` field is an enrollment proof.
 
-No candidate currently identifies a supported operation that supplies the initial
-actual-root binding. Consequently none is selectable for privileged intake. The
-following sequences describe the missing creation operations, rather than treating
-an approved launcher as an already established trust anchor:
+The [bounded controller experiment](native-primary-controller-proposal.md#bounded-native-startup-evidence)
+now observes one fresh ephemeral Codex root on owned stdio. It does not supply the
+fixed native issuer, independently authenticated bootstrap or complete custody and
+restriction proof. No candidate is selectable for privileged intake. The following
+sequences still require those creation and authentication mechanisms; an approved
+launcher is not an already established trust anchor:
 
 | Candidate | Required creation sequence | Current refusal point |
 |---|---|---|

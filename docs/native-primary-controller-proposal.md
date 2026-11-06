@@ -151,6 +151,48 @@ need the [operation-specific revocation and recovery rules](native-caller-enroll
 New bootstrap cannot revive an old launch permission. Local cleanup and terminal
 reconciliation retain separate bounded scopes and never wait for signing.
 
+## Bounded native startup evidence
+
+Private metadata-only experiments with the reviewed Codex 0.164.0 executable now
+observe initialization and one newly created ephemeral root on owned stdio. The
+matching `thread/start` response reports the requested directory, approval policy
+`never`, a read-only sandbox with network disabled, no parent, no thread path and
+no turns. No model turn, admitted routed child or privileged operation was requested.
+These observations establish creation/response correlation in that experiment;
+they do not establish a trusted native controller or caller enrollment.
+
+The experimental process guard denies fork and network, allows execution of only
+the exact client, and confines ordinary writes to private scratch. The successful
+guard also included an exact directory service lookup and data access to the
+existing `installation_id` file. The
+[matching release source](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/core/src/installation_id.rs)
+opens that file read/write/create and locks it even when it already contains a
+valid ID. This data exception permits writes; the experiment separately verified
+that the valid existing file's bytes, identity, mode and timestamps were unchanged.
+Disposable controls refused direct credential/configuration write opens, removal
+and permission changes, helper execution, fork and outbound network. Delegated
+directory-service behavior and a production permission profile remain unproved.
+
+Root startup also attempted network access and process creation, which the guard
+refused. Successful metadata therefore does not justify enabling those paths for
+model execution. The root's `source` value did not match the assumed `appServer`
+classification. Neither that label nor the client-supplied analytics source is an
+authority primitive; the exact created root must remain bound to verified native
+code and the exclusively owned channel.
+
+A separate direct-exec control exposed another limit: the exact-executable rule
+allows self-exec while PID and kernel birth time remain unchanged. A gated macOS
+control observes `NOTE_EXEC` for that replacement and no such event without exec.
+This is a possible revocation signal, not a synchronous authorization/commit fence
+or an exec counter. Continuous native generation, queued frames, event delivery
+races and loss of monitoring still need a fail-closed protocol. A birth-time check
+alone cannot satisfy the exec-revocation requirement.
+
+No production profile, owner signing purpose, primary workflow or service authority
+is selected by these experiments. The fixed controller, independent native identity,
+descriptor custody, actual child attribution and both primary-host paths remain
+implementation and review gates.
+
 ## Bounded experiment before a selection
 
 The first experiment must request no model turn, invoke no privileged business
