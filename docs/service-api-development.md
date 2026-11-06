@@ -762,3 +762,34 @@ bounded reap failures, error precedence and unchanged absolute-deadline argument
 These concern the detached watchdog handle; they do not establish the cause of all
 subprocess warnings or change the detached collector's ownership. This preparation
 does not complete native control, provider liveness or release acceptance.
+
+## Owner-local bounded signature input capture
+
+`AccountOwnerViews.capture_signature_inputs` captures unverified billing-signature
+inputs through its existing account owner, connection and lock. It checks the
+process/thread owner and active project, and refuses an outer transaction.
+Explicit trusted limits bound the row count and copied field bytes. Their finite
+ceilings of 4,096 rows and 64 MiB are configuration ceilings, not installed defaults
+or measured operating limits.
+
+The preliminary query returns only type, length and integer metadata for at most
+the row limit plus one. It charges all of that project's billing attestations,
+including other providers, before applying the legacy provider filter or copying
+content/signature bodies. An extra row or excessive aggregate size refuses the
+capture; nothing is silently truncated. Encoded metadata, content, signatures,
+recorded/current signer bytes and fixed-width integers are counted. The original
+provider, digest, type and sequence checks then construct the immutable inputs.
+
+The owner-local value has no verification result or admission status. Existing
+signature preparation does not accept its type as proof. Reads remain fresh and
+preserve raw historical signer bytes, including older encodings. Missing signer
+files stay missing. No key/history mutation, crypto verification, second database
+connection, new RPC operation, executor or normal-client migration is enabled.
+
+These limits bound returned/copied fields per capture. They do not bound SQLite
+scan work, SQLite/Python heap use, wall time or retained job capacity. The legacy
+normal preparation still needs migration. Indexed or otherwise bounded SQL work,
+capacity reservation before capture, fair worker intake, fixed verifier custody,
+fresh bounded commit rechecks and native authenticated endpoints remain required.
+This increment does not complete C5, C18, C19 or release acceptance; earlier
+failed/exhausted reviews and the failed planning run remain unchanged.

@@ -18,12 +18,15 @@ from .account_api import (
     AccountError, AccountRequest, _DIGEST, _PROJECT, account_request_digest,
     decode_account_request, decode_account_response, integer, matches,
 )
-from .learning_contracts import canonical_json
+from .learning_contracts import MAX_RECORD_BYTES, canonical_json
 from .learning_store import (
     OWNER_SIGNER_LINE, LearningLedger, LedgerError, OwnerSignerNotConfigured, StateError,
     _owner_key_identity, _signer_fingerprint,
 )
 from .owner_key_contracts import owner_public_key_from_line
+from .signature_inputs import (
+    SignatureCaptureError, SignatureCaptureLimits, SignatureInputSnapshot, signature_input_size,
+)
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,95 @@ class AccountOwnerViews:
 
     def owner_public_key(self, project_id: str) -> dict:
         return self._owner_key_view(project_id, include_public_key=True)
+
+    def capture_signature_inputs(
+        self, project_id: str, provider: str, limits: SignatureCaptureLimits,
+    ) -> SignatureInputSnapshot:
+        """Bound copied inputs over this owner, without verifying or admitting.
+
+        The preliminary quota covers ALL project billing attestations before
+        the legacy provider filter copies any bodies. It never truncates them.
+        This does not bound SQL scan work/time or reserve global job capacity.
+        No RPC operation or worker is activated by this owner-only method.
+        """
+        self._guard()
+        if type(provider) is not str or provider not in {"codex", "claude"} or type(limits) is not SignatureCaptureLimits:
+            raise SignatureCaptureError("signature_capture_invalid_request")
+        limits.__post_init__()
+        try:
+            with self._ledger._lock:
+                if self._ledger._connection.in_transaction:
+                    raise SignatureCaptureError("signature_capture_unavailable")
+                self._ledger.state.harden_database_files()
+                self._project_locked(project_id)
+                try:
+                    owner = self._ledger._owner_generation_locked()
+                except LedgerError:
+                    incompatible = True
+                else:
+                    incompatible = False
+                if incompatible:
+                    raise SignatureCaptureError("signature_capture_incompatible")
+                signer = self._ledger._current_signer_bytes()
+                size = signature_input_size(project_id, provider, owner, signer, ())
+                if size > limits.max_bytes:
+                    raise SignatureCaptureError("signature_capture_limit")
+                # Only type/length/integer metadata is returned. In particular,
+                # no JSON expression or content/signature value is selected.
+                # LIMIT bounds returned metadata, not the underlying scan work.
+                headers = self._ledger._connection.execute(
+                    "SELECT typeof(r.record_id),length(CAST(r.record_id AS BLOB)),"
+                    "typeof(r.content),length(r.content),"
+                    "typeof(r.content_digest),length(CAST(r.content_digest AS BLOB)),"
+                    "typeof(r.source),length(CAST(r.source AS BLOB)),r.source_sequence,"
+                    "typeof(a.signature),length(a.signature) "
+                    "FROM records r LEFT JOIN owner_attestations a "
+                    "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
+                    "WHERE r.project_id=? AND r.record_type='billing_attestation' "
+                    "ORDER BY r.source_sequence LIMIT ?",
+                    (project_id, limits.max_rows + 1),
+                ).fetchall()
+                if len(headers) > limits.max_rows:
+                    raise SignatureCaptureError("signature_capture_limit")
+                for header in headers:
+                    identifier_type, identifier_bytes, content_type, content_bytes, digest_type, digest_bytes, \
+                        source_type, source_bytes, sequence, signature_type, signature_bytes = header
+                    if (
+                        identifier_type != "text" or content_type != "blob" or digest_type != "text" or source_type != "text"
+                        or any(type(value) is not int or value < 0
+                               for value in (identifier_bytes, content_bytes, digest_bytes, source_bytes))
+                        or not 0 < content_bytes <= MAX_RECORD_BYTES or digest_bytes != 64
+                        or type(sequence) is not int or sequence < 1
+                        or (signature_type == "null" and signature_bytes is not None)
+                        or (signature_type == "blob" and
+                            (type(signature_bytes) is not int or not 0 <= signature_bytes <= 16_384))
+                        or signature_type not in {"null", "blob"}
+                    ):
+                        raise SignatureCaptureError("signature_capture_incompatible")
+                    size += 8 + identifier_bytes + content_bytes + digest_bytes + source_bytes + (signature_bytes or 0)
+                    if size > limits.max_bytes:
+                        raise SignatureCaptureError("signature_capture_limit")
+                try:
+                    rows = self._ledger._attestation_rows_locked(project_id, provider)
+                except LedgerError:
+                    incompatible = True
+                else:
+                    incompatible = False
+                if incompatible:
+                    raise SignatureCaptureError("signature_capture_incompatible")
+                retained = signature_input_size(project_id, provider, owner, signer, rows)
+                if len(rows) > limits.max_rows or retained > size or retained > limits.max_bytes:
+                    raise SignatureCaptureError("signature_capture_incompatible")
+                return SignatureInputSnapshot(
+                    self._ledger._attestation_origin, project_id, provider, owner, signer, rows, retained,
+                )
+        except (AccountError, SignatureCaptureError):
+            raise
+        except Exception:
+            pass
+        # Raise outside the handler so neither SQL/path text nor its exception
+        # object becomes the public fixed error's cause or context.
+        raise SignatureCaptureError("signature_capture_unavailable")
 
     def _owner_key_view(self, project_id: str, *, include_public_key: bool) -> dict:
         self._guard()

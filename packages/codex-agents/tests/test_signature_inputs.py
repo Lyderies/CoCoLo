@@ -1,0 +1,308 @@
+from __future__ import annotations
+
+import os
+import tempfile
+import threading
+import unittest
+from dataclasses import FrozenInstanceError
+from pathlib import Path
+from unittest import mock
+
+from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
+from tests.learning_support import attest_provider, generate_test_owner_key
+from tests.test_owner_key_contracts import public_value
+
+from codex_agents.account_api import ACCOUNT_OPERATIONS, AccountError
+from codex_agents.account_service import AccountOwnerViews
+from codex_agents.learning_contracts import MAX_RECORD_BYTES
+from codex_agents.learning_engine import OwnerGrantAuthority
+from codex_agents.learning_store import LearningLedger, LearningState, LedgerError, authorize_collector_runtime
+from codex_agents.signature_inputs import (
+    MAX_SIGNATURE_CAPTURE_BYTES, MAX_SIGNATURE_CAPTURE_ROWS,
+    SignatureCaptureError, SignatureCaptureLimits, signature_input_size,
+)
+
+
+class SignatureCaptureLimitTests(unittest.TestCase):
+    def test_limits_are_explicit_exact_integers_with_finite_ceilings(self):
+        for rows, size in ((True, 1), (1, False), (0, 1), (1, 0), (-1, 1), (1, -1),
+                           (1.0, 1), (1, "CANARY"), (MAX_SIGNATURE_CAPTURE_ROWS + 1, 1),
+                           (1, MAX_SIGNATURE_CAPTURE_BYTES + 1)):
+            with self.subTest(rows=rows, size=size), self.assertRaises(SignatureCaptureError) as caught:
+                SignatureCaptureLimits(rows, size)
+            self.assertEqual("signature_capture_invalid_request", str(caught.exception))
+        self.assertEqual(1, SignatureCaptureLimits(1, 1).max_bytes)
+        limits = SignatureCaptureLimits(MAX_SIGNATURE_CAPTURE_ROWS, MAX_SIGNATURE_CAPTURE_BYTES)
+        with self.assertRaises(FrozenInstanceError):
+            limits.max_rows = 1
+
+    def test_unknown_error_text_never_becomes_a_reason(self):
+        for value in ("CANARY-PRIVATE", {}, True, None):
+            self.assertEqual("signature_capture_invalid_request", str(SignatureCaptureError(value)))
+
+
+class SignatureInputOwnerTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        self.state = LearningState(self.base / "state")
+        authorize_collector_runtime(self.state, ORCHESTRATION_ROOT / "cli.py")
+        self.key, public = generate_test_owner_key(self.base)
+        self.state.install_owner_public_key(public)
+        self.ledger = LearningLedger(self.state)
+        self.addCleanup(self.ledger.close)
+        self.roots = [self.base / name for name in ("project-a", "project-b")]
+        for root in self.roots:
+            root.mkdir()
+        self.projects = [self.ledger.register_project(root, now_ms=i + 1) for i, root in enumerate(self.roots)]
+        self.record = attest_provider(self.ledger, self.projects[0], self.key, "codex", "a" * 64)
+        self.views = AccountOwnerViews(self.ledger)
+        self.limits = SignatureCaptureLimits(8, 65_536)
+
+    def capture(self, *, project=None, provider="codex", limits=None):
+        return self.views.capture_signature_inputs(
+            self.projects[0] if project is None else project, provider,
+            self.limits if limits is None else limits,
+        )
+
+    def assert_capture_error(self, reason, action):
+        with self.assertRaises(SignatureCaptureError) as caught:
+            action()
+        self.assertEqual(reason, caught.exception.reason_code)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
+    def test_capture_matches_legacy_inputs_without_crypto_connections_or_writes(self):
+        rows = self.ledger._attestation_rows_locked(self.projects[0], "codex")
+        owner = self.ledger._owner_generation_locked()
+        signer = self.state.allowed_signers_path.read_bytes()
+        before = self.ledger._connection.total_changes
+        history = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_key_history")]
+        with mock.patch("codex_agents.learning_store.sqlite3.connect", side_effect=AssertionError("second connection")), \
+                mock.patch.object(self.state, "digest_key", side_effect=AssertionError("secret key")), \
+                mock.patch.object(OwnerGrantAuthority, "verify_owner_record", side_effect=AssertionError("crypto")):
+            captured = self.capture()
+        self.assertIs(self.ledger._attestation_origin, captured.origin)
+        self.assertEqual((self.projects[0], "codex", owner, signer, rows),
+                         (captured.project_id, captured.provider, captured.owner, captured.signer, captured.rows))
+        self.assertEqual(signature_input_size(self.projects[0], "codex", owner, signer, rows), captured.retained_bytes)
+        self.assertEqual(before, self.ledger._connection.total_changes)
+        self.assertEqual(history, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_key_history")])
+        self.assertEqual(signer, self.state.allowed_signers_path.read_bytes())
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertEqual((), self.capture(project=self.projects[1]).rows)
+        self.assertEqual({"account.health", "account.project", "account.owner_key", "account.owner_public_key"},
+                         ACCOUNT_OPERATIONS)
+
+    def test_inputs_are_immutable_hidden_and_never_a_prepared_signature_proof(self):
+        captured = self.capture()
+        with self.assertRaises(FrozenInstanceError):
+            captured.provider = "claude"
+        self.assertNotIn(captured.rows[0][0], repr(captured))
+        self.assertFalse(hasattr(captured, "verified"))
+        with mock.patch.object(self.ledger, "_owner_generation_locked", side_effect=AssertionError("proof backend")):
+            with self.assertRaisesRegex(LedgerError, "preparation is stale"):
+                self.ledger._prepared_attestations_locked(captured, self.projects[0], "codex")
+
+    def test_exact_field_byte_boundary_and_one_byte_overflow_before_body_copy(self):
+        captured = self.capture()
+        exact = SignatureCaptureLimits(1, captured.retained_bytes)
+        self.assertEqual(captured.rows, self.capture(limits=exact).rows)
+        with mock.patch.object(self.ledger, "_attestation_rows_locked", side_effect=AssertionError("body copy")) as copy:
+            self.assert_capture_error("signature_capture_limit", lambda: self.capture(
+                limits=SignatureCaptureLimits(1, exact.max_bytes - 1)))
+        copy.assert_not_called()
+
+    def test_row_overflow_never_truncates_or_calls_body_copy(self):
+        attest_provider(self.ledger, self.projects[0], self.key, "codex", "a" * 64, issued_at=2)
+        with mock.patch.object(self.ledger, "_attestation_rows_locked", side_effect=AssertionError("body copy")) as copy:
+            self.assert_capture_error("signature_capture_limit", lambda: self.capture(
+                limits=SignatureCaptureLimits(1, 65_536)))
+        copy.assert_not_called()
+        captured = self.capture(limits=SignatureCaptureLimits(2, 65_536))
+        self.assertEqual(2, len(captured.rows))
+        self.assertEqual(self.ledger._attestation_rows_locked(self.projects[0], "codex"), captured.rows)
+
+    def test_other_provider_history_is_charged_before_filtering(self):
+        attest_provider(self.ledger, self.projects[0], self.key, "claude", "b" * 64, issued_at=2)
+        self.assert_capture_error("signature_capture_limit", lambda: self.capture(
+            limits=SignatureCaptureLimits(1, 65_536)))
+        captured = self.capture(limits=SignatureCaptureLimits(2, 65_536))
+        self.assertEqual(1, len(captured.rows))
+        self.assertEqual(self.record["record_id"], captured.rows[0][0])
+        self.assertNotEqual(captured.rows, self.capture(provider="claude").rows)
+
+    def test_utf8_and_nul_in_metadata_cannot_undercharge_before_body_copy(self):
+        captured = self.capture()
+        self.ledger._connection.execute("UPDATE records SET source=? WHERE project_id=? AND record_id=?",
+                                        ("owner\0" + "\U0001f984" * 512, self.projects[0], self.record["record_id"]))
+        with mock.patch.object(self.ledger, "_attestation_rows_locked", side_effect=AssertionError("body copy")) as copy:
+            self.assert_capture_error("signature_capture_limit", lambda: self.capture(
+                limits=SignatureCaptureLimits(1, captured.retained_bytes + 10)))
+        copy.assert_not_called()
+
+    def test_invalid_stored_body_and_signature_types_or_sizes_refuse_before_copy(self):
+        connection = self.ledger._connection
+        original_content = connection.execute("SELECT content FROM records WHERE project_id=? AND record_id=?",
+                                              (self.projects[0], self.record["record_id"])).fetchone()[0]
+        original_signature = connection.execute(
+            "SELECT signature FROM owner_attestations WHERE project_id=? AND subject_record_id=?",
+            (self.projects[0], self.record["record_id"]),
+        ).fetchone()[0]
+        variants = (("content", b"x" * (MAX_RECORD_BYTES + 1)), ("content", "CANARY-TEXT"),
+                    ("signature", b"x" * 16_385), ("signature", "CANARY-TEXT"))
+        for field, value in variants:
+            with self.subTest(field=field, kind=type(value).__name__):
+                if field == "content":
+                    connection.execute("UPDATE records SET content=? WHERE project_id=? AND record_id=?",
+                                       (value, self.projects[0], self.record["record_id"]))
+                else:
+                    connection.execute("UPDATE owner_attestations SET signature=? WHERE project_id=? AND subject_record_id=?",
+                                       (value, self.projects[0], self.record["record_id"]))
+                with mock.patch.object(self.ledger, "_attestation_rows_locked", side_effect=AssertionError("body copy")) as copy:
+                    self.assert_capture_error("signature_capture_incompatible", self.capture)
+                copy.assert_not_called()
+                connection.execute("UPDATE records SET content=? WHERE project_id=? AND record_id=?",
+                                   (original_content, self.projects[0], self.record["record_id"]))
+                connection.execute("UPDATE owner_attestations SET signature=? WHERE project_id=? AND subject_record_id=?",
+                                   (original_signature, self.projects[0], self.record["record_id"]))
+
+    def test_invalid_digest_and_backend_exceptions_are_fixed_without_context(self):
+        with mock.patch.object(self.ledger, "_attestation_rows_locked", side_effect=LedgerError("CANARY-CONTENT")):
+            self.assert_capture_error("signature_capture_incompatible", self.capture)
+        with mock.patch.object(self.ledger, "_attestation_rows_locked", side_effect=RuntimeError("CANARY-PATH")):
+            self.assert_capture_error("signature_capture_unavailable", self.capture)
+        self.ledger._connection.execute("UPDATE records SET content_digest=? WHERE project_id=? AND record_id=?",
+                                        ("0" * 64, self.projects[0], self.record["record_id"]))
+        self.assert_capture_error("signature_capture_incompatible", self.capture)
+
+    def test_missing_or_empty_signer_is_not_recreated_or_implicitly_verified(self):
+        path = self.state.allowed_signers_path
+        line = path.read_bytes()
+        before = self.ledger._connection.total_changes
+        try:
+            path.unlink()
+            captured = self.capture()
+            self.assertIsNone(captured.signer)
+            self.assertEqual(line, captured.owner[1])
+            self.assertFalse(path.exists())
+            path.write_bytes(b"")
+            path.chmod(0o600)
+            self.assertIsNone(self.capture().signer)
+            self.assertEqual(b"", path.read_bytes())
+        finally:
+            path.write_bytes(line)
+            path.chmod(0o600)
+        self.assertEqual(before, self.ledger._connection.total_changes)
+
+    def test_repeated_capture_observes_new_generation_even_with_identical_key(self):
+        first = self.capture()
+        # Synthetic history recurrence, not permission to re-enroll a retired key.
+        self.ledger._connection.execute(
+            "INSERT INTO owner_key_history(sequence,signer_line,reason,recorded_at_ms) VALUES(2,?,'replaced',42)",
+            (first.owner[1],),
+        )
+        second = self.capture()
+        self.assertEqual(first.owner[1], second.owner[1])
+        self.assertEqual(first.rows, second.rows)
+        self.assertEqual(2, second.owner[0])
+        self.assertEqual(1, first.owner[0])
+        self.assertIsNot(first, second)
+
+    def test_legacy_signer_encoding_is_captured_exactly_without_rewriting(self):
+        padded = public_value("ssh-rsa", b"\x00\x01\x00\x01", b"\x00\x01" + b"\x55" * 127)
+        line = ("codex-agents-owner " + padded + "\n").encode("ascii")
+        self.state.allowed_signers_path.write_bytes(line)
+        self.ledger._connection.execute(
+            "INSERT INTO owner_key_history(sequence,signer_line,reason,recorded_at_ms) VALUES(2,?,'replaced',42)", (line,))
+        before = self.ledger._connection.total_changes
+        captured = self.capture()
+        self.assertEqual(line, captured.owner[1])
+        self.assertEqual(line, captured.signer)
+        self.assertEqual(line, self.state.allowed_signers_path.read_bytes())
+        self.assertEqual(before, self.ledger._connection.total_changes)
+
+    def test_invalid_requests_and_inactive_project_refuse_before_capture(self):
+        with mock.patch.object(self.ledger, "_owner_generation_locked", side_effect=AssertionError("owner access")) as owner:
+            for provider in (None, True, "CANARY", {}):
+                self.assert_capture_error("signature_capture_invalid_request", lambda: self.capture(provider=provider))
+            self.assert_capture_error("signature_capture_invalid_request", lambda: self.views.capture_signature_inputs(
+                self.projects[0], "codex", {}))
+            self.ledger._connection.execute("UPDATE projects SET status='deleted' WHERE project_id=?", (self.projects[0],))
+            with self.assertRaisesRegex(AccountError, "account_project_not_found"):
+                self.capture()
+        owner.assert_not_called()
+
+    def test_outer_transaction_refuses_without_body_or_signer_access(self):
+        self.ledger._connection.execute("BEGIN")
+        try:
+            with mock.patch.object(self.ledger, "_current_signer_bytes", side_effect=AssertionError("signer")) as signer:
+                self.assert_capture_error("signature_capture_unavailable", self.capture)
+            signer.assert_not_called()
+        finally:
+            self.ledger._connection.rollback()
+
+    def test_maximal_unverified_signature_and_missing_signature_keep_exact_bytes(self):
+        signature = b"CANARY-UNVERIFIED".ljust(16_384, b"x")
+        self.ledger._connection.execute(
+            "UPDATE owner_attestations SET signature=? WHERE project_id=? AND subject_record_id=?",
+            (signature, self.projects[0], self.record["record_id"]),
+        )
+        with mock.patch.object(OwnerGrantAuthority, "verify_owner_record", side_effect=AssertionError("crypto")):
+            captured = self.capture()
+            self.assertEqual(signature, captured.rows[0][-1])
+            self.ledger._connection.execute("DELETE FROM owner_attestations WHERE project_id=?", (self.projects[0],))
+            self.assertIsNone(self.capture().rows[0][-1])
+
+    def test_actual_replacement_is_fresh_and_does_not_reverify_old_inputs(self):
+        first = self.capture()
+        directory = self.base / "new-owner"
+        directory.mkdir()
+        _, public = generate_test_owner_key(directory)
+        self.ledger.replace_owner_key(public, now_ms=42)
+        with mock.patch.object(OwnerGrantAuthority, "verify_owner_record", side_effect=AssertionError("crypto")):
+            second = self.capture()
+        self.assertEqual(first.owner[0] + 1, second.owner[0])
+        self.assertNotEqual(first.signer, second.signer)
+        self.assertEqual(second.owner[1], second.signer)
+        self.assertEqual(first.rows, second.rows)
+
+    def test_unconfigured_owner_is_observed_without_enrollment(self):
+        state = LearningState(self.base / "unconfigured")
+        authorize_collector_runtime(state, ORCHESTRATION_ROOT / "cli.py")
+        ledger = LearningLedger(state)
+        self.addCleanup(ledger.close)
+        project = ledger.register_project(self.roots[0], now_ms=1)
+        views = AccountOwnerViews(ledger)
+        state.allowed_signers_path.unlink()
+        before = ledger._connection.total_changes
+        captured = views.capture_signature_inputs(project, "codex", self.limits)
+        self.assertIsNone(captured.owner)
+        self.assertIsNone(captured.signer)
+        self.assertEqual((), captured.rows)
+        self.assertFalse(state.allowed_signers_path.exists())
+        self.assertEqual(before, ledger._connection.total_changes)
+        self.assertEqual(0, ledger._connection.execute("SELECT COUNT(*) FROM owner_key_history").fetchone()[0])
+
+    def test_wrong_process_or_thread_never_uses_the_backend(self):
+        with mock.patch.object(self.ledger, "_owner_generation_locked", side_effect=AssertionError("owner access")) as owner:
+            with mock.patch("codex_agents.account_service.os.getpid", return_value=os.getpid() + 1):
+                with self.assertRaisesRegex(AccountError, "account_wrong_owner"):
+                    self.capture()
+            errors = []
+
+            def attempt():
+                try:
+                    self.capture()
+                except Exception as error:
+                    errors.append(error)
+
+            thread = threading.Thread(target=attempt)
+            thread.start()
+            thread.join(2)
+            self.assertFalse(thread.is_alive())
+        owner.assert_not_called()
+        self.assertEqual(1, len(errors))
+        self.assertIs(type(errors[0]), AccountError)
+        self.assertEqual("account_wrong_owner", errors[0].reason_code)

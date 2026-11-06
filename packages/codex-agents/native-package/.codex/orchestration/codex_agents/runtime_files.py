@@ -70,6 +70,7 @@ RUNTIME_FILES = (
     "codex_agents/service_queue.py",
     "codex_agents/service_transport.py",
     "codex_agents/session_guard.py",
+    "codex_agents/signature_inputs.py",
     "codex_agents/supervision.py",
     "codex_agents/validation.py",
     "config/discovery-policy.json",
