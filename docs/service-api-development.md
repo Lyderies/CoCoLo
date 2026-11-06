@@ -134,6 +134,11 @@ Failure is sticky: undecided attempts yield unavailable metadata and request
 bounded metadata; existing frozen stop/terminal decisions retain their original
 reason. Cached decisions use scalar tuples, so outward snapshot mutation cannot
 alter them. The detached watchdog remains required.
+If a later sample first fails during a tick, its returned batch is rebuilt through
+the failure-aware path without further clock reads. Earlier undecided rows cannot
+remain healthy or disappear from that call's pending-stop/cleanup views. Frozen
+decisions and known cleanup retain their original facts. Each tick makes at most
+two bounded passes; this is not a measured latency guarantee.
 Stop requests, actual authoritative terminal observations and confirmed tracked-tree
 cleanup are separate facts; late terminal/cleanup observations retain the original
 stop decision. Trusted terminal/cleanup facts are saved before the fallible clock

@@ -343,7 +343,14 @@ class ProjectMonitor:
         internal tuple is not an unbounded or paginated external status reply.
         """
         self._owner()
-        return tuple(self._observe(entry, "poll") for entry in self._attempts.values())
+        failed_before = self._clock_failed
+        statuses = tuple(self._observe(entry, "poll") for entry in self._attempts.values())
+        if self._clock_failed and not failed_before:
+            # A later failed sample invalidates earlier undecided rows in this
+            # same batch. Rebuild without clock reads; retained decisions and
+            # known cleanup keep their original facts.
+            return tuple(self._observe(entry, "poll") for entry in self._attempts.values())
+        return statuses
 
     def pending_stops(self) -> tuple[AttemptStatus, ...]:
         """Repeated stop observations remain pending until actual cleanup."""

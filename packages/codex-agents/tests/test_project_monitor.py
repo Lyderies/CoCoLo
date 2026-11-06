@@ -42,6 +42,26 @@ class InterruptClock(FakeClock):
         return super().__call__()
 
 
+class SequencedClock(FakeClock):
+    def __init__(self):
+        super().__init__()
+        self.samples = []
+        self.sequence_reads = 0
+
+    def __call__(self):
+        if self.samples:
+            self.sequence_reads += 1
+            value = self.samples.pop(0)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+        return super().__call__()
+
+    @property
+    def total_reads(self):
+        return self.calls + self.sequence_reads
+
+
 class ProjectMonitorTests(unittest.TestCase):
     def make_monitor(self, *, capacity=4, project="a", clock=None):
         source = FakeClock() if clock is None else clock
@@ -459,6 +479,61 @@ class ProjectMonitorTests(unittest.TestCase):
         self.assertEqual((status,), owner.pending_cleanup())
         owner.observe_cleanup(binding())
         self.assertEqual((), owner.pending_cleanup())
+
+    def sequence_monitor(self, count=2):
+        source = SequencedClock()
+        owner = ProjectMonitor(scope(), limits(), max_tracked_attempts=count, clock_ns=source)
+        for number in range(1, count + 1):
+            owner.register(binding(number), hard_deadline_ns=100 * SECOND)
+            owner.startup(binding(number))
+        return source, owner
+
+    def fail_second_sample(self, source):
+        source.samples = [SECOND, OSError("CANARY-private-clock")]
+        return source.total_reads
+
+    def test_tick_rebuilds_earlier_healthy_rows_when_a_later_shared_sample_fails(self):
+        source, owner = self.sequence_monitor()
+        before = self.fail_second_sample(source)
+        self.assertEqual(("unavailable", "unavailable"), tuple(s.health for s in owner.tick()))
+        self.assertEqual(before + 2, source.total_reads)
+
+    def test_same_failing_call_returns_every_pending_stop(self):
+        source, owner = self.sequence_monitor()
+        before = self.fail_second_sample(source)
+        self.assertEqual((binding(), binding(2)), tuple(s.binding for s in owner.pending_stops()))
+        self.assertEqual(before + 2, source.total_reads)
+
+    def test_same_failing_call_returns_every_pending_cleanup(self):
+        source, owner = self.sequence_monitor()
+        before = self.fail_second_sample(source)
+        self.assertEqual((binding(), binding(2)), tuple(s.binding for s in owner.pending_cleanup()))
+        self.assertEqual(before + 2, source.total_reads)
+
+    def test_failure_rebuild_keeps_frozen_cancel_terminal_and_cleaned_entries(self):
+        source, owner = self.sequence_monitor(5)
+        owner.cancel(binding())
+        owner.observe_terminal(binding(2))
+        owner.observe_cleanup(binding(3))
+        before = self.fail_second_sample(source)
+        statuses = owner.tick()
+        self.assertEqual(("stopping", "terminal", "cleaned", "unavailable", "unavailable"),
+                         tuple(s.health for s in statuses))
+        self.assertEqual("cancel_requested", statuses[0].stop_reason)
+        self.assertTrue(statuses[1].terminal_observed)
+        self.assertTrue(statuses[2].cleanup_confirmed)
+        self.assertEqual(before + 2, source.total_reads)
+
+    def test_new_deadline_decision_before_later_failure_keeps_its_original_reason(self):
+        source = SequencedClock()
+        owner = ProjectMonitor(scope(), limits(), max_tracked_attempts=2, clock_ns=source)
+        owner.register(binding(), hard_deadline_ns=SECOND)
+        owner.register(binding(2), hard_deadline_ns=100 * SECOND)
+        before = self.fail_second_sample(source)
+        first, second = owner.tick()
+        self.assertEqual(("stopping", "absolute_deadline"), (first.health, first.stop_reason))
+        self.assertEqual(("unavailable", "monitor_unavailable"), (second.health, second.stop_reason))
+        self.assertEqual(before + 2, source.total_reads)
 
     @unittest.skipUnless(hasattr(os, "fork"), "requires inherited process fixture")
     def test_actual_fork_refuses_inherited_monitor_before_sampling(self):
