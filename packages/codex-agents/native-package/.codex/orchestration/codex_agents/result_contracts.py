@@ -101,6 +101,7 @@ def assignment_bytes(assignment: object, binding: AttemptBinding) -> bytes:
         encoded = canonical_json(checked)
         invalid = (
             len(encoded) > MAX_ASSIGNMENT_CANONICAL_BYTES
+            or type(checked.get("attempt", 1)) is not int
             or checked.get("attempt", 1) != binding.attempt
         )
     except (ContractError, TypeError, ValueError, OverflowError, RecursionError):

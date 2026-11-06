@@ -541,7 +541,7 @@ def validate_assignment_shape(data: Any) -> dict[str, Any]:
         "expected_output",
     ):
         _nonempty_string(data[field], field, f"assignment.{field}")
-    if not isinstance(data["attempt"], int) or data["attempt"] < 1:
+    if type(data["attempt"]) is not int or data["attempt"] < 1:
         raise ContractError("attempt must be a positive integer", field="assignment.attempt")
     retry_of = data.get("retry_of_assignment_id")
     if data["attempt"] == 1 and retry_of is not None:

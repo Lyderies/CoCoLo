@@ -128,6 +128,7 @@ class ProjectHistory:
     def __init__(
         self, directory: Path, project_id: str, *, result_key: bytes | None = None,
         result_capacity: ResultCapacity | None = None, result_clock_ms: Callable[[], int] | None = None,
+        allow_schema_upgrade: bool = False,
     ) -> None:
         self._pid = os.getpid()
         self._thread = threading.current_thread()
@@ -138,12 +139,14 @@ class ProjectHistory:
         self._result_capacity = None
         self._result_clock = result_clock_ms if result_clock_ms is not None else (lambda: time.time_ns() // 1_000_000)
         if (
-            (result_key is None) != (result_capacity is None)
+            type(allow_schema_upgrade) is not bool
+            or (result_key is None) != (result_capacity is None)
             or (result_key is not None and (type(result_key) is not bytes or len(result_key) != 32))
             or (result_capacity is not None and type(result_capacity) is not ResultCapacity)
             or (result_clock_ms is not None and not callable(result_clock_ms))
         ):
             raise HistoryError("history_invalid_input")
+        self._allow_schema_upgrade = allow_schema_upgrade
         if result_capacity is not None:
             invalid_capacity = False
             try:
@@ -282,6 +285,10 @@ class ProjectHistory:
                 connection.execute("ROLLBACK")
                 raise
         elif version == 1 and application == _APPLICATION_ID and actual_schema == schema_set(_SCHEMA_V1):
+            if not self._allow_schema_upgrade:
+                # Only the separately authorized, drained persistence-owner
+                # upgrade path may opt in; ordinary API startup never does.
+                raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
             self._check_schema_identity({name: columns for name, columns in _COLUMNS.items()
@@ -508,11 +515,18 @@ class ProjectHistory:
         digest = hashlib.sha256(content).hexdigest()
         with self._transaction():
             reserved = self._connection.execute(
-                "SELECT terminal_record_id FROM result_reservations WHERE project_id=? AND claim_id=?",
-                (self.project_id, binding.claim_id),
-            ).fetchone()
-            if reserved is not None and reserved[0] is None:
-                raise HistoryError("history_result_not_ready")
+                "SELECT * FROM result_reservations WHERE project_id=? AND "
+                "(claim_id=? OR (run_handle=? AND attempt=?) OR claim_digest=?) LIMIT 4",
+                (self.project_id, binding.claim_id, binding.run_handle, binding.attempt, binding.claim_digest),
+            ).fetchall()
+            if reserved:
+                if len(reserved) != 1:
+                    raise HistoryError("history_conflict")
+                reservation = self._reservation(reserved[0])
+                if reservation.binding != binding:
+                    raise HistoryError("history_conflict")
+                if reservation.terminal_record_id is None:
+                    raise HistoryError("history_result_not_ready")
             return self._commit_terminal_locked(content, checked, binding, encoded_binding, digest, ingested_at_ms)
 
     def _commit_terminal_locked(self, content, checked, binding, encoded_binding, digest, ingested_at_ms):

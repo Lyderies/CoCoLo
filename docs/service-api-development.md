@@ -80,6 +80,8 @@ inside the explicit reservation window. Exact retries retain the original times;
 changed assignment, deadline, claim or other binding fields conflict. Reserving
 storage must precede consuming launch authority; that ordering and native caller
 proof remain mandatory integration gates. A storage reservation is not admission.
+Assignment attempts require exact integers; a boolean cannot compare equal to an
+integer attempt and enter the reservation or shared assignment-validation path.
 
 `commit_result` checks canonical, bounded result bytes against the original assignment
 and exact dispatch-result digest/fence metadata. Rejected bytes are never written.
@@ -87,7 +89,10 @@ It first binds the immutable prepared request, writes a generated private artifa
 with exclusive/nofollow creation and file/directory synchronization, then registers
 its reference, the terminal record and delivery outbox in one SQLite transaction.
 Result and assignment text stay outside SQLite. A metadata-only terminal commit
-cannot bypass an outstanding result reservation. Valid legacy, negative-review and
+checks all reserved unique identities (claim ID, run-handle/attempt and claim digest)
+inside its transaction. An alternate claim or a target matching several reservations
+cannot bypass an outstanding body reservation or consume its sequence. Exact committed
+metadata replay remains available after body retirement. Valid legacy, negative-review and
 host-fenced result bodies retain their exact bytes and separate verdict/terminal facts.
 The service must independently prove the actual bridge facts and original assignment;
 validation does not supply that authority.
@@ -121,7 +126,12 @@ the stored result and closed terminal metadata.
 
 Project-history schema 2 adds only fixed result metadata tables. Upgrade requires
 the exact schema-1 DDL, columns, application ID and project identity before any
-migration write. The table additions and version advance are one transaction.
+migration write. Normal opens refuse schema 1 without changing it, even when a
+result key/policy is configured. Only a trusted persistence-owner upgrade path may
+set the exact-boolean `allow_schema_upgrade` option after its separately proven
+authorization and drain; no wire request selects this option. The flag itself is
+not proof of a drain or native authority. The table additions and version advance
+are one transaction.
 Unknown schemas/triggers are refused; prior record bytes, counters and outbox
 identities remain unchanged. This is not the legacy shared-ledger importer or a
 production migration approval.

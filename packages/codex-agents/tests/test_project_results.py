@@ -231,6 +231,66 @@ class ProjectResultTests(unittest.TestCase):
         delivery = self.store.commit_result(content, binding(), assignment(), body)
         self.assertEqual(delivery, self.store.commit_terminal(content, binding(), ingested_at_ms=self.now))
 
+    def assert_metadata_alias_is_refused(self, **changes):
+        self.reserve()
+        body, content = self.payload()
+        alias = replace(binding(), **changes)
+        with self.assertRaisesRegex(HistoryError, "history_conflict"):
+            self.store.commit_terminal(content, alias, ingested_at_ms=self.now)
+        self.assertEqual((), self.store.pending_terminals())
+        self.assertEqual([], self.files())
+        delivery = self.store.commit_result(content, binding(), assignment(), body)
+        self.assertEqual(1, delivery.delivery_sequence)
+        self.assertEqual(1, self.store.record(delivery.record_id).source_sequence)
+        self.assertEqual(body, self.store.read_result(binding()))
+
+    def test_changed_claim_id_cannot_bypass_reserved_run_and_claim_digest(self):
+        self.assert_metadata_alias_is_refused(claim_id="other-claim")
+
+    def test_changed_claim_and_digest_cannot_bypass_reserved_run_attempt(self):
+        self.assert_metadata_alias_is_refused(claim_id="other-claim", claim_digest="b" * 64)
+
+    def test_changed_claim_and_run_cannot_bypass_reserved_claim_digest(self):
+        self.assert_metadata_alias_is_refused(claim_id="other-claim", run_handle="hrn_" + "b" * 48)
+
+    def test_request_matching_two_reservations_cannot_consume_either_identity(self):
+        self.reserve()
+        self.reserve(2)
+        _, content = self.payload()
+        alias = replace(binding(), run_handle=binding(2).run_handle)
+        with self.assertRaisesRegex(HistoryError, "history_conflict"):
+            self.store.commit_terminal(content, alias, ingested_at_ms=self.now)
+        self.assertEqual((), self.store.pending_terminals())
+        self.assertEqual((1, 2), (self.commit().delivery_sequence, self.commit(2).delivery_sequence))
+
+    def test_expired_reservation_still_blocks_metadata_identity_reuse(self):
+        self.reserve()
+        self.now = 61_000
+        self.assertEqual(1, self.store.expire_results())
+        _, content = self.payload()
+        with self.assertRaisesRegex(HistoryError, "history_conflict"):
+            self.store.commit_terminal(content, replace(binding(), claim_id="other-claim"), ingested_at_ms=self.now)
+        self.assertEqual((), self.store.pending_terminals())
+
+    def test_retired_body_keeps_exact_metadata_replay_but_not_an_alias(self):
+        self.reserve()
+        delivery = self.commit()
+        _, content = self.payload()
+        self.store.retire_result(binding())
+        self.assertEqual(delivery, self.store.commit_terminal(content, binding(), ingested_at_ms=self.now))
+        with self.assertRaisesRegex(HistoryError, "history_conflict"):
+            self.store.commit_terminal(content, replace(binding(), claim_id="other-claim"), ingested_at_ms=self.now)
+        self.assertEqual((delivery,), self.store.pending_terminals())
+        self.assertEqual([], self.files())
+
+    def test_boolean_assignment_attempt_cannot_reserve_or_write_a_body(self):
+        assigned = assignment()
+        assigned["attempt"] = True
+        with self.assertRaisesRegex(HistoryError, "history_invalid_input"):
+            self.store.reserve_result(binding(), assigned, hard_deadline_at_ms=2000)
+        self.assertEqual(0, self.store._connection.execute("SELECT COUNT(*) FROM result_reservations").fetchone()[0])
+        self.assertEqual([], self.files())
+
     def test_atomic_terminal_failure_retains_exact_prepared_retry_without_consuming_sequence(self):
         self.reserve()
         body, content = self.payload()
@@ -569,7 +629,7 @@ class ResultSchemaMigrationTests(unittest.TestCase):
             connection.commit()
             connection.close()
             path.chmod(0o600)
-            store = ProjectHistory(directory, PROJECT_A)
+            store = ProjectHistory(directory, PROJECT_A, allow_schema_upgrade=True)
             try:
                 self.assertEqual(content, store.record(record["record_id"]).content)
                 self.assertEqual((7, 3), tuple(store._connection.execute(
@@ -598,7 +658,7 @@ class ResultSchemaMigrationTests(unittest.TestCase):
             connection.close()
             path.chmod(0o600)
             with self.assertRaisesRegex(HistoryError, "history_incompatible"):
-                ProjectHistory(directory, PROJECT_A)
+                ProjectHistory(directory, PROJECT_A, allow_schema_upgrade=True)
             connection = sqlite3.connect(path)
             try:
                 self.assertEqual(1, connection.execute("PRAGMA user_version").fetchone()[0])
@@ -629,7 +689,7 @@ class Cut(ProjectHistory):
             if sql.lstrip().startswith('CREATE TABLE result_reservations'): os._exit(79)
         self._connection.set_trace_callback(trace)
         super()._initialize()
-Cut(Path(sys.argv[1]),sys.argv[2])
+Cut(Path(sys.argv[1]),sys.argv[2],allow_schema_upgrade=True)
 """
             completed = subprocess.run(
                 [sys.executable, "-I", "-B", "-S", "-c",
@@ -645,13 +705,45 @@ Cut(Path(sys.argv[1]),sys.argv[2])
                     "SELECT next_source_sequence,next_delivery_sequence FROM history_identity").fetchone())
             finally:
                 connection.close()
-            store = ProjectHistory(directory, PROJECT_A)
+            store = ProjectHistory(directory, PROJECT_A, allow_schema_upgrade=True)
             try:
                 self.assertEqual(2, store._connection.execute("PRAGMA user_version").fetchone()[0])
                 self.assertEqual((7, 3), tuple(store._connection.execute(
                     "SELECT next_source_sequence,next_delivery_sequence FROM history_identity").fetchone()))
             finally:
                 store.close()
+
+    def test_normal_open_never_upgrades_schema1_even_with_result_key_configuration(self):
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
+            directory = Path(temporary)
+            path = directory / "history.sqlite3"
+            connection = sqlite3.connect(path)
+            connection.executescript(project_history._SCHEMA_V1)
+            connection.execute("INSERT INTO history_identity VALUES(?,7,3)", (PROJECT_A,))
+            connection.execute(f"PRAGMA application_id={project_history._APPLICATION_ID}")
+            connection.execute("PRAGMA user_version=1")
+            connection.commit()
+            connection.close()
+            path.chmod(0o600)
+            for options in ({}, {"allow_schema_upgrade": False},
+                            {"result_key": KEY, "result_capacity": ResultCapacity(2, MAX_RESULT_BODY_BYTES, 60_000, 120_000)}):
+                with self.subTest(options=list(options)), self.assertRaisesRegex(HistoryError, "history_incompatible"):
+                    ProjectHistory(directory, PROJECT_A, **options)
+                connection = sqlite3.connect(path)
+                try:
+                    self.assertEqual(1, connection.execute("PRAGMA user_version").fetchone()[0])
+                    self.assertIsNone(connection.execute("SELECT name FROM sqlite_master WHERE name='result_identity'").fetchone())
+                    self.assertEqual((7, 3), connection.execute(
+                        "SELECT next_source_sequence,next_delivery_sequence FROM history_identity").fetchone())
+                finally:
+                    connection.close()
+
+    def test_upgrade_option_rejects_non_boolean_values_before_opening_files(self):
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
+            for invalid in (None, 0, 1, "true", 1.0):
+                with self.subTest(invalid=invalid), self.assertRaisesRegex(HistoryError, "history_invalid_input"):
+                    ProjectHistory(Path(temporary), PROJECT_A, allow_schema_upgrade=invalid)
+            self.assertEqual([], list(Path(temporary).iterdir()))
 
 
 if __name__ == "__main__":
