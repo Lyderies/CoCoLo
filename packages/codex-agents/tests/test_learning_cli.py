@@ -847,7 +847,6 @@ class LearningCliTests(unittest.TestCase):
         observation_path = self._write("host-observation.json", observation)
         report = self._run(
             "learning-record-host-result",
-            "--full-report",
             "--task", str(task_path),
             "--assignment", str(assignment_path),
             "--parent-grant", str(parent_path),
@@ -855,6 +854,8 @@ class LearningCliTests(unittest.TestCase):
             "--observation", str(observation_path),
         )
         self.assertEqual(run_id, report["outcome"]["run_id"])
+        self.assertEqual("compact-learning-cycle-v1", report["learning_cycle"]["format"])
+        self.assertEqual("available", report["learning_cycle"]["summary_state"])
         self.assertEqual("unverified", report["outcome"]["status"])
         self.assertFalse(report["outcome"]["accepted"])
         self.assertFalse(report["outcome"]["deterministic_pass"])
@@ -959,10 +960,12 @@ class LearningCliTests(unittest.TestCase):
         )
         try:
             with ledger.repository(self.project_id) as repository:
+                persisted_cases = repository.records("evaluation_case")
                 mined_sources = {
-                    repository.record(record_id, "evaluation_case")["source_outcome_id"]
-                    for record_id in report["learning_cycle"]["mined_case_ids"]
+                    record["source_outcome_id"]
+                    for record in persisted_cases
                 }
+            self.assertEqual(len(persisted_cases), report["learning_cycle"]["mined_case_count"])
             self.assertNotIn(report["outcome"]["record_id"], mined_sources)
         finally:
             ledger.close()
@@ -1008,6 +1011,7 @@ class LearningCliTests(unittest.TestCase):
         }
         failed = self._run(
             "learning-record-host-result",
+            "--full-report",
             "--task", str(self._write("failed-task.json", task)),
             "--assignment", str(self._write("failed-assignment.json", assigned)),
             "--parent-grant", str(self._write("failed-parent.json", parent_grant)),
@@ -1017,6 +1021,8 @@ class LearningCliTests(unittest.TestCase):
         self.assertEqual("failed", failed["outcome"]["status"])
         self.assertEqual("turn_failed", failed["event"]["event_code"])
         self.assertTrue(failed["outcome"]["terminal_failure"])
+        self.assertIn("slices", failed["learning_cycle"]["analysis"])
+        self.assertIn("mined_case_ids", failed["learning_cycle"])
 
     def test_generate_candidate_requires_qa_and_selects_exact_paired_cohorts(self) -> None:
         spec, qa_rows = self._seed_candidate_cli_cohort()

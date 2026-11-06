@@ -53,6 +53,7 @@ Add `--full-report` to the original command to receive the complete legacy respo
 the analysis and exact identifier lists. Choose this before recording when those details are
 needed. Repeating a mutation is not retrieval of its previous report: its incidental learning
 cycle may differ. This option does not create an artifact handle or change retry permission.
+This increment provides no later lookup for the omitted identifier lists.
 
 Outcomes, events, commits, receipts, verifier decisions and safe dispatch diagnostics remain
 complete in both modes. A successful record command can still contain rejected QA. Dispatch
