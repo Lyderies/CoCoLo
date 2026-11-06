@@ -363,6 +363,38 @@ class AccountApiTests(unittest.TestCase):
                 self.assertTrue(refused_before_lock, "view reached a foreign owner lock")
                 self.assertEqual(["account_wrong_owner"], results)
 
+    def test_thread_equality_cannot_adopt_the_account_connection(self):
+        class EqualThread(threading.Thread):
+            __hash__ = object.__hash__
+
+            def __eq__(self, other):
+                return True
+
+        for reconstruct in (False, True):
+            with self.subTest(reconstruct=reconstruct):
+                results = []
+
+                def read():
+                    try:
+                        views = AccountOwnerViews(self.ledger) if reconstruct else self.views
+                        views.project(self.projects[0])
+                    except AccountError as exc:
+                        results.append(exc.reason_code)
+                    except AssertionError:
+                        results.append("foreign_resource_access")
+                    else:
+                        results.append("accepted")
+
+                with mock.patch.object(
+                    self.state, "harden_database_files", side_effect=AssertionError("foreign resource access"),
+                ) as harden:
+                    worker = EqualThread(target=read, daemon=True)
+                    worker.start()
+                    worker.join(3)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(["account_wrong_owner"], results)
+                harden.assert_not_called()
+
     def test_reconstructing_views_after_fork_cannot_adopt_the_ledger(self):
         if not hasattr(os, "fork"):
             self.skipTest("requires POSIX fork")

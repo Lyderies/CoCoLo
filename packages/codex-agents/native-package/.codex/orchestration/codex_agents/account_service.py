@@ -63,9 +63,15 @@ class AccountOwnerViews:
         self._guard()
 
     def _guard(self) -> None:
+        origin = self._origin
+        current = getattr(self._ledger, "_connection_origin", None)
         if (
-            self._origin != (os.getpid(), threading.current_thread())
-            or self._origin != self._ledger._connection_origin
+            type(origin) is not tuple or len(origin) != 2
+            or type(current) is not tuple or len(current) != 2
+            or type(origin[0]) is not int or origin[0] != os.getpid()
+            or origin[1] is not threading.current_thread()
+            or type(current[0]) is not int or current[0] != origin[0]
+            or current[1] is not origin[1]
         ):
             raise AccountError("account_wrong_owner")
 

@@ -259,7 +259,8 @@ the full request digest, project, runtime and permitted operations; the handler 
 the callback. Hook/app-server sources are limited to health. Health reports transport response
 only, explicitly `database_checked=false`, and avoids the persistence backend and its writer lock.
 SQL views require the process/thread that opened the connection, stamped on the ledger rather
-than inferred when a wrapper is constructed. A newly constructed view cannot adopt another
+than inferred when a wrapper is constructed. Thread checks use object identity so a subclass's
+equality method cannot make a foreign thread an owner. A newly constructed view cannot adopt another
 thread's or an inherited ledger. Views check this origin before each owner lock; forked handlers
 refuse before acquiring inherited locks. Closing a handler leaves the shared persistence owner
 open. The origin stamp does not change legacy collector thread handoff behavior.
