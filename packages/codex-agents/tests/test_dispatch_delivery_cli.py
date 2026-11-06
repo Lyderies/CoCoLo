@@ -15,7 +15,7 @@ from tests.support import TEMP_ROOT
 from tests.learning_support import assignment, result
 
 import cli
-from codex_agents.bridge import BridgeRefused, _fenced_result
+from codex_agents.bridge import BridgeInterrupted, BridgeRefused, _fenced_result
 from codex_agents.contracts import ContractError, validate_result
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.learning_store import CollectorError, LedgerError
@@ -25,12 +25,17 @@ class DispatchDeliveryCliTests(unittest.TestCase):
     """CLI boundary fixture; native admission/cleanup are not simulated proof."""
 
     def invoke(self, bridge_report, *, resume_failure=True, validation_error=None,
-               owner_error=None, bridge_error=None):
+               owner_error=None, bridge_error=None, close_error=None,
+               guard_exit_error=None, probe=None):
         ledger = mock.Mock()
+        ledger.close.side_effect = close_error
         maintenance = mock.Mock()
         if resume_failure:
             maintenance.resume.side_effect = CollectorError("CANARY-private-restart-detail")
         managed = cli._RestartingLedger(ledger, maintenance)
+        guard = mock.MagicMock()
+        guard.__exit__.return_value = False
+        guard.__exit__.side_effect = guard_exit_error
         assigned = assignment()
         inputs = {"task.json": {"id": assigned["task_id"]}, "route.json": {"provider": "codex"},
                   "assignment.json": assigned, "grant.json": assigned["permissions"]}
@@ -50,8 +55,11 @@ class DispatchDeliveryCliTests(unittest.TestCase):
                 stack.enter_context(mock.patch.object(cli, "_json_input", side_effect=lambda name: inputs[name]))
                 dispatched = stack.enter_context(mock.patch.object(cli, "dispatch_bridge",
                     return_value=bridge_report, side_effect=bridge_error))
-                stack.enter_context(mock.patch.object(cli, "bridge_signal_guard", side_effect=contextlib.nullcontext))
+                stack.enter_context(mock.patch.object(cli, "bridge_signal_guard", return_value=guard))
                 stack.enter_context(contextlib.redirect_stdout(output))
+                if probe is not None:
+                    probe.update(ledger=ledger, maintenance=maintenance, dispatched=dispatched,
+                                 output=output, guard=guard)
                 code = cli.main()
             decoded = json.loads(output.getvalue())  # Exactly one complete JSON object.
             if dispatched.call_count:
@@ -135,6 +143,52 @@ class DispatchDeliveryCliTests(unittest.TestCase):
         dispatched.assert_called_once()
         ledger.close.assert_called_once_with()
         maintenance.resume.assert_called_once_with()
+
+    def test_restart_error_before_return_does_not_become_a_completed_report(self):
+        code, response, ledger, maintenance, dispatched, *_ = self.invoke(
+            self.report(), bridge_error=cli.CollectorRestartError(cli._COMPLETED_LEDGER_RESTART_ERROR),
+        )
+        self.assertEqual((2, cli._COMPLETED_LEDGER_RESTART_ERROR), (code, response["error"]))
+        self.assertFalse(response["ready"])
+        self.assertTrue({"result", "bridge_report", "dispatch_completed", "post_operation_error"}.isdisjoint(response))
+        dispatched.assert_called_once()
+        ledger.close.assert_called_once_with()
+        maintenance.resume.assert_called_once_with()
+
+    def test_underlying_close_error_after_return_retains_its_error_path(self):
+        code, response, ledger, maintenance, dispatched, *_ = self.invoke(
+            self.report(), close_error=LedgerError("ledger close refused"),
+        )
+        self.assertEqual((2, "ledger close refused"), (code, response["error"]))
+        self.assertFalse(response["ready"])
+        self.assertTrue({"result", "bridge_report", "dispatch_completed", "post_operation_error"}.isdisjoint(response))
+        dispatched.assert_called_once()
+        ledger.close.assert_called_once_with()
+        maintenance.resume.assert_called_once_with()
+
+    def test_nonlocal_dispatch_interruption_survives_close_and_resume(self):
+        for error in (BridgeInterrupted(143), KeyboardInterrupt()):
+            with self.subTest(error=type(error).__name__):
+                probe = {}
+                with self.assertRaises(type(error)) as raised:
+                    self.invoke(self.report(), bridge_error=error, probe=probe)
+                self.assertIs(error, raised.exception)
+                self.assertEqual("", probe["output"].getvalue())
+                probe["dispatched"].assert_called_once()
+                probe["ledger"].close.assert_called_once_with()
+                probe["maintenance"].resume.assert_called_once_with()
+
+    def test_signal_guard_exit_interruption_after_return_is_not_suppressed(self):
+        probe = {}
+        error = BridgeInterrupted(130)
+        with self.assertRaises(BridgeInterrupted) as raised:
+            self.invoke(self.report(), guard_exit_error=error, probe=probe)
+        self.assertIs(error, raised.exception)
+        self.assertEqual("", probe["output"].getvalue())
+        probe["dispatched"].assert_called_once()
+        probe["guard"].__exit__.assert_called_once()
+        probe["ledger"].close.assert_called_once_with()
+        probe["maintenance"].resume.assert_called_once_with()
 
 
 if __name__ == "__main__":
