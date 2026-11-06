@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = ROOT / "setup.sh"
@@ -1678,7 +1679,16 @@ class WizardTerminalTests(unittest.TestCase):
         self.assertIn("could not check whether installed files are ignored", self.screen)
         self.assertNotIn("Nothing to commit", self.screen)
         self.send("\r")  # Commit now
-        self.expect("Not committed")
+        # The status and detail arrive in separate terminal writes. Exercise
+        # partial reads and wait for the detail rather than asserting mid-frame.
+        original_read = os.read
+
+        def read_part(fd: int, size: int) -> bytes:
+            return original_read(fd, min(size, 16) if fd == self.fd else size)
+
+        with mock.patch.object(os, "read", side_effect=read_part):
+            self.expect("Not committed")
+            self.expect("filter.planted.clean")
         plain = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", self.screen)
         self.assertIn("filter.planted.clean", plain)
         final = self.finish_after_install()
