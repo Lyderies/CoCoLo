@@ -849,3 +849,40 @@ requiring an explicit migration/drain contract; no index build is added to reque
 Reserved capacity, fair worker custody, independent health/control, bounded final
 commit rechecks, native authentication, normal-client migration and release gates
 remain required. This SQL preparation does not complete C3, C5, C18 or C19.
+
+### Owner-local signature job intake
+
+`SignatureJobIntake` reserves a full row, field-byte and job allocation before
+calling the existing bounded capture. Explicit immutable limits bound active
+projects, jobs per project, per-job fields and selected work. Products cannot
+exceed 4,096 jobs, 8,192 reserved rows or 64 MiB of reserved fields. Each project
+has its own configured share. These ceilings are not installed operating defaults
+or exact process-heap accounting. No caller-supplied snapshot or callback is accepted.
+One intake is bound to each existing ledger lifetime; duplicate wrappers over the
+same ledger cannot create independent copies of that reservation budget. This
+in-process binding is not native account identity or cross-restart recovery.
+
+Pending inputs use FIFO per project and round-robin project selection. Selection
+skips a project already holding a selected slot without reordering its FIFO and
+examines at most the active rotation. At most one job per project is selected.
+Selection reserves a future execution slot; it does not launch or prove a worker.
+No crypto, extra database, key/history write, client/RPC operation or listener is
+enabled. Status contains bounded counts, and handles are in-process lookup keys
+without native caller or project authority.
+
+Cancellation before selection releases the owned inputs. A selected cancellation
+retains all allocations until a separate trusted owner confirmation. A stopped
+noncancelled job retains its inputs and row/byte reservation through final owner
+consumption. The owner-only returned-input accessor supplies unverified data for
+a future bounded final check; it keeps the reservation. Confirmation methods only
+update metadata: the actual fixed adapter
+must establish exact worker termination and drop its own input references first.
+A handle, flag or dataclass is not termination, verification or admission proof.
+
+This in-memory preparation is not durable global capacity authority. Creating a
+fresh empty object does not recover orphan workers or old controller epochs.
+Activation still requires durable claims/replay and conservative recovery, actual
+fixed-worker custody, bounded fresh final checks, independent health/control,
+native authentication and normal-client migration. Earlier failed/exhausted gates
+and the failed planning result remain unchanged; C3, C5, C18, C19 and release
+acceptance are not completed by these metadata transitions.

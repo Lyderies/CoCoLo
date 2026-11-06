@@ -71,6 +71,7 @@ RUNTIME_FILES = (
     "codex_agents/service_transport.py",
     "codex_agents/session_guard.py",
     "codex_agents/signature_inputs.py",
+    "codex_agents/signature_job_intake.py",
     "codex_agents/sql_read_budget.py",
     "codex_agents/supervision.py",
     "codex_agents/validation.py",
