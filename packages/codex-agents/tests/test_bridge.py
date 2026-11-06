@@ -2206,7 +2206,7 @@ class BridgeLifecycleTests(CliTestCase):
         validated = self.cli("validate-result", *context, "--result", result_path)
         self.assertEqual(dispatched["result"]["assignment_id"], validated["assignment_id"])
         recorded = self.cli(
-            "learning-record-host-result", *context, "--result", result_path,
+            "learning-record-host-result", "--full-report", *context, "--result", result_path,
             "--observation", self.write("observation.json", {
                 "run_handle": opened["run_handle"],
                 "result_attempts": [
@@ -2215,6 +2215,8 @@ class BridgeLifecycleTests(CliTestCase):
             }),
         )
         self.assertEqual("claude-opus-5-5", recorded["outcome"]["model"])
+        self.assertIn("slices", recorded["learning_cycle"]["analysis"])
+        self.assertIn("mined_case_ids", recorded["learning_cycle"])
         self.assertEqual("claude_agents_researcher", recorded["outcome"]["role"])
         self.assertEqual(
             dispatched["bridge_report"]["client_diagnostics"],
@@ -2278,6 +2280,9 @@ class BridgeLifecycleTests(CliTestCase):
             "--observation", observation,
         )
         self.assertEqual("gpt-6.1-sol", recorded["outcome"]["model"])
+        self.assertEqual("compact-learning-cycle-v1", recorded["learning_cycle"]["format"])
+        self.assertEqual("available", recorded["learning_cycle"]["summary_state"])
+        self.assertNotIn("analysis", recorded["learning_cycle"])
 
     def test_codex_open_dispatch_validate_and_record(self) -> None:
         # The same lifecycle through the ledger, as a Claude primary bridges it.

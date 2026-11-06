@@ -40,6 +40,26 @@ no automatic replacement with a packaged role. The project owner can align its m
 patch authorship; the primary can meanwhile write code and delegate eligible research and review tasks.
 The provider, model, effort and role still come from `learning-route`.
 
+## Compact learning reports
+
+`learning-record-host-result`, `learning-record-operational-qa` and `learning-review-case`
+return a compact `learning_cycle` summary by default. It counts configurations, diagnosis
+occurrences, mined cases and proposed candidates without repeating the historical analysis
+or its identifier lists. The summary identifies its format and omitted fields. An unsupported
+analysis or oversized collection reports `summary_state: unavailable` with null counts;
+this does not change the command's commit or QA decision.
+
+Add `--full-report` to the original command to receive the complete legacy response, including
+the analysis and exact identifier lists. Choose this before recording when those details are
+needed. Repeating a mutation is not retrieval of its previous report: its incidental learning
+cycle may differ. This option does not create an artifact handle or change retry permission.
+
+Outcomes, events, commits, receipts, verifier decisions and safe dispatch diagnostics remain
+complete in both modes. A successful record command can still contain rejected QA. Dispatch
+results, result validation and explicit `learning-analyze`/`learning-run-cycle` reports keep
+their complete output. The compact cycle summary is under 2 KiB; that bound does not truncate
+or impose a new limit on the authoritative fields beside it.
+
 ## Previewing a bridge assignment
 
 Run `dispatch-preflight` with the same `--project-root`, `--task`, `--assignment` and

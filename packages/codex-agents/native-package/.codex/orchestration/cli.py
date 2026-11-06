@@ -118,6 +118,7 @@ from codex_agents.learning_engine import (  # noqa: E402
     validate_runtime_candidate,
 )
 from codex_agents.collector_client import CollectorClient  # noqa: E402
+from codex_agents.cli_reports import command_report  # noqa: E402
 from codex_agents.collector_contracts import (  # noqa: E402
     CollectorError,
     CollectorRestartError,
@@ -264,6 +265,10 @@ def _bounded_json_input(path: str) -> dict:
 
 def _print(data: object) -> None:
     print(json.dumps(data, indent=2, sort_keys=True))
+
+
+def _print_command_report(args: argparse.Namespace, report: dict) -> None:
+    _print(command_report(args.command, report, full=getattr(args, "full_report", False)))
 
 
 def _add_assignment_context(
@@ -896,6 +901,10 @@ def build_parser() -> argparse.ArgumentParser:
     learning_host_result.add_argument("--observation", required=True)
     learning_host_result.add_argument("--evaluation-assignment-digest")
     learning_host_result.add_argument("--trial-id")
+    learning_host_result.add_argument(
+        "--full-report", action="store_true",
+        help="include the complete learning-cycle analysis and record identifiers",
+    )
 
     learning_open_host = subparsers.add_parser(
         "learning-open-host-run",
@@ -1078,6 +1087,10 @@ def build_parser() -> argparse.ArgumentParser:
     learning_operational_qa.add_argument("--check-receipt", required=True)
     learning_operational_qa.add_argument("--verifier-assignment", required=True)
     learning_operational_qa.add_argument("--verifier-result", required=True)
+    learning_operational_qa.add_argument(
+        "--full-report", action="store_true",
+        help="include the complete learning-cycle analysis and record identifiers",
+    )
 
     learning_run_checks = subparsers.add_parser(
         "learning-run-operational-checks",
@@ -1163,6 +1176,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--destination", required=True, choices=("promotion_holdout", "canary")
     )
     learning_review.add_argument("--freeze", action="store_true")
+    learning_review.add_argument(
+        "--full-report", action="store_true",
+        help="include the complete learning-cycle analysis and record identifiers",
+    )
 
     learning_analyze = subparsers.add_parser(
         "learning-analyze", help="analyze admitted project outcomes by configuration"
@@ -2202,7 +2219,7 @@ def main() -> int:
                     report["learning_cycle"] = ledger.run_learning_cycle(
                         project_id, as_of_ms=trusted_now_ms
                     )
-                    _print(report)
+                    _print_command_report(args, report)
                     return 0
                 policy = load_policy(
                     ORCHESTRATION_ROOT / "config" / "routing-policy.json"
@@ -3199,7 +3216,7 @@ def main() -> int:
     ) as exc:
         _print(_with_codex_hint(args.command, {"ready": False, "error": str(exc)}))
         return 2
-    _print(report)
+    _print_command_report(args, report)
     successful = report.get("ready", True)
     if args.command == "validate" and args.package_only:
         successful = report.get("package_ready", False)

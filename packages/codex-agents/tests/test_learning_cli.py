@@ -847,6 +847,7 @@ class LearningCliTests(unittest.TestCase):
         observation_path = self._write("host-observation.json", observation)
         report = self._run(
             "learning-record-host-result",
+            "--full-report",
             "--task", str(task_path),
             "--assignment", str(assignment_path),
             "--parent-grant", str(parent_path),
