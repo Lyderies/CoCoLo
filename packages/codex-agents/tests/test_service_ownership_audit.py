@@ -71,6 +71,35 @@ class OwnershipMemoryTests(unittest.TestCase):
         self.assertIn("persistence_dependency", self.reasons(report))
         self.assertFalse(report["boundary_conformant"])
 
+    def test_owner_member_imports_fail_without_the_owner_source(self):
+        for owner in sorted(audit.PERSISTENCE_MODULES - {"sqlite3", "_sqlite3"}):
+            base, _, member = owner.rpartition(".")
+            for initializer in ({}, {"codex_agents/__init__.py": ""}):
+                with self.subTest(owner=owner, initializer=bool(initializer)):
+                    report = self.check(initializer | {
+                        "client.py": f"from {base} import {member} as owner\n",
+                    })
+                    self.assertFalse(report["boundary_conformant"])
+                    self.assertIn("persistence_dependency", self.reasons(report))
+
+    def test_aggregate_bytes_are_refused_before_parsing_any_module(self):
+        with mock.patch.object(audit, "MAX_TOTAL_BYTES", 3), \
+                mock.patch.object(audit.ast, "parse", wraps=audit.ast.parse) as parse, \
+                self.assertRaisesRegex(audit.AuditError, "audit_source_limit"):
+            self.check({"client.py": "x=1\n", "helper.py": "x=2\n"})
+        parse.assert_not_called()
+
+    def test_ast_limits_stop_before_later_modules_or_scanning(self):
+        for limit, source in (("MAX_AST_NODES", "x=1\n"), ("MAX_CALLS", "f()\n"),
+                              ("MAX_IMPORTS", "import one, two\n")):
+            with self.subTest(limit=limit), mock.patch.object(audit, limit, 1), \
+                    mock.patch.object(audit.ast, "parse", wraps=audit.ast.parse) as parse, \
+                    mock.patch.object(audit, "Scanner") as scanner, \
+                    self.assertRaisesRegex(audit.AuditError, "audit_source_limit"):
+                self.check({"client.py": source * 2, "later.py": "x=1\n"})
+            self.assertEqual(1, parse.call_count)
+            scanner.assert_not_called()
+
     def test_pure_client_graph_is_not_confused_by_string_literals(self):
         report = self.check({
             "pkg/__init__.py": "",
@@ -91,6 +120,8 @@ class OwnershipMemoryTests(unittest.TestCase):
             "import builtins as native\nnative.__import__('CANARY')\n",
             "loader = __import__\n",
             "run = eval\n",
+            "import builtins as native\ngetattr(native, 'CANARY')()\n",
+            "from builtins import getattr as lookup\nimport builtins\nlookup(builtins, 'CANARY')()\n",
             "def submit(connection): return connection.execute('CANARY')\n",
         ):
             with self.subTest(source_kind=source.splitlines()[0]):
@@ -98,6 +129,39 @@ class OwnershipMemoryTests(unittest.TestCase):
                 self.assertFalse(report["boundary_conformant"])
                 self.assertTrue(self.reasons(report) & {"dynamic_loading", "possible_sql_call"})
                 self.assertNotIn("CANARY", json.dumps(report))
+
+    def test_known_owner_calls_fail_without_a_submodule_import(self):
+        for owner in sorted(audit.PERSISTENCE_MODULES - {"sqlite3", "_sqlite3"}):
+            report = self.check({"client.py": f"import codex_agents\n{owner}.Owner()\n"})
+            self.assertFalse(report["boundary_conformant"])
+            self.assertIn("persistence_call", self.reasons(report))
+
+    def test_parser_memory_error_has_a_fixed_cli_error(self):
+        with mock.patch.object(audit, "load_sources", return_value={"client.py": ""}), \
+                mock.patch.object(audit.ast, "parse", side_effect=MemoryError("CANARY")), \
+                contextlib.redirect_stdout(io.StringIO()) as stdout:
+            status = audit.main(["inventory", "--client-root", "client.py"])
+        self.assertEqual(2, status)
+        self.assertEqual({"ready": False, "reason_code": "audit_source_limit"}, json.loads(stdout.getvalue()))
+
+    def test_long_import_prefix_fails_before_alias_expansion(self):
+        prefix = ".".join(["module"] * 80)
+        for source in (f"import {prefix}\n", f"from {prefix} import one, two\n"):
+            with self.assertRaisesRegex(audit.AuditError, "audit_source_limit"):
+                self.check({"client.py": source})
+
+    def test_record_budget_stops_scan_and_client_violation_expansion(self):
+        with mock.patch.object(audit, "MAX_REPORT_BYTES", 100), \
+                mock.patch.object(audit, "_render_bounded") as render, \
+                self.assertRaisesRegex(audit.AuditError, "audit_source_limit"):
+            self.check({"client.py": "f()\n" * 100})
+        render.assert_not_called()
+        sources = {f"client{i}.py": "import sqlite3\n" for i in range(10)}
+        with mock.patch.object(audit, "MAX_REPORT_BYTES", 500), \
+                mock.patch.object(audit, "_render_bounded") as render, \
+                self.assertRaisesRegex(audit.AuditError, "audit_source_limit"):
+            audit.audit_sources(sources, list(sources))
+        render.assert_not_called()
 
     def test_missing_local_import_wildcard_and_missing_root_do_not_pass(self):
         variants = [
@@ -241,6 +305,67 @@ class OwnershipFileTests(unittest.TestCase):
                 self.assertRaisesRegex(audit.AuditError, "audit_source_limit"):
             audit.load_sources(self.root)
         with mock.patch.object(audit, "MAX_TOTAL_BYTES", 10), \
+                self.assertRaisesRegex(audit.AuditError, "audit_source_limit"):
+            audit.load_sources(self.root)
+
+    def test_replaced_ancestor_never_reads_outside_source(self):
+        package = self.root / "pkg"
+        package.mkdir()
+        (package / "client.py").write_text("ORIGINAL = 1\n")
+        outside = self.base / "outside"
+        outside.mkdir()
+        (outside / "client.py").write_text("CANARY = 'outside'\n")
+        held = self.base / "held"
+        inode = package.stat().st_ino
+        real_scandir = os.scandir
+        swapped = False
+
+        def replace_after_directory_open(value):
+            nonlocal swapped
+            iterator = real_scandir(value)
+            current = os.fstat(value) if type(value) is int else os.stat(value)
+            if current.st_ino == inode and not swapped:
+                package.rename(held)
+                package.symlink_to(outside, target_is_directory=True)
+                swapped = True
+            return iterator
+
+        with mock.patch.object(audit.os, "scandir", side_effect=replace_after_directory_open):
+            try:
+                sources = audit.load_sources(self.root)
+            except audit.AuditError as exc:
+                self.assertEqual("audit_unsafe_source", exc.reason_code)
+            else:
+                self.assertEqual({"pkg/client.py": "ORIGINAL = 1\n"}, sources)
+        self.assertTrue(swapped)
+
+    def test_directory_entry_limit_stops_enumeration_incrementally(self):
+        real_scandir = os.scandir
+        for index in range(5):
+            (self.root / f"ignored{index}.txt").write_text("")
+        yielded = []
+
+        @contextlib.contextmanager
+        def counted(value):
+            with real_scandir(value) as iterator:
+                def entries():
+                    for entry in iterator:
+                        yielded.append(entry.name)
+                        yield entry
+                yield entries()
+
+        with mock.patch.object(audit.os, "scandir", side_effect=counted), \
+                mock.patch.object(audit, "MAX_IMPORTS", 2), \
+                self.assertRaisesRegex(audit.AuditError, "audit_source_limit"):
+            audit.load_sources(self.root)
+        self.assertEqual(3, len(yielded))
+
+    def test_deep_empty_tree_is_bounded(self):
+        current = self.root
+        for _ in range(4):
+            current = current / "pkg"
+            current.mkdir()
+        with mock.patch.object(audit, "MAX_DIRECTORY_DEPTH", 2), \
                 self.assertRaisesRegex(audit.AuditError, "audit_source_limit"):
             audit.load_sources(self.root)
 

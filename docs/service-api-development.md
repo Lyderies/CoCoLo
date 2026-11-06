@@ -290,6 +290,11 @@ The default JSON is compact. `--full` returns bounded module/import/call-site me
 it includes no source text or call arguments and fails rather than truncating oversized
 output. Call counts are AST sites, not regex line counts or execution counts. The report
 labels module-wide alias attribution and unknown object/external-package flows explicitly.
+Traversal opens the selected root and its children through directory descriptors without
+following symlinks; replacing an ancestor path cannot redirect subsequent file reads.
+Directory entries and depth, aggregate source bytes before parsing, each parsed AST and
+import/call records are bounded incrementally. A single parser allocation is bounded by
+the per-file byte limit; this is not an operating-system memory quota.
 
 `--client-root` selects explicit source-relative Python paths, for example the pure
 account/history/collector clients. A pass covers those listed roots only. The check

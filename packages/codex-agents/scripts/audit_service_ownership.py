@@ -39,6 +39,7 @@ MAX_SOURCE_BYTES = 1_048_576
 MAX_TOTAL_BYTES = 8 * MAX_SOURCE_BYTES
 MAX_AST_NODES = 1_000_000
 MAX_AST_DEPTH = 128
+MAX_DIRECTORY_DEPTH = 64
 MAX_CALLS = 20_000
 MAX_IMPORTS = 8_192
 MAX_REPORT_BYTES = 4 * MAX_SOURCE_BYTES
@@ -51,6 +52,14 @@ class AuditError(RuntimeError):
     def __init__(self, reason: str):
         self.reason_code = reason if reason in REASONS else "audit_invalid_source"
         super().__init__(self.reason_code)
+
+
+def _charge_record(budget, value):
+    """Cap collected metadata as well as the final JSON serialization."""
+    for chunk in json.JSONEncoder(sort_keys=True).iterencode(value):
+        budget["report_bytes"] += len(chunk.encode())
+        if budget["report_bytes"] > MAX_REPORT_BYTES:
+            raise AuditError("audit_source_limit")
 
 
 def source_name(name: str) -> PurePosixPath:
@@ -114,24 +123,29 @@ def _exports(tree: ast.Module) -> set[str]:
 
 
 class Scanner(ast.NodeVisitor):
-    def __init__(self, path, tree, modules, packages, exports):
+    def __init__(self, path, tree, modules, packages, exports, budget):
         self.path, self.tree = path, tree
         self.module = module_name(path)
         self.package = self.module if path.endswith("/__init__.py") else self.module.rpartition(".")[0]
         self.modules, self.packages, self.exports = modules, packages, exports
         self.local_roots = {name.split(".")[0] for name in modules}
         self.aliases = {}
-        self.imports, self.unknowns, self.calls = [], [], []
+        self.imports, self.unknowns, self.calls = set(), [], []
+        self.budget = budget
         self.scope, self.commands = [], []
         # Bind import aliases module-wide for syntactic call attribution only.
         # This deliberately does not claim flow-sensitive object/type resolution.
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
+                    if len(alias.name) > 512 or len(alias.asname or "") > 160:
+                        raise AuditError("audit_source_limit")
                     self.aliases[alias.asname or alias.name.split(".")[0]] = alias.name if alias.asname else alias.name.split(".")[0]
             elif isinstance(node, ast.ImportFrom):
                 base = self._base(node)
                 for alias in node.names:
+                    if len(base) + len(alias.name) + 1 > 512 or len(alias.asname or "") > 160:
+                        raise AuditError("audit_source_limit")
                     self.aliases[alias.asname or alias.name] = ".".join(filter(None, (base, alias.name)))
 
     def _base(self, node):
@@ -148,23 +162,36 @@ class Scanner(ast.NodeVisitor):
         return self.aliases.get(head, head) + (dot + tail if dot else "")
 
     def _unknown(self, node, reason):
-        self.unknowns.append({"line": node.lineno, "reason": reason})
+        item = {"line": node.lineno, "reason": reason}
+        _charge_record(self.budget, item)
+        self.unknowns.append(item)
 
     def _import(self, node, target):
+        if len(target) > 512:
+            raise AuditError("audit_source_limit")
         if not target or any(_IDENTIFIER.fullmatch(part) is None for part in target.split(".")):
             self._unknown(node, "unresolved_import")
             return
         local = target in self.modules or target in self.packages
         local_top = target.split(".")[0] in self.local_roots
         missing = local_top and not local
-        self.imports.append({"line": node.lineno, "target": target, "local": local, "missing": missing})
+        self._edge(node.lineno, target, local, missing)
         if missing:
             self._unknown(node, "missing_local_import")
         pieces = target.split(".")
         for size in range(1, len(pieces)):
             parent = ".".join(pieces[:size])
             if parent in self.modules:
-                self.imports.append({"line": node.lineno, "target": parent, "local": True, "missing": False})
+                self._edge(node.lineno, parent, True, False)
+
+    def _edge(self, line, target, local, missing):
+        edge = (line, target, local, missing)
+        if edge not in self.imports:
+            if self.budget["edges"] >= MAX_IMPORTS:
+                raise AuditError("audit_source_limit")
+            _charge_record(self.budget, edge)
+            self.budget["edges"] += 1
+            self.imports.add(edge)
 
     def visit_Import(self, node):
         for alias in node.names:
@@ -177,10 +204,11 @@ class Scanner(ast.NodeVisitor):
             return
         self._import(node, base)
         for alias in node.names:
+            member = base + "." + alias.name
             if alias.name == "*":
                 self._unknown(node, "wildcard_import")
-            elif base + "." + alias.name in self.modules or base + "." + alias.name in self.packages:
-                self._import(node, base + "." + alias.name)
+            elif member in self.modules or member in self.packages or (_forbidden(member) and not _forbidden(base)):
+                self._import(node, member)
             elif base in self.modules and alias.name not in self.exports[base]:
                 self._unknown(node, "unresolved_local_symbol")
             elif base in self.packages and base not in self.modules:
@@ -217,19 +245,19 @@ class Scanner(ast.NodeVisitor):
             categories.append("ledger_named_receiver")
         if method in KEY_METHODS or qualified.rsplit(".", 1)[-1] in KEY_METHODS:
             categories.append("key_derivation_candidate")
-        if qualified.startswith(("sqlite3.", "_sqlite3.")) or qualified in {
-            "codex_agents.learning_store.LearningLedger", "codex_agents.learning_store.LearningState",
-            "codex_agents.project_history.ProjectHistory",
-        }:
+        if _forbidden(qualified):
             categories.append("persistence_constructor_or_call")
         if isinstance(node.func, ast.Attribute) and method in SQL_METHODS:
             categories.append("possible_sql_call")
-        if raw == "getattr" and node.args and self._qualified(node.args[0]) == "importlib":
+        if ((raw == "getattr" or qualified == "builtins.getattr") and node.args
+                and self._qualified(node.args[0]) in {"importlib", "builtins"}):
             self._unknown(node, "dynamic_loading")
-        self.calls.append({
+        record = {
             "line": node.lineno, "scope": ".".join(self.scope), "commands": sorted(set(self.commands)),
             "callee": raw, "import_qualified_candidate": qualified, "categories": categories,
-        })
+        }
+        _charge_record(self.budget, record)
+        self.calls.append(record)
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node):
@@ -261,6 +289,35 @@ class Scanner(ast.NodeVisitor):
             self.visit(statement)
 
 
+def _check_tree(tree, budget):
+    # Keep only one iterator per level, rather than materializing a wide AST's
+    # children, and stop before retaining/scanning any subsequent module.
+    pending = [iter((tree,))]
+    while pending:
+        node = next(pending[-1], None)
+        if node is None:
+            pending.pop()
+            continue
+        budget["nodes"] += 1
+        budget["calls"] += isinstance(node, ast.Call)
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            budget["aliases"] += len(node.names)
+        if (budget["nodes"] > MAX_AST_NODES or len(pending) - 1 > MAX_AST_DEPTH
+                or budget["calls"] > MAX_CALLS or budget["aliases"] > MAX_IMPORTS):
+            raise AuditError("audit_source_limit")
+        pending.append(ast.iter_child_nodes(node))
+
+
+def _render_bounded(value, *, indent=None):
+    chunks, size = [], 1  # Include print's final newline.
+    for chunk in json.JSONEncoder(sort_keys=True, indent=indent).iterencode(value):
+        size += len(chunk.encode())
+        if size > MAX_REPORT_BYTES:
+            raise AuditError("audit_source_limit")
+        chunks.append(chunk)
+    return "".join(chunks)
+
+
 def audit_sources(sources: dict[str, str], client_roots=DEFAULT_CLIENT_ROOTS) -> dict:
     if type(sources) is not dict or not 0 < len(sources) <= MAX_MODULES:
         raise AuditError("audit_source_limit")
@@ -271,40 +328,41 @@ def audit_sources(sources: dict[str, str], client_roots=DEFAULT_CLIENT_ROOTS) ->
         or any(type(path) is not str for path in client_roots)
     ):
         raise AuditError("audit_invalid_path")
-    trees, paths, sizes, digests = {}, {}, [], {}
+    trees, paths, digests = {}, {}, {}
+    budget = {"nodes": 0, "calls": 0, "aliases": 0, "edges": 0, "report_bytes": 0}
     try:
+        # Check the whole byte budget before the first parser allocation. The
+        # character check also bounds the temporary UTF-8 encoding itself.
+        total = 0
         for path, source in sorted(sources.items()):
             name = module_name(path)
-            if name in paths or type(source) is not str:
+            if name in paths:
                 raise AuditError("audit_invalid_source")
-            raw = source.encode("utf-8")
-            if len(raw) > MAX_SOURCE_BYTES:
+            if len(source) > MAX_SOURCE_BYTES:
                 raise AuditError("audit_source_limit")
-            sizes.append(len(raw))
+            raw = source.encode("utf-8")
+            total += len(raw)
+            if len(raw) > MAX_SOURCE_BYTES or total > MAX_TOTAL_BYTES:
+                raise AuditError("audit_source_limit")
             paths[name] = path
             digests[path] = hashlib.sha256(raw).hexdigest()
-            trees[name] = ast.parse(source, filename="<source>")
+        for name, path in paths.items():
+            tree = ast.parse(sources[path], filename="<source>")
+            _check_tree(tree, budget)
+            trees[name] = tree
+    except MemoryError:
+        raise AuditError("audit_source_limit") from None
     except (SyntaxError, UnicodeError, ValueError, RecursionError):
         raise AuditError("audit_invalid_source") from None
-    if sum(sizes) > MAX_TOTAL_BYTES:
-        raise AuditError("audit_source_limit")
-    nodes = 0
-    pending_nodes = [(tree, 0) for tree in trees.values()]
-    while pending_nodes:
-        node, depth = pending_nodes.pop()
-        nodes += 1
-        if nodes > MAX_AST_NODES or depth > MAX_AST_DEPTH:
-            raise AuditError("audit_source_limit")
-        pending_nodes.extend((child, depth + 1) for child in ast.iter_child_nodes(node))
     packages = {piece for name in paths for piece in [".".join(name.split(".")[:n]) for n in range(1, len(name.split(".")))]}
     exports = {name: _exports(tree) for name, tree in trees.items()}
     modules = {}
     for name, tree in trees.items():
-        scanner = Scanner(paths[name], tree, trees, packages, exports)
+        scanner = Scanner(paths[name], tree, trees, packages, exports, budget)
         scanner.visit(tree)
         modules[name] = {
             "path": paths[name], "sha256": digests[paths[name]],
-            "imports": sorted({(v["line"], v["target"], v["local"], v["missing"]) for v in scanner.imports}),
+            "imports": sorted(scanner.imports),
             "unknowns": sorted({(v["line"], v["reason"]) for v in scanner.unknowns}),
             "calls": sorted(scanner.calls, key=lambda item: (item["line"], item["callee"])),
         }
@@ -317,12 +375,16 @@ def audit_sources(sources: dict[str, str], client_roots=DEFAULT_CLIENT_ROOTS) ->
     if not roots or len(roots) > MAX_MODULES:
         raise AuditError("audit_invalid_path")
     clients = []
+    def add_violation(violations, item):
+        _charge_record(budget, item)
+        violations.append(item)
+
     for path in roots:
         name = module_name(path)
         violations, seen = [], set()
         pending = deque([(name, (name,))])
         if name not in modules or paths[name] != path:
-            violations.append({"reason": "missing_client_root", "path": path, "line": 0, "via": [name]})
+            add_violation(violations, {"reason": "missing_client_root", "path": path, "line": 0, "via": [name]})
             pending.clear()
         while pending:
             current, via = pending.popleft()
@@ -330,16 +392,18 @@ def audit_sources(sources: dict[str, str], client_roots=DEFAULT_CLIENT_ROOTS) ->
                 continue
             seen.add(current)
             if _forbidden(current):
-                violations.append({"reason": "persistence_dependency", "path": paths.get(current, current), "line": 0, "via": list(via)})
+                add_violation(violations, {"reason": "persistence_dependency", "path": paths.get(current, current), "line": 0, "via": list(via)})
                 continue
             item = modules.get(current)
             if item is None:
                 continue
             for line, reason in item["unknowns"]:
-                violations.append({"reason": reason, "path": item["path"], "line": line, "via": list(via)})
+                add_violation(violations, {"reason": reason, "path": item["path"], "line": line, "via": list(via)})
             for call in item["calls"]:
+                if "persistence_constructor_or_call" in call["categories"]:
+                    add_violation(violations, {"reason": "persistence_call", "path": item["path"], "line": call["line"], "via": list(via)})
                 if "possible_sql_call" in call["categories"]:
-                    violations.append({"reason": "possible_sql_call", "path": item["path"], "line": call["line"], "via": list(via)})
+                    add_violation(violations, {"reason": "possible_sql_call", "path": item["path"], "line": call["line"], "via": list(via)})
             parents = [".".join(current.split(".")[:n]) for n in range(1, len(current.split(".")))]
             targets = {v[1] for v in item["imports"] if v[2] or _forbidden(v[1])}
             targets.update(parent for parent in parents if parent in modules)
@@ -363,59 +427,84 @@ def audit_sources(sources: dict[str, str], client_roots=DEFAULT_CLIENT_ROOTS) ->
             "ledger_named_receiver": "Attribute calls whose receiver is exactly the name ledger, without object type proof.",
             "key_derivation_candidate": "Syntactic or imported-alias call names keyed_digest/external_id/digest_key, not a complete derivation flow.",
             "possible_sql_call": "Conservative SQL-like method names, including unknown receiver types.",
-            "persistence_constructor_or_call": "Calls attributed to imported SQLite or known persistence constructors; not runtime type proof.",
+            "persistence_constructor_or_call": "Calls attributed to known SQLite/persistence module namespaces; not runtime type proof.",
             "import_edges": "Distinct module import targets by source line, including parent initializers.",
         },
         "clients": clients, "modules": modules,
     }
-    if len(json.dumps(report, sort_keys=True).encode()) > MAX_REPORT_BYTES:
-        raise AuditError("audit_source_limit")
+    _render_bounded(report)
     return report
 
 
 def load_sources(root: Path) -> dict[str, str]:
     """Read bounded regular files from one explicit source tree, never follow links."""
-    failure = None
     sources = {}
     total_bytes = entries = 0
-    def walk_error(_):
-        raise AuditError("audit_unsafe_source")
-    try:
-        root = root.absolute()
-        if not root.is_dir() or root.resolve(strict=True) != root:
-            raise AuditError("audit_unsafe_source")
-        for directory, directories, files in os.walk(root, followlinks=False, onerror=walk_error):
-            entries += len(directories) + len(files)
-            if entries > MAX_IMPORTS:
-                raise AuditError("audit_source_limit")
-            directories[:] = sorted(name for name in directories if name != "__pycache__")
-            if any((Path(directory) / name).is_symlink() for name in directories):
+
+    def walk(directory_fd, relative, depth):
+        nonlocal entries, total_bytes
+        if depth > MAX_DIRECTORY_DEPTH:
+            raise AuditError("audit_source_limit")
+        names = []
+        with os.scandir(directory_fd) as iterator:
+            for entry in iterator:
+                entries += 1
+                if entries > MAX_IMPORTS:
+                    raise AuditError("audit_source_limit")
+                names.append(entry.name)
+        for name in sorted(names):
+            if name == "__pycache__":
+                continue
+            before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISLNK(before.st_mode):
                 raise AuditError("audit_unsafe_source")
-            for name in sorted(files):
-                if not name.endswith(".py"):
-                    continue
-                path = Path(directory) / name
-                before = path.lstat()
+            path = relative / name
+            if stat.S_ISDIR(before.st_mode):
+                child_fd = os.open(name, directory_flags, dir_fd=directory_fd)
+                try:
+                    actual = os.fstat(child_fd)
+                    if (before.st_dev, before.st_ino) != (actual.st_dev, actual.st_ino):
+                        raise AuditError("audit_unsafe_source")
+                    walk(child_fd, path, depth + 1)
+                finally:
+                    os.close(child_fd)
+            elif name.endswith(".py"):
+                source_name(path.as_posix())
                 if not stat.S_ISREG(before.st_mode):
                     raise AuditError("audit_unsafe_source")
-                descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+                remaining = min(MAX_SOURCE_BYTES, MAX_TOTAL_BYTES - total_bytes)
+                if before.st_size > remaining or len(sources) >= MAX_MODULES:
+                    raise AuditError("audit_source_limit")
+                descriptor = os.open(name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory_fd)
                 with os.fdopen(descriptor, "rb") as stream:
                     actual = os.fstat(stream.fileno())
                     if not stat.S_ISREG(actual.st_mode) or (before.st_dev, before.st_ino) != (actual.st_dev, actual.st_ino):
                         raise AuditError("audit_unsafe_source")
-                    raw = stream.read(MAX_SOURCE_BYTES + 1)
-                if len(raw) > MAX_SOURCE_BYTES or len(sources) >= MAX_MODULES:
+                    raw = stream.read(remaining + 1)
+                if len(raw) > remaining:
                     raise AuditError("audit_source_limit")
                 total_bytes += len(raw)
-                if total_bytes > MAX_TOTAL_BYTES:
-                    raise AuditError("audit_source_limit")
-                sources[path.relative_to(root).as_posix()] = raw.decode("utf-8")
-        if sum(len(value.encode()) for value in sources.values()) > MAX_TOTAL_BYTES:
-            raise AuditError("audit_source_limit")
-    except (OSError, UnicodeError):
-        failure = "audit_unsafe_source"
-    if failure:
-        raise AuditError(failure)
+                sources[path.as_posix()] = raw.decode("utf-8")
+
+    try:
+        root = root.absolute()
+        if (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
+                or len(root.parts) > 128 or ".." in root.parts):
+            raise AuditError("audit_unsafe_source")
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
+        directory_fd = os.open(root.anchor, directory_flags)
+        try:
+            # Start at the filesystem root: even selected-root ancestors are
+            # opened relative to pinned descriptors, with no symlink following.
+            for component in root.parts[1:]:
+                child_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+                os.close(directory_fd)
+                directory_fd = child_fd
+            walk(directory_fd, PurePosixPath(), 0)
+        finally:
+            os.close(directory_fd)
+    except (OSError, UnicodeError, NotImplementedError):
+        raise AuditError("audit_unsafe_source") from None
     return sources
 
 
@@ -439,9 +528,10 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         report = audit_sources(load_sources(args.source_root), args.client_roots or DEFAULT_CLIENT_ROOTS)
-        rendered = json.dumps(report if args.full else summary(report), sort_keys=True, indent=2)
-        if len(rendered.encode()) + 1 > MAX_REPORT_BYTES:
-            raise AuditError("audit_source_limit")
+        rendered = _render_bounded(report if args.full else summary(report), indent=2)
+    except MemoryError:
+        print('{"ready": false, "reason_code": "audit_source_limit"}')
+        return 2
     except AuditError as exc:
         print(json.dumps({"ready": False, "reason_code": exc.reason_code}, sort_keys=True))
         return 2
