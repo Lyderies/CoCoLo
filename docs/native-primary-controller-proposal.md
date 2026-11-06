@@ -193,6 +193,18 @@ is selected by these experiments. The fixed controller, independent native ident
 descriptor custody, actual child attribution and both primary-host paths remain
 implementation and review gates.
 
+A separate auth-only experiment with the reviewed Claude 2.1.310 client obtains a
+matching stream-JSON control initialization response before sending any user
+message. Its guard denies network and process creation and permits writes only
+to private scratch, with safe mode, restricted settings, empty tools/strict empty
+MCP and session persistence disabled. The response contains no session identity.
+A subsequent fixed SDK `SessionStart` callback registration still produces no
+lifecycle callback during the bounded startup-only observation. No guard is removed
+to induce one. These results demonstrate control-startup correlation, without
+proving an actual root, root/child attribution, auth readiness or enrollment for
+the Claude-primary-to-Codex path. No Claude activity/cancellation implementation
+or production profile is selected by this auth-only prerequisite work.
+
 ## Bounded experiment before a selection
 
 The first experiment must request no model turn, invoke no privileged business

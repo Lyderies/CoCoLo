@@ -55,6 +55,7 @@ RUNTIME_FILES = (
     "codex_agents/liveness_clock.py",
     "codex_agents/process_tree.py",
     "codex_agents/project_history.py",
+    "codex_agents/project_monitor.py",
     "codex_agents/providers.py",
     "codex_agents/routing.py",
     "codex_agents/runtime_files.py",

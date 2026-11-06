@@ -117,6 +117,32 @@ native authority and both Codex-child paths remain required before the Claude ph
 
 ## Project history persistence owner
 
+`project_monitor.ProjectMonitor` now connects the local timer to a bounded internal
+registry of exact `AttemptBinding` values. One project/primary/runtime/supervisor
+generation owns each registry. Duplicate registration cannot rearm startup, work
+silence or the original deadline; a changed claim, binding, duration or deadline
+conflicts. Explicit capacity includes retained terminal entries, with no eviction,
+automatic retry, account release or reuse of a run/attempt. Bindings and policy
+values are captured rather than retaining caller-owned objects.
+
+Trusted startup/activity/status/cancel calls use the complete immutable binding.
+Wrong scope/process/thread refuses before clock sampling. Tick and pending-stop
+reads perform no persistence, RPC, authorization or publication callback. A failed
+clock yields unavailable metadata and a sticky `monitor_unavailable` stop request
+while other attempts continue polling. The detached watchdog remains required.
+Stop requests, actual authoritative terminal observations and confirmed tracked-tree
+cleanup are separate facts; late terminal/cleanup observations retain the original
+stop decision. Stop observations remain pending until actual cleanup is confirmed.
+
+This registry starts no event loop or native process and exposes no public endpoint
+or caller credential. Trusted callers must establish native identity/authorization,
+admission, event qualification and actual terminal/cleanup evidence before invoking
+it. It cannot confirm OS cleanup itself. A disposable write-lock fixture exercises
+local control/timers while a separate process holds a real SQLite write lock;
+it is not the authenticated service integration, full C16, real-client cadence,
+cross-store recovery or two-project release proof. Internal snapshot tuples are
+bounded by explicit capacity; they are not external paginated API responses.
+
 `project_history.ProjectHistory` now owns one project's SQLite connection and writer lock in
 an existing protected directory. A descriptor walk rejects replaceable ancestry and aliases;
 root/owner sticky temporary directories are allowed only with root/owner entries. These are
