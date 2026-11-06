@@ -83,20 +83,77 @@ class _ReadScope:
 
     def progress(self) -> int:
         # No SQL, connection mutation, external callback or async interrupt.
-        self.callbacks += 1
-        if self.reason is None and self.callbacks >= self.limits.max_callbacks:
-            self.reason = "sql_read_work_limit"
-        self.poll()
-        return int(self.reason is not None)
+        try:
+            self.callbacks += 1
+            if self.reason is None and self.callbacks >= self.limits.max_callbacks:
+                self.reason = "sql_read_work_limit"
+            self.poll()
+            return int(self.reason is not None)
+        except BaseException as error:
+            self.reason = "sql_read_unavailable"
+            if not isinstance(error, Exception):
+                self.interruption = error
+            return 1
+
+
+class _SQLReadView:
+    """Fetch-only view for one fixed owner read; no cursor statement API."""
+
+    __slots__ = ("_owner", "_scope", "_cursor")
+
+    def __init__(self, owner: SQLReadConnection, scope: _ReadScope, cursor: sqlite3.Cursor) -> None:
+        self._owner, self._scope, self._cursor = owner, scope, cursor
+
+    def _check(self) -> None:
+        self._owner._read_owner()
+        if self._owner._sql_scope is not self._scope:
+            raise SQLReadError("sql_read_unavailable")
+        self._scope.poll()
+        if self._scope.reason is not None:
+            raise SQLReadError(self._scope.reason)
+
+    def fetchone(self):
+        self._check()
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        self._check()
+        return self._cursor.fetchall()
+
+    def fetchmany(self, *args, **kwargs):
+        self._check()
+        return self._cursor.fetchmany(*args, **kwargs)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self._check()
+        return next(self._cursor)
+
+    def execute(self, *args, **kwargs):
+        self._check()
+        raise SQLReadError("sql_read_unavailable")
+
+    executemany = execute
+    executescript = execute
+
+    def close(self) -> None:
+        self._owner._read_owner()
+        if self._owner._sql_scope is self._scope:
+            self._cursor.close()
 
 
 class SQLReadConnection(sqlite3.Connection):
     """Trusted fresh factory; ordinary legacy operations keep their contract.
 
     A read scope requires the actual construction process/thread, no transaction,
-    and no registered foreign progress handler. Its fixed owner methods must use
-    this connection's execute/cursor methods. Do not share cursors across scopes
-    or install native custom busy/progress handlers behind this factory's back.
+    and no registered foreign progress handler. Its fixed owner function creates
+    fresh reads through connection.execute and fetch-only views. Cursor creation
+    and statement execution through views are refused. Previously retained raw
+    cursors must not be used by that fixed function; holding or inspecting native
+    database/cursor capabilities is outside this cooperative contract. Do not
+    install native custom busy/progress handlers behind this factory's back.
     No listener or client-facing arbitrary SQL interface is provided here.
     """
 
@@ -148,11 +205,15 @@ class SQLReadConnection(sqlite3.Connection):
 
     def execute(self, sql, parameters=(), /):
         self._before_statement()
-        return self._track(super().execute(sql, parameters))
+        cursor = self._track(super().execute(sql, parameters))
+        scope = self._sql_scope
+        return cursor if scope is None else _SQLReadView(self, scope, cursor)
 
     def cursor(self, *args, **kwargs):
         self._before_statement()
-        return self._track(super().cursor(*args, **kwargs))
+        if self._sql_scope is not None:
+            raise SQLReadError("sql_read_unavailable")
+        return super().cursor(*args, **kwargs)
 
     def executemany(self, *args, **kwargs):
         self._usable()
@@ -214,6 +275,7 @@ class SQLReadConnection(sqlite3.Connection):
         traceback = None
         sqlite_failure = False
         sqlite_code = None
+        fixed_reason = None
         result = None
         try:
             if self._sql_scope is not None or self._sql_foreign_progress or self.in_transaction:
@@ -244,13 +306,17 @@ class SQLReadConnection(sqlite3.Connection):
                 try:
                     result = operation()
                 except BaseException as error:
-                    if isinstance(error, sqlite3.Error):
+                    if isinstance(error, SQLReadError):
+                        # Retain only a validated reason, never a raised fixed
+                        # error's pre-existing raw exception context/traceback.
+                        fixed_reason = SQLReadError(error.reason_code).reason_code
+                    elif isinstance(error, sqlite3.Error):
                         sqlite_failure = True
                         sqlite_code = getattr(error, "sqlite_errorcode", None)
                     else:
                         failure, traceback = error, error.__traceback__
             scope.poll()
-            reason = scope.reason
+            reason = scope.reason if scope.reason is not None else fixed_reason
         finally:
             if scope is not None and self._sql_scope is scope:
                 try:

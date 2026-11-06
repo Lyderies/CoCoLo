@@ -816,10 +816,23 @@ failure or regression refuses; no callback performs SQL or asynchronous interrup
 Entry/exit checks also cover short reads that never invoke the progress callback.
 The function and SQL are owner code, never caller-supplied RPC callbacks or SQL.
 
-Scope-owned cursors close before the callback is removed. Prior query-only mode,
+Budgeted statements return fetch-only views. Raw cursor creation and cursor
+statement/batch/script execution are refused within the fixed read function.
+Fetching and iteration check owner, active scope, clock and refusal latch before
+touching SQLite; views cannot resume a completed scope. Ordinary legacy cursors
+outside a read call retain their behavior. The fixed function must create fresh
+reads through `connection.execute`; previously retained native cursors are not
+adopted or claimed contained by this cooperative helper.
+
+Scope-owned native cursors close before the callback is removed. Prior query-only mode,
 built-in busy timeout and value limits are restored and checked. Restoration
 failure makes the exact connection unusable and closes it. Backend failures are
 converted outside exception handlers so fixed errors retain no raw cause/context.
+An existing `SQLReadError` contributes only its validated reason to a fresh fixed
+error. Restoration failure overrides an earlier fixed refusal with unavailable.
+The whole progress callback catches interruption faults and propagates a stored
+`KeyboardInterrupt` after restoring the owner, rather than letting SQLite swallow
+that callback exception.
 Capture reports cooperative work, deadline, value-limit or lock refusal through
 `signature_capture_work_limit`; no capture RPC is enabled.
 

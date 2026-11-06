@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import hashlib
+import sqlite3
+import time
 import tempfile
 import threading
 import unittest
@@ -111,6 +113,15 @@ class SignatureInputOwnerTests(unittest.TestCase):
         self.assertEqual(reason, caught.exception.reason_code)
         self.assertIsNone(caught.exception.__cause__)
         self.assertIsNone(caught.exception.__context__)
+
+    def add_unrelated_history(self):
+        connection = self.ledger._connection
+        original = dict(connection.execute("SELECT * FROM records WHERE project_id=?",
+                                           (self.projects[0],)).fetchone())
+        rows = [{**original, "record_id": "CANARY-event-" + str(i), "record_type": "event", "source_sequence": i}
+                for i in range(100, 5100)]
+        connection.executemany("INSERT INTO records(" + ",".join(original) + ") VALUES(" +
+                               ",".join("?" for _ in original) + ")", [tuple(row.values()) for row in rows])
 
     def test_capture_matches_legacy_inputs_without_crypto_connections_or_writes(self):
         rows = self.ledger._attestation_rows_locked(self.projects[0], "codex")
@@ -327,12 +338,7 @@ class SignatureInputOwnerTests(unittest.TestCase):
     def test_unrelated_history_scan_exhausts_work_before_body_copy_then_recovers(self):
         captured = self.capture()
         connection = self.ledger._connection
-        original = dict(connection.execute("SELECT * FROM records WHERE project_id=?",
-                                           (self.projects[0],)).fetchone())
-        rows = [{**original, "record_id": "CANARY-event-" + str(i), "record_type": "event", "source_sequence": i}
-                for i in range(100, 5100)]
-        connection.executemany("INSERT INTO records(" + ",".join(original) + ") VALUES(" +
-                               ",".join("?" for _ in original) + ")", [tuple(row.values()) for row in rows])
+        self.add_unrelated_history()
         before = connection.total_changes
         with mock.patch.object(self.ledger, "_attestation_rows_locked") as copy:
             self.assert_capture_error("signature_capture_work_limit", lambda: self.capture(
@@ -341,6 +347,71 @@ class SignatureInputOwnerTests(unittest.TestCase):
         self.assertEqual(captured.rows, self.capture().rows)
         self.assertEqual(before, connection.total_changes)
         self.assertEqual(5000, connection.execute("PRAGMA busy_timeout").fetchone()[0])
+
+    def test_capture_deadline_refuses_during_scan_and_restores_the_owner(self):
+        captured = self.capture()
+        self.add_unrelated_history()
+        connection = self.ledger._connection
+        observed = []
+
+        def clock():
+            scope = connection._sql_scope
+            if scope is not None and scope.callbacks:
+                observed.append(scope.callbacks)
+                return 1_000_000_000
+            return 0
+
+        with mock.patch("codex_agents.sql_read_budget._clock_ns", side_effect=clock), \
+                mock.patch.object(self.ledger, "_attestation_rows_locked") as copy:
+            self.assert_capture_error("signature_capture_work_limit", self.capture)
+        copy.assert_not_called()
+        self.assertTrue(observed)
+        self.assertIsNone(connection._sql_scope)
+        self.assertFalse(connection._sql_unusable)
+        self.assertEqual(captured.rows, self.capture().rows)
+
+    def test_capture_busy_refusal_is_bounded_and_restores_the_previous_timeout(self):
+        connection = self.ledger._connection
+        # A private rollback-journal fixture makes an exclusive lock observable
+        # to a reader; this is not installed WAL concurrency/latency evidence.
+        self.assertEqual("delete", connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0])
+        locker = sqlite3.connect(self.state.database, isolation_level=None)
+        try:
+            locker.execute("BEGIN EXCLUSIVE")
+            started = time.monotonic()
+            self.assert_capture_error("signature_capture_work_limit", self.capture)
+            elapsed = time.monotonic() - started
+        finally:
+            locker.rollback()
+            locker.close()
+        self.assertLess(elapsed, 2)
+        self.assertEqual(5000, connection.execute("PRAGMA busy_timeout").fetchone()[0])
+        self.assertEqual(1, len(self.capture().rows))
+
+    def test_capture_reports_unavailable_when_deadline_and_actual_restore_step_fail(self):
+        connection = self.ledger._connection
+        original_harden, original_pragma = self.state.harden_database_files, connection._pragma_integer
+        hardened, reached = [], []
+
+        def harden():
+            original_harden()
+            hardened.append(True)
+
+        def pragma(name, value=None):
+            if name == "busy_timeout" and value == 5000:
+                reached.append(name)
+                raise sqlite3.OperationalError("CANARY-RESTORE")
+            return original_pragma(name, value)
+
+        with mock.patch.object(self.state, "harden_database_files", side_effect=harden), \
+                mock.patch.object(connection, "_pragma_integer", side_effect=pragma), \
+                mock.patch("codex_agents.sql_read_budget._clock_ns", side_effect=lambda: 1_000_000_000 if hardened else 0):
+            self.assert_capture_error("signature_capture_unavailable", self.capture)
+        self.assertEqual([True], hardened)
+        self.assertEqual(["busy_timeout"], reached)
+        self.assertTrue(connection._sql_unusable)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            sqlite3.Connection.execute(connection, "SELECT 1")
 
     def test_foreign_progress_handler_is_preserved_before_any_capture_read(self):
         connection = self.ledger._connection
