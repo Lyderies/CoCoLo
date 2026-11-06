@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import select
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import tests.support  # noqa: F401
@@ -134,6 +137,83 @@ class HistoryApiTests(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual("history_wrong_owner", json.loads(replies[0])["reason_code"])
         self.assertEqual([], self.opened)
+
+    def test_recycled_numeric_thread_identity_does_not_adopt_a_handler(self):
+        owner_ident = threading.get_ident()
+        authorize = mock.Mock(wraps=fixture_authorizer)
+        factory = mock.Mock(side_effect=AssertionError("foreign owner opened persistence"))
+        service = HistoryService(PROJECT_A, RUNTIME, factory, authorizer=authorize)
+        self.addCleanup(service.close)
+        replies = []
+
+        def foreign_thread():
+            replies.append(json.loads(service.handle(encode_history_request(request()), FIXTURE_CONTEXT)))
+            try:
+                service.close()
+            except HistoryError as exc:
+                replies.append(exc.reason_code)
+            else:
+                replies.append("closed")
+
+        # Model OS reuse of a numeric thread ID while retaining the actual new
+        # Thread object. Rebinding this module's alias does not patch threading's
+        # own registry or SQLite's independent thread check.
+        replacement = SimpleNamespace(get_ident=lambda: owner_ident, current_thread=threading.current_thread)
+        with mock.patch("codex_agents.history_service.threading", replacement):
+            worker = threading.Thread(target=foreign_thread)
+            worker.start()
+            worker.join(timeout=5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual("history_wrong_owner", replies[0]["reason_code"])
+        self.assertEqual("history_wrong_owner", replies[1])
+        authorize.assert_not_called()
+        factory.assert_not_called()
+
+    @unittest.skipUnless(hasattr(os, "fork"), "process-affinity check requires fork")
+    def test_forked_handler_cannot_authorize_open_or_close_history(self):
+        for already_open in (False, True):
+            with self.subTest(already_open=already_open):
+                if already_open:
+                    self.call(request())
+                authorize = mock.Mock(wraps=fixture_authorizer)
+                self.service._authorizer = authorize
+                child_command = request(payload={"record": event_record("evt-foreign-process")})
+                reader, writer = os.pipe()
+                child = os.fork()
+                if child == 0:
+                    os.close(reader)
+                    try:
+                        before = len(self.opened)
+                        reply = json.loads(self.service.handle(encode_history_request(child_command), FIXTURE_CONTEXT))
+                        try:
+                            self.service.close()
+                        except HistoryError as exc:
+                            close_reason = exc.reason_code
+                        else:
+                            close_reason = "closed"
+                        facts = {"handle_reason": reply["reason_code"], "close_reason": close_reason,
+                                 "authorize_calls": authorize.call_count, "factory_calls": len(self.opened)-before}
+                        os.write(writer, canonical_json(facts))
+                    finally:
+                        os.close(writer)
+                        os._exit(0)
+                os.close(writer)
+                try:
+                    ready = bool(select.select([reader], [], [], 5)[0])
+                    if not ready:
+                        os.kill(child, signal.SIGKILL)
+                    raw = os.read(reader, 4096) if ready else b""
+                finally:
+                    os.close(reader)
+                    _, status = os.waitpid(child, 0)
+                self.assertTrue(ready, "inherited handler did not refuse promptly")
+                self.assertEqual(0, os.waitstatus_to_exitcode(status))
+                self.assertEqual({"handle_reason": "history_wrong_owner", "close_reason": "history_wrong_owner",
+                                  "authorize_calls": 0, "factory_calls": 0}, json.loads(raw))
+                self.call(request())
+                with self.assertRaisesRegex(HistoryError, "history_not_found"):
+                    self.call(request("history.read_record", identity="check-foreign",
+                                      payload={"record_id": "evt-foreign-process"}))
 
     def test_malformed_or_open_fields_have_fixed_errors_without_echo(self):
         valid = json.loads(encode_history_request(request()))

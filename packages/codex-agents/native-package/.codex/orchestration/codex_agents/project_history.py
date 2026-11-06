@@ -92,7 +92,7 @@ class ProjectHistory:
 
     def __init__(self, directory: Path, project_id: str) -> None:
         self._pid = os.getpid()
-        self._thread = threading.get_ident()
+        self._thread = threading.current_thread()
         self._closed = False
         self._connection = None
         self._directory_fd = self._writer_fd = None
@@ -188,7 +188,7 @@ class ProjectHistory:
         return descriptor
 
     def _require_owner(self) -> None:
-        if self._closed or self._pid != os.getpid() or self._thread != threading.get_ident():
+        if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise HistoryError("history_wrong_owner")
 
     @contextmanager
@@ -234,7 +234,7 @@ class ProjectHistory:
 
     def close(self) -> None:
         # An inherited instance must not close/unlock the original owner's resources.
-        if self._pid != os.getpid() or self._thread != threading.get_ident():
+        if self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise HistoryError("history_wrong_owner")
         if self._closed:
             return

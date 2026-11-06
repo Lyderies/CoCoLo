@@ -13,6 +13,7 @@ import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import tests.support  # noqa: F401
@@ -324,6 +325,39 @@ class ProjectHistoryTests(unittest.TestCase):
         self.store.close()
         with self.assertRaisesRegex(HistoryError, "history_wrong_owner"):
             self.store.pending_terminals()
+
+    def test_recycled_numeric_thread_identity_cannot_read_or_close_a_writer(self) -> None:
+        owner_ident = threading.get_ident()
+        errors = []
+
+        def foreign_thread(operation):
+            try:
+                operation()
+            except HistoryError as exc:
+                errors.append(exc.reason_code)
+            else:
+                errors.append("accepted")
+
+        replacement = SimpleNamespace(get_ident=lambda: owner_ident, current_thread=threading.current_thread)
+        with mock.patch.object(project_history, "threading", replacement):
+            worker = threading.Thread(target=foreign_thread, args=(self.store.pending_terminals,))
+            worker.start()
+            worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+            # A closed owner still refuses a foreign close before its idempotent
+            # fast path, without letting this negative fixture release any FD.
+            self.store._closed = True
+            try:
+                worker = threading.Thread(target=foreign_thread, args=(self.store.close,))
+                worker.start()
+                worker.join(timeout=5)
+                self.assertFalse(worker.is_alive())
+            finally:
+                self.store._closed = False
+        self.assertEqual(["history_wrong_owner", "history_wrong_owner"], errors)
+        self.assertEqual((), self.store.pending_terminals())
+        with self.assertRaisesRegex(HistoryError, "history_writer_busy"):
+            ProjectHistory(self.directory, PROJECT_A)
 
     def test_wrong_project_and_unsafe_database_aliases_fail_closed(self) -> None:
         self.store.close()

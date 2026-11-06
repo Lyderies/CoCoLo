@@ -96,6 +96,11 @@ projects use independent files and locks; a transaction in A does not take B's w
 creates no account state, signing material or digest key and imports neither `LearningState`
 nor `LearningLedger`. It cannot admit, launch or release account work.
 
+Both the handler and store bind their original process and Python thread object, rather than a
+reusable numeric thread ID. An inherited handler refuses before authorization or opening a store,
+and foreign close calls refuse before the idempotent-close path or any descriptor cleanup. These
+local resource-ownership checks do not authenticate an external client or prove native enrollment.
+
 The internal methods accept already authorized work from a future project service. They are
 not external request handlers: no listener, native enrollment or normal CLI/hook/bridge path
 is enabled by this increment. A role, project label, `AttemptBinding` or receipt digest supplied

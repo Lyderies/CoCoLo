@@ -9,6 +9,7 @@ not proof. Disposable process fixtures may supply explicitly fake server context
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -73,7 +74,8 @@ class HistoryService:
             raise HistoryError("history_invalid_input")
         self._project, self._runtime, self._open = project_id, runtime_digest, open_history
         self._authorizer, self._clock = authorizer, clock_ms or (lambda: time.time_ns() // 1_000_000)
-        self._thread = threading.get_ident()
+        self._pid = os.getpid()
+        self._thread = threading.current_thread()
         self._store: ProjectHistory | None = None
         self._closed = False
 
@@ -94,7 +96,7 @@ class HistoryService:
         digest = None
         project = runtime = None
         try:
-            if self._closed or self._thread != threading.get_ident():
+            if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
                 raise HistoryError("history_wrong_owner")
             request = decode_history_request(raw)
             identity = request.request_id
@@ -175,7 +177,7 @@ class HistoryService:
         return data
 
     def close(self) -> None:
-        if self._thread != threading.get_ident():
+        if self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise HistoryError("history_wrong_owner")
         self._closed = True
         if self._store is not None:
