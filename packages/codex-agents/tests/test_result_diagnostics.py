@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import importlib.abc
 import json
-import subprocess
 import sys
 import unittest
 from copy import deepcopy
@@ -27,37 +27,38 @@ from codex_agents.learning_contracts import (
 )
 from codex_agents.learning_store import MAX_WORKER_RESULT_BYTES
 from tests.learning_support import assignment, result
-from tests.support import ORCHESTRATION_ROOT
 
 
 class ResultDiagnosticTests(unittest.TestCase):
     def test_result_validation_never_imports_a_persistence_owner(self) -> None:
-        script = r'''
-import importlib.abc,json,sys
-class Guard(importlib.abc.MetaPathFinder):
- def find_spec(self,name,path=None,target=None):
-  if name in {'sqlite3','_sqlite3','codex_agents.learning_store','codex_agents.project_history'}:
-   raise AssertionError('result validation imported persistence')
-sys.meta_path.insert(0,Guard())
-from codex_agents.bridge import _unrecordable
-from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES
-assigned,value=json.loads(sys.stdin.read())
-observed={
- 'valid':_unrecordable(value,assigned),
- 'invalid':_unrecordable({**value,'assignment_id':'different'},assigned),
- 'oversized':_unrecordable({**value,'summary':'x'*MAX_RESULT_BODY_BYTES},assigned),
- 'sqlite_loaded':'sqlite3' in sys.modules,
-}
-print(json.dumps(observed))
-'''
-        completed = subprocess.run([sys.executable, "-I", "-B", "-S", "-c",
-                                    f"import sys;sys.path.insert(0,{str(ORCHESTRATION_ROOT)!r});" + script],
-                                   input=json.dumps([assignment(), result()]), text=True,
-                                   capture_output=True, timeout=10)
-        self.assertEqual(0, completed.returncode, completed.stderr)
-        self.assertEqual({"valid": [None, None], "invalid": ["invalid_result", "assignment_mismatch"],
-                          "oversized": ["result_too_large", None], "sqlite_loaded": False},
-                         json.loads(completed.stdout))
+        blocked = {"sqlite3", "_sqlite3", "codex_agents.learning_store", "codex_agents.project_history"}
+
+        class Guard(importlib.abc.MetaPathFinder):
+            def find_spec(self, name, path=None, target=None):
+                if name in blocked:
+                    raise AssertionError("result validation imported persistence")
+
+        # QA deliberately forbids process creation. Fresh module imports still
+        # exercise the boundary, even when earlier tests imported the owners.
+        # Restore both caches so later tests keep their original class identity.
+        with mock.patch.dict(sys.modules), mock.patch.object(sys, "meta_path", [Guard(), *sys.meta_path]):
+            for name in tuple(sys.modules):
+                if name in blocked or name == "codex_agents" or name.startswith("codex_agents."):
+                    del sys.modules[name]
+            for name in sorted(blocked):
+                with self.assertRaisesRegex(AssertionError, "result validation imported persistence"):
+                    importlib.import_module(name)
+            fresh_bridge = importlib.import_module("codex_agents.bridge")
+            body_limit = importlib.import_module("codex_agents.result_contracts").MAX_RESULT_BODY_BYTES
+            assigned, value = assignment(), result()
+            observed = {
+                "valid": fresh_bridge._unrecordable(value, assigned),
+                "invalid": fresh_bridge._unrecordable({**value, "assignment_id": "different"}, assigned),
+                "oversized": fresh_bridge._unrecordable({**value, "summary": "x" * body_limit}, assigned),
+                "sqlite_loaded": "sqlite3" in sys.modules,
+            }
+        self.assertEqual({"valid": (None, None), "invalid": ("invalid_result", "assignment_mismatch"),
+                          "oversized": ("result_too_large", None), "sqlite_loaded": False}, observed)
 
     def test_actual_invalid_results_preserve_every_typed_reason(self) -> None:
         valid = result()
