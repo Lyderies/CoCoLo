@@ -250,6 +250,50 @@ class ProjectResultTests(unittest.TestCase):
         self.assertEqual(1, self.store.record(delivery.record_id).source_sequence)
         self.assertEqual(body, self.store.read_result(binding()))
 
+    def test_failed_metadata_commit_cannot_restart_existing_body_retention(self):
+        self.store.close()
+        self.capacity = ResultCapacity(16, 2 * MAX_RESULT_BODY_BYTES, 60_000, 5000)
+        self.store = self.open()
+        self.reserve()
+        body, content = self.payload()
+        with mock.patch.object(self.store, "_insert_terminal", side_effect=RuntimeError("metadata cut")):
+            with self.assertRaisesRegex(RuntimeError, "metadata cut"):
+                self.store.commit_result(content, binding(), assignment(), body)
+        prepared = self.store.result_reservation(binding())
+        self.assertEqual((1000, 6000, 6000, None), (prepared.prepared_at_ms, prepared.retained_until_ms,
+                                                   prepared.expires_at_ms, prepared.committed_at_ms))
+        self.assertEqual(1, len(self.files()))
+        self.now = 7000
+        with self.assertRaisesRegex(HistoryError, "history_result_expired"):
+            self.store.commit_result(content, binding(), assignment(), body)
+        self.assertEqual([], self.files())
+        self.assertEqual((), self.store.pending_terminals())
+        self.assertEqual("expired", self.store.result_reservation(binding()).state)
+
+    def test_changed_policy_and_later_success_keep_original_prepared_retention(self):
+        self.store.close()
+        self.capacity = ResultCapacity(16, 2 * MAX_RESULT_BODY_BYTES, 60_000, 5000)
+        self.store = self.open()
+        self.reserve()
+        body, content = self.payload()
+        with mock.patch.object(self.store, "_insert_terminal", side_effect=RuntimeError("metadata cut")):
+            with self.assertRaises(RuntimeError):
+                self.store.commit_result(content, binding(), assignment(), body)
+        self.now = 1500
+        self.store.close()
+        self.capacity = replace(self.capacity, retention_ms=120_000)
+        self.store = self.open()
+        self.store.commit_result(content, binding(), assignment(), body)
+        committed = self.store.result_reservation(binding())
+        self.assertEqual((1000, 1500, 6000, 6000),
+                         (committed.prepared_at_ms, committed.committed_at_ms,
+                          committed.retained_until_ms, committed.expires_at_ms))
+        self.assertEqual(body, self.store.read_result(binding()))
+        self.now = 6000
+        with self.assertRaisesRegex(HistoryError, "history_result_expired"):
+            self.store.read_result(binding())
+        self.assertEqual([], self.files())
+
     def test_interrupted_partial_write_is_bounded_and_exact_retry_recovers(self):
         self.reserve()
         body, content = self.payload()

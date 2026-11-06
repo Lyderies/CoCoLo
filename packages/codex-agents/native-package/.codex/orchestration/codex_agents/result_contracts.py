@@ -47,6 +47,8 @@ class ResultReservation:
     reserved_until_ms: int
     expires_at_ms: int
     state: str
+    prepared_at_ms: int | None = None
+    retained_until_ms: int | None = None
     committed_at_ms: int | None = None
     body_size: int | None = None
     result_digest: str | None = None
@@ -64,19 +66,27 @@ class ResultReservation:
         ):
             raise HistoryError("history_invalid_input")
         self.binding.as_data()
+        prepared = (
+            valid_integer(self.prepared_at_ms, minimum=self.created_at_ms, maximum=self.reserved_until_ms - 1)
+            and valid_integer(self.retained_until_ms, minimum=self.prepared_at_ms + 1)
+            and self.retained_until_ms - self.prepared_at_ms <= MAX_RESULT_RETENTION_MS
+        )
+        unprepared = self.prepared_at_ms is None and self.retained_until_ms is None
         empty = (self.committed_at_ms is None and self.body_size is None
                  and self.result_digest is None and self.terminal_record_id is None)
         full = (
-            valid_integer(self.committed_at_ms, minimum=self.created_at_ms, maximum=self.reserved_until_ms - 1)
+            prepared and valid_integer(self.committed_at_ms, minimum=self.prepared_at_ms,
+                                       maximum=min(self.reserved_until_ms, self.retained_until_ms) - 1)
             and valid_integer(self.body_size, minimum=1, maximum=MAX_RESULT_BODY_BYTES)
             and matches(self.result_digest, _DIGEST) and matches(self.terminal_record_id, _ID)
         )
         expiry_valid = (
-            self.expires_at_ms == self.reserved_until_ms if empty else
-            full and self.committed_at_ms < self.expires_at_ms <= self.committed_at_ms + MAX_RESULT_RETENTION_MS
+            self.expires_at_ms == self.reserved_until_ms if unprepared else
+            prepared and self.expires_at_ms == (min(self.reserved_until_ms, self.retained_until_ms)
+                                                if empty else self.retained_until_ms)
         )
         if ((self.state == "reserved" and not empty) or (self.state == "committed" and not full)
-                or not (empty or full) or not expiry_valid):
+                or not (empty or full) or not (prepared or unprepared) or not expiry_valid):
             raise HistoryError("history_invalid_input")
 
     def as_data(self) -> dict:

@@ -100,14 +100,17 @@ two fixed names of an interrupted hard-link publication may be reconciled only w
 they identify the same private inode with exactly those two links; unrelated aliases
 are refused. No retry launches model work or replaces a committed result.
 
-Committed retention starts at the first successful commit, separately from the
-pre-launch reservation window, and never exceeds seven days. It is not refreshed
-by retries. The trusted lifecycle owner must also retire bodies when their actual
+Body retention starts with the durable prepared request before the first possible
+artifact write, separately from the pre-launch reservation window, and never
+exceeds seven days. A failed metadata commit, later retry or policy change cannot
+refresh it. The trusted lifecycle owner must also retire bodies when their actual
 orchestration closes. Retirement is persisted before deletion; failed deletion keeps
 the registration and capacity charged. Only confirmed deletion releases body space.
 Replay tombstones remain and count against the explicit retained-entry cap; reaching
 that cap refuses new storage work. No automatic tombstone eviction or identifier
 reuse is implemented. Future drained generation retirement remains a migration gate.
+The future persistence-owner event loop must schedule bounded expiry sweeps and
+restart cleanup; this internal store does not start a background collector or timer.
 
 Reads recheck the exact binding, retention, private file ownership/type/mode/link
 count, byte count and keyed digest. Trusted time is checked again after artifact I/O;

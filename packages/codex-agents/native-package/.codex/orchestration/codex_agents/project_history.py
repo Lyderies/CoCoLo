@@ -73,7 +73,8 @@ CREATE TABLE result_reservations(
  created_at_ms INTEGER NOT NULL, hard_deadline_at_ms INTEGER NOT NULL,
  reserved_until_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('reserved','committed','retiring','expired')),
- prepared_digest TEXT, committed_at_ms INTEGER, body_size INTEGER,
+ prepared_digest TEXT, prepared_at_ms INTEGER, retained_until_ms INTEGER,
+ committed_at_ms INTEGER, body_size INTEGER,
  result_digest TEXT, terminal_record_id TEXT,
  PRIMARY KEY(project_id,claim_id), UNIQUE(project_id,run_handle,attempt),
  UNIQUE(project_id,claim_digest),
@@ -91,7 +92,8 @@ _COLUMNS = {
     "result_identity": ("project_id", "key_check", "last_observed_at_ms"),
     "result_reservations": ("project_id", "claim_id", "run_handle", "attempt", "claim_digest", "orchestration_handle",
                             "binding", "assignment_digest", "created_at_ms", "hard_deadline_at_ms", "reserved_until_ms",
-                            "expires_at_ms", "state", "prepared_digest", "committed_at_ms", "body_size", "result_digest",
+                            "expires_at_ms", "state", "prepared_digest", "prepared_at_ms", "retained_until_ms",
+                            "committed_at_ms", "body_size", "result_digest",
                             "terminal_record_id"),
 }
 
@@ -569,7 +571,8 @@ class ProjectHistory:
             encoded = self._stored_blob(row["binding"], maximum=MAX_BINDING_BYTES)
             binding = AttemptBinding(**parse_bounded_json(encoded))
             value = ResultReservation(binding, row["assignment_digest"], row["created_at_ms"], row["hard_deadline_at_ms"],
-                                      row["reserved_until_ms"], row["expires_at_ms"], row["state"], row["committed_at_ms"],
+                                      row["reserved_until_ms"], row["expires_at_ms"], row["state"],
+                                      row["prepared_at_ms"], row["retained_until_ms"], row["committed_at_ms"],
                                       row["body_size"], row["result_digest"], row["terminal_record_id"])
             invalid = (
                 encoded != canonical_json(binding.as_data()) or row["project_id"] != self.project_id
@@ -577,6 +580,7 @@ class ProjectHistory:
                 or row["run_handle"] != binding.run_handle or row["attempt"] != binding.attempt
                 or row["claim_digest"] != binding.claim_digest or row["orchestration_handle"] != binding.orchestration_handle
                 or (row["prepared_digest"] is not None and not matches(row["prepared_digest"], _DIGEST))
+                or ((row["prepared_digest"] is None) != (value.prepared_at_ms is None))
                 or (value.committed_at_ms is not None and row["prepared_digest"] is None)
             )
             if value.committed_at_ms is not None:
@@ -776,9 +780,17 @@ class ProjectHistory:
             terminal = self._connection.execute("SELECT * FROM terminal_outbox WHERE project_id=? AND claim_id=?",
                                                 (self.project_id, binding.claim_id)).fetchone()
             return self._delivery(terminal)
-        with self._transaction():
-            self._connection.execute("UPDATE result_reservations SET prepared_digest=? WHERE project_id=? AND claim_id=?",
-                                     (prepared, self.project_id, binding.claim_id))
+        if row["prepared_digest"] is None:
+            with self._transaction():
+                # Retention begins before the first possible private body write,
+                # even if publication/metadata commit fails. Retry and changed
+                # deployment policy cannot extend these original timestamps.
+                self._connection.execute(
+                    "UPDATE result_reservations SET prepared_digest=?,prepared_at_ms=?,retained_until_ms=?,"
+                    "expires_at_ms=MIN(reserved_until_ms,?) WHERE project_id=? AND claim_id=?",
+                    (prepared, now, now + self._result_capacity.retention_ms,
+                     now + self._result_capacity.retention_ms, self.project_id, binding.claim_id),
+                )
         self._write_result_file(binding, body, digest)
         now = self._result_now()
         row, value = self._live_result(binding, now)
@@ -790,7 +802,7 @@ class ProjectHistory:
             self._connection.execute(
                 "UPDATE result_reservations SET state='committed',committed_at_ms=?,expires_at_ms=?,"
                 "body_size=?,result_digest=?,terminal_record_id=? WHERE project_id=? AND claim_id=?",
-                (now, now + self._result_capacity.retention_ms, len(body), digest, delivery.record_id,
+                (now, value.retained_until_ms, len(body), digest, delivery.record_id,
                  self.project_id, binding.claim_id),
             )
         return delivery
