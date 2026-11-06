@@ -678,3 +678,34 @@ Production fair intake, reserved control/terminal queues, authenticated native
 actors, executor/event adapters, watchdog integration, durable publication and
 restart recovery remain required. Slow admission/authentication and untrusted
 event floods still need end-to-end checks before the complete concurrency gate.
+
+## Bounded control socket loop
+
+`control_loop.ControlLoop` polls the monitor around fair, bounded batches of
+nonblocking local socket I/O. The trusted owner supplies already connected Unix
+stream sockets and an opaque context for the existing default-deny authorizer.
+The loop creates no listener, path, native identity, process or persistence owner.
+It does not authenticate that context. A reviewed native frontend must perform
+slow verification separately and supply bounded, already verified in-memory state.
+
+Limits are explicit: at most 256 connections, a configured number of peer steps
+per cycle, one 16 KiB request/reply per connection, a fixed connection lifetime
+of at most 60 seconds and a maximum select wait of at most one second. These are
+configuration ceilings, not installed defaults or real-client latency calibration.
+Round-robin scheduling does not let a ready peer consume another peer's step.
+Partial senders/readers cannot block the owner; partial traffic never refreshes a
+deadline. Trailing bytes received with the first frame are refused. No second
+request is executed. Deadline expiry after a cancel has latched can discard its
+reply without undoing the stop; delivery failure does not prove no effect.
+
+Clock sampling shares the monitor's failure latch. Failure or interruption closes
+connections and preserves unavailable/previous-stop decisions and nonlocal
+interrupts. Process/thread checks precede operations and close. Closing the loop
+leaves the service and monitor intact. The trusted outer owner must keep polling
+and run its separate actual cleanup executor and watchdog.
+
+Socketpair tests exercise partial input, kernel reply backpressure, fair progress,
+deadline expiry, valid request pressure, malformed frames and ownership/clock
+failures. They do not establish a native frontend, connection-admission fairness,
+reserved native-event/terminal lanes, actual provider observation, cleanup or
+full C5/C16. Independent review remains required before installation or activation.
