@@ -15,6 +15,7 @@ from unittest import mock
 import tests.support  # noqa: F401
 from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 from tests.learning_support import generate_test_owner_key
+from tests.test_owner_key_contracts import public_value
 
 from codex_agents.account_api import (
     ACCOUNT_OPERATIONS, ACCOUNT_PROTOCOL_VERSION, MAX_ACCOUNT_FRAME_BYTES,
@@ -24,6 +25,7 @@ from codex_agents.account_api import (
 from codex_agents.account_service import AccountAuthorization, AccountOwnerViews, AccountService
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.learning_store import LearningLedger, LearningState, authorize_collector_runtime
+from codex_agents.owner_key_contracts import checked_public_key
 from codex_agents.service_transport import ServiceTransportError
 
 RUNTIME = "a" * 64
@@ -63,6 +65,15 @@ class AccountApiTests(unittest.TestCase):
 
     def call(self, request, *, service=None, context=TOKEN):
         return decode_account_response((service or self.service).handle(encode_account_request(request), context), request)
+
+    def owner_service(self, *, source="owner", operations=ACCOUNT_OPERATIONS):
+        def authorize(request, context):
+            if self.authorize(request, context) is None:
+                return None
+            return AccountAuthorization(request.project_id, RUNTIME, account_request_digest(request), source, operations)
+        service = AccountService(RUNTIME, self.views, authorizer=authorize)
+        self.addCleanup(service.close)
+        return service
 
     def test_default_denial_wrong_context_runtime_and_project_do_no_backend_work(self):
         default = AccountService(RUNTIME, self.views)
@@ -508,17 +519,191 @@ class Block(importlib.abc.MetaPathFinder):
    raise AssertionError('persistence import')
 sys.meta_path.insert(0,Block())
 from codex_agents.account_api import AccountClient,AccountError
-try:
- AccountClient(Path(sys.argv[1]),sys.argv[2],sys.argv[3],timeout=.1).project()
-except AccountError as exc:
- print(json.dumps({'reason':exc.reason_code,'sqlite_loaded':'sqlite3' in sys.modules}))
+client=AccountClient(Path(sys.argv[1]),sys.argv[2],sys.argv[3],timeout=.1)
+observed=[]
+for read in (client.project,client.owner_public_key):
+ try: read()
+ except AccountError as exc:
+  observed.append({'reason':exc.reason_code,'sqlite_loaded':'sqlite3' in sys.modules})
+print(json.dumps(observed))
 '''
         completed = subprocess.run([sys.executable, "-I", "-B", "-S", "-c",
                                     f"import sys;sys.path.insert(0,{str(ORCHESTRATION_ROOT)!r});" + script,
                                     str(self.base / "missing.sock"), self.projects[0], RUNTIME],
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, check=False)
         self.assertEqual(0, completed.returncode, completed.stderr.decode(errors="replace"))
-        self.assertEqual({"reason": "account_unavailable", "sqlite_loaded": False}, json.loads(completed.stdout))
+        self.assertEqual([{"reason": "account_unavailable", "sqlite_loaded": False}] * 2, json.loads(completed.stdout))
+
+    def test_public_owner_view_requires_owner_source_and_operation_before_backend(self):
+        request = self.request("account.owner_public_key")
+        with mock.patch.object(self.views, "owner_public_key", side_effect=AssertionError("unauthorized key read")):
+            for source in ("host", "hook", "app_server"):
+                with self.subTest(source=source), self.assertRaisesRegex(AccountError, "account_not_authorized"):
+                    self.call(request, service=self.owner_service(source=source))
+            with self.assertRaisesRegex(AccountError, "account_not_authorized"):
+                self.call(request, service=self.owner_service(operations=frozenset({"account.owner_key"})))
+            with self.assertRaisesRegex(AccountError, "account_not_authorized"):
+                self.call(request, service=self.owner_service(), context={"source": "owner", "authorized": True})
+
+    def test_public_owner_grant_cannot_be_reused_for_changed_scope_or_request(self):
+        original = self.request("account.owner_public_key")
+        authorization = AccountAuthorization(self.projects[0], RUNTIME, account_request_digest(original),
+                                             "owner", frozenset({"account.owner_public_key"}))
+        service = AccountService(RUNTIME, self.views, authorizer=lambda request, context: authorization)
+        self.addCleanup(service.close)
+        with mock.patch.object(self.views, "owner_public_key", side_effect=AssertionError("wrong bound read")):
+            for changed in (self.request("account.owner_public_key", project=self.projects[1]),
+                            self.request("account.owner_public_key", identity="another-read"),
+                            self.request("account.owner_public_key", runtime="b" * 64)):
+                with self.assertRaisesRegex(AccountError, "account_not_authorized"):
+                    self.call(changed, service=service)
+
+    def test_inactive_project_public_key_read_refuses_before_signer_access(self):
+        self.ledger._connection.execute("UPDATE projects SET status='deleted' WHERE project_id=?", (self.projects[0],))
+        with mock.patch.object(self.state, "_owner_signer_bytes", side_effect=AssertionError("inactive project read key")):
+            with self.assertRaisesRegex(AccountError, "account_project_not_found"):
+                self.call(self.request("account.owner_public_key"), service=self.owner_service())
+
+    def test_public_owner_view_returns_exact_key_and_generation_without_writes(self):
+        line = self.state.allowed_signers_path.read_bytes()
+        history = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_key_history")]
+        key = self.state.digest_key()
+        changes = self.ledger._connection.total_changes
+        service = self.owner_service()
+        with mock.patch("sqlite3.connect", side_effect=AssertionError("second connection")), mock.patch.object(
+            self.state, "recorded_owner_key", side_effect=AssertionError("second connection")
+        ):
+            first = self.call(self.request("account.owner_public_key"), service=service)
+            second = self.call(self.request("account.owner_public_key", project=self.projects[1]), service=service)
+            legacy = self.call(self.request("account.owner_key"))
+        self.assertEqual(first, second)
+        self.assertEqual(line, ("codex-agents-owner " + first["public_key"] + "\n").encode("ascii"))
+        self.assertEqual(legacy, {name: value for name, value in first.items() if name != "public_key"})
+        self.assertEqual(("ok", 1, 0, None), tuple(first[name] for name in
+                         ("state", "sequence", "replacements", "last_replaced_at_ms")))
+        self.assertEqual(history, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_key_history")])
+        self.assertEqual(changes, self.ledger._connection.total_changes)
+        self.assertEqual(key, self.state.digest_key())
+        self.assertEqual(line, self.state.allowed_signers_path.read_bytes())
+
+    def test_public_owner_view_rechecks_replacement_with_the_same_read_identity(self):
+        service = self.owner_service()
+        request = self.request("account.owner_public_key")
+        first = self.call(request, service=service)
+        directory = self.base / "new-public-owner"
+        directory.mkdir()
+        _, public = generate_test_owner_key(directory)
+        self.ledger.replace_owner_key(public, now_ms=42)
+        second = self.call(request, service=service)
+        self.assertEqual(first["sequence"] + 1, second["sequence"])
+        self.assertNotEqual(first["public_key"], second["public_key"])
+        self.assertNotEqual(first["fingerprint"], second["fingerprint"])
+        self.assertEqual((1, 42), (second["replacements"], second["last_replaced_at_ms"]))
+        self.assertEqual(self.call(self.request("account.owner_key"))["fingerprint"], second["fingerprint"])
+
+    def test_public_owner_view_never_returns_a_key_for_mismatched_signer_state(self):
+        service = self.owner_service()
+        line = self.state.allowed_signers_path.read_bytes()
+        changes = self.ledger._connection.total_changes
+        try:
+            for raw in (b"", b"CANARY-INVALID-SIGNER"):
+                self.state.allowed_signers_path.write_bytes(raw)
+                view = self.call(self.request("account.owner_public_key"), service=service)
+                self.assertEqual("mismatch", view["state"])
+                self.assertIsNone(view["public_key"])
+                self.assertEqual(1, view["sequence"])
+                self.assertEqual(raw, self.state.allowed_signers_path.read_bytes())
+        finally:
+            self.state.allowed_signers_path.write_bytes(line)
+        self.assertEqual(changes, self.ledger._connection.total_changes)
+
+    def test_unconfigured_public_owner_view_has_no_key_or_implicit_enrollment(self):
+        state = LearningState(self.base / "unconfigured-owner")
+        authorize_collector_runtime(state, ORCHESTRATION_ROOT / "cli.py")
+        ledger = LearningLedger(state)
+        self.addCleanup(ledger.close)
+        root = self.base / "unconfigured-project"
+        root.mkdir()
+        project = ledger.register_project(root, now_ms=1)
+        views = AccountOwnerViews(ledger)
+        expected = {"state": "not_configured", "fingerprint": None, "sequence": 0,
+                    "replacements": 0, "last_replaced_at_ms": None, "public_key": None}
+        changes = ledger._connection.total_changes
+        self.assertEqual(expected, views.owner_public_key(project))
+        state.allowed_signers_path.write_bytes(b"CANARY-INVALID-SIGNER")
+        self.assertEqual({**expected, "state": "mismatch"}, views.owner_public_key(project))
+        self.assertEqual(0, ledger._connection.execute("SELECT COUNT(*) FROM owner_key_history").fetchone()[0])
+        self.assertEqual(changes, ledger._connection.total_changes)
+
+    def test_new_strict_read_does_not_rewrite_or_change_legacy_owner_encodings(self):
+        padded = public_value("ssh-rsa", b"\x00\x01\x00\x01", b"\x00\x01" + b"\x55" * 127)
+        line = ("codex-agents-owner " + padded + "\n").encode("ascii")
+        self.state.allowed_signers_path.write_bytes(line)
+        self.ledger._connection.execute(
+            "INSERT INTO owner_key_history(sequence,signer_line,reason,recorded_at_ms) VALUES(2,?,'replaced',42)",
+            (line,),
+        )
+        changes = self.ledger._connection.total_changes
+        prior = self.call(self.request("account.owner_key"))
+        self.assertEqual("ok", prior["state"])
+        with self.assertRaisesRegex(AccountError, "account_incompatible"):
+            self.call(self.request("account.owner_public_key"), service=self.owner_service())
+        self.assertEqual(prior, self.call(self.request("account.owner_key")))
+        self.assertEqual(line, self.state.allowed_signers_path.read_bytes())
+        self.assertEqual(line, self.ledger._connection.execute("SELECT signer_line FROM owner_key_history WHERE sequence=2").fetchone()[0])
+        self.assertEqual(changes, self.ledger._connection.total_changes)
+
+    def test_public_key_reply_binds_fingerprint_state_and_closed_shape(self):
+        request = self.request("account.owner_public_key")
+        service = self.owner_service()
+        valid = json.loads(service.handle(encode_account_request(request), TOKEN))
+        cases = [
+            {**valid["result"], "public_key": value}
+            for value in (None, True, {}, [], "", valid["result"]["public_key"] + " comment")
+        ]
+        cases += [
+            {**valid["result"], "fingerprint": "SHA256:" + "A" * 43},
+            {**valid["result"], "state": "mismatch"},
+            {**valid["result"], "extra": True},
+        ]
+        missing = dict(valid["result"])
+        del missing["public_key"]
+        cases.append(missing)
+        for result in cases:
+            with self.assertRaisesRegex(AccountError, "account_invalid_response"):
+                decode_account_response(canonical_json({**valid, "result": result}), request)
+        legacy = self.request("account.owner_key")
+        changed = {**valid, "request_digest": account_request_digest(legacy)}
+        with self.assertRaisesRegex(AccountError, "account_invalid_response"):
+            decode_account_response(canonical_json(changed), legacy)
+
+    def test_largest_public_key_reply_fits_the_existing_frame(self):
+        request = self.request("account.owner_public_key", identity="r" * 160)
+        value = public_value("ssh-rsa", b"\x01\x00\x01", b"\x01" + b"\x55" * 3028)
+        _, fingerprint = checked_public_key(value)
+        maximum = (1 << 63) - 1
+        result = {"state": "ok", "public_key": value, "fingerprint": fingerprint,
+                  "sequence": maximum, "replacements": maximum, "last_replaced_at_ms": maximum}
+        labels = {"request_id": request.request_id, "project_id": request.project_id,
+                  "runtime_digest": request.runtime_digest, "request_digest": account_request_digest(request)}
+        raw = AccountService._reply(labels, result=result)
+        self.assertLessEqual(len(raw) + 1, MAX_ACCOUNT_FRAME_BYTES)
+        self.assertEqual(result, decode_account_response(raw, request))
+
+    def test_real_socket_public_owner_reads_use_explicit_retry_and_survive_restart(self):
+        expected = self.views.owner_public_key(self.projects[0])
+        endpoint, process, stop = self._start_view_server("public-owner", mode="drop")
+        client = AccountClient(endpoint, self.projects[0], RUNTIME, timeout=.5)
+        with self.assertRaisesRegex(AccountError, "account_invalid_response"):
+            client.owner_public_key(request_id="public-read")
+        self._server_line(process, "seen-1")
+        self.assertEqual(expected, client.owner_public_key(request_id="public-read"))
+        self._server_line(process, "seen-2")
+        stop()
+        endpoint, process, stop = self._start_view_server("public-owner")
+        self.assertEqual(expected, AccountClient(endpoint, self.projects[1], RUNTIME).owner_public_key(request_id="public-read"))
+        self._server_line(process, "seen-1")
+        stop()
 
     def _start_view_server(self, name, *, mode="normal"):
         endpoint = self.base / (name + ".sock")

@@ -16,12 +16,13 @@ from pathlib import Path
 
 from .contracts import ContractError
 from .learning_contracts import canonical_json, parse_bounded_json
+from .owner_key_contracts import checked_public_key
 from .service_transport import MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
 
 ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
 MAX_ACCOUNT_INTEGER = (1 << 63) - 1
-ACCOUNT_OPERATIONS = frozenset({"account.health", "account.project", "account.owner_key"})
+ACCOUNT_OPERATIONS = frozenset({"account.health", "account.project", "account.owner_key", "account.owner_public_key"})
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
     "account_not_authorized", "account_wrong_owner", "account_unavailable",
@@ -127,8 +128,11 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
         ):
             raise AccountError("account_invalid_response")
     else:
+        owner_fields = {"state", "fingerprint", "sequence", "replacements", "last_replaced_at_ms"}
+        if request.operation == "account.owner_public_key":
+            owner_fields.add("public_key")
         if (
-            set(result) != {"state", "fingerprint", "sequence", "replacements", "last_replaced_at_ms"}
+            set(result) != owner_fields
             or type(result["state"]) is not str or result["state"] not in {"ok", "mismatch", "not_configured"}
             or not integer(result["sequence"]) or not integer(result["replacements"])
             or result["replacements"] > result["sequence"]
@@ -140,6 +144,18 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
             or (result["state"] == "not_configured" and result["sequence"] != 0)
         ):
             raise AccountError("account_invalid_response")
+        if request.operation == "account.owner_public_key":
+            if result["state"] == "ok":
+                invalid = False
+                try:
+                    _, fingerprint = checked_public_key(result["public_key"])
+                    invalid = fingerprint != result["fingerprint"]
+                except ValueError:
+                    invalid = True
+                if invalid:
+                    raise AccountError("account_invalid_response")
+            elif result["public_key"] is not None:
+                raise AccountError("account_invalid_response")
     return result
 
 
@@ -204,3 +220,6 @@ class AccountClient:
 
     def owner_key(self, *, request_id: str | None = None) -> dict:
         return self._read("account.owner_key", request_id)
+
+    def owner_public_key(self, *, request_id: str | None = None) -> dict:
+        return self._read("account.owner_public_key", request_id)

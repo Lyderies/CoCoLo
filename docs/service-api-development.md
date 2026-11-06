@@ -432,7 +432,7 @@ production intake fairness, independent local timers, account coordination or co
 
 ## Closed account read API increment
 
-`account_api` contains a pure codec and client for three closed read operations. `account_service`
+`account_api` contains a pure codec and client for four closed read operations. `account_service`
 receives one already opened global `LearningLedger`; it creates no per-project key, ledger or
 connection and does not start or migrate persistence on request. Its project view returns only
 the authorized active project's ID, status and creation time. Its owner-key view returns the
@@ -443,7 +443,7 @@ malformed, unsafe or present-but-unrecorded signer material reports `mismatch`.
 Signer reads check regular-file type before opening, open nonblocking, and recheck descriptor
 type, owner, mode, link count and inode before a bounded read. A FIFO or replacement between
 inspection and open cannot stall this view. First-owner enrollment uses the same checked read.
-No key bytes, signatures, roots, paths, SQL or arbitrary methods are returned or selected by JSON.
+No private key bytes, signatures, roots, paths, SQL or arbitrary methods are returned or selected by JSON.
 
 Authorization defaults to denial before backend work. The server-only adapter output must bind
 the full request digest, project, runtime and permitted operations; the handler rechecks it after
@@ -463,6 +463,24 @@ are fixed and omit exception text. The client makes one exchange under one deadl
 imports SQLite, starts a service or automatically retries. Read IDs correlate fresh views; they
 do not preserve snapshots. EOF with empty or truncated JSON is an invalid response. Another
 explicit read with the same ID is still a new view.
+
+The additive `account.owner_public_key` read requires trusted adapter source `owner`
+and the specific allowed operation; host, hook and app-server contexts are refused
+before backend access. It returns the public SSH key with the existing fingerprint,
+sequence and replacement metadata from one locked owner observation. A missing or
+mismatched signer returns no public key. An `ok` response requires the full canonical
+public encoding to match its fingerprint. The complete current 4 KiB signer-line
+limit fits inside the existing 16 KiB response bound.
+
+Pure `owner_key_contracts` supplies the shared encoding helpers without persistence
+or signing dependencies. Legacy names remain reexported from `learning_store`, with
+their existing identity fallback and RSA normalization. Existing status responses
+and historical bytes retain their behavior. The new strict read returns a fixed
+incompatibility error for an older noncanonical encoding instead of rewriting it.
+This operation prepares the canonical key read needed by human attestation; the
+normal attester still needs migration to an authenticated owner endpoint. Public
+key data and its generation grant no native owner or signing authority, and no
+signing purpose is added or changed.
 
 Disposable socket tests read two projects through one account owner, restart it without changing
 the global key, and drop/truncate replies to check explicit retry. Separate tests check default

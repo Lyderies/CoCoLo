@@ -23,6 +23,7 @@ from .learning_store import (
     OWNER_SIGNER_LINE, LearningLedger, LedgerError, OwnerSignerNotConfigured, StateError,
     _owner_key_identity, _signer_fingerprint,
 )
+from .owner_key_contracts import owner_public_key_from_line
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,12 @@ class AccountOwnerViews:
             return self._project_locked(project_id)
 
     def owner_key(self, project_id: str) -> dict:
+        return self._owner_key_view(project_id, include_public_key=False)
+
+    def owner_public_key(self, project_id: str) -> dict:
+        return self._owner_key_view(project_id, include_public_key=True)
+
+    def _owner_key_view(self, project_id: str, *, include_public_key: bool) -> dict:
         self._guard()
         with self._ledger._lock:
             self._ledger.state.harden_database_files()
@@ -123,8 +130,11 @@ class AccountOwnerViews:
             if owner is None:
                 if count:
                     raise AccountError("account_incompatible")
-                return {"state": "not_configured" if unconfigured else "mismatch", "fingerprint": None,
-                        "sequence": 0, "replacements": 0, "last_replaced_at_ms": None}
+                result = {"state": "not_configured" if unconfigured else "mismatch", "fingerprint": None,
+                          "sequence": 0, "replacements": 0, "last_replaced_at_ms": None}
+                if include_public_key:
+                    result["public_key"] = None
+                return result
             try:
                 if OWNER_SIGNER_LINE.fullmatch(owner[1]) is None:
                     raise ValueError("invalid canonical key")
@@ -136,8 +146,19 @@ class AccountOwnerViews:
                 invalid = False
             if invalid or count > owner[0]:
                 raise AccountError("account_incompatible")
-            return {"state": "ok" if signer == owner[1] else "mismatch", "fingerprint": fingerprint,
-                    "sequence": owner[0], "replacements": count, "last_replaced_at_ms": last}
+            result = {"state": "ok" if signer == owner[1] else "mismatch", "fingerprint": fingerprint,
+                      "sequence": owner[0], "replacements": count, "last_replaced_at_ms": last}
+            if include_public_key:
+                result["public_key"] = None
+                if result["state"] == "ok":
+                    try:
+                        value, public_fingerprint = owner_public_key_from_line(owner[1])
+                    except ValueError:
+                        raise AccountError("account_incompatible") from None
+                    if public_fingerprint != fingerprint:
+                        raise AccountError("account_incompatible")
+                    result["public_key"] = value
+            return result
 
 
 class AccountService:
@@ -196,12 +217,15 @@ class AccountService:
                 or authorization.request_digest != digest or current_digest != digest
                 or request.operation not in authorization.allowed_operations
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
+                or (request.operation == "account.owner_public_key" and authorization.source != "owner")
             ):
                 raise AccountError("account_not_authorized")
             if request.operation == "account.health":
                 result = {"transport_alive": True, "database_checked": False}
             elif request.operation == "account.project":
                 result = self._views.project(request.project_id)
+            elif request.operation == "account.owner_public_key":
+                result = self._views.owner_public_key(request.project_id)
             else:
                 result = self._views.owner_key(request.project_id)
             reply = self._reply(labels, result=result)
