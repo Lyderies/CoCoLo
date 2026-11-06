@@ -902,3 +902,16 @@ billing signing bytes using metadata contracts alone. The existing
 the purpose, exact project scope and validated record digest. The calculation can
 be imported separately from the persistence and verification engine. Signature
 verification, worker custody and fresh account admission remain separate requirements.
+
+### Private signature-helper input
+
+`signature_input_wire` provides a versioned binary input frame over captured,
+unverified fields. Explicit immutable limits bound raw input, row count and each
+field before copying. The frame preserves raw signer, content and signature bytes,
+UTF-8 strings and null versus empty signatures. Its maximum wire size is the
+retained-field budget plus 26 bytes, derived from the fixed header and field layout.
+This bounds data and metadata counts rather than exact Python heap use.
+
+The decoded value carries a correlation nonce and fields. Owner origins remain
+in the parent; process/descriptor custody and fresh admission require separate
+proof. This module performs no I/O and activates no worker or service operation.
