@@ -356,6 +356,19 @@ class SignatureJobIntakeTests(unittest.TestCase):
                 self.capture(self.b)
         self.assertEqual("signature_capture_unavailable", caught.exception.reason_code)
         self.assertEqual(1, self.intake.snapshot().jobs)
+        self.assertTrue(connection._sql_unusable)
+        before = self.intake.snapshot()
+        with mock.patch.object(self.views, "_capture_signature_inputs_locked",
+                               side_effect=AssertionError("poisoned backend work")) as capture:
+            for caller, operation in (("intake", lambda: self.capture(self.b)), ("owner", self.fixture.capture)):
+                with self.subTest(caller=caller):
+                    with self.assertRaises(SignatureCaptureError) as refused:
+                        operation()
+                    self.assertEqual("signature_capture_unavailable", refused.exception.reason_code)
+                    self.assertIsNone(refused.exception.__cause__)
+                    self.assertIsNone(refused.exception.__context__)
+                    self.assertEqual(before, self.intake.snapshot())
+        capture.assert_not_called()
         self.assert_job_error("signature_job_unavailable", self.intake.select_next)
         self.assertEqual("released", self.intake.cancel(handle))
         self.assertEqual(0, self.intake.snapshot().jobs)

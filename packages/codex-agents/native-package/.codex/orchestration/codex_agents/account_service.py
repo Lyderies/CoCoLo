@@ -123,8 +123,7 @@ class AccountOwnerViews:
         try:
             work_limits.__post_init__()
             with self._ledger._lock:
-                if self._ledger._connection.in_transaction:
-                    raise SignatureCaptureError("signature_capture_unavailable")
+                # read_call guards unusable connections and outer transactions.
                 return self._ledger._connection.read_call(
                     work_limits, lambda: self._capture_signature_inputs_locked(project_id, provider, limits),
                 )

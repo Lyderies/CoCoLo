@@ -866,6 +866,8 @@ Expected encoding, storage and state failures retain fixed refusal codes without
 backend exception context. Unexpected programming and resource faults propagate
 after capture settings and unstarted intake reservations are cleaned up; they
 are not reported as ordinary malformed inputs or unavailable storage.
+Capture delegates unusable-connection and outer-transaction checks to the guarded
+read boundary, including repeat calls after restoration has poisoned a connection.
 
 Pending inputs use FIFO per project and round-robin project selection. Selection
 skips a project already holding a selected slot without reordering its FIFO and
