@@ -1,0 +1,79 @@
+{
+  "vectors": [
+    {
+      "name": "feedback",
+      "project_id": "prj_00000000000000000000000000000000",
+      "record": {
+        "schema_version": 1,
+        "record_type": "feedback",
+        "record_id": "feedback:payload-vector",
+        "run_id": "run:payload-vector",
+        "observed_at_ms": 7,
+        "label": "accepted",
+        "reason_code": "quality",
+        "correction_digest": null
+      },
+      "payload_ascii": "{\"project_id\":\"prj_00000000000000000000000000000000\",\"purpose\":\"authenticated_owner_record\",\"record_digest\":\"5c41145feda3d37ef86955d49d5320e88a30169819c0160a3af313aa298ee3d2\",\"record_type\":\"feedback\"}"
+    },
+    {
+      "name": "grader_calibration",
+      "project_id": "prj_00000000000000000000000000000000",
+      "record": {
+        "schema_version": 1,
+        "record_type": "grader_calibration",
+        "configuration": {
+          "model": "gpt-6.1-sol",
+          "effort": "high",
+          "prompt_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "rubric_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "masking": true,
+          "drift_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "owner_override_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        "labels": [],
+        "labels_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "label_count": 0,
+        "agreement_micros": 0,
+        "swap_stability_micros": 0,
+        "disagreements": 0,
+        "ready": false,
+        "observed_at_ms": 7,
+        "record_id": "calibration:ce773565ce9a1c5f74642e9c1410df861c33564dd33c6eaa6c64dead3028f727"
+      },
+      "payload_ascii": "{\"project_id\":\"prj_00000000000000000000000000000000\",\"purpose\":\"authenticated_owner_record\",\"record_digest\":\"12516a814f505ba9a47e2245204775f99295cd967147f1e45387f919aea84e7a\",\"record_type\":\"grader_calibration\"}"
+    },
+    {
+      "name": "legacy_billing",
+      "project_id": "prj_00000000000000000000000000000000",
+      "record": {
+        "schema_version": 1,
+        "record_type": "billing_attestation",
+        "record_id": "billing:payload-vector",
+        "provider": "codex",
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "no_paid_overage": true,
+        "no_usage_credits": true,
+        "issued_at": 7,
+        "observed_at_ms": 7
+      },
+      "payload_ascii": "{\"project_id\":\"prj_00000000000000000000000000000000\",\"purpose\":\"authenticated_owner_record\",\"record_digest\":\"051bd50aa3c91506f77f1c7f3c7a6a9d8283586b38eacd5e3c57350b7c0fc2a2\",\"record_type\":\"billing_attestation\"}"
+    },
+    {
+      "name": "credits_disabled_billing",
+      "project_id": "prj_00000000000000000000000000000000",
+      "record": {
+        "schema_version": 1,
+        "record_type": "billing_attestation",
+        "record_id": "billing:payload-vector",
+        "provider": "codex",
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "no_paid_overage": true,
+        "no_usage_credits": true,
+        "issued_at": 7,
+        "observed_at_ms": 7,
+        "codex_credits_spending_disabled": true
+      },
+      "payload_ascii": "{\"project_id\":\"prj_00000000000000000000000000000000\",\"purpose\":\"authenticated_owner_record\",\"record_digest\":\"6d631fd5992e6f073439f258dc4e560fc667ba4b548f36eb468abf79da882acd\",\"record_type\":\"billing_attestation\"}"
+    }
+  ]
+}

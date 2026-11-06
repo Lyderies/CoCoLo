@@ -893,3 +893,12 @@ fixed-worker custody, bounded fresh final checks, independent health/control,
 native authentication and normal-client migration. Earlier failed/exhausted gates
 and the failed planning result remain unchanged; C3, C5, C18, C19 and release
 acceptance are not completed by these metadata transitions.
+
+### Owner-record signing data
+
+`owner_record_payload` calculates the existing canonical feedback, calibration and
+billing signing bytes using metadata contracts alone. The existing
+`OwnerGrantAuthority.owner_record_payload` entry point delegates to it, preserving
+the purpose, exact project scope and validated record digest. The calculation can
+be imported separately from the persistence and verification engine. Signature
+verification, worker custody and fresh account admission remain separate requirements.

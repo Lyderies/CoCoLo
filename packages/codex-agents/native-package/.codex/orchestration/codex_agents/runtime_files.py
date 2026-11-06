@@ -57,6 +57,7 @@ RUNTIME_FILES = (
     "codex_agents/learning_store.py",
     "codex_agents/liveness_clock.py",
     "codex_agents/owner_key_contracts.py",
+    "codex_agents/owner_record_payload.py",
     "codex_agents/process_tree.py",
     "codex_agents/project_history.py",
     "codex_agents/project_monitor.py",

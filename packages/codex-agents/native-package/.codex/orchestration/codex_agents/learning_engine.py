@@ -48,7 +48,6 @@ from .learning_contracts import (
     keyed_digest,
     parse_bounded_json_value,
     provider_for_model,
-    validate_billing_attestation,
     validate_canary_report,
     validate_candidate,
     validate_comparison,
@@ -69,6 +68,7 @@ from .git_plumbing import XCRUN_NO_CACHE
 from .git_plumbing import git_executable as find_git
 from .git_plumbing import repository_layout_problem, run_git
 from .host_paths import HostPathError, private_directory, remove_private_directory
+from .owner_record_payload import owner_record_payload
 from .routing import provider_model_allowed
 
 COMPARISON_MIN_CASES = 20
@@ -3855,25 +3855,7 @@ class OwnerGrantAuthority:
     def owner_record_payload(project_id: str, record: dict[str, Any]) -> bytes:
         """Return exact bytes for an owner feedback or calibration signature."""
 
-        if not isinstance(project_id, str) or not project_id:
-            raise ContractError("owner record project is invalid")
-        record_type = record.get("record_type") if isinstance(record, dict) else None
-        if record_type == "feedback":
-            checked = validate_feedback(record)
-        elif record_type == "grader_calibration":
-            checked = validate_grader_calibration(record)
-        elif record_type == "billing_attestation":
-            checked = validate_billing_attestation(record)
-        else:
-            raise ContractError("owner record type is unsupported")
-        return canonical_json(
-            {
-                "purpose": "authenticated_owner_record",
-                "project_id": project_id,
-                "record_type": record_type,
-                "record_digest": content_digest(checked),
-            }
-        )
+        return owner_record_payload(project_id, record)
 
     def verify_owner_record(
         self, project_id: str, record: dict[str, Any], signature: bytes
