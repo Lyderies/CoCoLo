@@ -72,13 +72,14 @@ from .providers import (
     observation_failure_reason,
     resolve_client,
 )
+from .result_contracts import MAX_RESULT_BODY_BYTES
 
 MAX_EXPORT_BYTES = 16 * 1024 * 1024
 MAX_EXPORT_FILES = 2_000
 MAX_EXPORT_SECONDS = 60
 MAX_STREAM_BYTES = 8 * 1024 * 1024
 MAX_LINE_BYTES = 1024 * 1024
-MAX_RESULT_BYTES = 1024 * 1024
+MAX_RESULT_BYTES = MAX_RESULT_BODY_BYTES
 CLAUDE_TOOLS = ("Read", "Glob", "Grep")
 # Known built-in plugins are switched off; the init-frame check still fails
 # closed if any plugin loads, so this list is a convenience, not the control.
@@ -1800,7 +1801,6 @@ def _unrecordable(
     """Return the fence outcome and a content-free validator reason, if any."""
 
     from .learning_contracts import MAX_OUTCOME_EVIDENCE_DIGESTS, canonical_json
-    from .learning_store import MAX_WORKER_RESULT_BYTES
 
     try:
         validate_result(result, assignment=assignment)
@@ -1821,7 +1821,7 @@ def _unrecordable(
     # bindings. Fence before binding if that existing durable limit cannot fit.
     if len(result["evidence"]) + 2 > MAX_OUTCOME_EVIDENCE_DIGESTS:
         return "result_too_large", None
-    if len(canonical_json(result)) > MAX_WORKER_RESULT_BYTES:
+    if len(canonical_json(result)) > MAX_RESULT_BODY_BYTES:
         return "result_too_large", None
     return None, None
 

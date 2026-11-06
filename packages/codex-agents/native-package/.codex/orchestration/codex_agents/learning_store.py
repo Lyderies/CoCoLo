@@ -69,6 +69,7 @@ from .learning_contracts import (
     validate_execution_configuration,
 )
 from .learning_adapters import HOOK_EVENTS, empty_usage, load_client_capabilities, reconcile_run
+from .result_contracts import MAX_RESULT_BODY_BYTES
 from .runtime_files import ORCHESTRATION_PREFIX, RUNTIME_FILES, runtime_digest
 
 COLLECTOR_AUTHORIZATION_SCHEMA_VERSION = 1
@@ -110,7 +111,7 @@ UPGRADE_RECONCILIATION_TTL_MS = 10 * 60 * 1000
 MAX_PENDING_OPERATIONAL_CHECKS = 256
 # The CLI reads a result as at most this many bytes, so a kept worker result
 # never needs more.
-MAX_WORKER_RESULT_BYTES = 1_048_576
+MAX_WORKER_RESULT_BYTES = MAX_RESULT_BODY_BYTES
 INGESTION_FRESH_MS = 30 * 60 * 1000
 PRODUCER_AUTHORITY = {
     "hook": {"event"},

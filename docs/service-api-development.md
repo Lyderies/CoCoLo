@@ -544,3 +544,12 @@ actual Unix-socket lost replies and owner restart, scope forgery, post-I/O
 revocation, expiry/retirement between chunks, corrupt artifacts, strict response
 types and process/thread affinity. An import guard and the source ownership audit
 cover this client without authorizing persistence fallback or completing C19.
+
+The shared `result_contracts.MAX_RESULT_BODY_BYTES` is also the unchanged 1 MiB
+limit for bridge parsing and recordable worker results. The legacy persistence
+module retains its `MAX_WORKER_RESULT_BYTES` name as an alias. Bridge result
+validation now reads the pure contract directly; it no longer imports a
+persistence owner merely to check the result size. A fresh-interpreter import
+guard exercises valid, invalid and oversized results with SQLite and owner imports
+blocked. Other bridge ledger/error imports and direct publication calls remain
+in the ownership audit; this preparatory correction does not complete migration.
