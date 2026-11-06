@@ -124,6 +124,25 @@ startup/library-injection constraints and protected runtime binding before an
 issuer's observations can be trusted. No caller-provided `sandbox_ok`, `no_api_keys`
 or `native=true` field is an enrollment proof.
 
+No candidate currently identifies a supported operation that supplies the initial
+actual-root binding. Consequently none is selectable for privileged intake. The
+following sequences describe the missing creation operations, rather than treating
+an approved launcher as an already established trust anchor:
+
+| Candidate | Required creation sequence | Current refusal point |
+|---|---|---|
+| Fixed keeper | A trusted native host establishes the actual root and current restrictions; it creates a keeper and exclusive operation ingress bound to that root; an independently authenticated bootstrap registers that keeper with the service epoch | Existing rule invocation and Python session lookup do not establish that first native root observation or registration provenance |
+| Direct client | A supported host/OS operation binds the exact fixed entry control flow and actual root restrictions to the service challenge and request | No such attestation operation is identified; recognizing an interpreter or the same installed binary is insufficient |
+| Controller-owned transport | An owner-established controller creates the reviewed native client and exclusively owns its protocol channel; trusted native protocol events distinguish that controller-created root from every child request and supply current restriction context | Process ownership and schema fields alone do not establish actor attribution, dynamic-tool inheritance or effective restrictions; current-client isolation compatibility also remains unproved |
+| Separate identity/native host integration | Explicitly provisioned policy grants a fixed authority a closed root-attestation operation; it authenticates the actual root and issues only scoped, current bindings | A different UID, signature or privileged executable cannot choose the requester's role by itself; provisioning and the attestation operation remain unspecified |
+
+For each candidate, a positive proof must be paired with an invocation of identical
+reviewed code from an unapproved process and a supported child. The latter must
+not obtain primary service authority from known session/role/handle values. This
+concerns the new API enrollment boundary; it does not claim OS protection against
+the accepted same-user database-file access limit. Owner bootstrap remains a
+separate explicit ceremony, with existing signed statements preserved.
+
 Candidate peer-PID/audit-token and native code-identity APIs must be checked against
 the target SDK and runtime. Relevant declarations are `sys/un.h` (`LOCAL_PEERPID`, `LOCAL_PEEREPID`,
 `LOCAL_PEERTOKEN`), `bsm/libbsm.h` (`audit_token_to_pid`, `audit_token_to_pidversion`)
@@ -157,6 +176,25 @@ These are proof obligations for the proposed transport. They are not claims abou
 the current bridge's future enrollment descriptors. Existing watchdog descriptors
 and their parent-death enforcement must be preserved during any spawn change.
 
+Exclusive keeper-to-service custody is insufficient if a child can ask the keeper
+to perform primary operations. The complete channel inventory must be resolved:
+
+| Channel | Required creator, writers and binding | Required lifetime behavior |
+|---|---|---|
+| Primary operation ingress | The established root bootstrap creates it for exactly one primary/session/permission generation; the keeper derives context from that creation, never request labels | No inherited or delegated writer; root exit, exec or unverifiable restriction change closes intake and invalidates queued contexts |
+| Keeper to project/account service | The authenticated keeper creates it for the registered project/runtime and verified service epoch; keeper code alone writes closed operations | No provider/client/plugin descriptor inheritance, generic forwarding or privilege from a received descriptor |
+| Bridge executor enrollment | The trusted launch path creates a distinct context for one admitted run/attempt/dispatch | Cannot enroll another run or borrow a primary channel; launch consumption and later recovery have separate operation scopes |
+| Hook/app-server activity ingress | Its own established producer binding permits only normalized activity/health for exact targets | No primary bootstrap, launch, cancellation or owner operation; a controller's bootstrap role is distinct from an activity producer |
+| Verification worker pipes | Fixed trusted code creates bounded input/output pipes for one request digest and native-context generation | No service descriptor or ability to choose a role, target, executable or verifier; late output after invalidation is discarded |
+| Owner operation ingress | An established owner-terminal entry and the applicable checked signed statement | No primary/child reuse, passphrase delivery or arbitrary signing API; key/epoch changes invalidate pending authority work |
+
+Every applicable accepted stream needs negative cases for fork inheritance,
+dup/dup2, exec, interpreter replacement, SCM_RIGHTS, parent exit with a surviving
+writer, and endpoint replacement. Include complete and partial requests queued
+by different writers before and after identity or revision changes. Checking the
+peer again after reading cannot retrospectively authenticate those buffered bytes.
+Unknown writer continuity refuses the affected request and channel.
+
 ## Internal context and closed roles
 
 The authorizer may create its server-only context only after the complete trust
@@ -180,6 +218,12 @@ ceremonies. Completing short setup/registration/attestation calls during another
 run remains required; leaving all such work permanently behind a global drain is
 not a solution to the concurrency requirement.
 
+The owner and executor entries each need their own concrete bootstrap sequence,
+initial anchor and refusal cases; neither inherits proof from the primary's
+enrollment. The role-to-operation policy must distinguish an account metadata
+read from an owner authority change. Existing source labels and permitted-operation
+sets do not implement that future policy or an executor role by themselves.
+
 The ordinary request envelope remains bounded/versioned and closed. Validate its
 complete canonical bytes, permitted operation, immutable request identity and
 project/run/attempt/runtime scope. Enrollment adds no arbitrary SQL, method,
@@ -191,6 +235,53 @@ and revalidate their current revisions before authority changes. Reserve control
 and terminal capacity. Local silence/deadline enforcement and cleanup cannot wait
 on enrollment work or metadata publication. An accepted cancellation request still
 does not mean cleanup has been confirmed.
+
+The current `HistoryService.handle` invokes its authorizer on the persistence-owner
+thread. A native verifier must not be installed directly in that callback. The
+integration needs bounded preverification outside the owner, an immutable result
+bound to the exact canonical request and native context, and a cheap revision check
+at the owner operation. Both account and project paths need this separation.
+`AccountService` also invokes authorization synchronously before its owner-thread
+views, so moving only the history verifier is insufficient.
+Bound unauthenticated connections, bytes, outstanding verification jobs, queue
+depth and read/verification deadlines before starting expensive work. Refuse at
+capacity; control and terminal work have separately reserved capacity. Worker
+completion is not an authority commit, and a hash alone is not authentication.
+
+## Revocation and recovery operations
+
+The implementation must resolve the following dispositions before authorizer
+activation. These rules constrain the protocol; no revocation source or cross-store
+serialization mechanism is implemented by this document.
+
+| Operation | Queued or not yet committed after relevant revocation | Executing, committed or reply lost |
+|---|---|---|
+| Enrollment and new reads | Refuse stale primary/permission, project/runtime, service or applicable policy generations; require fresh native bootstrap | A new service epoch cannot recover a context from a readable handle; a read snapshot never grants later authority |
+| Admission, preparation and launch consumption | Revalidate actual primary/run scope and applicable project/runtime/supervisor/account/owner-policy revisions at the authoritative short write | Reconcile the original immutable request/claim; never mint a fresh permission because a reply is missing |
+| Native spawn handoff | A revoked queued permit must not reach spawn; consumption alone does not prove that revocation and spawn are ordered | Account for outstanding prepared/consumed/native-spawn permits in the drain barrier; missing PID or metadata is not nonexecution or permission to relaunch |
+| Owning-primary cancellation | Check actual primary ownership and target supervisor/attempt generation; stale external context cannot choose a replacement target | The supervisor retains independently scoped safety-cleanup authority; acknowledgement states whether cleanup is requested, underway or confirmed |
+| Activity and health | Refuse stale producer/run bindings; a producer cannot obtain control authority by changing event labels | Local timers and tracked-process cleanup continue independently of enrollment and durable metadata queues |
+| Terminal delivery and acknowledgement | Require the exact run/attempt/claim and a separately authenticated recovery scope; do not widen an expired launch context | Retain exact result/fence binding and idempotent receipt lookup across runtime changes; inability to reauthenticate cannot imply success, nonexecution or fresh launch authority |
+| Owner registration, key and signed statements | Verify the applicable current owner/key/policy revision and explicit operation before commit | Lost replies reconcile the original operation; signing remains in the owner terminal, and replacement invalidates pending statements rather than restoring an old key |
+
+Session/permission revisions need a trusted actual-root source; a polled record or
+daemon environment is not that source. Project/runtime/account/owner revisions
+need identified authoritative writers. Supervisor replacement must publish an
+authenticated new generation and invalidate old target contexts. At each short
+authority write, revocation and use need a defined serialization point. If their
+facts span stores, an explicit receipt/handoff protocol must supply that ordering;
+two SQLite commits do not create a common atomic boundary. The launch-to-spawn
+gap and old-runtime terminal delivery remain migration/recovery design gates.
+No operation may keep a transaction open while waiting for a native verifier,
+signature worker, provider or child. Unsupported freshness or ordering refuses
+new authority while preserving separately authorized local cleanup/reconciliation.
+
+V1 permits a native Claude child opened before an owner-key change to start
+afterwards. Keep that documented limit visible: new API authority must not silently
+inherit a stale launch permission, and this design does not claim to stop an
+already opened native tool call. Its exact disposition and native-control evidence
+belong to the Claude phase after both Codex-child paths pass. NE5 cannot be claimed
+for that path merely from the project/account API fixtures.
 
 ## Coverage and material alternatives
 
@@ -218,7 +309,7 @@ If the existing launcher cannot supply the needed actual-root proof, stop that
 activation path and present the supported alternatives. Do not silently adopt
 new privileges, omit a provider path or declare a synthetic adapter sufficient.
 
-## Ordered exits before privileged integration
+## Proof dependencies before privileged integration
 
 | Gate | Observable evidence |
 |---|---|
@@ -231,8 +322,32 @@ new privileges, omit a provider path or declare a synthetic adapter sufficient.
 | NE7: client and recovery integration | Complete normal-client/authority-read census, no SQLite fallback, one global account/key, exact one-shot launch/outbox/replay and drained migration remain intact |
 | NE8: release evidence | Codex-first path checks, diagnostic review/test install/fresh installed probe, combined security/regressions and real two-project installation pass |
 
-The next bounded experiment should falsify NE2–NE4 assumptions for the keeper
-candidate before implementing privileged business intake. Private feasibility
-observations are not a passing gate, installed-client evidence or authorization.
-If a material native integration choice remains after that work, prepare its exact
-reviewable change and evidence before requesting the owner's decision.
+Gate numbers are identifiers, not an executable sequence: NE2 cannot pass until
+the relevant NE3 issuer/endpoint and NE4 ingress/service custody proofs hold. NE1
+and a concrete candidate bootstrap specification precede that combined proof.
+NE5 and NE6 may be falsified with synthetic fixtures, but their real integration,
+NE7 and NE8 remain required before release. No production authorizer is enabled
+to obtain experimental evidence.
+
+The next bounded experiment must name its candidate, native primitive, exact
+channel and expected refusal before execution:
+
+| Experiment | Observable falsification | What it cannot establish |
+|---|---|---|
+| Bootstrap discrimination | The identical reviewed issuer invoked by an unapproved process or supported child must not obtain root scope; a positive actual-root case uses the specified authoritative creation operation | Fixture-supplied root labels, ordinary process creation and metadata handshakes cannot prove actual-root provenance |
+| Named-stream writer custody | A connector delegates its endpoint to a known child, then queues its own frame; complete and partial earlier child frames must never gain connector authority from a later peer query | A private OS experiment is not an enrolled client or a production authorizer |
+| Descriptor/epoch transitions | Fork/dup/exec/delegation, root exit, service restart and queued revision changes must invalidate the specified context without changing its request identity | Supplied fixture generations cannot prove a supported native host publishes real permission changes |
+| Owner-thread isolation | A deliberately slow bounded verifier and full preauthentication queue must not occupy the persistence owner or reserved control/terminal capacity | Isolated scheduling logic cannot establish end-to-end client, crash or migration correctness |
+
+If no supported actual-root creation/attestation operation can be named, stop the
+candidate before a privileged prototype. Retain that unavailable proof and prepare
+the exact alternative integration change, affected host paths and evidence for a
+material owner decision when needed. Do not replace the missing operation with a
+synthetic boolean, choose a different authority architecture silently or relax the
+review/install/fresh installed probe gates. NE8 abbreviates rather than replaces
+all L1–L17, C1–C19, D1–D8 and LIVE-1 through LIVE-5 acceptance criteria, existing
+admission/billing/headroom/signature/result/verifier/replay checks and real
+two-project QA. Retain the existing bridge admission/client/billing recheck before
+launch. The reviewed diagnostic test installation precedes the fresh installed
+Claude contract probe; offline source work does not waive either gate.
+Private feasibility observations are not a passing gate or installed-client proof.
