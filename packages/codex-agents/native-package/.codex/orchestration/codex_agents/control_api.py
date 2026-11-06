@@ -184,9 +184,15 @@ def _validate_result(request: ServiceRequest, result: dict) -> None:
             or not all(_integer(result[name], result["tracked_attempts"])
                        for name in ("stop_requested", "terminal_observed", "cleanup_confirmed"))
             or result["health_counts"]["cleaned"] != result["cleanup_confirmed"]
-            or result["health_counts"]["stopping"] > result["stop_requested"]
-            or result["health_counts"]["terminal"] > result["terminal_observed"]
         ):
+            raise ControlError("control_invalid_response")
+        counts = result["health_counts"]
+        required_stops = counts["stopping"] + counts["unavailable"]
+        stop_capacity = required_stops + counts["cleaned"]
+        # Cleanup may precede terminal observation, and a first stop preserves
+        # its health after a later terminal. Live health can carry neither fact.
+        if (not required_stops <= result["stop_requested"] <= stop_capacity
+                or not counts["terminal"] <= result["terminal_observed"] <= counts["terminal"] + stop_capacity):
             raise ControlError("control_invalid_response")
         return
     if (
@@ -210,7 +216,8 @@ def _validate_result(request: ServiceRequest, result: dict) -> None:
         if (result["cleanup_confirmed"] or result["health"] != liveness["health"]
                 or result["stop_reason"] != liveness["stop_reason"]
                 or result["liveness_frozen"] != (liveness["stop_reason"] is not None or liveness["terminal"])
-                or (liveness["terminal"] and not result["terminal_observed"])):
+                or (liveness["terminal"] and not result["terminal_observed"])
+                or (result["terminal_observed"] and not (liveness["terminal"] or result["stop_requested"]))):
             raise ControlError("control_invalid_response")
     expected = ("cleanup_confirmed" if result["cleanup_confirmed"] else "stop_requested" if result["stop_requested"]
                 else "terminal_observed" if result["terminal_observed"] else "running")

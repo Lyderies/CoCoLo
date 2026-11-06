@@ -643,8 +643,12 @@ limit, terminal or cleanup assertion is a supported client operation.
 
 Attempt replies expose closed liveness metadata, stop reason, actual terminal and
 cleanup observations, and a distinct cancellation state. Orchestration replies
-contain bounded counts rather than an attempt list. A requested stop never claims
-the tree is gone. Cleanup is confirmed only after the trusted executor supplies
+contain bounded counts rather than an attempt list. The decoder rejects terminal
+observations alongside live, unstopped liveness, and constrains summary stop/terminal
+counts to compatible health categories. A later terminal preserves the first stop,
+and cleanup may precede a terminal observation; both remain valid independently
+observed facts. A requested stop never claims the tree is gone. Cleanup is confirmed
+only after the trusted executor supplies
 the actual tracked-tree observation. Local ages freeze at a stop/terminal decision;
 publication carries its own monotonic timestamp. The client requires the same host
 clock domain, rejects publication outside its request interval or total explicit

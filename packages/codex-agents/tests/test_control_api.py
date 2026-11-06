@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from copy import deepcopy
 from dataclasses import asdict, replace
 from pathlib import Path
 from unittest import mock
@@ -247,6 +248,81 @@ class ControlApiTests(unittest.TestCase):
         result = self.call(request, service=service).result
         self.assertEqual(2, result["health_counts"]["unavailable"])
         self.assertEqual(2, result["stop_requested"])
+
+    def test_live_attempt_cannot_claim_terminal_even_in_a_correlated_cancel_reply(self):
+        for health, seconds in (("starting", None), ("active", 0), ("quiet", 2), ("stale", 5)):
+            if seconds is not None:
+                if seconds == 0:
+                    self.monitor.startup(binding())
+                else:
+                    self.clock.at(seconds)
+            status = self.request()
+            live = json.loads(self.service.handle(encode_control_request(status), CONTEXT))
+            self.assertEqual(health, live["result"]["health"])
+            for operation in ("project.status", "project.cancel"):
+                request = self.request(operation)
+                changed = deepcopy(live)
+                changed.update(request_id=request.request_id, request_digest=service_request_digest(request))
+                changed["result"].update(terminal_observed=True, cancellation_state="terminal_observed")
+                with self.subTest(health=health, operation=operation), self.assertRaisesRegex(
+                    ControlError, "control_invalid_response"
+                ):
+                    decode_control_response(canonical_json(changed), request)
+
+    def test_summary_stop_and_terminal_facts_cannot_be_attributed_to_live_health(self):
+        request = self.request(target=ServiceTarget(binding().orchestration_handle, None, None))
+        for health, seconds in (("starting", None), ("active", 0), ("quiet", 2), ("stale", 5)):
+            if seconds is not None:
+                if seconds == 0:
+                    self.monitor.startup(binding())
+                else:
+                    self.clock.at(seconds)
+            live = json.loads(self.service.handle(encode_control_request(request), CONTEXT))
+            self.assertEqual(1, live["result"]["health_counts"][health])
+            for fact in ("stop_requested", "terminal_observed"):
+                changed = deepcopy(live)
+                changed["result"][fact] = 1
+                with self.subTest(health=health, fact=fact), self.assertRaisesRegex(
+                    ControlError, "control_invalid_response"
+                ):
+                    decode_control_response(canonical_json(changed), request)
+        self.monitor.observe_terminal(binding())
+        terminal = json.loads(self.service.handle(encode_control_request(request), CONTEXT))
+        terminal["result"]["stop_requested"] = 1
+        with self.assertRaisesRegex(ControlError, "control_invalid_response"):
+            decode_control_response(canonical_json(terminal), request)
+
+    def test_unavailable_summary_requires_its_stop_to_be_counted(self):
+        self.clock.value = ValueError("PRIVATE-CLOCK")
+        request = self.request(target=ServiceTarget(binding().orchestration_handle, None, None))
+        unavailable = json.loads(self.service.handle(encode_control_request(request), CONTEXT))
+        self.assertEqual(1, unavailable["result"]["health_counts"]["unavailable"])
+        unavailable["result"]["stop_requested"] = 0
+        with self.assertRaisesRegex(ControlError, "control_invalid_response"):
+            decode_control_response(canonical_json(unavailable), request)
+
+    def test_summary_preserves_first_stop_and_cleanup_before_terminal(self):
+        for number in (2, 3, 4):
+            self.monitor.register(binding(number), hard_deadline_ns=100 * SECOND)
+        self.monitor.startup(binding())
+        self.monitor.cancel(binding(2))
+        self.monitor.observe_terminal(binding(2))
+        self.monitor.observe_terminal(binding(3))
+        self.monitor.observe_cleanup(binding(4))
+        request = self.request(target=ServiceTarget(binding().orchestration_handle, None, None))
+        initial = self.call(request).result
+        self.assertEqual((1, 2, 1), tuple(initial[name] for name in
+                                         ("stop_requested", "terminal_observed", "cleanup_confirmed")))
+        self.assertEqual({"active": 1, "stopping": 1, "terminal": 1, "cleaned": 1},
+                         {name: count for name, count in initial["health_counts"].items() if count})
+        self.monitor.observe_terminal(binding(4))
+        self.assertEqual(3, self.call(request).result["terminal_observed"])
+        self.clock.value = ValueError("PRIVATE-CLOCK")
+        self.monitor.observe_terminal(binding())
+        final = self.call(request).result
+        self.assertEqual((2, 4, 1), tuple(final[name] for name in
+                                       ("stop_requested", "terminal_observed", "cleanup_confirmed")))
+        self.assertEqual(1, final["health_counts"]["unavailable"])
 
     def test_summary_types_and_unavailable_or_activity_metadata_are_consistent(self):
         request = self.request(target=ServiceTarget(binding().orchestration_handle, None, None))
