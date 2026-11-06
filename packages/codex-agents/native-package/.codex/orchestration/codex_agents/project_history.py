@@ -28,11 +28,12 @@ from .history_contracts import (
     _DIGEST, _ID, _PROJECT, matches, valid_integer,
 )
 from .learning_contracts import (
-    MAX_RECORD_BYTES, SOURCES, canonical_json, keyed_digest, parse_bounded_json, validate_learning_record,
+    DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
+    keyed_digest, parse_bounded_json, validate_learning_record,
 )
 from .result_contracts import (
     MAX_ASSIGNMENT_CANONICAL_BYTES, MAX_RESULT_BODY_BYTES, MAX_RESULT_RETENTION_MS,
-    ResultCapacity, ResultReservation, assignment_bytes, checked_result_body,
+    ResultCapacity, ResultObservation, ResultReservation, assignment_bytes, checked_result_body,
 )
 
 _APPLICATION_ID = 0x43444831
@@ -758,6 +759,44 @@ class ProjectHistory:
         os.link(partial, final, src_dir_fd=self._directory_fd, dst_dir_fd=self._directory_fd, follow_symlinks=False)
         os.unlink(partial, dir_fd=self._directory_fd)
         os.fsync(self._directory_fd)
+
+    @_operation
+    def publish_result(
+        self, binding: AttemptBinding, assignment: dict, body: bytes, observation: ResultObservation,
+    ) -> TerminalDelivery:
+        """Construct exact terminal metadata inside the trusted digest-key owner.
+
+        This is an internal business operation, not an enabled publication API.
+        A trusted service must prove original assignment/executor-output custody,
+        host facts and the complete pre-reserved claim before calling it. Normal
+        primary/CLI/hook labels cannot authorize these facts. No key, digest or
+        record ID is supplied by the caller. The fixed captured observation time
+        and all terminal facts participate in the existing immutable prepared
+        commit, so retry/restart cannot silently replace them or refresh privacy.
+        """
+        binding = self._result_binding(binding)
+        if type(observation) is not ResultObservation:
+            raise HistoryError("history_invalid_input")
+        captured = observation.as_data()
+        encoded_assignment = assignment_bytes(assignment, binding)
+        snapshot = parse_bounded_json(encoded_assignment, max_bytes=MAX_ASSIGNMENT_CANONICAL_BYTES)
+        now = self._result_now()
+        _, reservation = self._live_result(binding, now)
+        if reservation.assignment_digest != keyed_digest(self._result_key, encoded_assignment):
+            raise HistoryError("history_conflict")
+        if not reservation.created_at_ms <= captured["observed_at_ms"] <= now:
+            raise HistoryError("history_invalid_input")
+        body = checked_result_body(body, snapshot, captured)
+        material = {
+            **captured, "schema_version": DISPATCH_RESULT_SCHEMA_VERSION,
+            "record_type": "dispatch_result", "run_id": binding.run_id,
+            "result_digest": keyed_digest(self._result_key, body),
+        }
+        # Keep the existing dispatch-result record ID rule: it hashes only safe
+        # terminal metadata, including the owner's keyed private-body digest.
+        record = {**material, "record_id": f"dispatch_result:{content_digest(material)}"}
+        content = canonical_json(validate_learning_record(record))
+        return self.commit_result(content, binding, snapshot, body)
 
     @_operation
     def commit_result(

@@ -6,12 +6,69 @@ from dataclasses import asdict, dataclass
 
 from .contracts import ContractError, result_axes, validate_assignment_shape, validate_result
 from .history_contracts import MAX_SEQUENCE, AttemptBinding, HistoryError, _DIGEST, _ID, matches, valid_integer
-from .learning_contracts import MAX_OUTCOME_EVIDENCE_DIGESTS, canonical_json, parse_bounded_json
+from .learning_contracts import (
+    DISPATCH_RESULT_SCHEMA_VERSION, MAX_OUTCOME_EVIDENCE_DIGESTS, MAX_RECORD_BYTES,
+    canonical_json, parse_bounded_json, validate_learning_record,
+)
 
 MAX_RESULT_BODY_BYTES = 1_048_576
 MAX_RESULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 MAX_ASSIGNMENT_CANONICAL_BYTES = 6 * 1_048_576
 RESULT_STATES = frozenset({"reserved", "committed", "retiring", "expired"})
+
+
+@dataclass(frozen=True)
+class ResultObservation:
+    """Captured executor facts, never a caller capability or parsed authority.
+
+    The trusted executor must capture these once from the actual execution. The
+    service must separately prove its custody, original assignment and complete
+    claim. In particular, the observation time is not regenerated on delivery
+    retry. Private digest keys and caller-selected record IDs are absent.
+    """
+
+    bridge_run_id: str
+    observed_at_ms: int
+    fenced: bool
+    reviewed: bool
+    terminal_state: str | None
+    result_validation_reason_code: str | None = None
+    client_diagnostics: dict | None = None
+
+    def __post_init__(self) -> None:
+        self.as_data()
+
+    def as_data(self) -> dict:
+        invalid = False
+        try:
+            if (
+                type(self) is not ResultObservation or type(self.bridge_run_id) is not str
+                or not valid_integer(self.observed_at_ms)
+                or type(self.fenced) is not bool or type(self.reviewed) is not bool
+                or (self.client_diagnostics is not None and type(self.client_diagnostics) is not dict)
+            ):
+                raise HistoryError("history_invalid_input")
+            material = {name: getattr(self, name) for name in (
+                "bridge_run_id", "observed_at_ms", "fenced", "reviewed", "terminal_state",
+                "result_validation_reason_code", "client_diagnostics",
+            )}
+            # Reuse the exact existing terminal/fence/diagnostic validator. These
+            # fixed placeholders check values only, not a business record or ID.
+            validate_learning_record({
+                **material, "schema_version": DISPATCH_RESULT_SCHEMA_VERSION,
+                "record_type": "dispatch_result", "record_id": "observation-validation",
+                "run_id": "observation-validation", "result_digest": "0" * 64,
+            })
+            encoded = canonical_json(material)
+            invalid = len(encoded) > MAX_RECORD_BYTES
+            if not invalid:
+                snapshot = parse_bounded_json(encoded, max_bytes=MAX_RECORD_BYTES)
+        except (HistoryError, ContractError, AttributeError, KeyError, TypeError, ValueError,
+                OverflowError, RecursionError):
+            invalid = True
+        if invalid:
+            raise HistoryError("history_invalid_input")
+        return snapshot
 
 
 @dataclass(frozen=True)

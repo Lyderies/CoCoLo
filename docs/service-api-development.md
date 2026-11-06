@@ -553,3 +553,39 @@ persistence owner merely to check the result size. A fresh-interpreter import
 guard exercises valid, invalid and oversized results with SQLite and owner imports
 blocked. Other bridge ledger/error imports and direct publication calls remain
 in the ownership audit; this preparatory correction does not complete migration.
+
+## Owner-side terminal construction
+
+`ProjectHistory.publish_result` is an internal business operation for the future
+trusted project service. It takes the already reserved complete binding, original
+assignment, canonical result bytes and a `ResultObservation` captured by the
+trusted executor. It computes the private keyed result digest and constructs the
+existing v3 dispatch-result record inside the persistence owner. Callers supply
+neither a digest key, result digest nor record ID. The record ID retains the
+existing rule of hashing terminal metadata containing the owner-keyed body digest.
+
+The observation contains the actual bridge run ID, original completion-observation
+time, fence/review/terminal facts and closed safe diagnostics. Its types and the
+existing shared dispatch-result validator are checked before publication; nested
+values and the assignment are copied before file I/O. Observation time must fall
+between the original reservation and the current trusted owner clock. It is never
+regenerated on retry. These facts, original assignment and validated body feed the
+existing immutable prepared commit before any private result file is written.
+Changed facts/body conflict; exact retry after restart returns the same terminal
+identity and preserves first-preparation retention. A new observation time after
+a lost response cannot silently replace the original result.
+
+Tests cover valid negative and host-fenced results, full 1 MiB input, key-free
+caller parameters, strict closed observations, exact assignment/binding, nested
+input mutation, no implicit reservation/key creation and failed metadata commit.
+Owned subprocesses die before the file write, after file publication and after
+the terminal transaction; exact retries reconcile all three without another
+sequence or retention extension.
+
+This adds no wire operation, listener, producer credential or caller authorization.
+`ResultObservation` validates values; it does not prove that a caller observed the
+execution. The eventual service still must prove registered executor/output
+custody, original assignment and captured host facts. The protected completion
+outbox/intake design, native authority, control/terminal queue isolation and legacy
+normal-client migration remain required. Earlier failed/exhausted review gates
+remain unchanged until a genuine combined integration review can cover the work.
