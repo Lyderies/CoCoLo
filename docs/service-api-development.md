@@ -64,6 +64,72 @@ request reconciliation and bounded bulk retrieval remain service/outbox work;
 the metadata frame ceiling must not simply be raised. No new endpoint or normal
 client database migration is enabled by this compatibility correction.
 
+## Durable validated-result storage
+
+The internal project persistence owner now has a result-reservation and artifact
+path. It remains disabled unless its trusted launcher explicitly supplies the
+existing private digest key and a finite `ResultCapacity`: retained entry count,
+reserved body bytes, pre-launch reservation window and committed-result retention.
+The store does not create a key, mint authority, release an account claim or enable
+a listener. Normal CLI/hook/bridge clients still need the authenticated API migration.
+
+Each reservation captures the complete `AttemptBinding`, keyed canonical assignment
+digest and actual original hard deadline. It charges the full supported 1 MiB body
+size before launch, including interrupted writes. The deadline must fit strictly
+inside the explicit reservation window. Exact retries retain the original times;
+changed assignment, deadline, claim or other binding fields conflict. Reserving
+storage must precede consuming launch authority; that ordering and native caller
+proof remain mandatory integration gates. A storage reservation is not admission.
+
+`commit_result` checks canonical, bounded result bytes against the original assignment
+and exact dispatch-result digest/fence metadata. Rejected bytes are never written.
+It first binds the immutable prepared request, writes a generated private artifact
+with exclusive/nofollow creation and file/directory synchronization, then registers
+its reference, the terminal record and delivery outbox in one SQLite transaction.
+Result and assignment text stay outside SQLite. A metadata-only terminal commit
+cannot bypass an outstanding result reservation. Valid legacy, negative-review and
+host-fenced result bodies retain their exact bytes and separate verdict/terminal facts.
+The service must independently prove the actual bridge facts and original assignment;
+validation does not supply that authority.
+
+A crash before file publication leaves a charged reservation and bounded partial
+file; exact retry can finish the same prepared request. A published file before the
+database commit remains inaccessible through result reads until its exact reference
+and outbox commit. A crash after commit returns the existing object on retry. The
+two fixed names of an interrupted hard-link publication may be reconciled only when
+they identify the same private inode with exactly those two links; unrelated aliases
+are refused. No retry launches model work or replaces a committed result.
+
+Committed retention starts at the first successful commit, separately from the
+pre-launch reservation window, and never exceeds seven days. It is not refreshed
+by retries. The trusted lifecycle owner must also retire bodies when their actual
+orchestration closes. Retirement is persisted before deletion; failed deletion keeps
+the registration and capacity charged. Only confirmed deletion releases body space.
+Replay tombstones remain and count against the explicit retained-entry cap; reaching
+that cap refuses new storage work. No automatic tombstone eviction or identifier
+reuse is implemented. Future drained generation retirement remains a migration gate.
+
+Reads recheck the exact binding, retention, private file ownership/type/mode/link
+count, byte count and keyed digest. Trusted time is checked again after artifact I/O;
+the last observed time is durable so a backward clock cannot resurrect expired data.
+Missing, corrupt, expired or mismatched data stay unavailable. No previous lost
+report is reconstructed, and a full legacy `bridge_report` is not synthesized from
+the stored result and closed terminal metadata.
+
+Project-history schema 2 adds only fixed result metadata tables. Upgrade requires
+the exact schema-1 DDL, columns, application ID and project identity before any
+migration write. The table additions and version advance are one transaction.
+Unknown schemas/triggers are refused; prior record bytes, counters and outbox
+identities remain unchanged. This is not the legacy shared-ledger importer or a
+production migration approval.
+
+Disposable tests include real writer-process exit before/after publication and
+terminal commit, death during the schema upgrade, exact 1 MiB bodies, retry and
+deletion failures. These are local persistence proofs, not power-loss/native-auth
+proof, normal-client migration or full C7/C8/C19 acceptance. Bounded bulk transport,
+authenticated original-assignment lookup, account/claim reconciliation and independent
+review remain required before the new storage path is enabled.
+
 ## Metadata transport increment
 
 `service_transport.exchange_frame` now supplies the existing collector client with one monotonic

@@ -410,7 +410,7 @@ class ProjectHistoryTests(unittest.TestCase):
                 (directory / name).unlink()
 
     def test_incompatible_version_application_and_columns_are_not_opened_as_history(self) -> None:
-        for index, mutation in enumerate(("PRAGMA user_version=2", "PRAGMA application_id=123",
+        for index, mutation in enumerate((f"PRAGMA user_version={project_history._SCHEMA_VERSION + 1}", "PRAGMA application_id=123",
                                          "ALTER TABLE records RENAME COLUMN source TO wrong_source")):
             directory = self.base / f"incompatible-{index}"
             directory.mkdir(mode=0o700)

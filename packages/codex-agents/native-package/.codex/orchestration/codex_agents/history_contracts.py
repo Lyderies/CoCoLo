@@ -22,6 +22,8 @@ HISTORY_REASON_CODES = frozenset({
     "history_conflict", "history_not_found", "history_sequence_exhausted",
     "history_invalid_request", "history_request_too_large", "history_invalid_response",
     "history_not_authorized", "history_service_unavailable",
+    "history_result_capacity", "history_result_expired", "history_result_unavailable",
+    "history_result_not_reserved", "history_result_not_ready",
 })
 
 
