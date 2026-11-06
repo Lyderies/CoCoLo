@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import threading
 import unittest
 from dataclasses import FrozenInstanceError, replace
@@ -11,6 +12,7 @@ import tests.test_signature_inputs as capture_fixture
 from codex_agents.account_api import ACCOUNT_OPERATIONS, AccountError
 from codex_agents.account_service import AccountOwnerViews
 from codex_agents.learning_engine import OwnerGrantAuthority
+from codex_agents.learning_store import StateError
 from codex_agents.signature_inputs import SignatureCaptureError, SignatureInputSnapshot, signature_input_size
 from codex_agents.signature_job_intake import (
     MAX_SIGNATURE_JOB_BYTES, MAX_SIGNATURE_JOB_ROWS, SignatureIntakeLimits, SignatureJobError,
@@ -141,6 +143,45 @@ class SignatureJobIntakeTests(unittest.TestCase):
         self.assertIsNone(self.intake.select_next())
         handle = self.capture(self.b)
         self.assertIs(handle, self.intake.select_next().handle)
+
+    def test_trusted_internal_faults_propagate_after_capture_and_intake_cleanup(self):
+        connection = self.ledger._connection
+
+        def settings():
+            return (connection.execute("PRAGMA query_only").fetchone()[0],
+                    connection.execute("PRAGMA busy_timeout").fetchone()[0],
+                    connection.getlimit(sqlite3.SQLITE_LIMIT_LENGTH), connection.in_transaction)
+
+        baseline = settings()
+        for boundary in ("capture_body", "intake_size"):
+            for error_type in (AssertionError, MemoryError, RuntimeError, TypeError, ValueError, AttributeError):
+                with self.subTest(boundary=boundary, error=error_type.__name__):
+                    error = error_type("CANARY-TRUSTED-FAULT")
+                    patch = (mock.patch.object(self.ledger, "_attestation_rows_locked", side_effect=error)
+                             if boundary == "capture_body" else mock.patch(
+                                 "codex_agents.signature_job_intake.signature_input_size", side_effect=error))
+                    with patch, self.assertRaises(error_type) as caught:
+                        self.capture()
+                    self.assertIs(error, caught.exception)
+                    self.assertEqual((0, 0), (self.intake.snapshot().jobs, self.intake.snapshot().reserved_bytes))
+                    self.assertIsNone(self.intake.select_next())
+                    self.assertEqual(baseline, settings())
+                    self.assertIsNot(True, getattr(connection, "_sql_unusable", False))
+        self.intake.cancel(self.capture())
+
+    def test_expected_storage_errors_remain_fixed_after_actual_capture_cleanup(self):
+        for error in (StateError("CANARY-PATH"), OSError("CANARY-PATH")):
+            with self.subTest(error=type(error).__name__), mock.patch.object(
+                    self.fixture.state, "harden_database_files", side_effect=error):
+                with self.assertRaises(SignatureCaptureError) as caught:
+                    self.capture()
+            self.assertEqual("signature_capture_unavailable", caught.exception.reason_code)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertIsNone(caught.exception.__context__)
+            self.assertNotIn("CANARY", str(caught.exception))
+            self.assertEqual((0, 0), (self.intake.snapshot().jobs, self.intake.snapshot().reserved_bytes))
+            self.assertIsNone(self.intake.select_next())
+        self.intake.cancel(self.capture())
 
     def test_snapshot_origin_fields_and_actual_byte_count_cannot_be_forged_by_a_capture_bug(self):
         inputs = self.fixture.capture()

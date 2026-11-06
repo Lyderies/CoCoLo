@@ -20,7 +20,7 @@ from codex_agents.account_service import AccountOwnerViews
 from codex_agents.learning_contracts import MAX_RECORD_BYTES
 from codex_agents.learning_engine import OwnerGrantAuthority
 from codex_agents.learning_store import (
-    OWNER_SIGNERS_MAX_BYTES, LearningLedger, LearningState, LedgerError, authorize_collector_runtime,
+    OWNER_SIGNERS_MAX_BYTES, LearningLedger, LearningState, LedgerError, StateError, authorize_collector_runtime,
 )
 from codex_agents.signature_inputs import (
     MAX_SIGNATURE_CAPTURE_BYTES, MAX_SIGNATURE_CAPTURE_ROWS,
@@ -221,7 +221,7 @@ class SignatureInputOwnerTests(unittest.TestCase):
     def test_invalid_digest_and_backend_exceptions_are_fixed_without_context(self):
         with mock.patch.object(self.ledger, "_attestation_rows_locked", side_effect=LedgerError("CANARY-CONTENT")):
             self.assert_capture_error("signature_capture_incompatible", self.capture)
-        with mock.patch.object(self.ledger, "_attestation_rows_locked", side_effect=RuntimeError("CANARY-PATH")):
+        with mock.patch.object(self.ledger, "_attestation_rows_locked", side_effect=OSError("CANARY-PATH")):
             self.assert_capture_error("signature_capture_unavailable", self.capture)
         self.ledger._connection.execute("UPDATE records SET content_digest=? WHERE project_id=? AND record_id=?",
                                         ("0" * 64, self.projects[0], self.record["record_id"]))
@@ -330,7 +330,7 @@ class SignatureInputOwnerTests(unittest.TestCase):
                     limits=SignatureCaptureLimits(1, 65_536)))
 
     def test_unsafe_database_hardening_refuses_before_owner_access(self):
-        with mock.patch.object(self.state, "harden_database_files", side_effect=RuntimeError("CANARY-PATH")), \
+        with mock.patch.object(self.state, "harden_database_files", side_effect=StateError("CANARY-PATH")), \
                 mock.patch.object(self.ledger, "_owner_generation_locked") as owner:
             self.assert_capture_error("signature_capture_unavailable", self.capture)
         owner.assert_not_called()

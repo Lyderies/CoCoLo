@@ -136,7 +136,7 @@ class AccountOwnerViews:
                 reason = "signature_capture_invalid_request"
             elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit", "sql_read_busy"}:
                 reason = "signature_capture_work_limit"
-        except Exception:
+        except (StateError, OSError, UnicodeError):
             pass
         # Outside every handler: no raw SQL/path exception cause or context.
         raise SignatureCaptureError(reason)

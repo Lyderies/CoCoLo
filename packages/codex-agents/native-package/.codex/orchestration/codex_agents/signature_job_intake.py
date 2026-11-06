@@ -214,7 +214,7 @@ class SignatureJobIntake:
         incompatible = False
         try:
             size = signature_input_size(project_id, provider, owner, signer, inputs.rows)
-        except Exception:
+        except UnicodeEncodeError:
             incompatible = True
         else:
             incompatible = size != inputs.retained_bytes or size > self._limits.bytes_per_job

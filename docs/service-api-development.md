@@ -862,6 +862,11 @@ One intake is bound to each existing ledger lifetime; duplicate wrappers over th
 same ledger cannot create independent copies of that reservation budget. This
 in-process binding is not native account identity or cross-restart recovery.
 
+Expected encoding, storage and state failures retain fixed refusal codes without
+backend exception context. Unexpected programming and resource faults propagate
+after capture settings and unstarted intake reservations are cleaned up; they
+are not reported as ordinary malformed inputs or unavailable storage.
+
 Pending inputs use FIFO per project and round-robin project selection. Selection
 skips a project already holding a selected slot without reordering its FIFO and
 examines at most the active rotation. At most one job per project is selected.
