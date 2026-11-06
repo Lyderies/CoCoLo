@@ -46,8 +46,16 @@ class WatchdogOwnershipTests(unittest.TestCase):
         tree = mock.Mock(root_birth="fixture-birth")
         tree.identify.return_value = True
         order = []
-        helper.wait.side_effect = lambda **kwargs: order.append("watchdog-wait") or 0
         active = {}
+
+        def wait(**kwargs):
+            self.assertEqual({}, active)
+            self.assertTrue(child.stdout.closed)
+            self.assertTrue(helper.stdout.closed)
+            order.append("watchdog-wait")
+            return 0
+
+        helper.wait.side_effect = wait
         with mock.patch.object(bridge, "tracking_available", return_value=True), \
                 mock.patch.object(bridge, "ProcessTree", return_value=tree), \
                 mock.patch.object(bridge, "process_table", return_value={}), \
@@ -91,11 +99,60 @@ class WatchdogOwnershipTests(unittest.TestCase):
 
     def test_failed_helper_launch_is_unavailable_without_a_process_to_reap(self):
         owner = bridge._WatchdogOwner()
-        with mock.patch.object(bridge.subprocess, "Popen", side_effect=OSError("CANARY-LAUNCH")):
+        with mock.patch.object(bridge.subprocess, "Popen", side_effect=OSError("CANARY-LAUNCH")) as launch:
             with self.assertRaises(bridge._Abort) as caught:
                 owner.start(424242, "fixture-birth", 100)
+        launch.assert_called_once_with(
+            [sys.executable, "-I", "-B", "-S", "-X", "pycache_prefix=/dev/null",
+             str(Path(bridge.__file__).resolve().with_name("process_tree.py")),
+             "424242", "fixture-birth", "100"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            start_new_session=True, close_fds=True, env={"PATH": os.defpath},
+        )
         self.assertEqual("watchdog_unavailable", caught.exception.reason)
         self.assertTrue(owner.reap())
+
+    def test_cleanup_failures_still_close_bookkeeping_before_bounded_helper_wait(self):
+        for stage in ("child-stop", "stream-close"):
+            with self.subTest(stage=stage):
+                failure = RuntimeError("fixture-" + stage)
+
+                class FailingClose(io.BytesIO):
+                    def close(self):
+                        if not self.closed:
+                            super().close()
+                            raise failure
+
+                stream = FailingClose() if stage == "stream-close" else io.BytesIO()
+                child = mock.Mock(pid=424242, stdout=stream, returncode=None)
+                helper = mock.Mock(stdout=io.BytesIO())
+                tree = mock.Mock(root_birth="fixture-birth")
+                tree.identify.return_value = True
+                active = {}
+
+                def wait(**kwargs):
+                    self.assertEqual({}, active)
+                    self.assertTrue(child.stdout.closed)
+                    self.assertTrue(helper.stdout.closed)
+                    return 0
+
+                helper.wait.side_effect = wait
+                with mock.patch.object(bridge, "tracking_available", return_value=True), \
+                        mock.patch.object(bridge, "ProcessTree", return_value=tree), \
+                        mock.patch.object(bridge, "process_table", return_value={}), \
+                        mock.patch.object(bridge, "_ACTIVE_CHILDREN", active), \
+                        mock.patch.object(bridge.subprocess, "Popen", return_value=helper), \
+                        mock.patch.object(bridge, "await_ready", side_effect=ValueError("fixture-ack")), \
+                        mock.patch.object(bridge, "_stop_child",
+                                          side_effect=failure if stage == "child-stop" else None) as stop:
+                    with self.assertRaises(RuntimeError) as caught:
+                        bridge.run_child(["fixture"], environment={}, cwd=Path.cwd(), deadline_seconds=10,
+                                         on_frame=lambda frame: None, popen=mock.Mock(return_value=child))
+                self.assertIs(failure, caught.exception)
+                stop.assert_called_once_with(child, tree)
+                helper.wait.assert_called_once_with(timeout=5)
+                helper.kill.assert_not_called()
+                helper.terminate.assert_not_called()
 
     def test_reap_propagates_interrupt_without_signalling_the_backstop(self):
         owner = bridge._WatchdogOwner()

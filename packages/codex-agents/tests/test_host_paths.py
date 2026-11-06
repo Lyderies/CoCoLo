@@ -286,9 +286,11 @@ class PythonLaunchTests(unittest.TestCase):
                     timeout=0.1,
                 )
         # The watchdog launch is only recorded; nothing is started or killed.
+        owner = bridge._WatchdogOwner()
         with mock.patch.object(bridge.subprocess, "Popen", record), \
                 self.assertRaises(bridge._Abort):
-            bridge._start_watchdog(-1, "0.0", 0.0)
+            owner.start(-1, "0.0", 0.0)
+        self.assertTrue(owner.reap())
         self.assertEqual(2, len(launched))
         for argv in launched:
             self.assertEqual([sys.executable, *PYTHON_ISOLATION_FLAGS], argv[:6])
