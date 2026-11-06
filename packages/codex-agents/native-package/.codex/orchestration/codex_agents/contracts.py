@@ -607,7 +607,7 @@ def validate_assignment_shape(data: Any) -> dict[str, Any]:
         )
     for field in BOUND_FIELDS:
         minimum = 0 if field in {"max_steers_per_attempt", "max_tool_calls"} else 1
-        if not isinstance(bounds[field], int) or bounds[field] < minimum:
+        if type(bounds[field]) is not int or bounds[field] < minimum:
             raise ContractError(
                 f"bounds.{field} must be an integer of at least {minimum}",
                 field=f"assignment.bounds.{field}",
@@ -702,11 +702,16 @@ def validate_assignment(
     if not isinstance(route_bounds, dict) or set(route_bounds) != BOUND_FIELDS:
         raise ContractError("route bounds are invalid", field="route.bounds")
     for field in BOUND_FIELDS:
+        minimum = 0 if field in {"max_steers_per_attempt", "max_tool_calls"} else 1
+        if type(route_bounds[field]) is not int or route_bounds[field] < minimum:
+            raise ContractError("route bound must be an integer in its declared range",
+                                field=f"route.bounds.{field}")
+    validate_assignment_execution_limits(data, route)
+    for field in BOUND_FIELDS:
         if bounds[field] > route_bounds[field]:
             raise ContractError(
                 f"bounds.{field} exceeds routed policy bound", field=f"assignment.bounds.{field}"
             )
-    validate_assignment_execution_limits(data, route)
     task_paths = set(checked_task.get("owned_paths", []))
     if not set(data["owned_paths"]).issubset(task_paths):
         raise ContractError("owned_paths exceed task ownership", field="assignment.owned_paths")

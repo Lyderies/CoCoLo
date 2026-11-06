@@ -278,6 +278,30 @@ class DispatchPreflightTests(unittest.TestCase):
             self.assertEqual("assignment.execution_limits.max_tool_calls",
                              json.loads(output.getvalue())["field"])
 
+    def test_cli_refuses_malformed_route_limits_before_collector_maintenance(self) -> None:
+        self.route.update(provider="claude", dispatch="bridge")
+        self.assigned["execution_limits"] = {"max_model_turns": 1}
+        for name, data in (("task", self.task), ("assignment", self.assigned), ("grant", self.grant)):
+            (self.base / f"{name}.json").write_text(json.dumps(data))
+        for command, binding in (("dispatch", ["--run-handle", "not-opened"]),
+                                 ("learning-open-host-run", ["--orchestration-handle", "not-opened"])):
+            for ceiling in (None, "3"):
+                self.route["bounds"]["max_tool_calls"] = ceiling
+                (self.base / "route.json").write_text(json.dumps(self.route))
+                argv = ["cli.py", command, "--project-root", str(self.root),
+                        "--task", str(self.base / "task.json"),
+                        "--route", str(self.base / "route.json"),
+                        "--assignment", str(self.base / "assignment.json"),
+                        "--parent-grant", str(self.base / "grant.json"), *binding]
+                output = io.StringIO()
+                with self.subTest(command=command, ceiling=ceiling):
+                    with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), \
+                            mock.patch.object(cli, "_learning_ledger",
+                                              side_effect=AssertionError("collector contacted")):
+                        self.assertEqual(2, cli.main())
+                    self.assertEqual("route.bounds.max_tool_calls",
+                                     json.loads(output.getvalue())["field"])
+
     def test_cli_preflight_does_not_create_learning_state(self) -> None:
         for name, data in (("task", self.task), ("assignment", self.assigned), ("grant", self.grant)):
             (self.base / f"{name}.json").write_text(json.dumps(data))

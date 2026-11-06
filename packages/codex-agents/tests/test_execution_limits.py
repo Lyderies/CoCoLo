@@ -127,6 +127,22 @@ class ExecutionLimitTests(unittest.TestCase):
             assigned, task=self.task(), route=route, parent_grant=self.parent_grant(),
         ))
 
+    def test_full_validation_refuses_malformed_legacy_bounds(self):
+        fields = ("max_attempts", "max_steers_per_attempt", "max_no_progress_events",
+                  "wait_seconds", "timeout_seconds", "max_tool_calls")
+        for label in ("route", "assignment"):
+            for field in fields:
+                for value in (None, "3", True, -1):
+                    route = self.route()
+                    assigned = self.assignment()
+                    assigned["execution_limits"] = {"max_model_turns": 1}
+                    (route if label == "route" else assigned)["bounds"][field] = value
+                    with self.subTest(label=label, field=field, value=value):
+                        with self.assertRaises(ContractError) as caught:
+                            validate_assignment(assigned, task=self.task(), route=route,
+                                                parent_grant=self.parent_grant())
+                        self.assertEqual(f"{label}.bounds.{field}", caught.exception.field)
+
 
 if __name__ == "__main__":
     unittest.main()
