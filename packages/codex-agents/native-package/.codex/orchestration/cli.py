@@ -292,6 +292,12 @@ def _add_learning_project(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-root", required=True, type=Path)
 
 
+_COMPLETED_LEDGER_RESTART_ERROR = (
+    "ledger operation completed; collector restart failed; "
+    "run learning-status for a registered project"
+)
+
+
 class _RestartingLedger:
     def __init__(
         self, ledger: LearningLedger, maintenance: CollectorMaintenance
@@ -319,10 +325,7 @@ class _RestartingLedger:
             self._maintenance.resume()
         except CollectorError as exc:
             if operation_completed:
-                raise CollectorRestartError(
-                    "ledger operation completed; collector restart failed; "
-                    "run learning-status for a registered project"
-                ) from exc
+                raise CollectorRestartError(_COMPLETED_LEDGER_RESTART_ERROR) from exc
 
 
 def _close_ledger(ledger: LearningLedger | _RestartingLedger) -> None:
@@ -1907,33 +1910,53 @@ def main() -> int:
             parent_grant = _json_input(args.parent_grant)
             validate_assignment(assignment, task=task, route=route, parent_grant=parent_grant)
             ledger, project_id = _learning_ledger(args)
+            completed_dispatch = None
             try:
-                _require_host_owner(
-                    ledger, project_id, run_handle=args.run_handle
-                )
-                # A termination signal kills the child's process group before
-                # this process exits, and the export is still removed.
-                with bridge_signal_guard():
-                    report = {
-                        "ready": True,
-                        **dispatch_bridge(
-                            ledger,
-                            project_id,
-                            project_root=args.project_root.resolve(),
-                            bundle_root=BUNDLE_ROOT,
-                            task=task,
-                            route=route,
-                            assignment=assignment,
-                            parent_grant=parent_grant,
-                            run_handle=args.run_handle,
-                            expected_export_commit=args.expected_export_commit,
-                            result_schema=(
-                                ORCHESTRATION_ROOT / "schemas" / "result.schema.json"
-                            ).read_bytes(),
-                        ),
-                    }
-            finally:
-                _close_ledger(ledger)
+                try:
+                    _require_host_owner(
+                        ledger, project_id, run_handle=args.run_handle
+                    )
+                    # A termination signal kills the child's process group before
+                    # this process exits, and the export is still removed.
+                    with bridge_signal_guard():
+                        completed_dispatch = {
+                            "ready": True,
+                            **dispatch_bridge(
+                                ledger,
+                                project_id,
+                                project_root=args.project_root.resolve(),
+                                bundle_root=BUNDLE_ROOT,
+                                task=task,
+                                route=route,
+                                assignment=assignment,
+                                parent_grant=parent_grant,
+                                run_handle=args.run_handle,
+                                expected_export_commit=args.expected_export_commit,
+                                result_schema=(
+                                    ORCHESTRATION_ROOT / "schemas" / "result.schema.json"
+                                ).read_bytes(),
+                            ),
+                        }
+                finally:
+                    _close_ledger(ledger)
+            except CollectorRestartError:
+                if completed_dispatch is None:
+                    raise
+                # The bridge already bound this exact validated/fenced result.
+                # Preserve it while reporting the distinct recovery failure;
+                # never normalize its contents, drop a fence or launch again.
+                _print_command_report(args, {
+                    **completed_dispatch,
+                    "ready": False,
+                    "error": _COMPLETED_LEDGER_RESTART_ERROR,
+                    "dispatch_completed": True,
+                    "post_operation_error": {
+                        "reason_code": "collector_restart_failed",
+                        "recovery_required": True,
+                    },
+                })
+                return 2
+            report = completed_dispatch
         elif args.command == "provider-observe":
             ledger, project_id = _learning_ledger(args)
             try:

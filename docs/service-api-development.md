@@ -39,6 +39,31 @@ independent timers and split-store recovery without duplicate launches or a dire
 The message limit is an initial control-contract bound, not a measured throughput or latency
 claim. Real admission, installed Claude probing and the complete release checks remain required.
 
+## Completed dispatch report delivery
+
+The compatibility CLI now preserves a report already returned by the bridge when
+the subsequent collector resume raises `CollectorRestartError`. It emits one JSON
+object with the exact `result` and `bridge_report`, `ready: false`,
+`dispatch_completed: true`, and `post_operation_error` containing fixed
+`reason_code: collector_restart_failed` and `recovery_required: true`. The failure
+exit code remains 2 and exception details are not added. Dispatch completion here
+means the host operation returned its bound report; child execution/verdict,
+admission and actual cleanup retain their own facts.
+
+The owning primary saves that returned data, restores learning through supported
+`learning-status`, and records the unchanged result with only the actual nonnull
+forced-terminal fact. Validation, ownership or dispatch errors before a report
+exists keep their error path. The wrapper never repairs output, drops a fence or
+relaunches a child. Normal successful responses retain their existing shape.
+
+This protects available in-process delivery. It does not provide durable retry
+after a missing response or process crash. The existing dispatch binding stores a
+keyed digest; validated worker result files are created only at the later host
+commit and permit up to 1 MiB. Complete result retention before response, exact
+request reconciliation and bounded bulk retrieval remain service/outbox work;
+the metadata frame ceiling must not simply be raised. No new endpoint or normal
+client database migration is enabled by this compatibility correction.
+
 ## Metadata transport increment
 
 `service_transport.exchange_frame` now supplies the existing collector client with one monotonic

@@ -103,9 +103,16 @@ says `dispatch: native`, stop and report it.
    result template and its rules) and binds its own child to the run, so there is
    nothing to bind. A refusal before launch (`launch denied: <reason_code>`) writes no
    dispatch; for a Claude route refused `billing_unverified` (billing over 30 minutes
-   old), run the billing probe and dispatch the same handle again. A `dispatch` that
-   fails after launch leaves no result to record: pause the orchestration, classify that
-   run abandoned (`host_confirmed_gone`), and resume. Put everything the
+   old), run the billing probe and dispatch the same handle again. If a nonzero
+   `dispatch` response contains `dispatch_completed: true`,
+   `post_operation_error.reason_code: collector_restart_failed`, and the complete
+   `result` and `bridge_report`, save those unchanged. Run `learning-status` for
+   the exact project root and require readiness before recording that exact result
+   and only its actual nonnull forced-terminal fact. Never redispatch or repair it.
+   A failure after launch without a usable report leaves no result to record:
+   pause the orchestration, confirm the child is gone, classify that run abandoned
+   (`host_confirmed_gone`), and resume. Never reconstruct a missing result.
+   Put everything the
    child needs in the assignment's objective, context and owned paths: it sees only
    the exported files, never this conversation.
 7. Track observable state: active, waiting on a named dependency, paused, blocked,
