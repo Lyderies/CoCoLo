@@ -32,6 +32,31 @@ source-conflict rules must be reconciled with legacy reads before migration.
 The actual normal-client inventory must include indirect helpers and
 provider/bridge/hook/setup/attestation paths, not just direct CLI branches.
 
+### Executable legacy compatibility fixtures
+
+The disposable backend cases in
+[`test_legacy_history_compatibility.py`](../packages/codex-agents/tests/test_legacy_history_compatibility.py)
+pin requirements for the future importer and cross-owner protocol:
+
+- An exact event duplicate from another authorized producer retains every original
+  row field across reopen. Changed content conflicts, and duplicate handling still
+  checks producer authority.
+- Expiry of an ordinary unlinked event frees its ID. Reuse in an empty project
+  starts at sequence 1 with new source/ingestion metadata, without changing another
+  project's record under the same ID.
+- Controlled provider observations and events share the same namespace, sequence
+  allocation and late watermark. Both insertion orders reject opposite-type ID
+  collisions; a rejected collision does not consume a sequence.
+- Expiring an ancestor can delete a newer derived tail while retaining an unlinked
+  middle row. The next append uses the retained maximum sequence and timestamp,
+  rather than an all-time high-water mark.
+- Legacy schema versions `1`, `true` and `1.0` retain their distinct canonical bytes
+  and reader types after reopen. Strict new-write validators remain separate.
+
+These cases exercise the existing single-store persistence owner without real
+provider calls, owner signatures or shared-account changes. They do not implement
+split-store import, retention, native authentication or cross-store recovery.
+
 ## Placement to finish during review
 
 One account owner retains the global digest key, owner history/signatures,
