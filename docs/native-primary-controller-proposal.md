@@ -209,6 +209,17 @@ queries demonstrate native API availability, not code/script identity, actual
 root/child authority, per-message attribution, continuous freshness or atomic
 query/commit revocation. The controller, custody and enrollment gates remain.
 
+A separate standalone Mach-message prototype requests the audit trailers described
+in the [pinned Apple message source](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/osfmk/ipc/ipc_kmsg.c#L548).
+It receives its parent's frame but times out awaiting the owned child's pre/post-exec
+frames, whose send calls reported success. A bounded lifetime control confirms the
+child is alive before receive and obtains the same incomplete result. The receive/
+rights setup has an unresolved cause; per-message identity and generation attribution
+remain unmeasured. The owned children are reaped, the helper restores its own
+registered ports and destroys its private guarded port, and no raw identity values
+are retained. The failed builds/runs and diagnostic controls are preserved privately.
+The standalone helper adds no production profile or real-client transport proof.
+
 No production profile, owner signing purpose, primary workflow or service authority
 is selected by these experiments. The fixed controller, independent native identity,
 descriptor custody, actual child attribution and both primary-host paths remain
