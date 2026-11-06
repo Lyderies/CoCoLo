@@ -129,11 +129,13 @@ class WatchdogOwnershipTests(unittest.TestCase):
                 tree = mock.Mock(root_birth="fixture-birth")
                 tree.identify.return_value = True
                 active = {}
+                wait_entry_checks = []
 
                 def wait(**kwargs):
                     self.assertEqual({}, active)
                     self.assertTrue(child.stdout.closed)
                     self.assertTrue(helper.stdout.closed)
+                    wait_entry_checks.append(stage)
                     return 0
 
                 helper.wait.side_effect = wait
@@ -149,6 +151,11 @@ class WatchdogOwnershipTests(unittest.TestCase):
                         bridge.run_child(["fixture"], environment={}, cwd=Path.cwd(), deadline_seconds=10,
                                          on_frame=lambda frame: None, popen=mock.Mock(return_value=child))
                 self.assertIs(failure, caught.exception)
+                # reap catches Exception, including a failed wait-side-effect
+                # assertion. Require an unswallowed marker and postconditions.
+                self.assertEqual([stage], wait_entry_checks)
+                self.assertEqual({}, active)
+                self.assertTrue(child.stdout.closed)
                 stop.assert_called_once_with(child, tree)
                 helper.wait.assert_called_once_with(timeout=5)
                 helper.kill.assert_not_called()
