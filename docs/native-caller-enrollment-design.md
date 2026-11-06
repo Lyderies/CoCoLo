@@ -285,6 +285,12 @@ for that path merely from the project/account API fixtures.
 
 ## Coverage and material alternatives
 
+The [controller-owned primary proposal](native-primary-controller-proposal.md)
+names a concrete alternative bootstrap operation: a fresh owner statement bound
+to a verified controller that creates the native root itself. Its signing purpose,
+startup isolation, native adapters and all-host coverage remain unselected and
+unproved; the proposal grants no authority.
+
 | Delegation path | Primary-side authority to establish | Executor/child separation |
 |---|---|---|
 | Codex primary → Codex child | Protected Codex entry and actual primary/session binding | Separate one-dispatch bridge context; child has no service authority |
