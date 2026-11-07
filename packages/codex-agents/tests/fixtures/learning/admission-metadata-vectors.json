@@ -1,0 +1,3483 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "name": "codex-admitted",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "pass",
+        "reason_code": "admitted",
+        "admission_basis": "evidence",
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333",
+          "4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-api-key-refused",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {
+          "OPENAI_API_KEY": "synthetic"
+        },
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "provider_api_key_present",
+        "admission_basis": null,
+        "account_fingerprint": null,
+        "evidence_digests": [],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-policy-missing",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": null,
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "admission_policy_unavailable",
+        "admission_basis": null,
+        "account_fingerprint": null,
+        "evidence_digests": [],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-identity-missing",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "provider_identity_missing",
+        "admission_basis": null,
+        "account_fingerprint": null,
+        "evidence_digests": [],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-version-refused",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "99.0.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "client_version_unreviewed",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-attestation-missing",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "billing_attestation_missing",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-future-paid-evidence",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000001,
+              "is_using_overage": false,
+              "paid_usage_usable": true,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "5555555555555555555555555555555555555555555555555555555555555555"
+          ],
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "paid_usage_usable",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "5555555555555555555555555555555555555555555555555555555555555555"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-older-restriction-survives-favourable",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 9999999999,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 95
+                }
+              ]
+            },
+            "6666666666666666666666666666666666666666666666666666666666666666"
+          ],
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "provider_exhausted",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333",
+          "6666666666666666666666666666666666666666666666666666666666666666"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-future-run-counts-under-cap",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 1
+        },
+        "prior_run_admissions": [
+          [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            10000000001
+          ]
+        ],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "window_run_cap_reached",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333",
+          "4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-cross-project-digests-not-cited",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "cited_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222"
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "pass",
+        "reason_code": "admitted",
+        "admission_basis": "evidence",
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-launch",
+      "function": "evaluate_launch",
+      "arguments": {
+        "provider": "codex",
+        "identity": {
+          "provider": "codex",
+          "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observed_at_ms": 10000000000,
+          "client_version": "0.164.0",
+          "plan_type": "prolite",
+          "logged_in": true,
+          "auth_method": "claude.ai",
+          "subscription_type": "max"
+        },
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "now_ms": 10000000000,
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ]
+      },
+      "expected": null
+    },
+    {
+      "name": "codex-launch-future-paid-refused",
+      "function": "evaluate_launch",
+      "arguments": {
+        "provider": "codex",
+        "identity": {
+          "provider": "codex",
+          "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observed_at_ms": 10000000000,
+          "client_version": "0.164.0",
+          "plan_type": "prolite",
+          "logged_in": true,
+          "auth_method": "claude.ai",
+          "subscription_type": "max"
+        },
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000001,
+              "is_using_overage": false,
+              "paid_usage_usable": true,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "now_ms": 10000000000,
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ]
+      },
+      "expected": "paid_usage_usable"
+    },
+    {
+      "name": "claude-admitted",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "pass",
+        "reason_code": "admitted",
+        "admission_basis": "evidence",
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333",
+          "4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-api-key-refused",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {
+          "OPENAI_API_KEY": "synthetic"
+        },
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "deny",
+        "reason_code": "provider_api_key_present",
+        "admission_basis": null,
+        "account_fingerprint": null,
+        "evidence_digests": [],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-policy-missing",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": null,
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "deny",
+        "reason_code": "admission_policy_unavailable",
+        "admission_basis": null,
+        "account_fingerprint": null,
+        "evidence_digests": [],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-identity-missing",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "deny",
+        "reason_code": "provider_identity_missing",
+        "admission_basis": null,
+        "account_fingerprint": null,
+        "evidence_digests": [],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-version-refused",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "99.0.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "deny",
+        "reason_code": "client_version_unreviewed",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-attestation-missing",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "deny",
+        "reason_code": "billing_attestation_missing",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-future-paid-evidence",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000001,
+              "is_using_overage": false,
+              "paid_usage_usable": true,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "5555555555555555555555555555555555555555555555555555555555555555"
+          ],
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "deny",
+        "reason_code": "paid_usage_usable",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "5555555555555555555555555555555555555555555555555555555555555555"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-older-restriction-survives-favourable",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 9999999999,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 95
+                }
+              ]
+            },
+            "6666666666666666666666666666666666666666666666666666666666666666"
+          ],
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "deny",
+        "reason_code": "provider_exhausted",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333",
+          "6666666666666666666666666666666666666666666666666666666666666666"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-future-run-counts-under-cap",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 1
+        },
+        "prior_run_admissions": [
+          [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            10000000001
+          ]
+        ],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "deny",
+        "reason_code": "window_run_cap_reached",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333",
+          "4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-cross-project-digests-not-cited",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "cited_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222"
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "pass",
+        "reason_code": "admitted",
+        "admission_basis": "evidence",
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-launch",
+      "function": "evaluate_launch",
+      "arguments": {
+        "provider": "claude",
+        "identity": {
+          "provider": "claude",
+          "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observed_at_ms": 10000000000,
+          "client_version": "2.1.310",
+          "plan_type": "prolite",
+          "logged_in": true,
+          "auth_method": "claude.ai",
+          "subscription_type": "max"
+        },
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "now_ms": 10000000000,
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ]
+      },
+      "expected": null
+    },
+    {
+      "name": "claude-launch-future-paid-refused",
+      "function": "evaluate_launch",
+      "arguments": {
+        "provider": "claude",
+        "identity": {
+          "provider": "claude",
+          "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observed_at_ms": 10000000000,
+          "client_version": "2.1.310",
+          "plan_type": "prolite",
+          "logged_in": true,
+          "auth_method": "claude.ai",
+          "subscription_type": "max"
+        },
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000001,
+              "is_using_overage": false,
+              "paid_usage_usable": true,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "now_ms": 10000000000,
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ]
+      },
+      "expected": "paid_usage_usable"
+    },
+    {
+      "name": "codex-free-plan",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "free",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "codex_plan_not_subscription",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-spend-control",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": true,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "codex_spend_control_reached",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-credits-explicitly-disabled",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": true
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": true,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "pass",
+        "reason_code": "admitted",
+        "admission_basis": "evidence",
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333",
+          "4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-credits-not-waived",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": true,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "paid_usage_usable",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-stale-billing",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "codex",
+        "identities": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "0.164.0",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 9998199999,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "0.164.0",
+            "maximum_exclusive": "0.165.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "codex",
+        "decision": "deny",
+        "reason_code": "billing_unverified",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-subscription-required",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "api_key",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "deny",
+        "reason_code": "claude_subscription_missing",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-single-bootstrap",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "pass",
+        "reason_code": "admitted",
+        "admission_basis": "bootstrap",
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-bootstrap-already-consumed",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ]
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "deny",
+        "reason_code": "billing_unverified",
+        "admission_basis": null,
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "claude-probe-refreshes-stale-billing",
+      "function": "evaluate_admission",
+      "arguments": {
+        "provider": "claude",
+        "identities": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "client_version": "2.1.310",
+              "plan_type": "prolite",
+              "logged_in": true,
+              "auth_method": "claude.ai",
+              "subscription_type": "max"
+            },
+            "1111111111111111111111111111111111111111111111111111111111111111"
+          ]
+        ],
+        "attestations": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "codex_credits_spending_disabled": false
+            },
+            "2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        ],
+        "billing": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 9998199999,
+              "is_using_overage": false,
+              "paid_usage_usable": false,
+              "has_credits": true,
+              "unlimited": false,
+              "spend_control_reached": false,
+              "ordinary_usage_allowed": true
+            },
+            "3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        ],
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "prior_claude_admissions": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "environ": {},
+        "now_ms": 10000000000,
+        "admission_policy": {
+          "client_versions": {
+            "minimum": "2.1.0",
+            "maximum_exclusive": "2.2.0"
+          },
+          "max_admissions_per_window": 3
+        },
+        "prior_run_admissions": [],
+        "window_headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10003600000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        ],
+        "probe": true
+      },
+      "expected": {
+        "provider": "claude",
+        "decision": "pass",
+        "reason_code": "admitted",
+        "admission_basis": "evidence",
+        "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "evidence_digests": [
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "3333333333333333333333333333333333333333333333333333333333333333",
+          "4444444444444444444444444444444444444444444444444444444444444444"
+        ],
+        "observed_at_ms": 10000000000
+      }
+    },
+    {
+      "name": "codex-earliest-unreset-window",
+      "function": "window_start_ms",
+      "arguments": {
+        "provider": "codex",
+        "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headroom": [
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10001000000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "7777777777777777777777777777777777777777777777777777777777777777"
+          ],
+          [
+            {
+              "provider": "codex",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10002000000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "8888888888888888888888888888888888888888888888888888888888888888"
+          ]
+        ],
+        "now_ms": 10000000000
+      },
+      "expected": [
+        9983000000,
+        "7777777777777777777777777777777777777777777777777777777777777777"
+      ]
+    },
+    {
+      "name": "claude-earliest-unreset-window",
+      "function": "window_start_ms",
+      "arguments": {
+        "provider": "claude",
+        "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headroom": [
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10001000000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "7777777777777777777777777777777777777777777777777777777777777777"
+          ],
+          [
+            {
+              "provider": "claude",
+              "account_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observed_at_ms": 10000000000,
+              "status": "allowed",
+              "windows": [
+                {
+                  "window_minutes": 300,
+                  "resets_at": 10002000000,
+                  "used_percent": 0
+                }
+              ]
+            },
+            "8888888888888888888888888888888888888888888888888888888888888888"
+          ]
+        ],
+        "now_ms": 10000000000
+      },
+      "expected": [
+        9983000000,
+        "7777777777777777777777777777777777777777777777777777777777777777"
+      ]
+    }
+  ]
+}

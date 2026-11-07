@@ -962,6 +962,20 @@ nonrenewable deadlines, cancellation, conservative orphan recovery and fresh
 bounded atomic account checks remain integration requirements. The ready marker
 and a process exit cannot replace those requirements.
 
+### Metadata-only admission calculations
+
+`admission_metadata` contains the unchanged legacy admission, launch, headroom
+and usage-window calculations, separately from provider observation/process code.
+The existing `providers` entry points re-export these functions and constants.
+Synthetic legacy vectors preserve decision order, restrictive and future evidence,
+shared run caps, credit opt-in behavior, Claude bootstrap and project-local citations.
+
+These functions calculate unsaved data over ordinary trusted Python values. They
+verify no signatures, authenticate no caller and grant no launch permission. They
+do not bound arbitrary caller objects. A future fixed helper must receive closed,
+bounded decoded values; fresh atomic owner checks and all activation gates remain
+mandatory. No service operation or helper mode is enabled by this extraction.
+
 ### Owner-local fixed worker pool
 
 `SignatureWorkerPool` binds once to an actual owner-local `SignatureJobIntake`.
