@@ -302,19 +302,24 @@ class SignatureJobIntake:
         job.state = "returned"
         self._release(handle)
 
-    def confirm_worker_stopped(self, handle: object) -> bool:
+    def confirm_worker_stopped(self, handle: object, *, retain_cancelled: bool = False) -> bool:
         """Keep inputs until consumed, or release after an acknowledged cancel.
 
-        The future fixed adapter must establish the exact worker's end and drop
+        A publishing adapter retains cancelled input through publication and
+        explicit result consumption; otherwise a later publication fault could
+        lose its reservation. The default preserves the original owner contract.
+        The fixed adapter must establish the exact worker's end and drop
         its input references first. A handle/type/flag is not termination proof.
         """
         self._guard()
+        if type(retain_cancelled) is not bool:
+            raise SignatureJobError("signature_job_invalid_transition")
         job = self._job(handle)
         if job.state != "selected" or job.project_id not in self._selected_projects:
             raise SignatureJobError("signature_job_invalid_transition")
         self._selected_projects.remove(job.project_id)
         job.state = "returned"
-        if job.cancel_requested:
+        if job.cancel_requested and not retain_cancelled:
             self._release(handle)
             return True
         return False

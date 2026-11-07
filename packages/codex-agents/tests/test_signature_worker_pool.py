@@ -79,7 +79,9 @@ class SignatureWorkerPoolTests(unittest.TestCase):
             self.pool.request_close()
             started = time.monotonic()
             while not self.pool.snapshot()["closed"]:
-                self.pool.poll()
+                for notice in self.pool.poll():
+                    if not notice.released:
+                        self.pool.discard(notice.handle)
                 if time.monotonic() - started > 10:
                     self.fail("fixed worker fixture did not drain")
                 time.sleep(0.002)
@@ -95,16 +97,17 @@ class SignatureWorkerPoolTests(unittest.TestCase):
         return self.intake.capture(self.fixture.projects[index], "codex", self.fixture.work_limits)
 
     def notices(self, count):
-        received = []
+        received = {}
         started = time.monotonic()
         while len(received) < count:
             state = self.pool.snapshot()
             self.assertLessEqual(state["active_protocol_bytes"], state["static_protocol_capacity_bytes"])
-            received.extend(self.pool.poll())
+            for notice in self.pool.poll():
+                received[notice.handle] = notice
             if time.monotonic() - started > 10:
                 self.fail("fixed worker completion timed out")
             time.sleep(0.002)
-        return received
+        return list(received.values())
 
     def test_two_actual_jobs_keep_returned_fields_until_consumed_with_no_owner_external_waits(self):
         attest_provider(self.fixture.ledger, self.fixture.projects[1], self.fixture.key, "codex", "b" * 64)
@@ -179,9 +182,12 @@ class SignatureWorkerPoolTests(unittest.TestCase):
             self.assertEqual(65536, self.intake.snapshot().reserved_bytes)
             release.set()
             notice, = self.notices(1)
-        self.assertTrue(notice.released)
+        self.assertFalse(notice.released)
         self.assertEqual(("signature_execution_cancelled", (), 1),
                          (notice.result.reason, notice.result.indices, notice.result.roots_reaped))
+        self.assertEqual(65536, self.intake.snapshot().reserved_bytes)
+        self.assertEqual('signature_execution_cancelled', pool.result(handle).reason)
+        pool.discard(handle)
         self.assertEqual(0, self.intake.snapshot().jobs)
         with self.assertRaises(SignatureWorkerError):
             pool.result(handle)
@@ -219,6 +225,43 @@ class SignatureWorkerPoolTests(unittest.TestCase):
         self.assertEqual(2, notice.result.roots_reaped)
         self.assertEqual(65536, self.intake.snapshot().reserved_bytes)
         pool.discard(handle)
+
+    def test_mid_poll_clock_failure_keeps_every_completion_visible_until_discard(self):
+        attest_provider(self.fixture.ledger, self.fixture.projects[1], self.fixture.key, 'codex', 'b' * 64)
+        pool = self.make_pool()
+        handles = [self.capture(0), self.capture(1)]
+        self.assertEqual(set(handles), {pool.offer_next(), pool.offer_next()})
+        started = time.monotonic()
+        while not all(not slot.outgoing.empty() for slot in pool._slots):
+            self.assertLess(time.monotonic() - started, 5)
+            time.sleep(0.002)
+        first = time.monotonic_ns()
+        failure = MemoryError('synthetic mid-poll clock failure')
+        values = [first, first, failure]
+
+        def clock():
+            value = values.pop(0)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        with mock.patch.object(time, 'monotonic_ns', side_effect=clock):
+            with self.assertRaises(MemoryError) as caught:
+                pool.poll()
+        self.assertIs(failure, caught.exception)
+        self.assertEqual(2 * 65536, self.intake.snapshot().reserved_bytes)
+        self.assertEqual('signature_execution_clock_failure', pool.result(handles[0]).reason)
+        notices = pool.poll()
+        self.assertEqual(set(handles), {notice.handle for notice in notices})
+        for notice in notices:
+            self.assertFalse(notice.released)
+            self.assertEqual(('signature_execution_clock_failure', (), 2),
+                             (notice.result.reason, notice.result.indices, notice.result.roots_reaped))
+        self.assertEqual(set(handles), {notice.handle for notice in pool.poll()})
+        for handle in handles:
+            pool.discard(handle)
+        self.assertEqual((), pool.poll())
+        self.assertEqual(0, self.intake.snapshot().jobs)
 
     def test_copy_budget_precedes_start_and_limits_are_revalidated_and_copied(self):
         with self.assertRaises(SignatureWorkerError) as caught:
@@ -289,7 +332,8 @@ class SignatureWorkerBlockedStartTests(unittest.TestCase):
     def test_exceptional_cleanup_clock_metadata_and_publication_hold_capacity(self):
         for scenario in ('cleanup-exception', 'clock-exception', 'clock-regression',
                          'malformed-roots', 'malformed-early', 'malformed-future',
-                         'offer-publication', 'result-publication', 'intake-publication', 'spawn-exception'):
+                         'offer-publication', 'result-publication', 'intake-publication',
+                         'cancelled-intake-publication', 'spawn-exception'):
             with self.subTest(scenario=scenario):
                 completed = subprocess.run(
                     [sys.executable, '-I', '-B', '-S', str(PACKAGE_ROOT / 'tests/fixtures/signature_pool_faults.py'),
@@ -306,7 +350,7 @@ class SignatureWorkerBlockedStartTests(unittest.TestCase):
                 self.assertEqual(not scenario.startswith('clock-'), report['unknown'])
                 if scenario in {'cleanup-exception', 'clock-exception', 'clock-regression',
                                 'malformed-roots', 'malformed-early', 'malformed-future',
-                                'result-publication', 'intake-publication'}:
+                                'result-publication', 'intake-publication', 'cancelled-intake-publication'}:
                     self.assertEqual(2, report['actual_process_launches'])
                 if scenario == 'spawn-exception':
                     self.assertEqual(0, report['actual_process_launches'])

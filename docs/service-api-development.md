@@ -988,8 +988,13 @@ unreaped and reads its ready marker before input. Nonblocking channels enforce
 finite bytes and one deadline across preparation and all SSH verifications.
 After the established no-fork boundary, cleanup verifies the owned root's birth
 and kills/waits for that process without process-table scans or group signals.
-Returned input reservations remain through consumption/discard. A cancelled job
-releases only after actual cleanup and worker-local full data references are gone.
+Returned input reservations, including cancelled results, remain through explicit
+owner consumption/discard. Confirming actual cleanup and dropping worker-local
+full data references precedes result publication; publication never releases a
+cancelled reservation. A closing owner drains and discards known returned results.
+Polls repeat unconsumed completion notices until explicit discard/cancellation,
+so a later slot's clock fault cannot hide an earlier completion. A latched owner
+clock failure suppresses positive results on subsequent reads and polls.
 
 Missing readiness, ambiguous spawn, lost worker/completion or unconfirmed cleanup
 retains its worker/slot, actual custody and all selected capacity. A late matching

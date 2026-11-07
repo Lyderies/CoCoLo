@@ -145,12 +145,14 @@ def main():
                     calls = []
                     original_confirm = intake.confirm_worker_stopped
 
-                    def confirm(value):
+                    def confirm(value, **kwargs):
                         calls.append(value)
-                        original_confirm(value)
+                        original_confirm(value, **kwargs)
                         raise MemoryError('synthetic post-confirmation failure')
 
-                    if scenario == 'intake-publication':
+                    if scenario in {'intake-publication', 'cancelled-intake-publication'}:
+                        if scenario == 'cancelled-intake-publication':
+                            assert pool.cancel(handle) == 'pending_confirmation'
                         with mock.patch.object(intake, 'confirm_worker_stopped', side_effect=confirm):
                             try:
                                 pool.poll()

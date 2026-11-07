@@ -326,7 +326,6 @@ class SignatureWorkerPool:
     def poll(self):
         self._owner()
         now = self._now()
-        notices = []
         for slot in self._slots:
             active = slot.current
             if active is None or active.unknown:
@@ -365,19 +364,17 @@ class SignatureWorkerPool:
                 result = SignatureWorkerResult('signature_execution_expired', (), result.finished_ns,
                                     result.roots_reaped, result.no_process_started)
             # The fixed execution has actually ended and dropped its full data
-            # before publishing. Keep noncancelled return fields under intake's
-            # quota even for a known zero-process job; cancelled jobs release.
+            # before publishing. Keep returned fields under intake's
+            # quota even for a known zero-process or cancelled job. Explicit
+            # owner consumption/discard releases it after publication, so an
+            # ambiguous publication can never lose a cancelled reservation.
             try:
-                kept = SignatureWorkerNotice(active.handle, result, False)
-                freed = SignatureWorkerNotice(active.handle, result, True)
                 # Stage allocating publication before the intake transition.
                 # On any ambiguous failure, keep the slot/pending completion
                 # and fence it permanently instead of replaying confirmation.
                 self._returned[active.handle] = result
-                released = self._intake.confirm_worker_stopped(active.handle)
-                if released:
-                    self._returned.pop(active.handle)
-                notices.append(freed if released else kept)
+                if self._intake.confirm_worker_stopped(active.handle, retain_cancelled=True) is not False:
+                    raise SignatureWorkerError()
                 slot.pending = None
                 slot.current = None
             except BaseException:
@@ -394,13 +391,20 @@ class SignatureWorkerPool:
             self._closed = (not any(slot.current is not None for slot in self._slots)
                             and not self._returned and self._intake.snapshot().jobs == 0
                             and all(slot.thread is None or not slot.thread.is_alive() for slot in self._slots))
-        return tuple(notices)
+        # Results are repeated until explicit consumption/discard. A later slot
+        # clock fault (or reply allocation failure) cannot lose an earlier
+        # completion. Every entry remains under its intake reservation.
+        return tuple(SignatureWorkerNotice(handle, self.result(handle), False) for handle in self._returned)
 
     def result(self, handle):
         self._owner()
         if type(handle) is not object or handle not in self._returned:
             raise SignatureWorkerError('signature_pool_invalid_handle')
-        return self._returned[handle]
+        result = self._returned[handle]
+        if self._clock_failed and result.reason == 'signature_execution_completed':
+            return SignatureWorkerResult('signature_execution_clock_failure', (), result.finished_ns,
+                                         result.roots_reaped, result.no_process_started)
+        return result
 
     def discard(self, handle):
         self._owner()

@@ -139,7 +139,12 @@ def main():
         assert retained() is not None
         slot_a = next(slot for slot in pool._slots if slot.current is not None)
         active = slot_a.current
-        forged = pools.SignatureWorkerResult('signature_execution_completed', (0,), time.monotonic_ns(), 1, False)
+        # Remove the already-observed marker so it cannot mask the unknown
+        # latch. The next candidate is otherwise valid completion metadata.
+        slot_a.pending = None
+        forged = pools.SignatureWorkerResult('signature_execution_completed', (0,), time.monotonic_ns(), 2, False)
+        assert pool._valid_result(forged, active)
+        assert active.started_ns <= forged.finished_ns < active.deadline_ns
         slot_a.outgoing.put_nowait(pools._Complete(active.token, forged))
         assert pool.poll() == () and pool.snapshot()['unconfirmed'] == 1
         assert intake.snapshot().selected == 1 and intake.snapshot().reserved_bytes == 65536
@@ -188,8 +193,17 @@ def main():
             since = time.monotonic()
             while not all(event.is_set() for event in offered):
                 if pool is not None:
-                    pool.poll()
+                    for notice in pool.poll():
+                        if not notice.released:
+                            pool.discard(notice.handle)
                 assert time.monotonic() - since < 5, 'offered executions did not settle'
+                time.sleep(0.002)
+            while pool is not None and any(slot.current is not None and not slot.current.unknown
+                                           for slot in pool._slots):
+                for notice in pool.poll():
+                    if not notice.released:
+                        pool.discard(notice.handle)
+                assert time.monotonic() - since < 5, 'completion publication did not settle'
                 time.sleep(0.002)
             settled = True
         except BaseException as error:
