@@ -120,6 +120,10 @@ The bridge still returns `outcome: invalid_result` and a failed fenced replaceme
 `missing_evidence` or `duplicate_criterion`. An untyped validation error uses
 `contract_validation_failed`; rejected text, field names and exception messages are never included.
 The reason does not authorize repair, retry, model escalation or acceptance.
+Codex protocol denials retain only the fixed known denied item names `mcp_tool_call`,
+`web_search` and `collab_tool_call`. Every other unrecognized event or item label becomes
+`unknown` before constructing the returned or stored fence; arbitrary child-authored labels
+are discarded. This does not change the failed denial or permit the event.
 Raw child results must leave admission `unverified` and cannot attest their own timeout.
 Those claims are fenced with `inconsistent_axes` before result binding; actual bridge-observed
 timeouts keep their authoritative timed-out outcome.

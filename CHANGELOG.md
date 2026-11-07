@@ -35,6 +35,10 @@
   fixed fallbacks. Version-3 dispatch metadata preserves these observations through cleanup and
   host commitment; version-1/2 bytes remain readable without invented historical observations.
   Existing outcomes, failed replacements, result/verifier digests and admission rules are unchanged.
+- Unknown Codex event/item names now use a fixed `unknown` denial label before constructing
+  returned or stored fences. Only known denied item names are retained. Regression tests pin
+  independent legacy fence bytes and cover CLI rejection reasons, invalid Claude reroutes,
+  and observed positive/signal exit statuses without retaining rejected child text.
 - Offline service foundation adds a pure, closed request codec for project status and cancellation.
   It bounds messages, rejects duplicate/authority/SQL fields and binds canonical request digests to
   project, primary session, supervisor instance/generation, runtime and exact attempt target.

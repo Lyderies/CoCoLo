@@ -131,6 +131,9 @@ CODEX_ALLOWED_ITEMS = frozenset({
     "agent_message", "reasoning", "command_execution", "file_change", "todo_list",
     "error",
 })
+# Only fixed known denied item names may enter a fence. Unknown child-authored
+# labels can contain content, even when their length and characters are bounded.
+CODEX_DENIED_ITEM_LABELS = frozenset({"mcp_tool_call", "web_search", "collab_tool_call"})
 # Claude Code bills a small helper model for housekeeping (seen live in modelUsage
 # while every assistant frame came from the requested model). Helper usage is
 # reported, but only the assistant frames decide whether the work was rerouted.
@@ -1260,11 +1263,11 @@ def run_claude(
 
 
 def _event_label(value: Any) -> str:
-    """A bounded, printable event or item type for an abort reason."""
+    """A fixed protocol label, never arbitrary child-authored event text."""
 
-    if not isinstance(value, str) or not value:
+    if type(value) is not str or len(value) > 64:
         return "unknown"
-    return re.sub(r"[^A-Za-z0-9_./-]", "?", value[:64])
+    return value if value in CODEX_DENIED_ITEM_LABELS else "unknown"
 
 
 def run_codex(

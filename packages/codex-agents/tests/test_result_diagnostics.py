@@ -30,6 +30,18 @@ from tests.learning_support import assignment, result
 
 
 class ResultDiagnosticTests(unittest.TestCase):
+    def test_codex_abort_labels_use_only_fixed_protocol_names(self) -> None:
+        class HostileString(str):
+            def __hash__(self):
+                raise AssertionError("untrusted string subclass was hashed")
+
+        for value in (None, True, 1, [], {}, "", "CANARY_EVENT_SECRET", "thread.surprise",
+                      "mcp_tool_call" + "x" * 100_000, "\N{SNOWMAN}", HostileString("mcp_tool_call")):
+            with self.subTest(value_type=type(value).__name__):
+                self.assertEqual("unknown", bridge._event_label(value))
+        for value in ("mcp_tool_call", "web_search", "collab_tool_call"):
+            self.assertEqual(value, bridge._event_label(value))
+
     def test_result_validation_never_imports_a_persistence_owner(self) -> None:
         blocked = {"sqlite3", "_sqlite3", "codex_agents.learning_store", "codex_agents.project_history"}
 
