@@ -46,6 +46,7 @@ from codex_agents.learning_store import (
     default_state_root,
     ensure_collector,
     _snapshot_project_partition,
+    _verify_project_backup_body,
     _start_collector_locked,
 )
 from codex_agents.learning_adapters import load_client_capabilities
@@ -2737,6 +2738,18 @@ class LearningStoreTests(unittest.TestCase):
         self.assertIn("repair_receipts", tables)
         self.assertEqual(0, attestations)
 
+    def test_schema_five_absent_checkpoint_table_cannot_verify_phantom_rows(self) -> None:
+        self._downgrade_fixture_to_schema_five()
+        body = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=5)
+        self.assertEqual([], body["columns"]["orchestration_checkpoints"])
+        self.assertEqual(0, _verify_project_backup_body(body)["orchestration_checkpoints"])
+        for rows, count in (([{}], 1), ([{}, {}], 2), ([], 1)):
+            malformed = deepcopy(body)
+            malformed["tables"]["orchestration_checkpoints"] = rows
+            malformed["counts"]["orchestration_checkpoints"] = count
+            with self.subTest(rows=len(rows), count=count), self.assertRaisesRegex(LedgerError, "absent table|count or column"):
+                _verify_project_backup_body(malformed)
+
     def test_schema_five_refuses_migration_without_current_verified_backups(self) -> None:
         self._downgrade_fixture_to_schema_five()
         self.ledger.close()
@@ -3639,7 +3652,7 @@ class LearningStoreTests(unittest.TestCase):
         shutdown.assert_not_called()
 
         healthy = {
-            "schema_version": 6,
+            "schema_version": 7,
             "runtime_version": PACKAGE_VERSION,
             "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
         }
@@ -3673,6 +3686,15 @@ class LearningStoreTests(unittest.TestCase):
             ORCHESTRATION_ROOT / "cli.py",
             project_root=self.project_a,
         )
+
+    def test_client_rejects_older_or_newer_schema_with_matching_runtime(self) -> None:
+        client = CollectorClient(self.state.socket)
+        for schema, error in ((6, CollectorUpgradeRequired), (8, CollectorNewerVersionError)):
+            with self.subTest(schema=schema), mock.patch.object(client, "_request", return_value={
+                "ok": True, "schema_version": schema,
+                "runtime_version": PACKAGE_VERSION, "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
+            }), self.assertRaises(error):
+                client.health()
 
     def test_client_orders_collector_versions_without_downgrade(self) -> None:
         client = CollectorClient(self.state.socket)
@@ -3719,7 +3741,7 @@ class LearningStoreTests(unittest.TestCase):
     def test_detached_collector_receives_no_inherited_environment(self) -> None:
         healthy = {
             "ok": True,
-            "schema_version": 6,
+            "schema_version": 7,
             "runtime_version": PACKAGE_VERSION,
             "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
             "started_at_ms": 1,

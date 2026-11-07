@@ -578,6 +578,8 @@ def _verify_project_backup_body(
             rows = tables[table]
             if declared != expected or not isinstance(rows, list) or counts[table] != len(rows):
                 raise LedgerError("project backup count or column manifest is invalid")
+            if not declared and rows:
+                raise LedgerError("project backup absent table has rows")
             decoded_rows = []
             for row in rows:
                 if not isinstance(row, dict) or set(row) != set(declared):
