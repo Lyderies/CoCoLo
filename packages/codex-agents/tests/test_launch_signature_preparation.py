@@ -303,6 +303,24 @@ class LaunchSignaturePreparationTests(unittest.TestCase):
                 self.launch()
         self.assert_no_claim()
 
+    def insert_fixture_denial_link(self, project, record):
+        # Production admission decisions currently create no automatic links.
+        # Insert a valid synthetic link so these rollback checks exercise one.
+        self.assertTrue(self.ledger._connection.in_transaction)
+        self.assertEqual(self.project, project)
+        self.assertEqual("admission_decision", record["record_type"])
+        self.assertEqual("deny", record["decision"])
+        key = (project, self.identity["record_id"], record["record_id"])
+        self.ledger._connection.execute(
+            "INSERT INTO record_links(project_id,from_record_id,to_record_id,relation) VALUES(?,?,?,'evidence')",
+            key,
+        )
+        self.assertIsNotNone(self.ledger._connection.execute(
+            "SELECT 1 FROM record_links WHERE project_id=? AND from_record_id=? AND to_record_id=? AND relation='evidence'",
+            key,
+        ).fetchone())
+        return key
+
     def test_denial_record_and_links_roll_back_on_a_postappend_interruption(self):
         class FixtureStop(BaseException):
             pass
@@ -310,13 +328,16 @@ class LaunchSignaturePreparationTests(unittest.TestCase):
         self.fixture.observe(**{"rateLimits.spendControlReached": True})
         before = self.fixture._launch_rows()
         link = self.ledger._auto_link_locked
+        inserted = []
 
-        def fail_after_link(*arguments):
-            link(*arguments)
+        def fail_after_link(project, record):
+            link(project, record)
+            inserted.append(self.insert_fixture_denial_link(project, record))
             raise FixtureStop()
 
         with mock.patch.object(self.ledger, "_auto_link_locked", side_effect=fail_after_link), self.assertRaises(FixtureStop):
             self.launch()
+        self.assertEqual(1, len(inserted), "the rollback fixture never inserted a link")
         self.assertFalse(self.ledger._connection.in_transaction)
         self.assertEqual(before, self.fixture._launch_rows())
         self.assert_no_claim()
@@ -325,15 +346,28 @@ class LaunchSignaturePreparationTests(unittest.TestCase):
         self.fixture.observe(**{"rateLimits.spendControlReached": True})
         before = self.fixture._launch_rows()
         harden = self.fixture.state.harden_database_files
+        link = self.ledger._auto_link_locked
+        inserted = []
+
+        def fixture_link(project, record):
+            link(project, record)
+            inserted.append(self.insert_fixture_denial_link(project, record))
 
         def refuse_writer():
             if self.ledger._connection.in_transaction:
+                self.assertEqual(1, len(inserted))
+                self.assertIsNotNone(self.ledger._connection.execute(
+                    "SELECT 1 FROM record_links WHERE project_id=? AND from_record_id=? AND to_record_id=? AND relation='evidence'",
+                    inserted[0],
+                ).fetchone())
                 raise StateError("fixture precommit mode refusal")
             harden()
 
-        with mock.patch.object(self.fixture.state, "harden_database_files", side_effect=refuse_writer), \
+        with mock.patch.object(self.ledger, "_auto_link_locked", side_effect=fixture_link), \
+                mock.patch.object(self.fixture.state, "harden_database_files", side_effect=refuse_writer), \
                 self.assertRaisesRegex(StateError, "fixture precommit mode refusal"):
             self.launch()
+        self.assertEqual(1, len(inserted), "the rollback fixture never inserted a link")
         self.assertFalse(self.ledger._connection.in_transaction)
         self.assertEqual(before, self.fixture._launch_rows())
         self.assert_no_claim()
