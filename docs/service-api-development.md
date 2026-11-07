@@ -961,3 +961,45 @@ this helper. Actual async ownership, prelaunch channel/memory reservation,
 nonrenewable deadlines, cancellation, conservative orphan recovery and fresh
 bounded atomic account checks remain integration requirements. The ready marker
 and a process exit cannot replace those requirements.
+
+### Owner-local fixed worker pool
+
+`SignatureWorkerPool` binds once to an actual owner-local `SignatureJobIntake`.
+Explicit immutable limits configure up to 16 prestarted fixed worker threads,
+one input and one completion mailbox per thread, one nonrenewable job deadline
+and bounded helper I/O/cleanup waits. Bootstrap belongs before writer readiness,
+outside independent cheap health/control: thread creation itself can block.
+Normal owner methods select fairly, offer metadata, inspect, cancel and poll;
+they create no thread/process, encode no large input, wait for no child and join
+no live worker. The fixed workers receive data rather than a ledger or private key.
+
+The pool reserves a complete protocol-copy share before offering work. With
+captured field budget B and row budget r, that share is
+`4*(B+27) + 4*(82+262*r) + 4*65536 + 20736` bytes. It covers counted concurrent
+wire/decoded-field/response copies, bounded chunks and the three public scratch
+files. It is not exact Python heap, JSON/Unicode object, allocator or kernel
+accounting. Separate intake row/field quotas and process/mailbox/file caps apply.
+The configured protocol ceiling is 512 MiB; existing intake products and 16 workers
+bound the derived maximum share sum to 281,553,728 bytes. No operating defaults
+or installed latency guarantees are selected by these configuration ceilings.
+
+Fixed execution retains each actual Popen handle, checks kernel birth while
+unreaped and reads its ready marker before input. Nonblocking channels enforce
+finite bytes and one deadline across preparation and all SSH verifications.
+After the established no-fork boundary, cleanup verifies the owned root's birth
+and kills/waits for that process without process-table scans or group signals.
+Returned input reservations remain through consumption/discard. A cancelled job
+releases only after actual cleanup and worker-local full data references are gone.
+
+Missing readiness, ambiguous spawn, lost worker/completion or unconfirmed cleanup
+retains its worker/slot, actual custody and all selected capacity. A late matching
+token cannot clear that state, and no replacement worker or replay is automatic.
+Other available project slots can continue. Closing does not acknowledge a drain
+while an unknown job, returned input or queued intake remains.
+
+This adapter is inactive in normal APIs/admission. Its experimental macOS helper
+guard denies network, process creation and writes outside public scratch, while
+retaining broad read access; it supplies no OS read-isolation claim. Linux and
+hardware key formats remain unmeasured. Durable global claims/recovery, native
+caller authority, fresh bounded atomic owner/policy/cap checks, normal-client
+migration and combined integration/security/release review remain mandatory.
