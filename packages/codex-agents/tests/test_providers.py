@@ -606,14 +606,14 @@ class AdmissionTests(unittest.TestCase):
                 run_handle=run["run_handle"], rate_limit_info=info,
             )
 
-    def clean_claude_billing(self, at_ms: int) -> None:
+    def clean_claude_billing(self, at_ms: int, **identity_changes) -> None:
         """Fresh, clean Claude billing at a given time, as a probe would record.
 
         Claude admission needs billing from the last 30 minutes, so tests that
         jump past a reset record it again at the new time.
         """
 
-        identity = self.observe("claude", now_ms=at_ms)[0]
+        identity = self.observe("claude", now_ms=at_ms, **identity_changes)[0]
         _, billing = claude_rate_limit_records(
             {"status": "allowed", "isUsingOverage": False, "overageStatus": "rejected",
              "overageDisabledReason": "org_level_disabled"},
@@ -2603,10 +2603,128 @@ os.kill(os.getpid(), signal.SIGKILL)
                       if record["phase"] == "during"][-1]
         self.assertEqual("rejected", merged["status"])
         # The reset-less rejection lasts its day, not the allowed readings' hour.
-        self.assertEqual(rejected_at + 24 * 3_600_000, merged["windows"][0]["resets_at"])
+        self.assertEqual(rejected_at + 24 * 3_600_000 + 1, merged["windows"][0]["resets_at"])
         after_reset = reset * 1000 + 1
         self.clean_claude_billing(after_reset)
         self.assert_denied("provider_exhausted", "claude", now_ms=after_reset + 1)
+
+    def test_later_aggregate_and_resetless_restrictions_are_not_discarded(self) -> None:
+        horizon = providers.EVIDENCE_HORIZON_MS
+        quiet = {"isUsingOverage": False, "overageStatus": "rejected",
+                 "overageDisabledReason": "org_level_disabled"}
+        for status in ("rejected", "allowed_warning"):
+            for shape in ("empty", "resetless-repeat"):
+                with self.subTest(status=status, shape=shape):
+                    email = f"fixture-{status}-{shape}@example.invalid"
+                    identity = self.observe("claude", email=email)[0]
+                    self.attest("claude", identity["account_fingerprint"])
+                    run = self.open_run("claude")
+                    first = {"rateLimitType": "five_hour"}
+                    if shape == "empty":
+                        first["resetsAt"] = (self.clock + 2_000) // 1000
+                    self.event(run, status=status, **first, **quiet)
+                    self.clock += 10_000
+                    later = {"unifiedWindows": {}} if shape == "empty" else {"rateLimitType": "five_hour"}
+                    kept = self.event(run, status=status, **later, **quiet)
+                    self.assertEqual(["provider_headroom"], [item["record_type"] for item in kept])
+                    last_observed = self.clock
+                    for at in (last_observed + horizon, last_observed + horizon + 1):
+                        self.clean_claude_billing(at, email=email)
+                        rating = ("exhausted" if status == "rejected" else "constrained") if at == last_observed + horizon else None
+                        self.assertEqual(rating, providers._headroom_state("claude", kept[0], at))
+                        expected = "provider_exhausted" if status == "rejected" and at == last_observed + horizon else None
+                        with mock.patch.object(self.ledger, "_clock_ms", return_value=at):
+                            self.assertEqual(expected, self.ledger.launch_recheck(
+                                self.project_id, run_handle=run["run_handle"], identity=identity))
+                        if expected is not None:
+                            self.assert_denied(expected, "claude", now_ms=at)
+                        else:
+                            self.assertEqual("pass", self.admit("claude", now_ms=at)["decision"])
+                    self.clock = last_observed + horizon + 1
+
+    def test_billing_probe_merge_preserves_aggregate_and_resetless_expiry(self) -> None:
+        horizon = providers.EVIDENCE_HORIZON_MS
+        quiet = {"isUsingOverage": False, "overageStatus": "rejected",
+                 "overageDisabledReason": "org_level_disabled"}
+        for status in ("rejected", "allowed_warning"):
+            for shape in ("empty", "resetless"):
+                with self.subTest(status=status, shape=shape):
+                    email = f"fixture-probe-{status}-{shape}@example.invalid"
+                    identity = self.observe("claude", email=email)[0]
+                    self.attest("claude", identity["account_fingerprint"])
+                    observed = self.tick()
+                    aggregate = {"unifiedWindows": {}} if shape == "empty" else {"rateLimitType": "five_hour"}
+                    events = [
+                        {"status": status, **aggregate, **quiet},
+                        {"status": "allowed", "rateLimitType": "five_hour", "utilization": 0.1,
+                         "resetsAt": (observed + 2_000) // 1000, **quiet},
+                    ]
+                    with trusted_tools(self.tools), mock.patch.object(self.ledger, "_clock_ms", return_value=observed), \
+                            mock.patch("codex_agents.claude_host.check_backend"), \
+                            mock.patch("codex_agents.bridge.claude_billing_probe", return_value=(events, None)) as probe:
+                        result = self.ledger.observe_claude_billing(
+                            self.project_id, project_root=self.tools, environ=CLEAN)
+                    probe.assert_called_once()
+                    self.assertEqual("launched", result["probe"])
+                    merged = validate_learning_record(result["records"][1])
+                    self.assertLessEqual(len(merged["windows"]), 16)
+                    for at in (observed - 1, observed + 3_000, observed + horizon, observed + horizon + 1):
+                        expected = None if at > observed + horizon else ("exhausted" if status == "rejected" else "constrained")
+                        self.assertEqual(expected, providers._headroom_state("claude", merged, at), at)
+                    # Only the merged headroom was stored by this probe. Fresh
+                    # clean billing and identity must not mask its restriction.
+                    at = observed + horizon
+                    self.clean_claude_billing(at, email=email)
+                    if status == "rejected":
+                        self.assert_denied("provider_exhausted", "claude", now_ms=at)
+                    else:
+                        self.assertEqual("pass", self.admit("claude", now_ms=at)["decision"])
+                    self.clean_claude_billing(at + 1, email=email)
+                    self.assertEqual("pass", self.admit("claude", now_ms=at + 1)["decision"])
+                    self.clock = at + 1
+
+    def test_empty_aggregate_restriction_survives_the_overflow_merge(self) -> None:
+        fingerprint = self.observe("claude")[0]["account_fingerprint"]
+        self.attest("claude", fingerprint)
+        run = self.open_run("claude")
+        quiet = {"isUsingOverage": False, "overageStatus": "rejected",
+                 "overageDisabledReason": "org_level_disabled"}
+        self.event(run, status="rejected", unifiedWindows={}, **quiet)
+        rejected_at = self.clock
+        reset = (self.clock + 2_000) // 1000
+        with self.assertRaisesRegex(ContractError, "too many rate-limit events"):
+            for step in range(200):
+                self.event(run, status="allowed", rateLimitType="five_hour",
+                           utilization=step / 1000, resetsAt=reset, **quiet)
+        with self.ledger.repository(self.project_id) as repository:
+            merged = [item for item in repository.records("provider_headroom") if item["phase"] == "during"][-1]
+        for at in (reset * 1000 + 1, rejected_at + providers.EVIDENCE_HORIZON_MS):
+            self.assertEqual("exhausted", providers._headroom_state("claude", merged, at))
+        self.assertIsNone(providers._headroom_state("claude", merged, rejected_at + providers.EVIDENCE_HORIZON_MS + 1))
+
+    def test_run_cap_keeps_another_projects_future_reset_after_clock_rollback(self) -> None:
+        self.limit("codex", max_admissions_per_window=1)
+        current = self.clock + 3 * 3_600_000
+        self.clock = current - 2 * 3_600_000
+        changes = {"rateLimits.secondary.resetsAt": (current + 4 * 3_600_000) // 1000}
+        identity = self.observe(**changes)[0]
+        self.attest("codex", identity["account_fingerprint"])
+        self.open_run()
+        other = Path(self.temporary.name) / "future-project"
+        other.mkdir()
+        other_id = self.ledger.register_project(other, now_ms=1)
+        raw = json.loads(provider_fixture("codex-rate-limits.json"))
+        raw["rateLimits"]["secondary"]["resetsAt"] = (current + 3_600_000) // 1000
+        future = parse_codex(raw, digest_key=self.state.digest_key(), observed_at_ms=current + 1,
+                             client_version="0.164.0")[1]
+        self.assertEqual(identity["account_fingerprint"], future["account_fingerprint"])
+        self.ledger._store_provider_observations(other_id, [future], timestamp=current + 1)
+        self.clock = current
+        self.observe(now_ms=current, **changes)
+        self.assert_denied("window_run_cap_reached", now_ms=current)
+        with self.assertRaises(AdmissionDenied) as raised:
+            self.open_run(now_ms=current)
+        self.assertEqual("window_run_cap_reached", raised.exception.reason_code)
 
     @contextlib.contextmanager
     def other_project(self):

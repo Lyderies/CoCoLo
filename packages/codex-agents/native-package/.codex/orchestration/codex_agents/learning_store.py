@@ -69,6 +69,7 @@ from .learning_contracts import (
     validate_execution_configuration,
 )
 from .learning_adapters import HOOK_EVENTS, empty_usage, load_client_capabilities, reconcile_run
+from .admission_metadata import EVIDENCE_HORIZON_MS
 from .owner_key_contracts import (
     OWNER_SIGNER_LINE as OWNER_SIGNER_LINE,
     OWNER_SIGNERS_MAX_BYTES as OWNER_SIGNERS_MAX_BYTES,
@@ -1610,7 +1611,28 @@ class SessionBinding:
     expires_at_ms: int
 
 
-def _window_covered(window: dict[str, Any], earlier: dict[str, Any]) -> bool:
+def _restriction_windows(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Include an unscoped fallback window for an aggregate Claude restriction."""
+
+    if record["windows"]:
+        return record["windows"]
+    if record["status"] in {"rejected", "allowed_warning"}:
+        return [{"scope": None, "window_minutes": None,
+                 "used_percent": None, "resets_at": None}]
+    return []
+
+
+def _effective_window_reset(window: dict[str, Any], observed_at_ms: int) -> int:
+    # Explicit resets are exclusive; the reset-less fallback is live through
+    # observed + horizon, inclusively, so its equivalent reset is one ms later.
+    return (window["resets_at"] if window["resets_at"] is not None
+            else observed_at_ms + EVIDENCE_HORIZON_MS + 1)
+
+
+def _window_covered(
+    window: dict[str, Any], earlier: dict[str, Any], *,
+    observed_at_ms: int, earlier_observed_at_ms: int,
+) -> bool:
     """Whether an earlier window already restricts at least as much, as long."""
 
     def used(item: dict[str, Any]) -> float:
@@ -1620,9 +1642,9 @@ def _window_covered(window: dict[str, Any], earlier: dict[str, Any]) -> bool:
         window["scope"], window["window_minutes"]
     ) or used(earlier) < used(window):
         return False
-    if window["resets_at"] is None or earlier["resets_at"] is None:
-        return window["resets_at"] == earlier["resets_at"]
-    return earlier["resets_at"] >= window["resets_at"]
+    return _effective_window_reset(earlier, earlier_observed_at_ms) >= _effective_window_reset(
+        window, observed_at_ms
+    )
 
 
 def _more_restrictive(record: dict[str, Any], prior: list[dict[str, Any]]) -> bool:
@@ -1646,10 +1668,13 @@ def _more_restrictive(record: dict[str, Any], prior: list[dict[str, Any]]) -> bo
     covering = [item for item in prior if CLAUDE_STATUS_RANK[item["status"]] >= status]
     if not covering:
         return True
-    earlier = [window for item in covering for window in item["windows"]]
     return any(
-        not any(_window_covered(window, other) for other in earlier)
-        for window in record["windows"]
+        not any(
+            _window_covered(window, other, observed_at_ms=record["observed_at_ms"],
+                            earlier_observed_at_ms=item["observed_at_ms"])
+            for item in covering for other in _restriction_windows(item)
+        )
+        for window in _restriction_windows(record)
     )
 
 
@@ -1659,22 +1684,20 @@ def _merged_restriction(
     """One headroom record as restrictive as all of a run's: the highest status,
     and per window the highest use and the latest effective reset.
 
-    A window with no reset time counts for a day from its own observation, so
-    that day's end is its effective reset. The merged window always carries an
-    explicit reset at least as late as every input's, so it never ends sooner.
+    A reset-less or empty aggregate restriction counts through a day from its
+    own observation. Its equivalent exclusive reset is one millisecond later.
+    Every merged window has an explicit reset at least as late as its inputs,
+    so neither merging nor a clock rollback can shorten that restriction.
     """
 
-    from .providers import EVIDENCE_HORIZON_MS, headroom_record
+    from .providers import headroom_record
 
     status = max((item["status"] for item in records), key=CLAUDE_STATUS_RANK.__getitem__)
     windows: dict[tuple[Any, Any], dict[str, Any]] = {}
     for item in records:
-        for window in item["windows"]:
+        for window in _restriction_windows(item):
             key = (window["scope"], window["window_minutes"])
-            effective_reset = (
-                window["resets_at"] if window["resets_at"] is not None
-                else item["observed_at_ms"] + EVIDENCE_HORIZON_MS
-            )
+            effective_reset = _effective_window_reset(window, item["observed_at_ms"])
             merged = windows.get(key)
             if merged is None:
                 windows[key] = {**window, "resets_at": effective_reset}

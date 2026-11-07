@@ -129,9 +129,9 @@ def window_start_ms(
 
     A recorded five-hour reset still ahead, and no more than one window away,
     places a window that began five hours before it. The earliest such start
-    among every observation still live is used, so a later reading can never
-    move the start forward and free places while an earlier window has not
-    reset. With no such reset known, the window is the last five hours.
+    among every observation still live, including future-stamped observations
+    after clock rollback, is used. A later reading cannot free places while an
+    earlier window has not reset. With no such reset known, use the last five hours.
     """
 
     starts = [
@@ -139,7 +139,6 @@ def window_start_ms(
         for record, digest in headroom
         if record["provider"] == provider
         and record["account_fingerprint"] == fingerprint
-        and record["observed_at_ms"] <= now_ms
         for window in record["windows"]
         if window["window_minutes"] == FIVE_HOUR_WINDOW_MINUTES
         and window["resets_at"] is not None

@@ -28,6 +28,39 @@ def calculate(module, case):
 
 
 class AdmissionMetadataTests(unittest.TestCase):
+    def test_mixed_future_reset_evidence_keeps_the_earliest_shared_cap_window(self):
+        cases = {case['name']: case for case in json.loads(FIXTURE.read_text())['cases']}
+        hour = 3_600_000
+        for provider in ('codex', 'claude'):
+            case = json.loads(json.dumps(cases[provider + '-admitted']))
+            arguments = case['arguments']
+            now = arguments['now_ms']
+            records = []
+            for observed, reset, digest in ((now - 1, now + 4 * hour, '7' * 64),
+                                             (now + 1, now + hour, '8' * 64)):
+                record = validate_provider_headroom(providers._record('provider_headroom', {
+                    'provider': provider, 'account_fingerprint': 'a' * 64,
+                    'observed_at_ms': observed, 'status': 'allowed' if provider == 'claude' else None,
+                    'run_id': None, 'phase': None,
+                    'windows': [{'scope': 'five_hour' if provider == 'claude' else None,
+                                 'window_minutes': 300, 'used_percent': 0, 'resets_at': reset}],
+                }))
+                records.append([record, digest])
+            arguments['admission_policy']['max_admissions_per_window'] = 1
+            arguments['prior_run_admissions'] = [['a' * 64, now - 2 * hour]]
+            arguments['window_headroom'] = records
+            with self.subTest(provider=provider, check='window'):
+                self.assertEqual((now - 4 * hour, '8' * 64), admission_metadata.window_start_ms(
+                    provider, 'a' * 64, records, now))
+            with self.subTest(provider=provider, check='denial'):
+                self.assertEqual('window_run_cap_reached', calculate(admission_metadata, case)['reason_code'])
+            # An expired or more-than-five-hours-away reset is ineligible,
+            # regardless of its future observation time. It cannot pin a cap.
+            for reset in (now, now + 5 * hour + 1):
+                records[1][0]['windows'][0]['resets_at'] = reset
+                with self.subTest(provider=provider, ineligible_reset=reset):
+                    self.assertEqual('admitted', calculate(admission_metadata, case)['reason_code'])
+
     def test_future_resetless_restrictions_survive_clock_rollback_for_admission_and_launch(self):
         cases = {case['name']: case for case in json.loads(FIXTURE.read_text())['cases']}
         for provider in ('codex', 'claude'):

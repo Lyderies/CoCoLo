@@ -978,6 +978,14 @@ fallback period. These are conservative restriction corrections, separately
 covered from the unchanged synthetic legacy examples.
 Exhausted observations also continue to protect the existing project-deletion
 check until their fallback period expires.
+Storage deduplication compares each reset-less observation's own expiry, including
+aggregate statuses without windows. Conservative probe and overflow merges retain
+an unscoped aggregate window with its original fallback expiry. The fallback is
+inclusive at one day; its equivalent explicit reset is one millisecond later.
+Still-eligible future-dated five-hour resets also participate in the earliest
+shared cap window, so clock rollback cannot discard an earlier admission.
+These offline corrections require independent acceptance before activation.
+Installation and release gates remain open.
 
 These functions calculate unsaved data over ordinary trusted Python values. They
 verify no signatures, authenticate no caller and grant no launch permission. They
