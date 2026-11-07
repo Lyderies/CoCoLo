@@ -936,3 +936,28 @@ payload or matching row position authenticates neither the worker nor its
 calculation. Actual fixed process and descriptor custody, public signature
 verification, durable claims/recovery and fresh bounded atomic account checks
 remain required. No executor, API operation or admission path is activated.
+
+### Fixed private process entry point
+
+`signature_process` is an unused fixed helper entry point with preparation and
+verification modes. The actual parent must establish the OS policy, exact owned
+process, bounded input/output channels and deadline. Before its ready marker the
+helper requires an actual fork refusal. That check and the marker are lifecycle
+data; they authenticate no caller or complete confinement policy.
+
+Preparation uses explicit input limits and audited metadata-only calculation.
+Verification accepts only three fixed public-data files in a private owned working
+directory, with no-follow opens, exact ownership/modes, single links and finite
+sizes. It retains the checked descriptors, replaces stdin with the payload and
+execs the fixed system SSH verifier in the same PID. Identity and namespace match
+existing owner-record verification. No private key or nested SSH child is used.
+Expected refusals and unexpected process faults exit without raw input or tracebacks.
+The parent must supply only its intended standard streams, discard helper stderr
+and keep exclusive scratch/file custody through reaping. Preopening retains file
+identity; it does not freeze bytes against another writer.
+
+No scheduler, service operation, native caller profile or installation invokes
+this helper. Actual async ownership, prelaunch channel/memory reservation,
+nonrenewable deadlines, cancellation, conservative orphan recovery and fresh
+bounded atomic account checks remain integration requirements. The ready marker
+and a process exit cannot replace those requirements.

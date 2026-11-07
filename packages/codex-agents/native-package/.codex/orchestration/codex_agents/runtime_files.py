@@ -75,6 +75,7 @@ RUNTIME_FILES = (
     "codex_agents/signature_inputs.py",
     "codex_agents/signature_job_intake.py",
     "codex_agents/signature_payloads.py",
+    "codex_agents/signature_process.py",
     "codex_agents/sql_read_budget.py",
     "codex_agents/supervision.py",
     "codex_agents/validation.py",
