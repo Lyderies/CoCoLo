@@ -152,6 +152,44 @@ and Security's `SecCode.h` (`kSecGuestAttributeAudit`). Use the audit-token acce
 its opaque representation is not a wire contract. Declaration of an API is not
 proof of the required identity, freshness, code or per-message semantics.
 
+## Public XPC code requirements
+
+A separate disposable application-bundle experiment now establishes a usable
+code-identity mechanism on the measured macOS host. A bundled XPC service accepted
+two requests from the exact allowed client code hash. A different-code client
+reached connection setup but never reached the application request handler. The
+same unchanged second binary received a reply when its exact code hash was
+allowed in a countercontrol. The native binaries remained unchanged during each
+experiment. These were local ad hoc signatures, not owner-key signing operations.
+
+Apple documents that
+[`xpc_connection_set_peer_code_signing_requirement`](https://developer.apple.com/documentation/xpc/xpc_connection_set_peer_code_signing_requirement(_:_:))
+checks the sender's code requirement for every incoming message. The installed
+public SDK declares that API. The experiment configured requirements before peer
+activation in both directions. This is a distinct public-libXPC experiment; it
+does not retry, repair or accept the stopped hand-written Mach experiment.
+
+This result does not select XPC or establish enrollment. An exact code requirement
+does not distinguish two instances of the same reviewed executable, identify a
+Codex or Claude root, prove the protected host checks ran, or authorize a business
+operation. The experiment did not exercise endpoint delegation, queued mixed
+senders, fork/exec transitions, native-client tool attribution, configuration
+injection or operation/commit revocation. The requirement fixture was private
+test input, not an installed trust source. Production code/build binding and
+trusted requirement provisioning remain to be implemented and reviewed.
+
+Bundled services are managed by `launchd`. All test client processes were waited;
+the observed service PIDs were absent at later inspection. Their self-expiry
+markers were not observed, and the parent could not reap those services. This
+does not establish their termination cause or production cleanup ownership.
+
+Any XPC candidate must retain the closed business protocol and bound untrusted
+input before creating transport objects. Native transport decoding, resource
+limits and service restart behavior require their own checks. Do not replace the
+current default-deny adapters with a code-signature-only authorizer or expose a
+generic XPC forwarding operation. The root/bootstrap proof and the operation
+revocation rules below remain required.
+
 ## Descriptor custody is part of authentication
 
 Do not infer the author of queued stream bytes solely from a later peer-identity

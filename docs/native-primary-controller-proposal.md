@@ -239,6 +239,39 @@ or production profile is selected by this auth-only prerequisite work.
 
 ## Bounded experiment before a selection
 
+The [public XPC code-requirement experiment](native-caller-enrollment-design.md#public-xpc-code-requirements)
+now supplies a measured candidate for the controller/service code-identity layer.
+It accepted exact client code, refused different code at the application handler,
+and accepted that same second binary under an explicit allowlisted countercontrol.
+It establishes neither root authority nor a selected production transport.
+
+For an XPC implementation candidate, the integration order is:
+
+1. Define the fixed controller and service build/distribution contract, including
+   protected code requirements in both directions. The private experiment's
+   mutable requirement fixture is not that trust contract. Bound native message
+   decoding and preserve the closed project/account/control operations.
+2. Prove the initial controller instance and its exclusively created client/root
+   binding. Two instances of identical code must not share a bootstrap grant.
+   Preserve fixed startup configuration and refuse unknown or child actors.
+3. Implement the separate terminal signing purpose and one-shot challenge/commit
+   protocol described above. A signature over supplied labels is insufficient;
+   native instance, root, runtime and service epoch must remain bound at use.
+4. Exercise endpoint transfer, queued messages, fork/exec, client replacement and
+   service restart against that exact implementation. Define and verify which
+   component owns helper termination; `launchd`-managed lifetime is not a tracked
+   child-tree cleanup proof.
+5. Connect the authenticated native context to the existing default-deny adapters,
+   then migrate the normal clients without a direct SQLite fallback. Keep local
+   control independent of the account/history writers. A Codex-only bootstrap is
+   insufficient: the Claude-primary-to-Codex path belongs in the Codex phase.
+
+Each step requires its stated proof before dependent activation. No controller,
+signing namespace, distribution mechanism, listener or native authorizer is
+selected or enabled by this integration order. An owner decision about the
+material startup/signing change still follows the concrete implementation and
+independent review; it cannot approve missing root or custody primitives.
+
 The first experiment must request no model turn, invoke no privileged business
 operation and modify no shared configuration. It must state its fixed startup
 guards before execution, then exercise owned initialization and creation of one
