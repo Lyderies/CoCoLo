@@ -4684,46 +4684,63 @@ class LearningLedger:
         self.state.harden_database_files()
         return record
 
+    def _launch_identity_locked(
+        self, project_id: str, run_handle: str, identity: dict[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        """Re-read the actual open run and its exact stored launch observation."""
+
+        if type(identity) is not dict:
+            raise LedgerError("launch identity is invalid")
+        run_id = self._open_run_for_provider_locked(
+            project_id, run_handle, identity.get("provider")
+        )
+        admission = self._run_admission_locked(project_id, run_id)
+        digest = content_digest(identity)
+        if (
+            identity.get("record_type") != "provider_identity"
+            or identity.get("account_fingerprint") != admission["account_fingerprint"]
+            or self._connection.execute(
+                "SELECT 1 FROM records WHERE project_id=? AND content_digest=? "
+                "AND record_type='provider_identity' AND source='provider'",
+                (project_id, digest),
+            ).fetchone() is None
+        ):
+            raise LedgerError("launch identity is not this run's stored observation")
+        return admission, digest
+
     def launch_recheck(
         self, project_id: str, *, run_handle: str, identity: dict[str, Any]
     ) -> str | None:
-        """Re-check an open, admitted run's billing, headroom and plan before launch.
+        """Re-check the actual admitted run against current launch restrictions.
 
-        `identity` must be this project's stored before-launch observation. The
-        account's billing and headroom from every project, including that
-        reading, are evaluated on the ledger's clock under the writer lock. The
-        run cap is not counted again. A denial is stored like any other and
-        its reason returned; None means the launch may proceed.
+        Verify immutable owner-signature inputs outside the ledger lock, then
+        reject any change to their owner generation, signer or complete rows.
+        Re-read the run, stored identity, shared billing/headroom and clock in
+        the final locked phase. Preparation never caches launch eligibility.
+        A denial is stored and returned; None is not a durable launch claim.
+        This legacy primitive still reads JSON/filesystem under the final lock;
+        bounded service jobs and native caller enrollment remain separate gates.
         """
 
         from .providers import evaluate_launch
 
+        # Reject an invalid/foreign run before spending verification work. Never
+        # borrow or commit an outer write transaction while releasing this lock.
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
+            admission, _ = self._launch_identity_locked(project_id, run_handle, identity)
+        prepared = self._prepare_attestations(project_id, admission["provider"])
         denied = None
         with self._lock, self._connection:
-            timestamp = self._clock_ms()
-            run_id = self._open_run_for_provider_locked(
-                project_id, run_handle, identity.get("provider")
-            )
-            admission = self._run_admission_locked(project_id, run_id)
-            digest = content_digest(identity)
-            if (
-                identity.get("record_type") != "provider_identity"
-                or identity.get("account_fingerprint") != admission["account_fingerprint"]
-                or self._connection.execute(
-                    "SELECT 1 FROM records WHERE project_id=? AND content_digest=? "
-                    "AND record_type='provider_identity' AND source='provider'",
-                    (project_id, digest),
-                ).fetchone() is None
-            ):
-                raise LedgerError("launch identity is not this run's stored observation")
+            admission, digest = self._launch_identity_locked(project_id, run_handle, identity)
             provider = admission["provider"]
+            attestations = self._prepared_attestations_locked(prepared, project_id, provider)
             billing, _ = self._account_records_locked(project_id, "provider_billing", provider)
             headroom, _ = self._account_records_locked(
                 project_id, "provider_headroom", provider
             )
-            attestations = self._provider_records_locked(
-                project_id, "billing_attestation", provider
-            )
+            timestamp = self._clock_ms()
             reason = evaluate_launch(
                 provider=provider, identity=identity, billing=billing,
                 headroom=headroom, now_ms=timestamp, attestations=attestations,
