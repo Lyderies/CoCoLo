@@ -4717,7 +4717,8 @@ class LearningLedger:
         reject any change to their owner generation, signer or complete rows.
         Re-read the run, stored identity, shared billing/headroom and clock in
         the final locked phase. Preparation never caches launch eligibility.
-        A denial is stored and returned; None is not a durable launch claim.
+        Denial records and links commit in one explicit unit. None is not a
+        durable launch claim. Call without already holding the private mutex.
         This legacy primitive still reads JSON/filesystem under the final lock;
         bounded service jobs and native caller enrollment remain separate gates.
         """
@@ -4732,7 +4733,7 @@ class LearningLedger:
             admission, _ = self._launch_identity_locked(project_id, run_handle, identity)
         prepared = self._prepare_attestations(project_id, admission["provider"])
         denied = None
-        with self._lock, self._connection:
+        with self._lock:
             admission, digest = self._launch_identity_locked(project_id, run_handle, identity)
             provider = admission["provider"]
             attestations = self._prepared_attestations_locked(prepared, project_id, provider)
@@ -4753,9 +4754,12 @@ class LearningLedger:
                     "account_fingerprint": admission["account_fingerprint"],
                     "evidence_digests": [digest], "observed_at_ms": timestamp,
                 }
-                self._store_admission_locked(
-                    project_id, denied, run_id=None, timestamp=timestamp
-                )
+                # Denial metadata and derived links are one explicit write
+                # unit, including mode checks before commit and full rollback.
+                with self._account_transaction():
+                    self._store_admission_locked(
+                        project_id, denied, run_id=None, timestamp=timestamp
+                    )
         self.state.harden_database_files()
         return None if denied is None else denied["reason_code"]
 

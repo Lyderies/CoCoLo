@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import threading
@@ -8,9 +9,9 @@ from unittest import mock
 
 import tests.test_providers as provider_fixture
 
-from codex_agents.learning_contracts import canonical_json
+from codex_agents.learning_contracts import canonical_json, content_digest, validate_learning_record
 from codex_agents.learning_engine import OwnerGrantAuthority
-from codex_agents.learning_store import LedgerError
+from codex_agents.learning_store import LedgerError, StateError
 from codex_agents.providers import BILLING_MAX_AGE_MS
 
 
@@ -186,6 +187,10 @@ class LaunchSignaturePreparationTests(unittest.TestCase):
 
         with mock.patch.object(OwnerGrantAuthority, "verify_owner_record", autospec=True, side_effect=delayed):
             self.assertEqual("billing_unverified", self.launch())
+        with self.ledger.repository(self.project) as repository:
+            denied = repository.records("admission_decision")[-1]
+        self.assertEqual(("deny", "billing_unverified", None),
+                         (denied["decision"], denied["reason_code"], denied["run_id"]))
         self.assert_no_claim()
 
     def test_actual_run_consumed_during_verification_refuses_before_a_launch_decision(self):
@@ -222,11 +227,123 @@ class LaunchSignaturePreparationTests(unittest.TestCase):
             self.assertEqual(1, len(calls))
         self.assert_no_claim()
 
-    def test_existing_write_transaction_and_invalid_run_refuse_before_crypto(self):
-        with self.ledger._account_transaction(), \
-                mock.patch.object(OwnerGrantAuthority, "verify_owner_record", side_effect=AssertionError("crypto in outer transaction")), \
-                self.assertRaisesRegex(LedgerError, "write transaction is already active"):
+    def mutation_after_verifying(self, mutation):
+        verify = OwnerGrantAuthority.verify_owner_record
+
+        def changed(authority, project, record, signature):
+            result = verify(authority, project, record, signature)
+            mutation()
+            return result
+
+        return mock.patch.object(OwnerGrantAuthority, "verify_owner_record", autospec=True, side_effect=changed)
+
+    def test_deleted_stored_identity_after_verification_refuses_launch(self):
+        def remove():
+            with self.ledger._account_transaction():
+                self.ledger._connection.execute("DELETE FROM records WHERE project_id=? AND record_id=?",
+                                                (self.project, self.identity["record_id"]))
+
+        with self.mutation_after_verifying(remove), \
+                self.assertRaisesRegex(LedgerError, "stored observation"):
             self.launch()
+        self.assert_no_claim()
+
+    def test_changed_stored_identity_after_verification_refuses_launch(self):
+        changed = {**self.identity, "client_version": "0.164.1"}
+
+        def update():
+            with self.ledger._account_transaction():
+                self.ledger._connection.execute("UPDATE records SET content=?,content_digest=? WHERE project_id=? AND record_id=?",
+                                                (canonical_json(changed), content_digest(changed), self.project, self.identity["record_id"]))
+
+        with self.mutation_after_verifying(update), \
+                self.assertRaisesRegex(LedgerError, "stored observation"):
+            self.launch()
+        self.assert_no_claim()
+
+    def test_removed_attestation_row_after_verification_refuses_launch(self):
+        identifier = self.ledger._attestation_rows_locked(self.project, "codex")[0][0]
+
+        def remove():
+            with self.ledger._account_transaction():
+                self.ledger._connection.execute("DELETE FROM records WHERE project_id=? AND record_id=?", (self.project, identifier))
+
+        with self.mutation_after_verifying(remove), \
+                self.assertRaisesRegex(LedgerError, "preparation is stale"):
+            self.launch()
+        self.assert_no_claim()
+
+    def test_added_attestation_row_after_verification_refuses_launch(self):
+        # A synthetic unsigned owner-source row must invalidate the capture;
+        # this fixture label is not proof of an owner signature or native role.
+        original = self.ledger._attestation_rows_locked(self.project, "codex")[0]
+        changed = json.loads(original[2])
+        changed.update(record_id="billing_attestation:fixture-extra-row",
+                       observed_at_ms=changed["observed_at_ms"] + 1, issued_at=changed["issued_at"] + 1)
+        checked = validate_learning_record(changed)
+
+        def insert():
+            with self.ledger._account_transaction():
+                self.ledger._append_checked_locked(self.project, checked, producer="owner", timestamp=self.fixture.clock + 1)
+
+        with self.mutation_after_verifying(insert), \
+                self.assertRaisesRegex(LedgerError, "preparation is stale"):
+            self.launch()
+        self.assert_no_claim()
+
+    def test_foreign_owner_preparation_and_json_cannot_replace_this_owners_capture(self):
+        # Fault injection into an internal helper, not a public authorization API.
+        prepared = self.ledger._prepare_attestations(self.project, "codex")
+        variants = (replace(prepared, origin=object()), replace(prepared, project_id="prj_" + "0" * 32),
+                    replace(prepared, provider="claude"), {"verified": True})
+        for value in variants:
+            with self.subTest(kind=type(value).__name__), \
+                    mock.patch.object(self.ledger, "_prepare_attestations", return_value=value), \
+                    self.assertRaisesRegex(LedgerError, "preparation is stale"):
+                self.launch()
+        self.assert_no_claim()
+
+    def test_denial_record_and_links_roll_back_on_a_postappend_interruption(self):
+        class FixtureStop(BaseException):
+            pass
+
+        self.fixture.observe(**{"rateLimits.spendControlReached": True})
+        before = self.fixture._launch_rows()
+        link = self.ledger._auto_link_locked
+
+        def fail_after_link(*arguments):
+            link(*arguments)
+            raise FixtureStop()
+
+        with mock.patch.object(self.ledger, "_auto_link_locked", side_effect=fail_after_link), self.assertRaises(FixtureStop):
+            self.launch()
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertEqual(before, self.fixture._launch_rows())
+        self.assert_no_claim()
+
+    def test_denial_database_mode_refusal_rolls_back_before_commit(self):
+        self.fixture.observe(**{"rateLimits.spendControlReached": True})
+        before = self.fixture._launch_rows()
+        harden = self.fixture.state.harden_database_files
+
+        def refuse_writer():
+            if self.ledger._connection.in_transaction:
+                raise StateError("fixture precommit mode refusal")
+            harden()
+
+        with mock.patch.object(self.fixture.state, "harden_database_files", side_effect=refuse_writer), \
+                self.assertRaisesRegex(StateError, "fixture precommit mode refusal"):
+            self.launch()
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertEqual(before, self.fixture._launch_rows())
+        self.assert_no_claim()
+
+    def test_existing_write_transaction_and_invalid_run_refuse_before_crypto(self):
+        with self.ledger._account_transaction():
+            with mock.patch.object(OwnerGrantAuthority, "verify_owner_record", side_effect=AssertionError("crypto in outer transaction")), \
+                    self.assertRaisesRegex(LedgerError, "write transaction is already active"):
+                self.launch()
+            self.assertTrue(self.ledger._connection.in_transaction, "launch refusal committed the caller's transaction")
         with mock.patch.object(OwnerGrantAuthority, "verify_owner_record", side_effect=AssertionError("crypto for unknown run")), \
                 self.assertRaisesRegex(LedgerError, "unavailable"):
             self.ledger.launch_recheck(self.project, run_handle="hrn_" + "0" * 48, identity=self.identity)
