@@ -265,6 +265,7 @@ _BACKUP_TABLE_COLUMNS = {
         "receipt_id", "assignment_digest", "reason_code", "issued_at_ms",
         "expires_at_ms", "consumed_at_ms", "run_id",
     ),
+    "launch_claims": ("handle_digest", "run_id", "kind", "claimed_at_ms", "bridge_run_id"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -312,6 +313,7 @@ _BACKUP_ORDER_COLUMNS = {
     "owner_attestations": ("subject_record_id",),
     "repair_receipts": ("receipt_id",),
     "host_run_bindings": ("created_at_ms", "run_id"),
+    "launch_claims": ("handle_digest",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -345,12 +347,20 @@ def _backup_decode_value(value: Any) -> Any:
 
 
 def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 7 and table == "launch_claims":
+        return ()
     if schema_version == 5:
         if table == "host_run_bindings":
             return _BACKUP_V5_HOST_COLUMNS
         if table == "orchestration_checkpoints":
             return ()
     return _BACKUP_TABLE_COLUMNS[table]
+
+
+def _backup_tables(schema_version: int) -> tuple[str, ...]:
+    # Preserve the exact old manifest. Older verified backups never contained
+    # a launch_claims entry, even an empty one.
+    return tuple(table for table in _BACKUP_TABLE_COLUMNS if schema_version >= 7 or table != "launch_claims")
 
 
 def _snapshot_project_partition(
@@ -373,7 +383,7 @@ def _snapshot_project_partition(
         raise LedgerError("project binding is not active")
     tables: dict[str, list[dict[str, Any]]] = {}
     columns_manifest: dict[str, list[str]] = {}
-    for table, wanted in _BACKUP_TABLE_COLUMNS.items():
+    for table in _backup_tables(ledger_schema_version):
         exists = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
         ).fetchone()
@@ -419,10 +429,30 @@ def _snapshot_project_partition(
     }
 
 
+_LAUNCH_CLAIMS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS launch_claims (
+    project_id TEXT NOT NULL,
+    handle_digest TEXT NOT NULL CHECK(typeof(handle_digest)='text' AND length(handle_digest)=64
+        AND handle_digest NOT GLOB '*[^0-9a-f]*'),
+    run_id TEXT NOT NULL CHECK(typeof(run_id)='text' AND length(run_id) BETWEEN 1 AND 160),
+    kind TEXT NOT NULL CHECK(kind IN ('claimed','legacy_fenced')),
+    claimed_at_ms INTEGER NOT NULL CHECK(typeof(claimed_at_ms)='integer' AND claimed_at_ms>=0),
+    bridge_run_id TEXT,
+    PRIMARY KEY(project_id,handle_digest),
+    UNIQUE(project_id,run_id),
+    CHECK((kind='claimed' AND typeof(bridge_run_id)='text' AND length(bridge_run_id)=36
+        AND substr(bridge_run_id,1,4)='brg_' AND substr(bridge_run_id,5) NOT GLOB '*[^0-9a-f]*')
+        OR (kind='legacy_fenced' AND bridge_run_id IS NULL)),
+    FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+)
+"""
+
+
 _BACKUP_RESTORE_SCHEMA = """
 CREATE TABLE projects(project_id TEXT PRIMARY KEY,canonical_root TEXT,root_digest TEXT,
  status TEXT NOT NULL CHECK(status IN ('active','deleted')),created_at_ms INTEGER NOT NULL,
  deleted_at_ms INTEGER);
+""" + _LAUNCH_CLAIMS_SCHEMA + ";\n" + """
 CREATE TABLE sessions(project_id TEXT NOT NULL,session_digest TEXT NOT NULL,producer TEXT NOT NULL,
  created_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,session_digest,producer),
  FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE);
@@ -508,7 +538,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -524,7 +554,7 @@ def _verify_project_backup_body(
     ):
         raise LedgerError("project backup project partition is invalid")
     tables, counts, columns = body["tables"], body["counts"], body["columns"]
-    expected_tables = set(_BACKUP_TABLE_COLUMNS)
+    expected_tables = set(_backup_tables(schema_version))
     if (
         not isinstance(tables, dict) or set(tables) != expected_tables
         or not isinstance(counts, dict) or set(counts) != expected_tables
@@ -542,7 +572,7 @@ def _verify_project_backup_body(
             project_values,
         )
         decoded_by_table: dict[str, list[dict[str, Any]]] = {}
-        for table in _BACKUP_TABLE_COLUMNS:
+        for table in _backup_tables(schema_version):
             declared = columns[table]
             expected = list(_backup_expected_columns(schema_version, table))
             rows = tables[table]
@@ -597,7 +627,7 @@ def _verify_project_backup_body(
                 raise LedgerError("isolated project backup restoration changed rows")
     finally:
         restored.close()
-    return {name: int(counts[name]) for name in _BACKUP_TABLE_COLUMNS}
+    return {name: int(counts[name]) for name in _backup_tables(schema_version)}
 
 
 def _verify_backup_envelope(
@@ -2017,8 +2047,8 @@ class LearningLedger:
                     with contextlib.suppress(OSError):
                         path.rmdir()
 
-    def _require_schema_five_project_backups(self) -> None:
-        """Refuse schema-6 migration until each active partition restores cleanly."""
+    def _require_project_migration_backups(self, schema_version: int, target_version: int) -> None:
+        """Refuse migration until each active partition has an exact verified backup."""
 
         projects = self._connection.execute(
             "SELECT project_id FROM projects WHERE status='active' ORDER BY project_id"
@@ -2052,10 +2082,10 @@ class LearningLedger:
                     body, _, _ = _verify_backup_envelope(
                         raw,
                         expected_project_id=project_id,
-                        expected_ledger_schema_version=5,
+                        expected_ledger_schema_version=schema_version,
                     )
                     current = _snapshot_project_partition(
-                        self._connection, project_id, ledger_schema_version=5
+                        self._connection, project_id, ledger_schema_version=schema_version
                     )
                     file_id = str(registration["file_id"])
                     current["tables"]["stored_files"] = [
@@ -2073,12 +2103,38 @@ class LearningLedger:
                 break
             if not verified:
                 raise LedgerError(
-                    "schema 6 migration requires a registered verified schema 5 "
+                    f"schema {target_version} migration requires a registered verified schema {schema_version} "
                     "project backup"
                 )
 
-    def _migrate_five_to_six(self) -> None:
-        """Apply the lifecycle migration as one rollback-safe write transaction."""
+    def _initialize_launch_claims_locked(self, *, backfill: bool) -> None:
+        """Owner-only schema step within the caller's migration transaction.
+
+        Old runs are ambiguous even without a retained intent. Fence all of them
+        instead of deriving unused authority from expiring history. Markers do
+        not reference expiring records/bindings or grant executable permission.
+        """
+        self._connection.execute(_LAUNCH_CLAIMS_SCHEMA)
+        if backfill:
+            self._connection.execute(
+                "INSERT INTO launch_claims(project_id,handle_digest,run_id,kind,claimed_at_ms,bridge_run_id) "
+                "SELECT project_id,handle_digest,run_id,'legacy_fenced',created_at_ms,NULL FROM host_run_bindings"
+            )
+
+    def _migrate_six_to_seven(self) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._initialize_launch_claims_locked(backfill=True)
+            self._connection.execute("PRAGMA user_version = 7")
+            self.state.harden_database_files()
+            self._connection.execute("COMMIT")
+        except BaseException:
+            with contextlib.suppress(sqlite3.Error):
+                self._connection.execute("ROLLBACK")
+            raise
+
+    def _migrate_five_to_current(self) -> None:
+        """Migrate lifecycle and launch consumption in one rollback-safe unit."""
 
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -2164,9 +2220,11 @@ class LearningLedger:
                 "goal_time_used_seconds,COALESCE(ended_at_ms,started_at_ms) "
                 "FROM orchestrations"
             )
-            self._connection.execute("PRAGMA user_version = 6")
+            self._initialize_launch_claims_locked(backfill=True)
+            self._connection.execute("PRAGMA user_version = 7")
+            self.state.harden_database_files()
             self._connection.execute("COMMIT")
-        except Exception:
+        except BaseException:
             with contextlib.suppress(sqlite3.Error):
                 self._connection.execute("ROLLBACK")
             raise
@@ -2176,10 +2234,20 @@ class LearningLedger:
         if current > LEDGER_SCHEMA_VERSION:
             raise LedgerError("ledger schema is newer than this package")
         if current == 5:
-            self._require_schema_five_project_backups()
-            self._migrate_five_to_six()
+            self._require_project_migration_backups(5, 7)
+            self._migrate_five_to_current()
             self.state.harden_database_files()
             return
+        if current == 6:
+            self._require_project_migration_backups(6, 7)
+            self._migrate_six_to_seven()
+            self.state.harden_database_files()
+            return
+        if current == 7 and self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='launch_claims'"
+        ).fetchone() is None:
+            # Never recreate an empty consumed set after corruption/deletion.
+            raise LedgerError("launch claim state is unavailable")
         had_hook_ingestion = self._connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hook_ingestion'"
         ).fetchone() is not None
@@ -2740,6 +2808,8 @@ class LearningLedger:
                     "goal_time_used_seconds,COALESCE(ended_at_ms,started_at_ms) "
                     "FROM orchestrations"
                 )
+            if current < 5:
+                self._initialize_launch_claims_locked(backfill=current != 0)
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
         self.state.harden_database_files()
 
@@ -5450,7 +5520,8 @@ class LearningLedger:
 
         The run must still be pending and bound to exactly this assignment, task
         and route, with a passing admission for the route's provider. A second
-        claim for the same run is refused, so a launch is never resent. With
+        claim for the same run is refused, even after history expiry or clock
+        rollback. Consumption is owner metadata, not an expiring event. With
         `claim` false the same checks run and nothing is written, so a refusal
         can happen before anything is exported or launched.
         """
@@ -5492,6 +5563,11 @@ class LearningLedger:
             if admission["provider"] != route.get("provider"):
                 raise LedgerError("host run admission differs from the dispatched provider")
             if self._connection.execute(
+                "SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?)",
+                (project_id, handle_digest, run_id),
+            ).fetchone() is not None:
+                raise LedgerError("host run was already dispatched")
+            if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='dispatch_intent' "
                 "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
                 (project_id, run_id),
@@ -5516,6 +5592,11 @@ class LearningLedger:
                 )
             except ContractError as exc:
                 raise LedgerError("dispatch intent is invalid") from exc
+            self._connection.execute(
+                "INSERT INTO launch_claims(project_id,handle_digest,run_id,kind,claimed_at_ms,bridge_run_id) "
+                "VALUES(?,?,?,'claimed',?,?)",
+                (project_id, handle_digest, run_id, timestamp, bridge_run_id),
+            )
             self._append_checked_locked(
                 project_id, record, producer="lifecycle", timestamp=timestamp
             )
@@ -9479,6 +9560,7 @@ class LearningLedger:
                 self._connection.execute("DELETE FROM collector_health WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM repair_receipts WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM host_run_bindings WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM launch_claims WHERE project_id=?", (project_id,))
                 updated = self._connection.execute(
                     "UPDATE projects SET canonical_root=NULL,root_digest=NULL,status='deleted',deleted_at_ms=? "
                     "WHERE project_id=? AND status='active'",

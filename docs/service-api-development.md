@@ -1093,3 +1093,36 @@ retaining broad read access; it supplies no OS read-isolation claim. Linux and
 hardware key formats remain unmeasured. Durable global claims/recovery, native
 caller authority, fresh bounded atomic owner/policy/cap checks, normal-client
 migration and combined integration/security/release review remain mandatory.
+
+## Durable launch consumption in the candidate account owner
+
+The account ledger uses schema 7. A separate `launch_claims` table records one
+consumed launch per project/run and opaque handle. The existing validated
+`dispatch_intent` and its consumption marker commit in the same explicit write
+transaction. Preflight and claiming both refuse an existing marker. Event
+retention, a clock rollback, a lost first response or a restart cannot recreate an
+unused claim merely by removing its displayed intent. The marker contains only
+bound identifiers, a fixed kind, timestamp and bridge identifier. It grants no
+permission to execute, and does not change result consumption or agent binding.
+
+The markers have no dependency on expiring records or bindings. Project backup
+and isolated restoration verification include them; explicit project deletion
+removes them. Schema 5 and 6 backups retain their exact earlier manifests. An
+older runtime refuses schema 7, and a schema-7 store missing its consumption
+table is refused instead of silently rebuilding an empty consumed set.
+
+An upgrade from schema 6 requires a registered, unexpired, independently restored
+backup matching every active project partition before migration writes. Schema 5
+retains the same backup requirement for its own version; its lifecycle and launch
+migration commit together or roll back to schema 5. Migration conservatively
+fences every existing run, including pending unbound runs with no retained
+intent. It preserves their records and signed statement bytes. Drained offline
+upgrade, backup creation by the previous runtime and mixed-runtime retirement
+remain installation gates; this candidate does not upgrade the installed owner.
+
+This closes the legacy per-run consumption gap. It does not compose a fresh
+admission check and claim into one operation or add scoped idempotent request
+receipts. No account mutation RPC, native caller enrollment, listener or normal
+CLI/hook/bridge API migration is enabled by this increment. Those operations,
+bounded admission work, cross-store recovery and independent release review
+remain required.

@@ -314,6 +314,7 @@ class LearningStoreTests(unittest.TestCase):
 
     def _downgrade_fixture_to_schema_five(self) -> None:
         with self.ledger._connection:
+            self.ledger._connection.execute("DROP TABLE launch_claims")
             self.ledger._connection.execute("DROP TABLE orchestration_checkpoints")
             for column in (
                 "deadline_observed",
@@ -566,7 +567,7 @@ class LearningStoreTests(unittest.TestCase):
             empty_ingestion_snapshot(registered=False)["registered_project_state"],
         )
 
-    def test_goal_statistics_migration_uses_schema_six(self) -> None:
+    def test_goal_statistics_and_launch_migration_use_schema_seven(self) -> None:
         version = self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         tables = {
             str(row[0])
@@ -574,7 +575,7 @@ class LearningStoreTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        self.assertEqual(6, version)
+        self.assertEqual(7, version)
         self.assertIn("host_run_bindings", tables)
         self.assertIn("hook_ingestion", tables)
         self.assertIn("orchestrations", tables)
@@ -614,7 +615,7 @@ class LearningStoreTests(unittest.TestCase):
         connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         snapshot = self.ledger.ingestion_snapshot(self.project_a_id, now_ms=30)
-        self.assertEqual(6, self.ledger._connection.execute(
+        self.assertEqual(7, self.ledger._connection.execute(
             "PRAGMA user_version"
         ).fetchone()[0])
         self.assertEqual(1, snapshot["accepted_hook_event_count"])
@@ -2595,7 +2596,7 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(set(body["tables"]), {
             "sessions", "run_provenance", "records", "record_links",
             "stored_files", "collector_health", "consumed_grants",
-            "owner_attestations", "repair_receipts", "host_run_bindings",
+            "owner_attestations", "repair_receipts", "host_run_bindings", "launch_claims",
             "hook_ingestion", "orchestrations", "orchestration_checkpoints",
             "operational_qa", "operational_check_receipts", "tombstones",
         })
@@ -2731,7 +2732,7 @@ class LearningStoreTests(unittest.TestCase):
         attestations = self.ledger._connection.execute(
             "SELECT COUNT(*) FROM owner_attestations"
         ).fetchone()[0]
-        self.assertEqual(6, version)
+        self.assertEqual(7, version)
         self.assertIn("owner_attestations", tables)
         self.assertIn("repair_receipts", tables)
         self.assertEqual(0, attestations)
@@ -2790,7 +2791,7 @@ class LearningStoreTests(unittest.TestCase):
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
 
         self.assertEqual(
-            6, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+            7, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         )
         checkpoint = self.ledger._connection.execute(
             "SELECT sequence,status,observed_at_ms FROM orchestration_checkpoints "
@@ -2805,6 +2806,11 @@ class LearningStoreTests(unittest.TestCase):
             (self.project_a_id,),
         ).fetchone()
         self.assertEqual(("pending", 11, None, 11, 0), tuple(binding))
+        marker = self.ledger._connection.execute(
+            "SELECT kind,bridge_run_id FROM launch_claims WHERE project_id=? AND run_id='legacy-run'",
+            (self.project_a_id,),
+        ).fetchone()
+        self.assertEqual(("legacy_fenced", None), tuple(marker))
 
     def test_schema_five_rejects_stale_or_nonmatching_backup(self) -> None:
         self._downgrade_fixture_to_schema_five()
@@ -2826,6 +2832,33 @@ class LearningStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(LedgerError, "registered verified schema 5"):
             LearningLedger(self.state, client_capabilities=self.clients)
         self._leave_ledger_closed()
+
+    def test_schema_five_launch_migration_interruption_rolls_back_the_whole_upgrade(self) -> None:
+        class FixtureStop(BaseException):
+            pass
+
+        self._downgrade_fixture_to_schema_five()
+        self._register_schema_five_backup(project_id=self.project_a_id)
+        self._register_schema_five_backup(project_id=self.project_b_id, file_id="schema5_backup_b")
+        self.ledger.close()
+        initialize = LearningLedger._initialize_launch_claims_locked
+
+        def interrupted(ledger, **arguments):
+            initialize(ledger, **arguments)
+            raise FixtureStop()
+
+        with mock.patch.object(LearningLedger, "_initialize_launch_claims_locked", autospec=True, side_effect=interrupted), \
+                self.assertRaises(FixtureStop):
+            LearningLedger(self.state, client_capabilities=self.clients)
+        connection = sqlite3.connect(self.state.database)
+        try:
+            self.assertEqual(5, connection.execute("PRAGMA user_version").fetchone()[0])
+            self.assertIsNone(connection.execute("SELECT 1 FROM sqlite_master WHERE name='launch_claims'").fetchone())
+            self.assertNotIn("binding_state", {row[1] for row in connection.execute("PRAGMA table_info(host_run_bindings)")})
+        finally:
+            connection.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.assertEqual(7, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def test_schema_five_migration_rolls_back_an_injected_schema_failure(self) -> None:
         self._downgrade_fixture_to_schema_five()
@@ -3345,9 +3378,10 @@ class LearningStoreTests(unittest.TestCase):
     def test_collector_rejects_forged_binding_and_unavailability_is_bounded(self) -> None:
         server = CollectorServer(self.ledger)
         server.start()
+        self.addCleanup(server.stop)
         client = CollectorClient(self.state.socket, timeout=0.2)
         health = client.health(self.project_a)
-        self.assertEqual(6, health["schema_version"])
+        self.assertEqual(7, health["schema_version"])
         self.assertEqual(PACKAGE_VERSION, health["runtime_version"])
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, health["runtime_digest"])
         self.assertIsInstance(health["started_at_ms"], int)
@@ -3395,7 +3429,7 @@ class LearningStoreTests(unittest.TestCase):
             "_request",
             return_value={
                 "ok": True,
-                "schema_version": 6,
+                "schema_version": 7,
                 "runtime_version": PACKAGE_VERSION,
                 "runtime_digest": "0" * 64,
             },
