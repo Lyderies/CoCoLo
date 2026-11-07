@@ -237,6 +237,37 @@ proving an actual root, root/child attribution, auth readiness or enrollment for
 the Claude-primary-to-Codex path. No Claude activity/cancellation implementation
 or production profile is selected by this auth-only prerequisite work.
 
+## Candidate process seal after owned startup
+
+The [code-object equality control](native-caller-enrollment-design.md#code-object-equality-does-not-identify-a-process-instance)
+rules out `CFEqual(SecCodeRef, SecCodeRef)` as an instance binding. A separate
+bounded native fixture tests a possible controller phase transition: create an
+owned peer channel first, then prevent further process creation before requesting
+any bootstrap authority.
+
+The fixture applies `(allow default)` plus denials for `process-fork` and
+`process-exec`. Its existing pipe channel works before sealing, after sealing
+and after the negative controls. Actual `fork`, same-binary `posix_spawn` and
+direct self-exec each return `EPERM`. Its kernel self audit token stays unchanged,
+and its pre-existing peer exits normally and is reaped without forced cleanup.
+The single bounded run starts no real Codex/Claude client, root or model work.
+
+This isolates process-creation denial. The allow-default fixture is not a
+production controller profile: it proves no filesystem, network, library or
+injection restriction, endpoint custody, native child attribution or complete
+exec-variant coverage. It uses deprecated `sandbox_init`; that is not a selected
+support or distribution contract. The earlier client startup and signature-worker
+guards remain unchanged, and their stopped attempts are not reopened.
+
+An implementation candidate could investigate sealing the fixed controller after
+guarded client/root creation but before obtaining a challenge or owner signature.
+The native client would still need its own reviewed restrictions before startup;
+sealing its parent later would not establish those restrictions. The exact seal,
+failure path, code/environment integrity, retained descriptors and independent
+native-instance proof must be implemented and reviewed together. A client-supplied
+`sealed` flag or this fixture's successful control cannot authorize enrollment.
+No bootstrap phase order or production authority is adopted by this candidate.
+
 ## Bounded experiment before a selection
 
 The [public XPC code-requirement experiment](native-caller-enrollment-design.md#public-xpc-code-requirements)

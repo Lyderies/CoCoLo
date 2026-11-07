@@ -190,6 +190,35 @@ current default-deny adapters with a code-signature-only authorizer or expose a
 generic XPC forwarding operation. The root/bootstrap proof and the operation
 revocation rules below remain required.
 
+## Code-object equality does not identify a process instance
+
+Do not use `CFEqual` on two `SecCodeRef` values to bind a controller grant to one
+native process. Apple's published
+[`SecCode::equal` implementation](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_codesigning/lib/Code.cpp)
+compares code-directory hashes, with a static-code fallback. That mutable source
+reference is implementation evidence as retrieved, not an attestation of the
+installed Security framework.
+
+A separate bounded native control on this host created three directly owned,
+live children: two running identical ad hoc signed code and one running different
+code. Each code reference came from its owned process's kernel audit token using
+`kSecGuestAttributeAudit`. Both same-code processes had distinct audit tokens but
+their code objects compared equal. The different-code comparison was unequal.
+All queries and no-network validity checks succeeded; all three children were
+waited with zero exit status and no forced cleanup. No raw process identities or
+audit tokens were retained in the evidence. This control used no XPC service or model request.
+
+Code requirements can constrain executable identity. Controller-instance,
+generation, actual root, service epoch and descriptor custody still need their
+own proof. A signed statement or code-object equality must not fill those gaps.
+
+The current public SDK also declares
+[`xpc_peer_requirement_match_received_message`](https://developer.apple.com/documentation/xpc/xpc_peer_requirement_match_received_message)
+from macOS 26. It checks a code requirement against a received message. No runtime
+experiment here exercises that API, and neither its declaration nor a successful
+code-requirement match would distinguish same-code instances. No minimum OS,
+transport or authorizer is selected by this observation.
+
 ## Descriptor custody is part of authentication
 
 Do not infer the author of queued stream bytes solely from a later peer-identity
