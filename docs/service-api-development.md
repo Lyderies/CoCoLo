@@ -964,11 +964,20 @@ and a process exit cannot replace those requirements.
 
 ### Metadata-only admission calculations
 
-`admission_metadata` contains the unchanged legacy admission, launch, headroom
+`admission_metadata` contains the legacy admission, launch, headroom
 and usage-window calculations, separately from provider observation/process code.
 The existing `providers` entry points re-export these functions and constants.
 Synthetic legacy vectors preserve decision order, restrictive and future evidence,
 shared run caps, credit opt-in behavior, Claude bootstrap and project-local citations.
+
+Reset-less restrictive observations remain live after a backward clock step until
+the existing one-day age bound expires. An empty Claude unified-window map retains
+an explicit rejection or warning under that same fallback bound. Known reset
+times still expire normally; an elapsed explicit window does not restart the
+fallback period. These are conservative restriction corrections, separately
+covered from the unchanged synthetic legacy examples.
+Exhausted observations also continue to protect the existing project-deletion
+check until their fallback period expires.
 
 These functions calculate unsaved data over ordinary trusted Python values. They
 verify no signatures, authenticate no caller and grant no launch permission. They

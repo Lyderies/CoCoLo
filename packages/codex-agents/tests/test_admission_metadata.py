@@ -11,6 +11,7 @@ import unittest
 
 from tests.support import ORCHESTRATION_ROOT
 from codex_agents import admission_metadata, providers
+from codex_agents.learning_contracts import validate_provider_headroom
 
 
 FIXTURE = Path(__file__).resolve().parent / 'fixtures/learning/admission-metadata-vectors.json'
@@ -27,6 +28,64 @@ def calculate(module, case):
 
 
 class AdmissionMetadataTests(unittest.TestCase):
+    def test_future_resetless_restrictions_survive_clock_rollback_for_admission_and_launch(self):
+        cases = {case['name']: case for case in json.loads(FIXTURE.read_text())['cases']}
+        for provider in ('codex', 'claude'):
+            for entrypoint, suffix in (('evaluate_admission', 'admitted'), ('evaluate_launch', 'launch')):
+                for mode in ('future-resetless', 'expired-resetless', 'future-known-reset'):
+                    with self.subTest(provider=provider, entrypoint=entrypoint, mode=mode):
+                        case = json.loads(json.dumps(cases[provider + '-' + suffix]))
+                        arguments = case['arguments']
+                        now = arguments['now_ms']
+                        observed = now - admission_metadata.EVIDENCE_HORIZON_MS - 1 if mode == 'expired-resetless' else now + 1
+                        record = validate_provider_headroom(providers._record('provider_headroom', {
+                            'provider': provider, 'account_fingerprint': 'a' * 64, 'observed_at_ms': observed,
+                            'status': 'rejected' if provider == 'claude' else None, 'run_id': None, 'phase': None,
+                            'windows': [{'scope': 'five_hour' if provider == 'claude' else None,
+                                         'window_minutes': 300, 'used_percent': 95 if provider == 'codex' else None,
+                                         'resets_at': now + 10000 if mode == 'future-known-reset' else None}],
+                        }))
+                        arguments['headroom'].append([record, '9' * 64])
+                        actual = calculate(admission_metadata, case)
+                        reason = actual['reason_code'] if entrypoint == 'evaluate_admission' else actual
+                        expected = ('admitted' if entrypoint == 'evaluate_admission' else None) if mode == 'expired-resetless' else 'provider_exhausted'
+                        self.assertEqual(expected, reason)
+
+    def test_empty_unified_windows_keep_rejection_or_warning_until_fallback_expiry(self):
+        cases = {case['name']: case for case in json.loads(FIXTURE.read_text())['cases']}
+        horizon = admission_metadata.EVIDENCE_HORIZON_MS
+        for status in ('rejected', 'allowed_warning'):
+            for delta in (0, 1, -horizon, -horizon - 1):
+                for entrypoint, suffix in (('evaluate_admission', 'admitted'), ('evaluate_launch', 'launch')):
+                    case = json.loads(json.dumps(cases['claude-' + suffix]))
+                    arguments = case['arguments']
+                    now = arguments['now_ms']
+                    headroom, billing = providers.claude_rate_limit_records({
+                        'status': status, 'unifiedWindows': {}, 'isUsingOverage': False,
+                        'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled',
+                    }, account_fingerprint='a' * 64, observed_at_ms=now + delta)
+                    validate_provider_headroom(headroom)
+                    self.assertEqual([], headroom['windows'])
+                    arguments['headroom'].append([headroom, '9' * 64])
+                    arguments['billing'].append([billing, '8' * 64])
+                    active = delta >= -horizon
+                    rating = ('exhausted' if status == 'rejected' else 'constrained') if active else 'ample'
+                    with self.subTest(status=status, delta=delta, entrypoint=entrypoint, check='rating'):
+                        self.assertEqual(rating, admission_metadata.headroom_state(
+                            'claude', 'a' * 64, arguments['headroom'], arguments['billing'], now)[0])
+                    with self.subTest(status=status, delta=delta, entrypoint=entrypoint, check='decision'):
+                        actual = calculate(admission_metadata, case)
+                        reason = actual['reason_code'] if entrypoint == 'evaluate_admission' else actual
+                        expected = 'provider_exhausted' if active and status == 'rejected' else ('admitted' if entrypoint == 'evaluate_admission' else None)
+                        self.assertEqual(expected, reason)
+        # An explicit reset that has elapsed must not fall back to a day-long
+        # restriction merely because the filtered live-window list is empty.
+        record = providers.claude_rate_limit_records({
+            'status': 'rejected', 'rateLimitType': 'five_hour', 'resetsAt': 9999999,
+            'isUsingOverage': False, 'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled',
+        }, account_fingerprint='a' * 64, observed_at_ms=10_000_000_001)[0]
+        self.assertIsNone(admission_metadata._headroom_state('claude', record, 10_000_000_000))
+
     def test_legacy_calculations_and_import_entrypoints_are_preserved(self):
         for name in ('evaluate_admission', 'evaluate_launch', 'window_start_ms'):
             self.assertIs(getattr(admission_metadata, name), getattr(providers, name))

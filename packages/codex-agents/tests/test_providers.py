@@ -2690,6 +2690,38 @@ os.kill(os.getpid(), signal.SIGKILL)
         self.clean_claude_billing(day_later + 3)
         self.assertEqual("pass", self.admit("claude", now_ms=day_later + 4)["decision"])
 
+    def test_future_resetless_exhaustion_cannot_be_erased_by_project_deletion(self) -> None:
+        for index, (provider, empty) in enumerate((('codex', False), ('claude', False), ('claude', True))):
+            with self.subTest(provider=provider, empty_unified_windows=empty):
+                root = Path(self.temporary.name) / f'future-restriction-{index}'
+                root.mkdir()
+                held = self.ledger.register_project(root, now_ms=1)
+                observed = self.clock + 1
+                if empty:
+                    headroom = providers.claude_rate_limit_records({
+                        'status': 'rejected', 'unifiedWindows': {}, 'isUsingOverage': False,
+                        'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled',
+                    }, account_fingerprint='a' * 64, observed_at_ms=observed)[0]
+                else:
+                    headroom = providers._record('provider_headroom', {
+                        'provider': provider, 'account_fingerprint': 'a' * 64, 'observed_at_ms': observed,
+                        'status': 'rejected' if provider == 'claude' else None,
+                        'run_id': None, 'phase': None,
+                        'windows': [{'scope': 'five_hour' if provider == 'claude' else None,
+                                     'window_minutes': 300, 'used_percent': 95 if provider == 'codex' else None,
+                                     'resets_at': None}],
+                    })
+                # This project has no admitted run, probe or paid billing record
+                # that could mask the headroom guard with a different denial.
+                self.ledger._store_provider_observations(held, [headroom], timestamp=observed)
+                with mock.patch.object(self.ledger, '_clock_ms', return_value=self.clock):
+                    with self.assertRaisesRegex(LedgerError, 'project_holds_account_restrictions'):
+                        self.ledger.delete_project(held, now_ms=observed + 30 * 24 * 3600000)
+                with self.ledger.repository(held) as repository:
+                    self.assertEqual(1, len(repository.records('provider_headroom')))
+                with mock.patch.object(self.ledger, '_clock_ms', return_value=observed + 24 * 3600000 + 1):
+                    self.assertTrue(self.ledger.delete_project(held).startswith('del_'))
+
     def test_a_project_holding_account_restrictions_cannot_be_deleted(self) -> None:
         with self.other_project():
             run = self.open_run("claude")

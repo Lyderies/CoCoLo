@@ -56,7 +56,9 @@ def _window_live(window: dict[str, Any], observed_at_ms: int, now_ms: int) -> bo
     # A window counts until it resets; one with no reset time counts for a day.
     if window["resets_at"] is not None:
         return window["resets_at"] > now_ms
-    return 0 <= now_ms - observed_at_ms <= EVIDENCE_HORIZON_MS
+    # Future observations still restrict after a clock rollback, just like
+    # future paid-usage evidence; a favourable older reading cannot clear them.
+    return now_ms - observed_at_ms <= EVIDENCE_HORIZON_MS
 
 
 def _headroom_state(provider: str, record: dict[str, Any], now_ms: int) -> str | None:
@@ -67,6 +69,15 @@ def _headroom_state(provider: str, record: dict[str, Any], now_ms: int) -> str |
         if _window_live(window, record["observed_at_ms"], now_ms)
     ]
     if not windows:
+        # A producer may report only an aggregate Claude status, including an
+        # empty unifiedWindows map. With no reset information, use the same
+        # fallback age bound. Explicitly expired windows never use this path.
+        if (provider == "claude" and not record["windows"]
+                and now_ms - record["observed_at_ms"] <= EVIDENCE_HORIZON_MS):
+            if record["status"] == "rejected":
+                return "exhausted"
+            if record["status"] == "allowed_warning":
+                return "constrained"
         return None
     used = [window["used_percent"] for window in windows if window["used_percent"] is not None]
     if provider == "codex":
