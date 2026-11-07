@@ -915,3 +915,24 @@ This bounds data and metadata counts rather than exact Python heap use.
 The decoded value carries a correlation nonce and fields. Owner origins remain
 in the parent; process/descriptor custody and fresh admission require separate
 proof. This module performs no I/O and activates no worker or service operation.
+
+### Private payload preparation response
+
+`signature_payloads` consumes that input frame and calculates the existing owner
+record signing bytes using metadata contracts alone. It preserves row positions
+and the legacy omission of malformed, unsigned or nonowner rows. A missing or
+incompatible current signer produces no payloads. No signature is verified.
+
+The closed binary response binds its nonce, SHA256 of the exact input bytes and
+row count. Entries have strictly increasing original row indices and bounded
+canonical payloads scoped to the same project and owner-record purpose. Explicit
+limits bound the entire response before decoding and each declared length before
+copying. Its maximum is 64 bytes plus 262 bytes per configured input row, with a
+256-byte payload ceiling. These are format limits; input/output copies, decoded
+records and process heap still require separate reservation and accounting.
+
+The returned batch is unverified data. A nonce, input digest, syntactically valid
+payload or matching row position authenticates neither the worker nor its
+calculation. Actual fixed process and descriptor custody, public signature
+verification, durable claims/recovery and fresh bounded atomic account checks
+remain required. No executor, API operation or admission path is activated.
