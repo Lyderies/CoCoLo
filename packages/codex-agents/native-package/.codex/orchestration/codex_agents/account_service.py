@@ -136,6 +136,8 @@ class AccountOwnerViews:
         precede the SQL scope; no whole-operation OS latency bound is claimed.
         Every candidate history row is charged before provider/account filtering.
         Overflow refuses the capture rather than dropping restrictive evidence.
+        Ownership/project scope failures retain AccountError; capture failures
+        use AdmissionCaptureError. Neither error grants a fallback admission.
         """
         self._guard()
         if (not matches(project_id, _PROJECT) or type(provider) is not str or provider not in {"codex", "claude"}
@@ -242,13 +244,6 @@ class AccountOwnerViews:
             size += 16 + line_bytes + len(reason)
         if size > limits.max_bytes:
             raise AdmissionCaptureError("admission_capture_limit")
-        incompatible = False
-        try:
-            owner = self._ledger._owner_generation_locked()
-        except LedgerError:
-            incompatible = True
-        if incompatible:
-            raise AdmissionCaptureError("admission_capture_incompatible")
         headers = connection.execute(
             "SELECT r.rowid,typeof(r.project_id),length(CAST(r.project_id AS BLOB)),"
             "typeof(r.record_id),length(CAST(r.record_id AS BLOB)),"
@@ -287,6 +282,15 @@ class AccountOwnerViews:
                      + source_bytes + (signature_bytes or 0))
             if size > limits.max_bytes:
                 raise AdmissionCaptureError("admission_capture_limit")
+        # Complete every row/aggregate check before copying even the bounded
+        # owner-history value. The current public signer was observed separately.
+        incompatible = False
+        try:
+            owner = self._ledger._owner_generation_locked()
+        except LedgerError:
+            incompatible = True
+        if incompatible:
+            raise AdmissionCaptureError("admission_capture_incompatible")
         raw = connection.execute(
             "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,r.content,"
             "r.content_digest,r.source,r.observed_at_ms,r.ingested_at_ms,a.signature" + _ADMISSION_INPUT_JOIN,

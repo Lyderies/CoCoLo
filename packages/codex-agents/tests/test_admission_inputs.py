@@ -203,6 +203,21 @@ class AdmissionInputOwnerTests(unittest.TestCase):
         self.assertTrue(all(type(value) is not str or len(value) <= 7 for header in headers for value in header))
         self.assertIsNotNone(self.capture())
 
+    def test_complete_row_and_byte_preflight_precedes_owner_history_values(self):
+        self.observe_codex(self.projects[1])
+        baseline = self.capture()
+        rows = len(baseline.rows)
+        for mode, limits in (
+            ("bytes", AdmissionCaptureLimits(rows, baseline.retained_bytes - 1)),
+            ("rows", AdmissionCaptureLimits(rows - 1, baseline.retained_bytes)),
+        ):
+            with self.subTest(mode=mode), mock.patch.object(
+                self.ledger, "_owner_generation_locked", side_effect=AssertionError("owner value before full preflight")
+            ):
+                self.denied("admission_capture_limit", lambda: self.capture(limits=limits))
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertIsNotNone(self.capture())
+
     def test_digest_corruption_returns_fixed_error_and_releases_the_read_snapshot(self):
         self.ledger._connection.execute("UPDATE records SET content_digest=? WHERE record_id=?",
                                         ("0" * 64, self.record["record_id"]))
@@ -493,3 +508,47 @@ class AdmissionInputOwnerTests(unittest.TestCase):
         for view in views:
             with self.assertRaises(SQLReadError):
                 view.fetchone()
+
+    def test_missing_and_inactive_projects_keep_the_account_error_contract(self):
+        missing = "prj_" + "0" * 32
+        self.assertNotIn(missing, self.projects)
+        connection = self.ledger._connection
+        for project in (missing, self.projects[0]):
+            with self.subTest(project=project):
+                if project == self.projects[0]:
+                    connection.execute("UPDATE projects SET status='deleted' WHERE project_id=?", (project,))
+                before = connection.total_changes
+                with self.assertRaises(AccountError) as caught:
+                    self.capture(project=project)
+                self.assertEqual("account_project_not_found", caught.exception.reason_code)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                self.assertEqual(before, connection.total_changes)
+                self.assertFalse(connection.in_transaction)
+                self.assertIsNone(connection._sql_scope)
+                self.assertFalse(connection._sql_unusable)
+
+    def test_malformed_signature_values_are_refused_before_any_owner_or_record_value(self):
+        connection = self.ledger._connection
+        original = connection.execute
+        saved = connection.execute("SELECT signature FROM owner_attestations WHERE project_id=?",
+                                    (self.projects[0],)).fetchone()[0]
+
+        def execute(sql, parameters=()):
+            if sql.startswith(RAW_PREFIX):
+                raise AssertionError("malformed signature fetched")
+            return original(sql, parameters)
+
+        for signature in ("CANARY" * 20_000, b"CANARY" * 3000):
+            with self.subTest(kind=type(signature).__name__):
+                connection.execute("UPDATE owner_attestations SET signature=? WHERE project_id=?",
+                                   (signature, self.projects[0]))
+                try:
+                    with mock.patch.object(connection, "execute", side_effect=execute), mock.patch.object(
+                        self.ledger, "_owner_generation_locked", side_effect=AssertionError("owner before signature preflight")
+                    ):
+                        self.denied("admission_capture_incompatible", self.capture)
+                finally:
+                    connection.execute("UPDATE owner_attestations SET signature=? WHERE project_id=?",
+                                       (saved, self.projects[0]))
+        self.assertEqual(saved, self.capture().rows[0][-1])

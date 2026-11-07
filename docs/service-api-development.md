@@ -970,6 +970,9 @@ SQL work limits and a copied `AdmissionInputPolicy` are trusted configuration;
 none is decoded from a service request or supplies installed-policy authority.
 `AdmissionInputSnapshot` adds no normal account operation, listener, helper mode
 or launch permission. The existing normal admission path is unchanged.
+Ownership and well-formed missing/inactive-project failures retain `AccountError`
+(`account_wrong_owner` or `account_project_not_found`). Capture validation,
+quota and storage/work failures use `AdmissionCaptureError`, without a fallback.
 
 One read transaction covers project status, owner history, record headers and
 record values. Fixed status/type/length/integer metadata is read before owner
