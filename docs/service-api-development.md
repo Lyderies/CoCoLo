@@ -962,6 +962,42 @@ nonrenewable deadlines, cancellation, conservative orphan recovery and fresh
 bounded atomic account checks remain integration requirements. The ready marker
 and a process exit cannot replace those requirements.
 
+### Owner-local admission evidence capture
+
+`AccountOwnerViews.capture_admission_inputs` captures unverified raw evidence
+from its already opened persistence owner. Explicit `AdmissionCaptureLimits`,
+SQL work limits and a copied `AdmissionInputPolicy` are trusted configuration;
+none is decoded from a service request or supplies installed-policy authority.
+`AdmissionInputSnapshot` adds no normal account operation, listener, helper mode
+or launch permission. The existing normal admission path is unchanged.
+
+One read transaction covers project status, owner history, record headers and
+record values. Fixed status/type/length/integer metadata is read before owner
+history and record values. Candidate rows and copied field bytes are charged
+before fetching their raw content or signatures. Overflow refuses the capture;
+it never silently drops restrictive evidence. Local identity and attestation
+rows, global provider billing/headroom, and global run/probe admission history
+are retained, including future observations and other providers/accounts.
+Raw result bodies and unrelated event history are excluded. Project/source,
+sequence, observation/ingestion times, exact content/digest and signature bytes
+remain available for later decoding and family-specific ordering and citations.
+
+The owner thread starts and ends its own read snapshot; an existing transaction
+or foreign progress handler is refused. Settings and cursors are restored by the
+cooperative SQL scope. Ambiguous transaction cleanup poisons/closes the owner
+connection and returns no capture. A later database commit is visible to a new
+capture, so a coherent earlier snapshot is not a fresh admission decision.
+
+Current public-signer and filesystem observations precede the SQL scope. Their
+existing size checks do not make file replacement atomic with database reads.
+The row/field quotas and cooperative VM/deadline checks bound neither exact
+Python/SQLite heap nor OS latency, global queued capacity or an installed service
+response time. Conservatively charging every candidate history row can refuse
+large histories; bounded projections/compaction and capacity reservation remain
+integration work. Closed bounded decoding, owner-signature verification, exact
+runtime/policy/generation freshness, atomic cap/bootstrap/claim commit checks,
+durable recovery, native authority and normal-client migration remain required.
+
 ### Metadata-only admission calculations
 
 `admission_metadata` contains the legacy admission, launch, headroom

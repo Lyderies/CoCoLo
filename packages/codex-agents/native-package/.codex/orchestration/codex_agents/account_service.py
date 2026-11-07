@@ -9,6 +9,8 @@ normal-client migration is enabled here.
 from __future__ import annotations
 
 import os
+import hashlib
+import sqlite3
 import threading
 from dataclasses import dataclass
 from typing import Callable
@@ -18,15 +20,33 @@ from .account_api import (
     AccountError, AccountRequest, _DIGEST, _PROJECT, account_request_digest,
     decode_account_request, decode_account_response, integer, matches,
 )
+from .admission_inputs import (
+    ADMISSION_CAPTURE_RECORD_TYPES, AdmissionCaptureError, AdmissionCaptureLimits,
+    AdmissionInputPolicy, AdmissionInputSnapshot, admission_input_size,
+)
 from .learning_contracts import MAX_RECORD_BYTES, canonical_json
 from .learning_store import (
-    OWNER_SIGNER_LINE, OWNER_SIGNERS_MAX_BYTES, LearningLedger, LedgerError, OwnerSignerNotConfigured, StateError,
+    COLLECTOR_RUNTIME_DIGEST, OWNER_SIGNER_LINE, OWNER_SIGNERS_MAX_BYTES,
+    LearningLedger, LedgerError, OwnerSignerNotConfigured, StateError,
     _owner_key_identity, _signer_fingerprint,
 )
 from .owner_key_contracts import owner_public_key_from_line
 from .sql_read_budget import SQLReadError, SQLReadLimits
 from .signature_inputs import (
     SignatureCaptureError, SignatureCaptureLimits, SignatureInputSnapshot, signature_input_size,
+)
+
+# Fixed owner query: do not parse JSON or select variable record values during
+# preliminary quota checks. Foreign-account/provider candidates are charged too.
+_ADMISSION_INPUT_SCOPE = (
+    "((r.project_id=? AND r.record_type IN ('provider_identity','billing_attestation')) "
+    "OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom')) "
+    "OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission')))"
+)
+_ADMISSION_INPUT_JOIN = (
+    " FROM records r LEFT JOIN owner_attestations a "
+    "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE "
+    + _ADMISSION_INPUT_SCOPE + " ORDER BY r.rowid LIMIT ?"
 )
 
 
@@ -66,6 +86,7 @@ class AccountOwnerViews:
         self._ledger = ledger
         self._origin = getattr(ledger, "_connection_origin", None)
         self._guard()
+        self._admission_capture_origin = object()
 
     def _guard(self) -> None:
         origin = self._origin
@@ -103,6 +124,202 @@ class AccountOwnerViews:
 
     def owner_public_key(self, project_id: str) -> dict:
         return self._owner_key_view(project_id, include_public_key=True)
+
+    def capture_admission_inputs(
+        self, project_id: str, provider: str, policy: AdmissionInputPolicy,
+        limits: AdmissionCaptureLimits, work_limits: SQLReadLimits,
+    ) -> AdmissionInputSnapshot:
+        """Capture raw evidence in one owner-local read snapshot, never admit.
+
+        Policy is explicit trusted owner configuration, not an RPC parameter or
+        proof of the installed policy. Public-signer and filesystem observations
+        precede the SQL scope; no whole-operation OS latency bound is claimed.
+        Every candidate history row is charged before provider/account filtering.
+        Overflow refuses the capture rather than dropping restrictive evidence.
+        """
+        self._guard()
+        if (not matches(project_id, _PROJECT) or type(provider) is not str or provider not in {"codex", "claude"}
+                or type(policy) is not AdmissionInputPolicy or type(limits) is not AdmissionCaptureLimits
+                or type(work_limits) is not SQLReadLimits):
+            raise AdmissionCaptureError("admission_capture_invalid_request")
+        policy.__post_init__()
+        limits.__post_init__()
+        policy = AdmissionInputPolicy(
+            policy.minimum_version, policy.maximum_exclusive_version, policy.max_admissions_per_window,
+        )
+        limits = AdmissionCaptureLimits(limits.max_rows, limits.max_bytes)
+        reason = "admission_capture_unavailable"
+        try:
+            work_limits.__post_init__()
+            with self._ledger._lock:
+                connection = self._ledger._connection
+                connection._read_owner()
+                unavailable = connection._sql_scope is not None or connection._sql_foreign_progress
+                try:
+                    unavailable = unavailable or connection.in_transaction
+                except sqlite3.Error:
+                    unavailable = True
+                if unavailable:
+                    raise AdmissionCaptureError("admission_capture_unavailable")
+                filesystem_failed = False
+                try:
+                    self._ledger.state.harden_database_files()
+                    signer = self._ledger._current_signer_bytes()
+                except (StateError, OSError):
+                    filesystem_failed = True
+                if filesystem_failed:
+                    raise AdmissionCaptureError("admission_capture_unavailable")
+                return self._ledger._connection.read_call(
+                    work_limits, lambda: self._capture_admission_transaction(project_id, provider, policy, limits, signer),
+                )
+        except (AccountError, AdmissionCaptureError):
+            if getattr(self._ledger._connection, "_sql_unusable", False) is not True:
+                raise
+        except SQLReadError as error:
+            if error.reason_code == "sql_read_invalid_limits":
+                reason = "admission_capture_invalid_request"
+            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit", "sql_read_busy"}:
+                reason = "admission_capture_work_limit"
+        raise AdmissionCaptureError(reason)
+
+    def _capture_admission_transaction(self, project_id, provider, policy, limits, signer):
+        connection = self._ledger._connection
+        failure = traceback = result = None
+        began = False
+        try:
+            connection.execute("BEGIN")
+            began = True
+            result = self._capture_admission_rows_locked(project_id, provider, policy, limits, signer)
+        except BaseException as error:
+            failure, traceback = error, error.__traceback__
+        if began:
+            try:
+                # Fixed native rollback ends this read snapshot even if the SQL
+                # scope's work/deadline latch refuses another wrapped statement.
+                connection.rollback()
+            except BaseException as error:
+                connection._sql_unusable = True
+                if failure is None or not isinstance(error, Exception):
+                    failure, traceback = error, error.__traceback__
+                try:
+                    sqlite3.Connection.close(connection)
+                except BaseException as closing:
+                    if failure is None or not isinstance(closing, Exception):
+                        failure, traceback = closing, closing.__traceback__
+        if failure is not None:
+            raise failure.with_traceback(traceback)
+        return result
+
+    def _capture_admission_rows_locked(self, project_id, provider, policy, limits, signer):
+        connection = self._ledger._connection
+        project = connection.execute(
+            "SELECT CASE status WHEN 'active' THEN 1 ELSE 0 END,"
+            "CASE WHEN typeof(created_at_ms)='integer' THEN created_at_ms END "
+            "FROM projects WHERE project_id=?", (project_id,),
+        ).fetchone()
+        if project is None or project[0] != 1:
+            raise AccountError("account_project_not_found")
+        if type(project[1]) is not int or project[1] < 0:
+            raise AdmissionCaptureError("admission_capture_incompatible")
+        created_at_ms = project[1]
+        timestamp = self._ledger._clock_ms()
+        if type(timestamp) is not int or not 0 <= timestamp < 2 ** 63:
+            raise AdmissionCaptureError("admission_capture_unavailable")
+        owner_header = connection.execute(
+            "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END,"
+            "typeof(signer_line),length(signer_line),"
+            "CASE reason WHEN 'enrolled' THEN 'enrolled' WHEN 'replaced' THEN 'replaced' END,"
+            "CASE WHEN typeof(recorded_at_ms)='integer' THEN recorded_at_ms END "
+            "FROM owner_key_history ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        size = admission_input_size(project_id, provider, COLLECTOR_RUNTIME_DIGEST, policy, None, signer, ())
+        if owner_header is not None:
+            sequence, line_type, line_bytes, reason, recorded = owner_header
+            if (type(sequence) is not int or sequence < 1 or line_type != "blob"
+                    or type(line_bytes) is not int or not 0 < line_bytes <= OWNER_SIGNERS_MAX_BYTES
+                    or reason not in {"enrolled", "replaced"} or type(recorded) is not int or recorded < 0):
+                raise AdmissionCaptureError("admission_capture_incompatible")
+            size += 16 + line_bytes + len(reason)
+        if size > limits.max_bytes:
+            raise AdmissionCaptureError("admission_capture_limit")
+        incompatible = False
+        try:
+            owner = self._ledger._owner_generation_locked()
+        except LedgerError:
+            incompatible = True
+        if incompatible:
+            raise AdmissionCaptureError("admission_capture_incompatible")
+        headers = connection.execute(
+            "SELECT r.rowid,typeof(r.project_id),length(CAST(r.project_id AS BLOB)),"
+            "typeof(r.record_id),length(CAST(r.record_id AS BLOB)),"
+            "typeof(r.record_type),length(CAST(r.record_type AS BLOB)),"
+            "typeof(r.content),length(r.content),"
+            "typeof(r.content_digest),length(CAST(r.content_digest AS BLOB)),"
+            "typeof(r.source),length(CAST(r.source AS BLOB)),"
+            "CASE WHEN typeof(r.source_sequence)='integer' THEN r.source_sequence END,"
+            "CASE WHEN typeof(r.observed_at_ms)='integer' THEN r.observed_at_ms END,"
+            "CASE WHEN typeof(r.ingested_at_ms)='integer' THEN r.ingested_at_ms END,"
+            "typeof(a.signature),length(a.signature)" + _ADMISSION_INPUT_JOIN,
+            (project_id, limits.max_rows + 1),
+        ).fetchall()
+        if len(headers) > limits.max_rows:
+            raise AdmissionCaptureError("admission_capture_limit")
+        for header in headers:
+            connection._before_statement()
+            rowid, project_type, project_bytes, identifier_type, identifier_bytes, kind_type, kind_bytes, \
+                content_type, content_bytes, digest_type, digest_bytes, source_type, source_bytes, \
+                sequence, observed, ingested, signature_type, signature_bytes = header
+            if (any(type(value) is not int or value < 0 for value in
+                    (rowid, project_bytes, identifier_bytes, kind_bytes, content_bytes, digest_bytes,
+                     source_bytes, sequence, observed, ingested))
+                    or rowid < 1 or sequence < 1 or project_type != "text" or project_bytes != 36
+                    or identifier_type != "text" or not 0 < identifier_bytes <= 640
+                    or kind_type != "text" or not 0 < kind_bytes <= 24
+                    or content_type != "blob" or not 0 < content_bytes <= MAX_RECORD_BYTES
+                    or digest_type != "text" or digest_bytes != 64
+                    or source_type != "text" or not 0 < source_bytes <= 32
+                    or signature_type not in {"null", "blob"}
+                    or (signature_type == "null" and signature_bytes is not None)
+                    or (signature_type == "blob" and
+                        (type(signature_bytes) is not int or not 0 <= signature_bytes <= 16_384))):
+                raise AdmissionCaptureError("admission_capture_incompatible")
+            size += (32 + project_bytes + identifier_bytes + kind_bytes + content_bytes + digest_bytes
+                     + source_bytes + (signature_bytes or 0))
+            if size > limits.max_bytes:
+                raise AdmissionCaptureError("admission_capture_limit")
+        raw = connection.execute(
+            "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,r.content,"
+            "r.content_digest,r.source,r.observed_at_ms,r.ingested_at_ms,a.signature" + _ADMISSION_INPUT_JOIN,
+            (project_id, limits.max_rows + 1),
+        ).fetchall()
+        if len(raw) != len(headers):
+            raise AdmissionCaptureError("admission_capture_incompatible")
+        rows = []
+        for header, row in zip(headers, raw, strict=True):
+            connection._before_statement()
+            values = tuple(row)
+            rowid, project, identifier, sequence, kind, content, digest, source, observed, ingested, signature = values
+            if (any(type(value) is not int for value in (rowid, sequence, observed, ingested))
+                    or rowid != header[0] or not matches(project, _PROJECT) or type(identifier) is not str
+                    or type(kind) is not str or kind not in ADMISSION_CAPTURE_RECORD_TYPES
+                    or type(content) is not bytes or not matches(digest, _DIGEST) or type(source) is not str
+                    or (signature is not None and type(signature) is not bytes)
+                    or (len(project.encode("utf-8")), len(identifier.encode("utf-8")), len(kind), len(content),
+                        len(digest), len(source.encode("utf-8")), sequence, observed, ingested,
+                        None if signature is None else len(signature)) !=
+                       (header[2], header[4], header[6], header[8], header[10], header[12],
+                        header[13], header[14], header[15], header[17])
+                    or hashlib.sha256(content).hexdigest() != digest):
+                raise AdmissionCaptureError("admission_capture_incompatible")
+            rows.append(values)
+        rows = tuple(rows)
+        retained = admission_input_size(project_id, provider, COLLECTOR_RUNTIME_DIGEST, policy, owner, signer, rows)
+        if retained != size:
+            raise AdmissionCaptureError("admission_capture_incompatible")
+        return AdmissionInputSnapshot(
+            self._admission_capture_origin, project_id, provider, COLLECTOR_RUNTIME_DIGEST, timestamp,
+            created_at_ms, policy, owner, signer, rows, retained,
+        )
 
     def capture_signature_inputs(
         self, project_id: str, provider: str, limits: SignatureCaptureLimits,
