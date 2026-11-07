@@ -1776,17 +1776,19 @@ class LearningLedger:
                 os.fchmod(descriptor, 0o600)
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self._writer_descriptor = descriptor
-            except OSError as exc:
+            except BaseException as exc:
                 if descriptor is not None:
                     with contextlib.suppress(OSError):
                         os.close(descriptor)
-                raise LedgerError("another learning writer owns this state root") from exc
+                if isinstance(exc, OSError):
+                    raise LedgerError("another learning writer owns this state root") from exc
+                raise
         try:
             self._connection = self._connect()
             self._migrate()
             self._record_first_owner_key()
             self._reconcile_managed_files()
-        except Exception:
+        except BaseException:
             connection = getattr(self, "_connection", None)
             if connection is not None:
                 with contextlib.suppress(sqlite3.Error):
@@ -1807,18 +1809,24 @@ class LearningLedger:
             check_same_thread=False,
             factory=SQLReadConnection,
         )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = FULL")
-        connection.execute("PRAGMA secure_delete = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
-        self.state.harden_database_files()
-        # New service wrappers must inherit the connection's actual origin, not
-        # adopt it on their construction thread or after a fork. Legacy collector
-        # paths still serialize cross-thread use themselves; this stamp does not
-        # change their contract. A Thread object avoids recycled numeric IDs.
-        self._connection_origin = (os.getpid(), threading.current_thread())
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = FULL")
+            connection.execute("PRAGMA secure_delete = ON")
+            connection.execute("PRAGMA busy_timeout = 5000")
+            self.state.harden_database_files()
+            # New service wrappers must inherit the connection's actual origin, not
+            # adopt it on their construction thread or after a fork. Legacy collector
+            # paths still serialize cross-thread use themselves; this stamp does not
+            # change their contract. A Thread object avoids recycled numeric IDs.
+            self._connection_origin = (os.getpid(), threading.current_thread())
+        except BaseException:
+            # Until this function returns, __init__ cannot reach this connection.
+            with contextlib.suppress(sqlite3.Error):
+                connection.close()
+            raise
         return connection
 
     def _record_first_owner_key(self) -> None:
