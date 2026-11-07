@@ -32,6 +32,7 @@ RUNTIME_FILES = (
     "codex_agents/__init__.py",
     "codex_agents/account_api.py",
     "codex_agents/account_service.py",
+    "codex_agents/admission_input_decode.py",
     "codex_agents/admission_inputs.py",
     "codex_agents/admission_metadata.py",
     "codex_agents/bridge.py",
