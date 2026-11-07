@@ -2338,12 +2338,15 @@ class BridgeLifecycleTests(CliTestCase):
             dispatched["bridge_report"]["client_diagnostics"],
             recorded["dispatch_diagnostics"]["client_diagnostics"],
         )
-        with self.assertRaisesRegex(LedgerError, "no longer open"):
-            LearningLedger(self.state, client_capabilities=self.clients) \
-                .record_claude_rate_limit_event(
+        late_ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        try:
+            with self.assertRaisesRegex(LedgerError, "no longer open"):
+                late_ledger.record_claude_rate_limit_event(
                     self.project_id, run_handle=opened["run_handle"],
                     rate_limit_info=RATE_LIMIT["rate_limit_info"],
                 )
+        finally:
+            late_ledger.close()
 
     def test_codex_primary_bridges_a_codex_child_through_the_cli(self) -> None:
         # A native Codex child would share the primary's session and command
