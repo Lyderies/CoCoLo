@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import unittest
+from contextlib import ExitStack
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest import mock
@@ -118,6 +119,23 @@ class SignatureWorkerPoolTests(unittest.TestCase):
             launches.append(threading.current_thread().ident)
             return original_popen(*args, **kwargs)
 
+        with ExitStack() as owner_traps:
+            for module, name in ((execution, 'encode_signature_inputs'), (execution, '_public_file'),
+                                 (execution.tempfile, 'mkdtemp'), (execution.shutil, 'rmtree'),
+                                 (Path, 'unlink')):
+                original = getattr(module, name)
+
+                def worker_only(*args, _original=original, **kwargs):
+                    self.assertIsNot(owner, threading.current_thread())
+                    return _original(*args, **kwargs)
+
+                owner_traps.enter_context(mock.patch.object(module, name, autospec=True, side_effect=worker_only))
+            self.run_two_jobs_with_owner_traps(pool, handles, owner, owned_worker_popen)
+        self.assertEqual(4, len(launches))
+        self.assertEqual(2, len(set(launches)))
+        self.assertEqual(0, self.intake.snapshot().jobs)
+
+    def run_two_jobs_with_owner_traps(self, pool, handles, owner, owned_worker_popen):
         with mock.patch("sqlite3.connect", side_effect=AssertionError("extra database")), \
                 mock.patch.object(self.fixture.state, "digest_key", side_effect=AssertionError("private state key")), \
                 mock.patch.object(threading.Thread, "start", side_effect=AssertionError("request thread start")), \
@@ -137,9 +155,6 @@ class SignatureWorkerPoolTests(unittest.TestCase):
                 self.assertFalse(hasattr(pool.result(handle), "origin"))
                 self.assertFalse(hasattr(pool.result(handle), "admission"))
                 pool.discard(handle)
-        self.assertEqual(4, len(launches))
-        self.assertEqual(2, len(set(launches)))
-        self.assertEqual(0, self.intake.snapshot().jobs)
 
     def test_cancel_after_actual_ready_keeps_share_until_root_reaped(self):
         pool = self.make_pool()
@@ -253,6 +268,49 @@ class SignatureWorkerPoolTests(unittest.TestCase):
 
 @unittest.skipUnless(MACOS_WORKER, "fixed macOS test guard; no Linux worker policy is selected")
 class SignatureWorkerBlockedStartTests(unittest.TestCase):
+    def test_blocked_fixture_failure_waits_for_all_actual_roots_before_cleanup(self):
+        completed = subprocess.run(
+            [sys.executable, '-I', '-B', '-S', str(PACKAGE_ROOT / 'tests/fixtures/signature_pool_blocked.py'),
+             str(PACKAGE_ROOT), 'fail-after-offer'],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=15, check=False,
+            env={'PATH': os.defpath, 'LC_ALL': 'C'}, close_fds=True,
+        )
+        self.assertNotEqual(0, completed.returncode)
+        error = completed.stderr.decode('utf-8', 'replace')
+        self.assertIn('synthetic blocked-start failure', error)
+        reports = [json.loads(line)['fixture_teardown'] for line in error.splitlines()
+                   if line.startswith('{"fixture_teardown":')]
+        self.assertEqual(1, len(reports), error)
+        teardown, = reports
+        self.assertGreaterEqual(teardown['actual_roots'], 1)
+        for field in ('offered_executions_settled', 'actual_roots_reaped', 'scratch_removed'):
+            self.assertTrue(teardown[field], error)
+
+    def test_exceptional_cleanup_clock_metadata_and_publication_hold_capacity(self):
+        for scenario in ('cleanup-exception', 'clock-exception', 'clock-regression',
+                         'malformed-roots', 'malformed-early', 'malformed-future',
+                         'offer-publication', 'result-publication', 'intake-publication', 'spawn-exception'):
+            with self.subTest(scenario=scenario):
+                completed = subprocess.run(
+                    [sys.executable, '-I', '-B', '-S', str(PACKAGE_ROOT / 'tests/fixtures/signature_pool_faults.py'),
+                     str(PACKAGE_ROOT), scenario],
+                    stdin=subprocess.DEVNULL, capture_output=True, timeout=15, check=False,
+                    env={'PATH': os.defpath, 'LC_ALL': 'C'}, close_fds=True,
+                )
+                self.assertEqual(0, completed.returncode, completed.stderr.decode('utf-8', 'replace'))
+                report = json.loads(completed.stdout)
+                self.assertEqual(scenario, report['scenario'])
+                for field in ('capacity_held', 'actual_roots_reaped_before_fixture_cleanup',
+                              'scratch_removed_after_execution_settled', 'unknown_close_stays_false'):
+                    self.assertTrue(report[field], field)
+                self.assertEqual(not scenario.startswith('clock-'), report['unknown'])
+                if scenario in {'cleanup-exception', 'clock-exception', 'clock-regression',
+                                'malformed-roots', 'malformed-early', 'malformed-future',
+                                'result-publication', 'intake-publication'}:
+                    self.assertEqual(2, report['actual_process_launches'])
+                if scenario == 'spawn-exception':
+                    self.assertEqual(0, report['actual_process_launches'])
+
     def test_other_project_progress_and_unknown_latch_with_actual_owned_children(self):
         completed = subprocess.run(
             [sys.executable, "-I", "-B", "-S", str(PACKAGE_ROOT / "tests/fixtures/signature_pool_blocked.py"),
@@ -269,5 +327,8 @@ class SignatureWorkerBlockedStartTests(unittest.TestCase):
             self.assertLess(report[field], 2_000_000_000)
         for field in ("a_guard_never_observed", "a_actual_handle_inputs_wire_scratch_retained",
                       "a_intake_and_protocol_shares_still_held", "late_matching_token_completion_cannot_clear_unknown",
-                      "close_did_not_claim_unknown_cleanup"):
+                      "close_did_not_claim_unknown_cleanup", "worker_context_retained_after_fixture_strong_reference_dropped"):
             self.assertTrue(report[field])
+        self.assertEqual(7, report['teardown']['actual_roots'])
+        for field in ('offered_executions_settled', 'actual_roots_reaped', 'scratch_removed'):
+            self.assertTrue(report['teardown'][field])

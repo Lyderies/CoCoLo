@@ -316,7 +316,7 @@ def _execute_signature_job(inputs, limits, deadline_ns, cancelled, poll_ns, clea
     if context.scratch is not None:
         try:
             shutil.rmtree(context.scratch)
-        except OSError:
+        except BaseException:
             raise SignatureExecutionUnconfirmed(context) from None
         context.scratch = None
     try:

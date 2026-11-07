@@ -997,6 +997,21 @@ token cannot clear that state, and no replacement worker or replay is automatic.
 Other available project slots can continue. Closing does not acknowledge a drain
 while an unknown job, returned input or queued intake remains.
 
+Completion metadata must agree with the selected job: successful indices require
+at least preparation plus one reaped verifier per successful index, and finish
+time must fall between selection and a fresh owner sample. A completion remains
+in its slot if that fresh clock sample fails; a later valid sample drains it only
+as a clock failure. Ambiguous enqueue or result/intake publication faults fence
+the slot and never replay confirmation. This is conservative in-memory fencing,
+not transactional rollback or durable recovery across the two owner objects.
+Cancellation cannot release a fenced slot's retained intake reservation.
+
+The isolated regression fixtures inject cleanup, clock, completion, enqueue and
+publication faults. Their teardown waits boundedly for every offered execution
+before reaping all tracked actual roots and removing public scratch. Unknown
+intake is never confirmed by fixture cleanup. A weak-reference check drops the
+fixture's strong context reference before checking parked-worker custody.
+
 This adapter is inactive in normal APIs/admission. Its experimental macOS helper
 guard denies network, process creation and writes outside public scratch, while
 retaining broad read access; it supplies no OS read-isolation claim. Linux and

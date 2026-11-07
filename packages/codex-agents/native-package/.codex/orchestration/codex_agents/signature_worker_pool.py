@@ -80,6 +80,7 @@ class _Active:
     handle: object
     token: object
     cancelled: threading.Event
+    started_ns: int
     deadline_ns: int
     row_count: int
     unknown: bool = False
@@ -113,6 +114,7 @@ class _Slot:
         self.fault = threading.Event()
         self.thread = None
         self.current = None
+        self.pending = None
 
 
 def _worker_loop(slot, wire_limits, poll_ns, cleanup_ns):
@@ -197,7 +199,6 @@ class SignatureWorkerPool:
         self._share = share
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._slots = [_Slot() for _ in range(limits.max_workers)]
-        self._active = {}
         self._returned = {}
         self._bootstrapped = self._starting = self._faulted = self._closing = self._closed = False
         self._clock_failed = False
@@ -216,14 +217,16 @@ class SignatureWorkerPool:
         except BaseException:
             self._faulted = True
             self._clock_failed = True
-            for active in self._active.values():
-                active.cancelled.set()
+            for slot in self._slots:
+                if slot.current is not None:
+                    slot.current.cancelled.set()
             raise
         if type(value) is not int or not 0 <= value <= _MAX_NS or (self._last_ns is not None and value < self._last_ns):
             self._faulted = True
             self._clock_failed = True
-            for active in self._active.values():
-                active.cancelled.set()
+            for slot in self._slots:
+                if slot.current is not None:
+                    slot.current.cancelled.set()
             raise SignatureWorkerError()
         self._last_ns = value
         return value
@@ -271,23 +274,30 @@ class SignatureWorkerPool:
             item = self._intake.select_next()
             if item is None:
                 return None
-            active = _Active(item.handle, token, cancelled, now + self._limits.timeout_ns, len(item.inputs.rows))
+            active = _Active(item.handle, token, cancelled, now, now + self._limits.timeout_ns, len(item.inputs.rows))
             slot.current = active
-            self._active[item.handle] = active
             slot.incoming.put_nowait(_Envelope(token, item.inputs, cancelled, active.deadline_ns))
             return item.handle
         except BaseException:
             # No inference of no-start after an ambiguous queue/publication
             # fault. Retain intake/static shares and refuse further offers.
             self._faulted = True
+            slot.fault.set()
+            if slot.current is not None:
+                slot.current.unknown = True
+                slot.current.cancelled.set()
             raise
 
     def cancel(self, handle):
         self._owner()
         if type(handle) is not object:
             raise SignatureWorkerError('signature_pool_invalid_handle')
+        active = next((slot.current for slot in self._slots
+                       if slot.current is not None and slot.current.handle is handle), None)
+        if active is not None and active.unknown:
+            active.cancelled.set()
+            return 'pending_confirmation'
         result = self._intake.cancel(handle)
-        active = self._active.get(handle)
         if active is not None:
             active.cancelled.set()
         if result == 'released':
@@ -300,7 +310,8 @@ class SignatureWorkerPool:
                 or type(result.roots_reaped) is not int or not 0 <= result.roots_reaped <= active.row_count + 1
                 or type(result.no_process_started) is not bool
                 or (result.no_process_started and result.roots_reaped != 0)
-                or (result.finished_ns is not None and (type(result.finished_ns) is not int or not 0 <= result.finished_ns <= _MAX_NS))):
+                or (result.finished_ns is not None and (type(result.finished_ns) is not int
+                    or not active.started_ns <= result.finished_ns <= _MAX_NS))):
             return False
         previous = -1
         for index in result.indices:
@@ -309,7 +320,8 @@ class SignatureWorkerPool:
             previous = index
         if result.reason != 'signature_execution_completed':
             return not result.indices
-        return result.finished_ns is not None and result.roots_reaped >= 1 and not result.no_process_started
+        return (result.finished_ns is not None and result.roots_reaped >= len(result.indices) + 1
+                and not result.no_process_started)
 
     def poll(self):
         self._owner()
@@ -319,12 +331,14 @@ class SignatureWorkerPool:
             active = slot.current
             if active is None or active.unknown:
                 continue
-            try:
-                message = slot.outgoing.get_nowait()
-            except queue.Empty:
-                if slot.fault.is_set() or not slot.thread.is_alive():
-                    active.unknown = True
-                continue
+            if slot.pending is None:
+                try:
+                    slot.pending = slot.outgoing.get_nowait()
+                except queue.Empty:
+                    if slot.fault.is_set() or not slot.thread.is_alive():
+                        active.unknown = True
+                    continue
+            message = slot.pending
             if type(message) is _Unknown and message.token is active.token:
                 active.unknown = True
                 continue
@@ -334,7 +348,13 @@ class SignatureWorkerPool:
                 slot.fault.set()
                 continue
             result = message.result
+            # Keep the sole completion in its slot across a failed fresh clock
+            # sample. A later valid sample can drain it only as clock failure.
             now = self._now()
+            if result.finished_ns is not None and result.finished_ns > now:
+                active.unknown = True
+                slot.fault.set()
+                continue
             if self._clock_failed:
                 result = SignatureWorkerResult('signature_execution_clock_failure', (), result.finished_ns,
                                     result.roots_reaped, result.no_process_started)
@@ -347,16 +367,32 @@ class SignatureWorkerPool:
             # The fixed execution has actually ended and dropped its full data
             # before publishing. Keep noncancelled return fields under intake's
             # quota even for a known zero-process job; cancelled jobs release.
-            released = self._intake.confirm_worker_stopped(active.handle)
-            del self._active[active.handle]
-            slot.current = None
-            if not released:
+            try:
+                kept = SignatureWorkerNotice(active.handle, result, False)
+                freed = SignatureWorkerNotice(active.handle, result, True)
+                # Stage allocating publication before the intake transition.
+                # On any ambiguous failure, keep the slot/pending completion
+                # and fence it permanently instead of replaying confirmation.
                 self._returned[active.handle] = result
-            notices.append(SignatureWorkerNotice(active.handle, result, released))
+                released = self._intake.confirm_worker_stopped(active.handle)
+                if released:
+                    self._returned.pop(active.handle)
+                notices.append(freed if released else kept)
+                slot.pending = None
+                slot.current = None
+            except BaseException:
+                self._faulted = True
+                active.unknown = True
+                active.cancelled.set()
+                slot.fault.set()
+                slot.current = active
+                self._returned.pop(active.handle, None)
+                raise
         if self._closing:
             for slot in self._slots:
                 slot.stop.set()
-            self._closed = (not self._active and not self._returned and self._intake.snapshot().jobs == 0
+            self._closed = (not any(slot.current is not None for slot in self._slots)
+                            and not self._returned and self._intake.snapshot().jobs == 0
                             and all(slot.thread is None or not slot.thread.is_alive() for slot in self._slots))
         return tuple(notices)
 
@@ -376,9 +412,14 @@ class SignatureWorkerPool:
     def request_close(self):
         self._owner()
         self._closing = True
-        for handle, active in self._active.items():
-            self._intake.cancel(handle)
-            active.cancelled.set()
+        for slot in self._slots:
+            active = slot.current
+            if active is not None:
+                active.cancelled.set()
+                # Unknown publication may already have changed intake state;
+                # never replay it or infer release from an absent handle.
+                if not active.unknown:
+                    self._intake.cancel(active.handle)
         for handle in tuple(self._returned):
             self._intake.cancel(handle)
             del self._returned[handle]
@@ -388,12 +429,13 @@ class SignatureWorkerPool:
     def snapshot(self):
         self._owner()
         intake = self._intake.snapshot()
-        unknown = sum(active.unknown for active in self._active.values())
-        unknown += max(0, intake.selected - len(self._active))
+        active = [slot.current for slot in self._slots if slot.current is not None]
+        unknown = sum(item.unknown for item in active)
+        unknown += max(0, intake.selected - len(active))
         return {
-            'active': len(self._active), 'unconfirmed': unknown, 'returned': len(self._returned),
-            'cancel_requested': sum(active.cancelled.is_set() for active in self._active.values()),
-            'active_protocol_bytes': len(self._active) * self._share,
+            'active': len(active), 'unconfirmed': unknown, 'returned': len(self._returned),
+            'cancel_requested': sum(item.cancelled.is_set() for item in active),
+            'active_protocol_bytes': max(len(active), intake.selected) * self._share,
             'static_protocol_capacity_bytes': len(self._slots) * self._share,
             'intake_jobs': intake.jobs, 'closing': self._closing, 'closed': self._closed,
             'faulted': self._faulted,
