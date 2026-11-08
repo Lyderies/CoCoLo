@@ -1202,6 +1202,9 @@ class LearningState:
         self.client_health = self.root / "collector-client-health.json"
         self.key_path = self.root / "digest.key"
         self.allowed_signers_path = self.root / "owner-allowed-signers"
+        self.initializing = self.root / "ledger-initializing"
+        self.initialized = self.root / "ledger-initialized"
+        self._prepare_database(create=create)
         if create:
             self._create_empty_file(self.database)
             self._create_key(self.key_path)
@@ -1210,6 +1213,77 @@ class LearningState:
             _check_owner_mode(self.database, directory=False)
             _check_owner_mode(self.key_path, directory=False)
             _check_owner_mode(self.allowed_signers_path, directory=False)
+
+    def _marker_exists(self, path: Path) -> bool:
+        if not os.path.lexists(path):
+            return False
+        _assert_no_symlink_components(path)
+        _check_owner_mode(path, directory=False)
+        if not path.is_file():
+            raise StateError("ledger initialization marker is invalid")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode) or handle.read(3) != b"1\n":
+                raise StateError("ledger initialization marker is invalid")
+        return True
+
+    def _write_marker(self, path: Path) -> None:
+        if not self._marker_exists(path):
+            descriptor = os.open(
+                path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(b"1\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        self._sync_root()
+
+    def _sync_root(self) -> None:
+        descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _prepare_database(self, *, create: bool) -> None:
+        initialized = self._marker_exists(self.initialized)
+        pending = self._marker_exists(self.initializing)
+        if os.path.lexists(self.database):
+            if self.database.is_symlink():
+                raise StateError("database path is unsafe")
+            _assert_no_symlink_components(self.database)
+            _check_owner_mode(self.database, directory=False)
+            if not self.database.is_file():
+                raise StateError("database path is unsafe")
+            if self.database.stat().st_size:
+                # An existing ledger must never receive a replacement digest key.
+                for path in (self.key_path, self.allowed_signers_path):
+                    _assert_no_symlink_components(path)
+                    try:
+                        _check_owner_mode(path, directory=False)
+                    except OSError as exc:
+                        raise StateError("existing ledger authority file is unavailable") from exc
+                return
+        if initialized:
+            raise StateError("initialized ledger database is missing or empty; verified recovery is required")
+        if pending and (create or self.database.is_file()):
+            return
+        # Only an otherwise empty owner root can begin an initial bootstrap.
+        # Existing keys, authorization or backup material are not proof of a new store.
+        if create and all(
+            path in (self.artifacts, self.exports, self.backups)
+            and path.is_dir() and not any(path.iterdir())
+            for path in self.root.iterdir()
+        ):
+            self._write_marker(self.initializing)
+            return
+        raise StateError("ledger database is missing or empty; verified recovery is required")
+
+    def mark_initialized(self) -> None:
+        self._write_marker(self.initialized)
+        self.initializing.unlink(missing_ok=True)
+        self._sync_root()
 
     @staticmethod
     def _create_key(path: Path) -> None:
@@ -1907,6 +1981,7 @@ class LearningLedger:
             self._connection = self._connect()
             self._migrate()
             self._record_first_owner_key()
+            self.state.mark_initialized()
             self._reconcile_managed_files()
         except BaseException:
             connection = getattr(self, "_connection", None)
@@ -1920,10 +1995,13 @@ class LearningLedger:
             raise
 
     def _connect(self) -> sqlite3.Connection:
+        # Never let sqlite3 implicitly recreate a lost initialized database.
+        self.state._prepare_database(create=True)
         if self.state.database.is_symlink():
             raise StateError("database path is unsafe")
         connection = sqlite3.connect(
-            self.state.database,
+            self.state.database.as_uri() + "?mode=rw",
+            uri=True,
             timeout=5,
             isolation_level=None,
             check_same_thread=False,
@@ -2129,7 +2207,7 @@ class LearningLedger:
                     if candidate.is_symlink():
                         raise StateError("managed storage contains a symlink")
                     relative = candidate.relative_to(self.state.root).as_posix()
-                    if relative not in registered:
+                    if relative not in registered and root != self.state.backups:
                         candidate.unlink()
             for current, directories, files in os.walk(root, topdown=False):
                 path = Path(current)
@@ -2357,6 +2435,11 @@ class LearningLedger:
 
     def _migrate(self) -> None:
         current = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+        if current == 0 and (
+            self.state._marker_exists(self.state.initialized)
+            or not self.state._marker_exists(self.state.initializing)
+        ):
+            raise StateError("initialized ledger schema is missing; verified recovery is required")
         if current > LEDGER_SCHEMA_VERSION:
             raise LedgerError("ledger schema is newer than this package")
         if 0 < current < 5:
@@ -2375,12 +2458,34 @@ class LearningLedger:
             return
         if current == 8:
             self._assert_launch_schema_locked(8)
+        with self._account_transaction():
+            self._migrate_layout_locked(current)
+
+    def _execute_schema_script_locked(self, script: str) -> None:
+        """Execute compiled schema SQL without executescript's implicit COMMIT.
+
+        SQLite's parser recognizes complete trigger bodies and quoted semicolons.
+        Only the trusted migration constants below enter this helper.
+        """
+        if not self._connection.in_transaction:
+            raise LedgerError("schema migration requires an owned transaction")
+        pending: list[str] = []
+        for character in script:
+            pending.append(character)
+            if character == ";" and sqlite3.complete_statement("".join(pending)):
+                self._connection.execute("".join(pending))
+                pending.clear()
+        if trailing := "".join(pending).strip():
+            self._connection.execute(trailing)
+
+    def _migrate_layout_locked(self, current: int) -> None:
+        # The caller owns the single transaction, including all additive DDL.
         had_hook_ingestion = self._connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hook_ingestion'"
         ).fetchone() is not None
         if current == 0:
-            with self._connection:
-                self._connection.executescript(
+            with contextlib.nullcontext():
+                self._execute_schema_script_locked(
                     """
                     CREATE TABLE projects (
                         project_id TEXT PRIMARY KEY,
@@ -2503,8 +2608,8 @@ class LearningLedger:
                     """
                 )
         elif current == 1:
-            with self._connection:
-                self._connection.executescript(
+            with contextlib.nullcontext():
+                self._execute_schema_script_locked(
                     """
                     CREATE TABLE owner_attestations (
                         project_id TEXT NOT NULL,
@@ -2542,8 +2647,8 @@ class LearningLedger:
                     """
                 )
         elif current == 2:
-            with self._connection:
-                self._connection.executescript(
+            with contextlib.nullcontext():
+                self._execute_schema_script_locked(
                     """
                     CREATE TABLE run_provenance (
                         project_id TEXT NOT NULL,
@@ -2571,8 +2676,8 @@ class LearningLedger:
                     """
                 )
         elif current == 3:
-            with self._connection:
-                self._connection.executescript(
+            with contextlib.nullcontext():
+                self._execute_schema_script_locked(
                     """
                     CREATE TABLE repair_receipts (
                         project_id TEXT NOT NULL,
@@ -2592,8 +2697,8 @@ class LearningLedger:
         # These tables are additive and deliberately keep user_version at 4 so a
         # registered 0.3.0 project can still cold-start the shared collector.
         if current <= LEDGER_SCHEMA_VERSION:
-            with self._connection:
-                self._connection.executescript(
+            with contextlib.nullcontext():
+                self._execute_schema_script_locked(
                     """
                     CREATE TABLE IF NOT EXISTS host_run_bindings (
                         project_id TEXT NOT NULL,
@@ -2742,8 +2847,8 @@ class LearningLedger:
                         "INSERT OR REPLACE INTO additive_migrations "
                         "VALUES('hook_ingestion_v1')"
                     )
-        with self._connection:
-            self._connection.executescript(
+        with contextlib.nullcontext():
+            self._execute_schema_script_locked(
                 """
                 CREATE TABLE IF NOT EXISTS orchestrations (
                     project_id TEXT NOT NULL,
@@ -2870,7 +2975,7 @@ class LearningLedger:
                 "deadline_observed=COALESCE(deadline_observed,0)"
             )
             if current < 6:
-                self._connection.executescript(
+                self._execute_schema_script_locked(
                     """
                     DROP TABLE IF EXISTS orchestration_checkpoints;
                     DROP INDEX IF EXISTS orchestration_status;
@@ -2909,7 +3014,7 @@ class LearningLedger:
                     DROP TRIGGER IF EXISTS cleanup_host_binding_with_event;
                     """
                 )
-            self._connection.executescript(
+            self._execute_schema_script_locked(
                 """
                 CREATE TABLE IF NOT EXISTS orchestration_checkpoints (
                     project_id TEXT NOT NULL,

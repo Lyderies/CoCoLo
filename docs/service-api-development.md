@@ -1168,3 +1168,20 @@ synchronous in this reference call, and legacy JSON/filesystem/policy reads rema
 inside the final lock. Bounded asynchronous admission-job integration, active-run
 capacity/reconciliation, actual native authentication and the complete release
 checks remain required before normal API activation.
+
+### Account-store startup recovery
+
+An initialized account store refuses a missing, empty or zero-version database.
+Reopening never silently creates a replacement database or digest key. A durable
+owner-only bootstrap marker permits retry of an interrupted first initialization;
+the initialized marker takes precedence over any leftover bootstrap marker. The
+schema layout is created in one explicit transaction, including additive tables,
+triggers and the version update. Interruption rolls it back before the next open.
+
+Startup retains unregistered backup files as recovery material. They remain
+unregistered and untrusted: the ordinary backup-verification API refuses them.
+Recovery must explicitly verify and restore them; normal startup does not import
+them. Orphan artifact and export cleanup continues. The standalone owner backup
+tool preserves each supported schema's exact 5/6/7/8 manifest and checks a relational
+restore, including the schema-8 receipt-parent uniqueness constraint. This does not
+complete the staged legacy migration or cross-store release recovery gates.

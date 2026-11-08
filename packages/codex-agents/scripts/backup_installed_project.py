@@ -92,6 +92,11 @@ _TABLE_COLUMNS = {
         "receipt_id", "assignment_digest", "reason_code", "issued_at_ms",
         "expires_at_ms", "consumed_at_ms", "run_id",
     ),
+    "launch_claims": ("handle_digest", "run_id", "kind", "claimed_at_ms", "bridge_run_id"),
+    "launch_inputs": ("handle_digest", "run_id", "runtime_digest", "provider", "model", "effort", "hard_timeout_seconds"),
+    "launch_observations": ("handle_digest", "identity_digest", "observed_at_ms"),
+    "launch_receipts": ("scope_digest", "request_digest", "parameters_digest", "handle_digest", "receipt_digest",
+                        "run_id", "state", "reason_code", "bridge_run_id", "deadline_at_ms", "recorded_at_ms"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -132,6 +137,10 @@ _TABLE_ORDER = {
     "owner_attestations": ("subject_record_id",),
     "repair_receipts": ("receipt_id",),
     "host_run_bindings": ("created_at_ms", "run_id"),
+    "launch_claims": ("handle_digest",),
+    "launch_inputs": ("handle_digest",),
+    "launch_observations": ("handle_digest",),
+    "launch_receipts": ("scope_digest", "request_digest"),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -142,6 +151,10 @@ _TABLE_ORDER = {
 
 
 def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 8 and table in {"launch_inputs", "launch_observations", "launch_receipts"}:
+        return ()
+    if schema_version < 7 and table == "launch_claims":
+        return ()
     if schema_version == 5:
         if table == "host_run_bindings":
             return tuple(column for column in _TABLE_COLUMNS[table] if column not in {
@@ -152,6 +165,15 @@ def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
         if table == "orchestration_checkpoints":
             return ()
     return _TABLE_COLUMNS[table]
+
+
+def _tables(schema_version: int) -> tuple[str, ...]:
+    if schema_version not in {5, 6, 7, 8}:
+        raise RuntimeError("installed ledger schema does not support this backup")
+    return tuple(table for table in _TABLE_COLUMNS
+                 if (schema_version >= 7 or table != "launch_claims")
+                 and (schema_version >= 8 or table not in {
+                     "launch_inputs", "launch_observations", "launch_receipts"}))
 
 
 def _encode(value: object) -> object:
@@ -186,19 +208,26 @@ def _verify_relational_restore(
     restored.row_factory = sqlite3.Row
     restored.execute("PRAGMA foreign_keys = ON")
     try:
-        for table in ("projects", *_TABLE_COLUMNS):
+        for table in ("projects", *_tables(body["ledger_schema_version"])):
             schema = source_connection.execute(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
             ).fetchone()
             if schema is not None:
                 restored.execute(str(schema[0]))
+        if body["ledger_schema_version"] >= 8:
+            parent_index = source_connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='launch_receipt_parent'"
+            ).fetchone()
+            if parent_index is None:
+                raise RuntimeError("project backup launch receipt parent is unavailable")
+            restored.execute(str(parent_index[0]))
         project = body["project"]
         restored.execute(
             f"INSERT INTO projects({','.join(_PROJECT_COLUMNS)}) VALUES(?,?,?,?,?,?)",
             [_decode(project[name]) for name in _PROJECT_COLUMNS],
         )
         project_id = project["project_id"]
-        for table in _TABLE_COLUMNS:
+        for table in _tables(body["ledger_schema_version"]):
             columns = body["columns"][table]
             rows = body["tables"][table]
             if body["counts"][table] != len(rows):
@@ -227,7 +256,7 @@ def _verify_relational_restore(
             raise RuntimeError("project backup foreign-key verification failed")
         if restored.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise RuntimeError("project backup integrity verification failed")
-        for table in _TABLE_COLUMNS:
+        for table in _tables(body["ledger_schema_version"]):
             columns = body["columns"][table]
             if not columns:
                 continue
@@ -289,7 +318,7 @@ def _main() -> int:
         project_id = ledger.project_for_root(target)
         connection = ledger._connection
         schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if schema_version not in {5, 6}:
+        if schema_version not in {5, 6, 7, 8}:
             raise RuntimeError("installed ledger schema does not support this backup")
         project_columns = {
             str(row[1])
@@ -306,7 +335,7 @@ def _main() -> int:
             raise RuntimeError("project binding is not active")
         tables: dict[str, list[dict[str, object]]] = {}
         columns_manifest: dict[str, list[str]] = {}
-        for table in _TABLE_COLUMNS:
+        for table in _tables(schema_version):
             exists = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
             ).fetchone()
