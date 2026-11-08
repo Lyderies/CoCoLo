@@ -146,6 +146,22 @@ class CapacityStatusApiTests(unittest.TestCase):
             self.call(request)
         self.assertEqual(before, self.ledger._connection.total_changes)
 
+    def test_missing_completion_registration_or_changed_terminal_binding_cannot_report_release(self):
+        statements = (
+            "DELETE FROM capacity_completions WHERE bridge_run_id=?",
+            "DELETE FROM capacity_executions WHERE bridge_run_id=?",
+            "UPDATE capacity_completions SET terminal_content_digest='" + "0" * 64 + "' WHERE bridge_run_id=?",
+        )
+        for sql in statements:
+            with self.subTest(sql=sql):
+                handle, output = self.fixture.run_one()
+                bridge = output["bridge_report"]["bridge_run_id"]
+                self.ledger._connection.execute(sql, (bridge,))
+                before = self.ledger._connection.total_changes
+                with self.assertRaisesRegex(AccountError, "account_unavailable"):
+                    self.call(self.request(handle, bridge))
+                self.assertEqual(before, self.ledger._connection.total_changes)
+
     def test_default_role_scope_and_operation_denial_precede_owner_access(self):
         default = AccountService(COLLECTOR_RUNTIME_DIGEST, self.views)
         self.addCleanup(default.close)
@@ -173,6 +189,22 @@ class CapacityStatusApiTests(unittest.TestCase):
                 self.assertRaisesRegex(AccountError, "account_not_authorized"):
             self.call(request, service=service)
 
+    def test_wrong_runtime_and_authorization_project_are_refused_before_owner_access(self):
+        original = self.request()
+        changed = AccountRequest(1, original.operation, original.request_id, self.project, "f" * 64, original.payload)
+        variants = [(self.service, changed)]
+        for project, runtime in (("prj_" + "e" * 32, COLLECTOR_RUNTIME_DIGEST), (self.project, "f" * 64)):
+            authorization = AccountAuthorization(project, runtime, account_request_digest(original),
+                                                "host", ACCOUNT_OPERATIONS, "a" * 64)
+            service = AccountService(COLLECTOR_RUNTIME_DIGEST, self.views,
+                                     authorizer=lambda request, context, grant=authorization: grant)
+            self.addCleanup(service.close)
+            variants.append((service, original))
+        with mock.patch.object(self.views, "capacity_status", side_effect=AssertionError("backend")):
+            for service, request in variants:
+                with self.assertRaisesRegex(AccountError, "account_not_authorized"):
+                    self.call(request, service=service)
+
     def test_inactive_project_is_refused_before_capacity_metadata_access(self):
         self.ledger._connection.execute("UPDATE projects SET status='deleted' WHERE project_id=?", (self.project,))
         with mock.patch.object(self.ledger, "_capacity_status", side_effect=AssertionError("inactive capacity read")), \
@@ -190,6 +222,19 @@ class CapacityStatusApiTests(unittest.TestCase):
             self.assertTrue(self.ledger._connection.in_transaction)
         finally:
             self.ledger._connection.rollback()
+
+    def test_uncommitted_project_deletion_is_not_disclosed_through_status_errors(self):
+        self.ledger._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.ledger._connection.execute("UPDATE projects SET status='deleted' WHERE project_id=?", (self.project,))
+            with mock.patch.object(self.views, "_project_locked", wraps=self.views._project_locked) as project_read:
+                with self.assertRaisesRegex(AccountError, "account_unavailable"):
+                    self.call(self.request())
+                project_read.assert_not_called()
+            self.assertTrue(self.ledger._connection.in_transaction)
+        finally:
+            self.ledger._connection.rollback()
+        self.assertEqual(UNKNOWN, self.call(self.request()))
 
     def test_owner_thread_rejection_does_not_make_health_depend_on_sql(self):
         result = []

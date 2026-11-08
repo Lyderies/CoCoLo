@@ -138,6 +138,8 @@ class AccountOwnerViews:
     def capacity_status(self, project_id: str, status: CapacityStatusInput) -> dict:
         self._guard()
         with self._ledger._lock:
+            if self._ledger._connection.in_transaction:
+                raise AccountError("account_unavailable")
             self._project_locked(project_id)
             return self._ledger._capacity_status(project_id, status)
 

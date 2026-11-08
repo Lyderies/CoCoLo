@@ -1463,6 +1463,10 @@ adapter must authorize the exact request for source `host`, its project/runtime,
 operation and caller scope. Hook, app-server and owner-source grants do not admit
 this operation. No PID, path, cleanup flag, process object or release instruction
 is accepted. Native caller and endpoint authentication remain activation gates.
+The caller scope is currently required adapter output; this dispatcher does not
+derive or compare it with the original claimant. The future native adapter must
+establish actual primary/run ownership before enabling the operation. A nonempty
+scope or project match alone does not supply that authority.
 
 The owner uses its existing connection and indexed project/handle/bridge binding.
 It returns only `state`, `receipt_digest` and `released_at_ms`:
