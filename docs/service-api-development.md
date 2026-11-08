@@ -1175,8 +1175,12 @@ An initialized account store refuses a missing, empty or zero-version database.
 Reopening never silently creates a replacement database or digest key. A durable
 owner-only bootstrap marker permits retry of an interrupted first initialization;
 the initialized marker takes precedence over any leftover bootstrap marker. The
-schema layout is created in one explicit transaction, including additive tables,
+marker is published by atomic rename only after its complete contents are fsynced,
+then the directory is fsynced. Interrupted bootstrap scratch files stay untrusted.
+The schema layout is created in one explicit transaction, including additive tables,
 triggers and the version update. Interruption rolls it back before the next open.
+Owner-key history initialization remains a separate, idempotent startup step;
+this layout guarantee does not claim one transaction for all startup work.
 
 Startup retains unregistered backup files as recovery material. They remain
 unregistered and untrusted: the ordinary backup-verification API refuses them.
@@ -1185,3 +1189,5 @@ them. Orphan artifact and export cleanup continues. The standalone owner backup
 tool preserves each supported schema's exact 5/6/7/8 manifest and checks a relational
 restore, including the schema-8 receipt-parent uniqueness constraint. This does not
 complete the staged legacy migration or cross-store release recovery gates.
+Envelope hashing uses the owner's canonical ASCII escaping, including for Unicode
+project paths, so the normal owner reader can verify these backups.

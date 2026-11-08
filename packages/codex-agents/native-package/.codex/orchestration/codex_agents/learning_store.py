@@ -1229,15 +1229,33 @@ class LearningState:
 
     def _write_marker(self, path: Path) -> None:
         if not self._marker_exists(path):
-            descriptor = os.open(
-                path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
-            )
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(b"1\n")
-                handle.flush()
-                os.fsync(handle.fileno())
+            temporary = self.root / f".{path.name}.{secrets.token_hex(8)}.tmp"
+            try:
+                descriptor = os.open(
+                    temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                )
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(b"1\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                # Publish only the complete, durable contents. Process death
+                # while writing leaves no invalid authoritative marker.
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
         self._sync_root()
+
+    def _initial_bootstrap_entry(self, path: Path) -> bool:
+        if path in (self.artifacts, self.exports, self.backups):
+            return path.is_dir() and not any(path.iterdir())
+        if re.fullmatch(r"\.ledger-initializing\.[0-9a-f]{16}\.tmp", path.name):
+            # A crash before initial publication can leave this untrusted
+            # scratch file. Preserve it; never read it or treat it as proof.
+            _assert_no_symlink_components(path)
+            _check_owner_mode(path, directory=False)
+            return path.is_file()
+        return False
 
     def _sync_root(self) -> None:
         descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
@@ -1272,8 +1290,7 @@ class LearningState:
         # Only an otherwise empty owner root can begin an initial bootstrap.
         # Existing keys, authorization or backup material are not proof of a new store.
         if create and all(
-            path in (self.artifacts, self.exports, self.backups)
-            and path.is_dir() and not any(path.iterdir())
+            self._initial_bootstrap_entry(path)
             for path in self.root.iterdir()
         ):
             self._write_marker(self.initializing)

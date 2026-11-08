@@ -1,5 +1,7 @@
 """Standalone owner-backup tool compatibility; only disposable signed fixtures."""
 import runpy
+import hashlib
+from pathlib import Path
 import unittest
 
 from tests.support import REPOSITORY_ROOT
@@ -56,6 +58,19 @@ class InstalledBackupManifestTests(unittest.TestCase):
         self.assertEqual(1, body["counts"]["launch_claims"])
         self.assertNotIn("launch_receipts", body["columns"])
         self.assertNotIn("launch_receipts", body["counts"])
+
+    def test_unicode_project_backup_envelope_is_accepted_by_owner_verifier(self):
+        case = self.fixture()
+        root = Path(case.fixture.fixture.temporary.name) / "caf\u00e9-\u65e5\u672c"
+        root.mkdir()
+        project = case.ledger.register_project(root, now_ms=case.stamp)
+        body = learning_store._snapshot_project_partition(case.ledger._connection, project,
+                                                         ledger_schema_version=8)
+        encode = TOOL["_canonical_json"]
+        payload = encode({"backup_sha256": hashlib.sha256(encode(body)).hexdigest(), "body": body})
+        restored, _, _ = learning_store._verify_backup_envelope(payload, expected_project_id=project,
+                                                               expected_ledger_schema_version=8)
+        self.assertEqual(body, restored)
 
 
 if __name__ == "__main__":

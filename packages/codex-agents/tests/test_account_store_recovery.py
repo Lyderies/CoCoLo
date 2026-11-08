@@ -140,6 +140,43 @@ class AccountStoreRecoveryTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def crash_marker_creation(self, root, marker):
+        script = """
+import os, sys
+from pathlib import Path
+import tests.support
+from codex_agents.learning_store import LearningLedger, LearningState
+root, marker = Path(sys.argv[1]), sys.argv[2]
+fdopen = os.fdopen
+def crash(descriptor, *args, **kwargs):
+    info = os.fstat(descriptor)
+    for path in (root / marker, *root.glob('.' + marker + '.*.tmp')):
+        if path.exists() and path.stat().st_ino == info.st_ino:
+            os._exit(73)
+    return fdopen(descriptor, *args, **kwargs)
+os.fdopen = crash
+LearningLedger(LearningState(root))
+"""
+        result = subprocess.run([sys.executable, "-B", "-c", script, str(root), marker],
+                                cwd=REPOSITORY_ROOT, capture_output=True, timeout=20)
+        self.assertEqual(73, result.returncode, result.stderr.decode(errors="replace"))
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX process exit")
+    def test_process_death_before_initialized_marker_contents_can_reopen_committed_store(self):
+        state = self.fresh_state()
+        self.crash_marker_creation(state.root, "ledger-initialized")
+        reopened = LearningLedger(LearningState(state.root))
+        self.addCleanup(reopened.close)
+        self.assertEqual(8, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX process exit")
+    def test_process_death_before_bootstrap_marker_contents_can_resume_empty_root(self):
+        root = Path(self.fixture.temporary.name) / "interrupted-bootstrap"
+        self.crash_marker_creation(root, "ledger-initializing")
+        reopened = LearningLedger(LearningState(root))
+        self.addCleanup(reopened.close)
+        self.assertEqual(8, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
+
     def test_interrupted_fresh_initialization_rolls_back_all_schema_and_reopens(self):
         class FixtureStop(BaseException):
             pass
