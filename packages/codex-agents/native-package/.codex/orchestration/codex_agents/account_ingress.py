@@ -89,7 +89,7 @@ class AccountIngress:
         self._subscriptions: dict[object, object] = {}
         self._rotation: deque[object] = deque()
         self._started = self._closing = self._closed = self._faulted = False
-        self._front_stopped = self._pumping = False
+        self._front_exiting = self._front_stopped = self._pumping = False
         self._thread = threading.Thread(target=self._front, name="account-ingress", daemon=True)
         jobs._ingress_owner = self
 
@@ -131,7 +131,7 @@ class AccountIngress:
             raise AccountError("account_invalid_request") from None
         peer = _Peer(connection, context, health, time.monotonic_ns() + self._limits.connection_timeout_ns)
         with self._lock:
-            if (not self._started or self._closing or self._front_stopped
+            if (not self._started or self._closing or self._front_exiting or self._front_stopped
                     or (self._faulted and not health)):
                 raise AccountError("account_unavailable")
             if any(p.connection.fileno() == connection.fileno() for p in self._peers.values()):
@@ -260,6 +260,9 @@ class AccountIngress:
                 self._faulted = True
         finally:
             with self._lock:
+                # Fence every lane before the final snapshot. Owner faults may
+                # preserve front health; an exiting front can own no new peer.
+                self._front_exiting = True
                 peers = tuple(self._peers.items())
             for token, peer in peers:
                 try:
@@ -282,6 +285,19 @@ class AccountIngress:
             else:
                 peer.reply = reply
 
+    def _claim_has_subscribers(self, ticket):
+        """Owner-only decision immediately before a returned job may commit.
+
+        A disconnect published after this decision can lose to completion; an
+        earlier published disconnect/expired deadline cannot. No metadata lock
+        covers the subsequent SQL commit, and no socket operation runs here.
+        """
+        self._service._views._guard()
+        group = self._groups[ticket]
+        now = time.monotonic_ns()
+        with self._lock:
+            return any(not self._peers[token].disconnected and now < self._peers[token].deadline for token in group)
+
     def pump_owner(self):
         """Bounded owner batches, with no socket wait, worker start or join.
 
@@ -296,7 +312,9 @@ class AccountIngress:
         try:
             steps = self._limits.owner_steps_per_cycle
             with self._lock:
-                gone = [(t, p) for t, p in self._peers.items() if p.disconnected][:steps]
+                # Control notices precede normal batches. This is bounded by
+                # the fixed connection ceiling, including unacknowledged slots.
+                gone = [(t, p) for t, p in self._peers.items() if p.disconnected]
             for token, peer in gone:
                 ticket = self._subscriptions.pop(token, None)
                 if ticket is not None:

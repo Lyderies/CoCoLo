@@ -113,8 +113,13 @@ class AccountClaimJobs:
         key = (project_id, runtime_digest, caller_scope, request_id)
         existing = self._requests.get(key)
         if existing is not None:
-            if self._job(existing).launch != launch:
+            job = self._job(existing)
+            if job.launch != launch:
                 raise ClaimError("claim_conflict")
+            if job.cancelled:
+                # Cancellation cannot be undone by a late duplicate. Keep its
+                # quota/custody and require an explicit retry after cleanup.
+                raise ClaimError("claim_busy")
             return existing
         limits = self._intake._limits
         count = self._counts.get(project_id, 0)
@@ -172,6 +177,11 @@ class AccountClaimJobs:
                 job = self._job(ticket)
                 if job.state != "pending":
                     raise ClaimError("claim_unavailable")
+                if self._ingress_owner is not None and not self._ingress_owner._claim_has_subscribers(ticket):
+                    # The actual returned worker is stopped. Published last-
+                    # subscriber loss must win before any final SQL claim; it
+                    # need not wait behind the owner's ordinary request batch.
+                    job.cancelled = True
                 if job.cancelled:
                     job.reason = "claim_cancelled"
                 else:

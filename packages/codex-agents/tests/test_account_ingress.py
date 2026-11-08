@@ -1,4 +1,5 @@
 """Actual socket delivery; synthetic frontend contexts are not native proof."""
+import os
 import socket
 import subprocess
 import threading
@@ -55,9 +56,9 @@ class AccountIngressTests(unittest.TestCase):
             thread.join(3)
             self.assertFalse(thread.is_alive(), "owned fixture frontend/client did not stop")
 
-    def start(self, *, ordinary=4, timeout_ns=5_000_000_000):
+    def start(self, *, ordinary=4, timeout_ns=5_000_000_000, owner_steps=2):
         self.ingress = AccountIngress(self.service, AccountIngressLimits(
-            ordinary, 1, ordinary + 1, 2, timeout_ns, 2_000_000))
+            ordinary, 1, ordinary + 1, owner_steps, timeout_ns, 2_000_000))
         self.ingress.bootstrap()
         return self.ingress
 
@@ -420,3 +421,205 @@ class AccountIngressTests(unittest.TestCase):
                 self.wait(lambda: self.ingress.snapshot()["ordinary"] == 0)
             self.assertEqual(b"", client.recv(1))
         self.assertEqual(0, self.jobs.snapshot()["tickets"])
+
+    def test_disconnects_larger_than_owner_batch_precede_actual_completion(self):
+        project, launch = self.fixture.other_project()
+        self.start(owner_steps=1)
+        gate = threading.Event()
+        self.fixture.gates.append(gate)
+        original = fixtures.execution._execute_signature_job
+        started = set()
+        lock = threading.Lock()
+
+        def both_projects(inputs, *args):
+            with lock:
+                started.add(inputs.project_id)
+            if not gate.wait(8):
+                raise AssertionError("fixture did not release actual signature work")
+            return original(inputs, *args)
+
+        def both_started():
+            with lock:
+                return len(started) == 2
+
+        with mock.patch.object(fixtures.execution, "_execute_signature_job", side_effect=both_projects):
+            first = self.pair(self.request("batch-first"))
+            second = self.pair(self.request("batch-second", project=project, launch=launch))
+            self.wait(both_started)
+            gate.set()
+            # Real helpers have finished; the owner has not yet polled/committed.
+            self.wait(lambda: all(not slot.outgoing.empty() for slot in self.jobs._pool._slots), pump=False)
+            first.close()
+            second.close()
+            self.wait(lambda: self.ingress.snapshot()["disconnected"] == 2, pump=False)
+            self.fixture.fixture.assert_no_claim()
+            self.ingress.pump_owner()
+            self.fixture.fixture.assert_no_claim()
+            self.wait(lambda: self.ingress.snapshot()["groups"] == 0)
+        self.assertEqual(0, self.jobs.snapshot()["tickets"])
+
+    def test_disconnect_published_during_submission_precedes_returned_claim_commit(self):
+        self.start()
+        gate, started, patcher = self.fixture.gate_first_project()
+        with patcher:
+            first = self.pair(self.request("late-disconnect"))
+            self.wait(started.is_set)
+            gate.set()
+            self.wait(lambda: any(not slot.outgoing.empty() for slot in self.jobs._pool._slots), pump=False)
+            request = self.request("read-during-disconnect", operation="account.project")
+            second = self.pair(request)
+            self.wait(lambda: self.ingress.snapshot()["queued"] == 1, pump=False)
+            begin = self.service.begin
+
+            def disconnect(*args, **kwargs):
+                first.close()
+                deadline = time.monotonic() + 2
+                while True:
+                    with self.ingress._lock:
+                        disconnected = any(peer.disconnected for peer in self.ingress._peers.values())
+                    if disconnected:
+                        break
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(.002)
+                return begin(*args, **kwargs)
+
+            with mock.patch.object(self.service, "begin", side_effect=disconnect):
+                self.ingress.pump_owner()
+            self.fixture.fixture.assert_no_claim()
+            self.assertIs(type(self.read(second, request)), dict)
+        self.wait(lambda: self.ingress.snapshot()["groups"] == 0)
+
+    def test_front_fault_fences_health_attachment_before_final_cleanup_snapshot(self):
+        self.start()
+        cleanup_entered, release_cleanup = threading.Event(), threading.Event()
+        drop = self.ingress._drop
+
+        def paused_cleanup(*args):
+            cleanup_entered.set()
+            if not release_cleanup.wait(2):
+                raise AssertionError("fixture did not release front cleanup")
+            return drop(*args)
+
+        server, client = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(server.close)
+        self.addCleanup(client.close)
+        server.settimeout(.7)
+        accepted = False
+        with mock.patch.object(self.ingress, "_front_step", side_effect=RuntimeError("fixture front fault")), \
+                mock.patch.object(self.ingress, "_drop", new=paused_cleanup):
+            trigger = self.pair()
+            trigger.sendall(b"{")
+            self.assertTrue(cleanup_entered.wait(2))
+            try:
+                try:
+                    self.ingress.attach(server, self.fixture.token, health=True)
+                    accepted = True
+                except AccountError as error:
+                    self.assertEqual("account_unavailable", error.reason_code)
+            finally:
+                release_cleanup.set()
+            self.wait(lambda: self.ingress.snapshot()["front_stopped"], pump=False)
+        if accepted:
+            # Red-only fixture rescue: the stopped front stranded this actual
+            # descriptor. Close it via its original I/O cleanup after the front
+            # exits; this is not evidence of working public production drain.
+            with self.ingress._lock:
+                stranded = [(token, peer) for token, peer in self.ingress._peers.items()
+                            if peer.connection is server]
+            for token, peer in stranded:
+                drop(None, token, peer)
+        self.assertFalse(accepted, "front cleanup accepted an unowned health socket")
+        self.assertEqual(.7, server.gettimeout())
+        self.assertGreaterEqual(server.fileno(), 0)
+
+    def test_wrong_process_and_owner_thread_are_refused_before_owner_work(self):
+        self.start()
+        methods = (self.ingress.pump_owner, self.ingress.bootstrap, self.ingress.request_close,
+                   self.ingress.drain, self.ingress.snapshot)
+        reasons = []
+
+        def other_thread():
+            for method in methods:
+                try:
+                    method()
+                except AccountError as error:
+                    reasons.append(error.reason_code)
+
+        thread = threading.Thread(target=other_thread)
+        self.threads.append(thread)
+        thread.start()
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(["account_wrong_owner"] * len(methods), reasons)
+        original_pid = os.getpid()
+        server, client = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(server.close)
+        self.addCleanup(client.close)
+        with mock.patch("codex_agents.account_ingress.os.getpid", return_value=original_pid + 1):
+            for method in (*methods, lambda: self.ingress.attach(server, self.fixture.token, health=True)):
+                with self.assertRaisesRegex(AccountError, "account_wrong_owner"):
+                    method()
+        self.assertGreaterEqual(server.fileno(), 0)
+
+    def test_group_allocation_interrupt_preserves_queued_custody_and_public_drain(self):
+        self.start()
+
+        class InterruptedGroups(dict):
+            def __setitem__(self, key, value):
+                raise KeyboardInterrupt
+
+        self.ingress._groups = InterruptedGroups()
+        self.pair(self.request("allocation-fault"))
+        self.wait(lambda: self.ingress.snapshot()["queued"] == 1, pump=False)
+        with self.assertRaises(KeyboardInterrupt):
+            self.ingress.pump_owner()
+        self.assertTrue(self.ingress.snapshot()["faulted"])
+        self.assertEqual(1, self.jobs.snapshot()["tickets"])
+        self.assertEqual(1, self.jobs._intake.snapshot().queued)
+        with mock.patch.object(self.jobs._pool, "offer_next", side_effect=AssertionError("fault cleanup offer")), \
+                mock.patch.object(self.service._views, "_claim_from_signature_job", side_effect=AssertionError("fault cleanup commit")):
+            self.ingress.request_close()
+            self.wait(self.ingress.drain, pump=False)
+        self.fixture.fixture.assert_no_claim()
+
+    def test_returned_job_liveness_check_interrupt_fences_and_drains_without_commit(self):
+        self.start()
+        gate, started, patcher = self.fixture.gate_first_project()
+        with patcher:
+            self.pair(self.request("liveness-check-fault"))
+            self.wait(started.is_set)
+            gate.set()
+            self.wait(lambda: any(not slot.outgoing.empty() for slot in self.jobs._pool._slots), pump=False)
+            with mock.patch.object(self.ingress, "_claim_has_subscribers", side_effect=KeyboardInterrupt), \
+                    self.assertRaises(KeyboardInterrupt):
+                self.ingress.pump_owner()
+        self.assertTrue(self.ingress.snapshot()["faulted"])
+        self.assertTrue(self.jobs.snapshot()["faulted"])
+        self.assertEqual(1, self.jobs.snapshot()["tickets"])
+        with mock.patch.object(self.jobs._pool, "offer_next", side_effect=AssertionError("fault cleanup offer")), \
+                mock.patch.object(self.service._views, "_claim_from_signature_job", side_effect=AssertionError("fault cleanup commit")):
+            self.ingress.request_close()
+            self.wait(self.ingress.drain, pump=False)
+        self.fixture.fixture.assert_no_claim()
+
+    def test_new_duplicate_cannot_join_cancelled_signature_preparation(self):
+        self.start()
+        gate, started, patcher = self.fixture.gate_first_project()
+        with patcher:
+            request = self.request("cancel-then-duplicate")
+            first = self.pair(request)
+            self.wait(started.is_set)
+            first.close()
+            self.wait(lambda: self.ingress.snapshot()["subscribers"] == 0)
+            duplicate = self.pair(request)
+            self.wait(lambda: self.ingress.snapshot()["queued"] == 1, pump=False)
+            self.ingress.pump_owner()
+            self.assertEqual(0, self.ingress.snapshot()["subscribers"], "new subscriber joined cancelled work")
+            with self.assertRaisesRegex(AccountError, "claim_busy"):
+                self.read(duplicate, request)
+            self.assertEqual(1, self.jobs.snapshot()["tickets"])
+            gate.set()
+            self.wait(lambda: self.ingress.snapshot()["groups"] == 0)
+        self.fixture.fixture.assert_no_claim()
+        # Only an explicit retry after confirmed cleanup can request new work.
+        self.assertEqual("claimed", self.read(self.pair(request), request)["state"])

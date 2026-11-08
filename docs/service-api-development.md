@@ -1280,13 +1280,25 @@ internal delivery custody and supplies no caller authority. Matching scoped IDs
 share one ticket and fan out its exact bound reply. Dropping one subscriber leaves
 the others intact. After the last subscriber leaves, only signature preparation
 is cancelled, and detached ticket quota remains until the actual worker returns.
-Unknown worker custody is never released by a disconnect or timeout. A committed
-claim and its receipt remain durable after lost delivery; explicit retry retrieves
+All published disconnect notices are reconciled before ordinary owner batches,
+within the fixed connection ceiling. Each actual returned signature job checks
+its bound ingress's subscriber liveness and deadlines again before committing.
+A disconnect published before that decision suppresses the claim even when it
+arrives during other owner work; completion can win a disconnect published later.
+The metadata lock never spans the SQL commit. This is a delivery-liveness decision,
+not native authorization, a worker-verification assertion or model cancellation.
+Unknown worker custody is never released by a disconnect or timeout.
+Once signature cancellation is latched, a new duplicate gets `claim_busy` while
+that ticket remains reserved. It cannot join or restart cancelled preparation;
+only an explicit retry after confirmed cleanup can request new work.
+A committed claim and its receipt remain durable after lost delivery; explicit retry retrieves
 known state without new signature work. These receipts grant no model execution.
 
 Owner faults permanently stop ordinary admission while cheap health can remain
-available. Front faults close I/O and latch unavailable. Public owner-checked
-`request_close` and `drain` remain available after faults. Draining never offers or
+available. Front faults close I/O and latch unavailable.
+All attachment lanes are fenced atomically before the front's final cleanup
+snapshot, so a late reserved-health attachment cannot escape its cleanup.
+Public owner-checked `request_close` and `drain` remain available after faults. Draining never offers or
 commits a claim, joins no thread, and reports completion only after the actual
 front thread and fixed pool stop. It leaves the service and SQL connection open.
 Actual native enrollment/reserved-lane custody, fully bounded admission work,
