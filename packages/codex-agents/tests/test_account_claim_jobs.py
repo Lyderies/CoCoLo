@@ -55,23 +55,29 @@ class AccountClaimJobTests(unittest.TestCase):
     def tearDown(self):
         for gate in self.gates:
             gate.set()
-        if self.jobs._faulted:
-            # The test owner may close actually returned, stopped workers. It
-            # never resets the fenced coordinator or starts replacement work.
-            self.jobs._pool.request_close()
-        else:
-            self.jobs.request_close()
+        self.jobs.request_close()
         started = time.monotonic()
-        while not self.jobs._pool.snapshot()["closed"]:
-            if self.jobs._faulted:
-                for notice in self.jobs._pool.poll():
-                    self.jobs._pool.discard(notice.handle)
-            else:
-                self.jobs.drive()
-                for ticket in tuple(self.jobs._jobs):
-                    self.jobs.take(ticket)
+        while not self.jobs.drain():
             self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
             time.sleep(.002)
+
+    def test_fault_before_offer_can_drain_queued_inputs_without_starting_work(self):
+        self.begin()
+        with mock.patch.object(self.jobs._pool, "poll", side_effect=RuntimeError("fixture before offer")), \
+                self.assertRaisesRegex(RuntimeError, "fixture before offer"):
+            self.jobs.drive()
+        self.assertTrue(self.jobs._faulted)
+        self.assertEqual(1, self.jobs._intake.snapshot().queued)
+        with mock.patch.object(self.jobs._pool, "offer_next", side_effect=AssertionError("shutdown offer")), \
+                mock.patch.object(self.views, "_claim_from_signature_job", side_effect=AssertionError("shutdown commit")):
+            self.jobs.request_close()
+            started = time.monotonic()
+            while not self.jobs.drain():
+                self.assertLess(time.monotonic() - started, 5)
+                time.sleep(.002)
+        self.assertEqual(0, self.jobs.snapshot()["tickets"])
+        self.assertEqual(0, self.jobs._intake.snapshot().jobs)
+        self.fixture.assert_no_claim()
 
     def request(self, identity="job-1", *, project=None, launch=None, operation="account.claim_launch"):
         return AccountRequest(1, operation, identity, project or self.project, COLLECTOR_RUNTIME_DIGEST,
@@ -338,6 +344,45 @@ class AccountClaimJobTests(unittest.TestCase):
             known = self.fixture.claim(identity="job-1")
         self.assertIs(True, known["known"])
         self.assert_wire_error(self.begin(), self.request(), "claim_unavailable")
+
+    def test_faulted_coordinator_has_public_cleanup_without_offer_or_recommit(self):
+        ticket = self.begin()
+        with mock.patch.object(self.jobs._pool, "discard", side_effect=RuntimeError("fixture drain fault")), \
+                self.assertRaisesRegex(RuntimeError, "fixture drain fault"):
+            self.pump(ticket)
+        self.assertTrue(self.jobs._faulted)
+        with mock.patch.object(self.jobs._pool, "offer_next", side_effect=AssertionError("cleanup offered work")), \
+                mock.patch.object(self.views, "_claim_from_signature_job", side_effect=AssertionError("cleanup recommitted")):
+            self.jobs.request_close()
+            started = time.monotonic()
+            while not self.jobs.drain():
+                self.assertLess(time.monotonic() - started, 5)
+                time.sleep(.002)
+        self.assertEqual(0, self.jobs.snapshot()["tickets"])
+        self.assertIs(True, self.jobs.snapshot()["faulted"])
+        self.assertEqual((1, 1), (self.fixture.count("launch_claims"), self.fixture.count("launch_receipts")))
+        self.assert_wire_error(self.begin(), self.request(), "claim_unavailable")
+
+    def test_fault_after_returned_input_release_can_drain_confirmed_completion_metadata(self):
+        release = self.jobs._intake.discard_returned
+
+        def interrupted(handle):
+            release(handle)
+            raise RuntimeError("fixture after input release")
+
+        ticket = self.begin()
+        with mock.patch.object(self.jobs._intake, "discard_returned", side_effect=interrupted), \
+                self.assertRaisesRegex(RuntimeError, "fixture after input release"):
+            self.pump(ticket)
+        self.assertTrue(self.jobs._faulted)
+        self.assertEqual(0, self.jobs._intake.snapshot().jobs)
+        self.jobs.request_close()
+        started = time.monotonic()
+        while not self.jobs.drain():
+            self.assertLess(time.monotonic() - started, 5)
+            time.sleep(.002)
+        self.assertEqual(0, self.jobs.snapshot()["tickets"])
+        self.assertEqual((1, 1), (self.fixture.count("launch_claims"), self.fixture.count("launch_receipts")))
 
 
 if __name__ == "__main__":

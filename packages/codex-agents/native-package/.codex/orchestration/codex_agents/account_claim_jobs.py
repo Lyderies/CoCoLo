@@ -62,9 +62,9 @@ class AccountClaimJobs:
         self._signatures: dict[object, object] = {}
         self._started = self._closing = self._faulted = False
 
-    def _guard(self):
+    def _guard(self, *, allow_faulted=False):
         self._views._guard()
-        if self._faulted:
+        if self._faulted and not allow_faulted:
             raise ClaimError("claim_unavailable")
 
     def bootstrap(self):
@@ -155,6 +155,9 @@ class AccountClaimJobs:
         self._guard()
         if not self._started:
             raise ClaimError("claim_unavailable")
+        if self._closing:
+            self.drain()
+            return
         try:
             for notice in self._pool.poll():
                 ticket = self._signatures[notice.handle]
@@ -217,17 +220,47 @@ class AccountClaimJobs:
             raise
 
     def request_close(self):
-        self._guard()
+        """Stop existing work even after a claim/publication fault.
+
+        This fence is permanent. Shutdown does not offer, commit or replay work;
+        the fixed pool keeps unknown custody and cancels its actual queued jobs.
+        """
+        self._guard(allow_faulted=True)
         self._closing = True
-        for ticket in tuple(self._jobs):
-            if self._jobs[ticket].state == "pending":
-                self.cancel(ticket)
-        self._pool.request_close()
+        try:
+            self._pool.request_close()
+        except BaseException:
+            self._faulted = True
+            raise
+
+    def drain(self):
+        """Poll cleanup only; return true after the fixed pool confirms closure.
+
+        No metadata flag can release an unknown worker's reservation. Pending
+        and ready ticket metadata remain until all owned workers actually close;
+        durable receipts stay in the database for later explicit caller retries.
+        """
+        self._guard(allow_faulted=True)
+        if not self._closing:
+            raise ClaimError("claim_unavailable")
+        try:
+            for notice in self._pool.poll():
+                self._pool.discard(notice.handle)
+            if not self._pool.snapshot()["closed"]:
+                return False
+            self._jobs.clear()
+            self._requests.clear()
+            self._counts.clear()
+            self._signatures.clear()
+            return True
+        except BaseException:
+            self._faulted = True
+            raise
 
     def snapshot(self):
-        self._guard()
+        self._guard(allow_faulted=True)
         return {"tickets": len(self._jobs), "projects": len(self._counts),
                 "pending": sum(job.state == "pending" for job in self._jobs.values()),
                 "ready": sum(job.state == "ready" for job in self._jobs.values()),
-                "closing": self._closing,
+                "closing": self._closing, "faulted": self._faulted,
                 "workers_closed": self._pool.snapshot()["closed"]}

@@ -1226,6 +1226,12 @@ temporary owner keys. They exercise a second project's claim and health while th
 first project's signature worker waits, invalid signatures, fresh foreign
 restrictions, stale signed inputs, quotas, retries, cancellation and interrupted
 commit/publication. They prove no real model execution or native enrollment.
+Fault fencing permits owner-checked `request_close`, `drain` and metadata
+inspection while permanently refusing new work. Draining never offers a job or
+re-enters claim commit. The fixed pool cancels queued as well as active work,
+releases only confirmed stopped inputs/completion metadata, and preserves unknown
+custody. Coordinator ticket metadata is cleared only after actual pool closure;
+durable receipts remain available for explicit retries after owner recovery.
 Preflight/final admission still uses legacy JSON and filesystem work, and the
 helper's broad-read guard remains experimental. Bounded final owner operations,
 full admission-data preparation, durable orphan reconciliation, active-run capacity,

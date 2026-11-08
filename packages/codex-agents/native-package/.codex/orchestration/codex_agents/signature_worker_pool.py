@@ -297,6 +297,13 @@ class SignatureWorkerPool:
         if active is not None and active.unknown:
             active.cancelled.set()
             return 'pending_confirmation'
+        if active is None and handle in self._returned and handle not in self._intake._jobs:
+            # A previous discard may have released its retained inputs before
+            # being interrupted. The actual stopped completion is still in our
+            # registry, with no active/unknown slot. Remove only that metadata;
+            # absence of an intake handle alone never proves worker shutdown.
+            del self._returned[handle]
+            return 'released'
         result = self._intake.cancel(handle)
         if active is not None:
             active.cancelled.set()
@@ -416,17 +423,13 @@ class SignatureWorkerPool:
     def request_close(self):
         self._owner()
         self._closing = True
-        for slot in self._slots:
-            active = slot.current
-            if active is not None:
-                active.cancelled.set()
-                # Unknown publication may already have changed intake state;
-                # never replay it or infer release from an absent handle.
-                if not active.unknown:
-                    self._intake.cancel(active.handle)
+        # Include queued jobs, which may survive an owner/publication fault
+        # before offer. cancel uses actual owned registries: unknown active
+        # custody stays reserved, and a missing slot is never proof of no start.
+        for handle in tuple(self._intake._jobs):
+            self.cancel(handle)
         for handle in tuple(self._returned):
-            self._intake.cancel(handle)
-            del self._returned[handle]
+            self.cancel(handle)
         for slot in self._slots:
             slot.stop.set()
 
