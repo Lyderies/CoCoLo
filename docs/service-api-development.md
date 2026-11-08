@@ -6,6 +6,69 @@ still use the installed 0.8.12 implementation; the source codec does not enable 
 
 ## Worker result persistence lane
 
+### Account enforcement of armed storage
+
+`AccountService` and its deferred `AccountClaimJobs` now require protected armed
+storage evidence for new eligible claims by default. Existing native caller,
+subscription/billing, signature, policy, account capacity and unique-launch checks
+still apply. Storage evidence only narrows admission; it grants no execution,
+caller authentication or capacity release.
+
+The trusted project writer can export its actual `claim_pending` lease through
+`ProjectHistory.attest_result_lease`. Export rechecks stored state, keyed seals and
+the original window; unused, bound and expired leases cannot produce this evidence.
+The fixed project lane captures it after durable arming on its writer thread,
+returns only an immutable byte reference, and drops that cached evidence after
+actual claim binding. Each lane entry additionally reserves the full 16 KiB proof
+budget. Account tickets retain at most one bounded proof and scope within their
+configured per-project/global ticket quotas.
+
+The account authorizer supplies a separately captured expected supervisor scope
+and the sealed bytes as server-side context. No account request field selects a
+proof, role, endpoint, key or reference mode. A native enrollment adapter must
+independently derive that expected scope from the actual owning supervisor and
+current permissions; taking it from the proof would remove the actor check.
+Fetching/caching the protected writer's evidence must remain outside account
+transactions and project control. The authenticated transport/enrollment for that
+publication is still an activation gate; HMAC possession alone does not prove the
+native requester or a protected runtime invocation.
+
+Before capacity checks or launch-marker/intent/receipt consumption, the account
+commit verifies a closed canonical proof of at most 16 KiB. It checks the keyed
+state seal and original lease receipt, `claim_pending` state, complete expected
+scope, exact canonical account request, project/runtime/run and original deadline.
+The original keyed assignment digest and orchestration handle must also match the
+authoritative account rows. The complete model timeout must fit strictly inside
+the unchanged storage window. Assignment/orchestration columns participate in the
+deferred capture comparison, so changes during signature work return stale rather
+than consuming a different run. The account opens no project SQLite connection.
+
+Missing, malformed/mismatched and expired/too-short storage produce fixed
+`claim_storage_required`, `claim_storage_invalid` and `claim_storage_expired`
+failures. They consume no launch claim, active slot or permanent claim receipt.
+A known exact account receipt is retrieved before fresh storage/signature work,
+including after lease expiry or clock rollback; it never registers or launches a
+child again. Deferred jobs capture original immutable scope/evidence before work,
+and cannot replace them through a duplicate with changed evidence.
+
+The earlier unleased operation remains an explicitly named internal reference
+setting for legacy-path fixtures. It requires an exact boolean in trusted Python
+construction, must match the configured deferred owner, and is not selectable in
+JSON. Before a new claim, supplied evidence is verified even in reference mode;
+invalid evidence never falls back to an unleased claim. Known receipt retrieval
+retains its earlier ordering before fresh evidence. Normal client migration uses the
+required-storage configuration and bounded deferred owner. Existing direct-ledger
+reference clients are not an authorized fallback when services fail.
+
+Disposable tests use real project/account stores, actual fake-provider signatures
+and deferred workers. They cover missing/forged seals, original receipt/window,
+scope/request/assignment/orchestration mismatch, changed rows during verification,
+known lost replies without project reads, bounded metadata and no claim/capacity
+consumption on failure. Native provenance/revocation, independent supervisor
+custody, real account/project transport, full latency/recovery/migration and all
+installed/model/independent-review release gates remain mandatory. No endpoint or
+installed runtime is enabled by this increment.
+
 ### Durable capacity before account claims
 
 The project store now reserves body capacity without needing a future claim ID.
@@ -62,8 +125,8 @@ native authority; no request can select it.
 Tests cover the actual fake-provider account handler minting its claim only after
 lease reservation/arming, exact bind and lost replies, writer-process death mid-
 bind and schema upgrade, mixed capacity limits, restart/expiry uncertainty, privacy
-and inert-worker delivery. Native caller authentication, account-side verification
-and enforcement of lease receipts, cross-owner execution custody, account-denial/
+and inert-worker delivery. Native caller authentication, authenticated publication
+of lease evidence to the account adapter, cross-owner execution custody, account-denial/
 orphan reconciliation, scheduled lifecycle expiry/retirement and normal-client
 migration remain separate mandatory integration/activation gates. No privileged
 endpoint or installed runtime is enabled here.

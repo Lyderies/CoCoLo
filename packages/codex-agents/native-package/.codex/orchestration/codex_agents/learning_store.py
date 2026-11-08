@@ -1997,6 +1997,9 @@ class _ClaimRequest:
     request: str
     parameters: str
     run_context: tuple | None = None
+    storage_required: bool = False
+    storage_binding: object = None
+    storage_evidence: bytes | None = None
 
 
 class LearningLedger:
@@ -5971,6 +5974,7 @@ class LearningLedger:
     def _claim_preflight(
         self, project_id: str, *, runtime_digest: str, caller_scope: str,
         request_id: str, launch: LaunchClaimInput, work_limits=None,
+        storage_required=False, storage_binding=None, storage_evidence=None,
     ):
         """Capture a request and current state; perform no signature work."""
         if (not claim_matches(project_id, _CLAIM_PROJECT) or not claim_matches(runtime_digest, _CLAIM_DIGEST)
@@ -5978,13 +5982,25 @@ class LearningLedger:
                 or not claim_matches(request_id, _CLAIM_REQUEST_ID) or type(launch) is not LaunchClaimInput):
             raise ClaimError("claim_invalid_request")
         launch = LaunchClaimInput(launch.run_handle, launch.identity_digest)
+        from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES
+        from .result_contracts import ResultLeaseBinding
+
+        if (type(storage_required) is not bool
+                or (storage_binding is not None and type(storage_binding) is not ResultLeaseBinding)
+                or (storage_evidence is not None and
+                    (type(storage_evidence) is not bytes or not 0 < len(storage_evidence) <= MAX_STORAGE_EVIDENCE_BYTES))):
+            raise ClaimError("claim_storage_invalid")
+        if storage_binding is not None:
+            storage_binding = ResultLeaseBinding(**storage_binding.as_data())
         key = self.state.digest_key()
         handle = keyed_digest(key, launch.run_handle)
         scope = keyed_digest(key, canonical_json({"project": project_id, "runtime": runtime_digest, "caller": caller_scope}))
         request = keyed_digest(key, request_id)
         parameters = keyed_digest(key, canonical_json(launch.payload()))
         context = _ClaimRequest(self._attestation_origin, project_id, runtime_digest, caller_scope,
-                                request_id, launch, handle, scope, request, parameters)
+                                request_id, launch, handle, scope, request, parameters,
+                                storage_required=storage_required or storage_binding is not None or storage_evidence is not None,
+                                storage_binding=storage_binding, storage_evidence=storage_evidence)
         with self._lock:
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
@@ -6244,17 +6260,20 @@ class LearningLedger:
 
     def claim_launch(
         self, project_id: str, *, runtime_digest: str, caller_scope: str,
-        request_id: str, launch: LaunchClaimInput,
+        request_id: str, launch: LaunchClaimInput, storage_required=False, storage_binding=None, storage_evidence=None,
     ) -> dict[str, Any]:
         """Legacy synchronous owner reference; replies are metadata, never grants.
 
         The asynchronous service path uses the same preflight and commit with an
         actually returned fixed signature job. Native caller/environment custody,
         bounded final admission work and normal-client migration remain required.
+        AccountService requires storage evidence by default; this direct library
+        reference does not grant a normal client a database or fallback path.
         """
         context, known, early_reason, provider = self._claim_preflight(
             project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
             request_id=request_id, launch=launch,
+            storage_required=storage_required, storage_binding=storage_binding, storage_evidence=storage_evidence,
         )
         if known is not None:
             return known
@@ -6327,7 +6346,7 @@ class LearningLedger:
     def _claim_run_rows_locked(self, project_id, handle):
         """Read all fixed scalar inputs before any eligibility short circuit."""
         binding = self._connection.execute(
-            "SELECT run_id,binding_state,consumed_at_ms,client_version,expires_at_ms,created_at_ms "
+            "SELECT run_id,binding_state,consumed_at_ms,client_version,expires_at_ms,created_at_ms,assignment_digest,orchestration_id "
             "FROM host_run_bindings WHERE project_id=? AND handle_digest=?", (project_id, handle),
         ).fetchone()
         inputs = self._connection.execute(
@@ -6416,6 +6435,32 @@ class LearningLedger:
                 reason = "client_version_unreviewed"
         return reason, binding, inputs, identity, admission, timestamp
 
+    def _check_claim_storage(self, context, run_id, timestamp, deadline, work_limits):
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+        from .claim_storage import verify_storage_evidence
+
+        if context.storage_binding is None or context.storage_evidence is None:
+            raise ClaimError("claim_storage_required")
+        def metadata():
+            row = self._connection.execute(
+                "SELECT h.assignment_digest,o.handle_digest FROM host_run_bindings h JOIN orchestrations o "
+                "ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id "
+                "WHERE h.project_id=? AND h.handle_digest=? AND h.run_id=?", (context.project_id, context.handle, run_id),
+            ).fetchone()
+            if row is None:
+                raise ClaimError("claim_storage_invalid")
+            return tuple(row)
+        assignment, orchestration = (metadata() if work_limits is None else
+                                     self._connection.transaction_read_call(work_limits, metadata))
+        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, "account.claim_launch", context.request_id,
+                                 context.project_id, context.runtime_digest, context.launch.payload())
+        verify_storage_evidence(
+            self.state.digest_key(), context.storage_binding, context.storage_evidence,
+            project_id=context.project_id, runtime_digest=context.runtime_digest, run_handle=context.launch.run_handle,
+            run_id=run_id, request_id=context.request_id, request_digest=account_request_digest(request),
+            assignment_digest=assignment, orchestration_digest=orchestration, now_ms=timestamp, deadline_ms=deadline,
+        )
+
     def _claim_commit(self, context, prepared, early_reason, *, admission=None, work_limits=None):
         self._check_claim_context(context)
         project_id, launch = context.project_id, context.launch
@@ -6473,14 +6518,16 @@ class LearningLedger:
                     }, run_id=None, timestamp=timestamp)
             bridge = deadline = None
             if reason is None:
+                deadline = timestamp + inputs["hard_timeout_seconds"] * 1000
+                if not timestamp < deadline <= MAX_CLAIM_INTEGER:
+                    raise ClaimError("claim_unavailable")
+                if context.storage_required:
+                    self._check_claim_storage(context, run_id, timestamp, deadline, work_limits)
                 def capacity():
                     return self._check_active_capacity_locked(inputs["provider"], admitted["account_fingerprint"])
                 policy = (capacity() if work_limits is None else
                           self._connection.transaction_read_call(work_limits, capacity))
                 bridge = "brg_" + secrets.token_hex(16)
-                deadline = timestamp + inputs["hard_timeout_seconds"] * 1000
-                if not timestamp < deadline <= MAX_CLAIM_INTEGER:
-                    raise ClaimError("claim_unavailable")
                 material = {"schema_version": 1, "record_type": "dispatch_intent", "run_id": run_id,
                             "bridge_run_id": bridge, "provider": inputs["provider"], "model": inputs["model"],
                             "effort": inputs["effort"], "deadline_at_ms": deadline, "observed_at_ms": timestamp}

@@ -45,7 +45,7 @@ class AccountClaimJobTests(unittest.TestCase):
         self.gates = []
         self.jobs = AccountClaimJobs(self.views, SignatureIntakeLimits(2, 2, 128, 262_144, 2),
                                      SignatureWorkerLimits(2, 4 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000),
-                                     SQLReadLimits(10_000, 1000, 1_048_576))
+                                     SQLReadLimits(10_000, 1000, 1_048_576), allow_unleased_claim_reference=True)
         self.jobs.bootstrap()
         self.token = object()
 
@@ -55,7 +55,8 @@ class AccountClaimJobTests(unittest.TestCase):
             return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
                                         "host", ACCOUNT_OPERATIONS, "a" * 64)
 
-        self.service = AccountService(COLLECTOR_RUNTIME_DIGEST, self.views, authorizer=authorize, claim_jobs=self.jobs)
+        self.service = AccountService(COLLECTOR_RUNTIME_DIGEST, self.views, authorizer=authorize, claim_jobs=self.jobs,
+                                      allow_unleased_claim_reference=True)
         self.addCleanup(self.service.close)
 
     def tearDown(self):
@@ -511,7 +512,8 @@ class AccountClaimJobTests(unittest.TestCase):
         with mock.patch.object(self.ledger, "_prepare_attestations", side_effect=AssertionError("synchronous fallback")):
             self.assert_wire_error(self.service.handle(raw, self.token), self.request(), "claim_unavailable")
             self.assert_wire_error(self.fixture.service.begin(raw, self.fixture.token), self.request(), "claim_unavailable")
-            denied = AccountService(COLLECTOR_RUNTIME_DIGEST, self.views, claim_jobs=self.jobs)
+            denied = AccountService(COLLECTOR_RUNTIME_DIGEST, self.views, claim_jobs=self.jobs,
+                                    allow_unleased_claim_reference=True)
             self.addCleanup(denied.close)
             self.assert_wire_error(denied.begin(raw), self.request(), "account_not_authorized")
         self.assertEqual(0, self.jobs.snapshot()["tickets"])

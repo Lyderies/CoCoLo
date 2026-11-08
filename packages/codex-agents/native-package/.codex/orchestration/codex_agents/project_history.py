@@ -18,12 +18,13 @@ import sqlite3
 import stat
 import threading
 import time
-from dataclasses import asdict, replace
+from dataclasses import replace
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
 from .contracts import ContractError
+from .claim_storage import encode_storage_evidence, lease_receipt_digest, lease_state_seal
 from .history_contracts import (
     MAX_SEQUENCE, AttemptBinding, HistoryEntry, HistoryError, TerminalDelivery,
     _DIGEST, _ID, _PROJECT, matches, valid_integer,
@@ -674,13 +675,10 @@ class ProjectHistory:
         return binding
 
     def _lease_digest(self, binding, assignment_digest, created, until):
-        return keyed_digest(self._result_key, canonical_json({
-            "domain": "project-result-lease-v1", "binding": binding.as_data(),
-            "assignment_digest": assignment_digest, "created_at_ms": created, "reserved_until_ms": until,
-        }))
+        return lease_receipt_digest(self._result_key, binding, assignment_digest, created, until)
 
     def _lease_seal(self, value):
-        return keyed_digest(self._result_key, canonical_json({"domain": "project-result-lease-state-v1", **asdict(value)}))
+        return lease_state_seal(self._result_key, value)
 
     def _claim_lease_digest(self, value, binding, deadline):
         return keyed_digest(self._result_key, canonical_json({
@@ -816,6 +814,21 @@ class ProjectHistory:
         binding = self._lease_binding(binding)
         self._result_now()
         return self._lease_row(binding)
+
+    @_operation
+    def attest_result_lease(self, binding: ResultLeaseBinding) -> bytes:
+        """Server-only fixed evidence for an actual armed protected-store lease.
+
+        Native/IPC enrollment must prove who owns this project writer and the
+        account requester. Bytes, HMACs and role/session labels alone do not.
+        No body, key, assignment text, path or caller-selected seal is returned.
+        """
+        binding = self._lease_binding(binding)
+        now = self._result_now()
+        value = self._lease_row(binding)
+        if now >= value.reserved_until_ms:
+            raise HistoryError("history_result_expired")
+        return encode_storage_evidence(self._result_key, value)
 
     @_operation
     def arm_result_lease(self, binding: ResultLeaseBinding) -> ResultLease:

@@ -43,15 +43,20 @@ class AccountClaimJobs:
     no thread/process and wait for no worker. Capture and final commit still use
     legacy JSON/filesystem paths; this is not a complete owner-loop latency or
     native enrollment guarantee. Tickets, notices and replies grant no spawn.
+    Bounded immutable protected-store evidence remains with the original request;
+    only the account commit verifies it and consumes admission, never a worker.
+    Unleased reference mode must be explicitly configured before intake.
     """
 
-    def __init__(self, views, intake_limits, worker_limits, work_limits):
+    def __init__(self, views, intake_limits, worker_limits, work_limits, *, allow_unleased_claim_reference=False):
         if (type(views) is not AccountOwnerViews or type(intake_limits) is not SignatureIntakeLimits
-                or type(worker_limits) is not SignatureWorkerLimits or type(work_limits) is not SQLReadLimits):
+                or type(worker_limits) is not SignatureWorkerLimits or type(work_limits) is not SQLReadLimits
+                or type(allow_unleased_claim_reference) is not bool):
             raise ClaimError("claim_invalid_request")
         views._guard()
         work_limits.__post_init__()
         self._views = views
+        self._allow_unleased_reference = allow_unleased_claim_reference
         self._work_limits = SQLReadLimits(work_limits.max_callbacks, work_limits.max_duration_ms,
                                          work_limits.max_value_bytes)
         self._intake = SignatureJobIntake(views, intake_limits)
@@ -100,7 +105,8 @@ class AccountClaimJobs:
             self._counts[job.key[0]] = count - 1
         del self._jobs[ticket]
 
-    def submit(self, project_id, *, runtime_digest, caller_scope, request_id, launch, _ingress=None):
+    def submit(self, project_id, *, runtime_digest, caller_scope, request_id, launch, _ingress=None,
+               storage_binding=None, storage_evidence=None):
         self._guard()
         self._delivery(_ingress)
         if not self._started or self._closing:
@@ -110,11 +116,17 @@ class AccountClaimJobs:
                 or type(launch) is not LaunchClaimInput):
             raise ClaimError("claim_invalid_request")
         launch = LaunchClaimInput(launch.run_handle, launch.identity_digest)
+        from .claim_storage import capture_storage_evidence
+
+        storage_binding, storage_evidence = capture_storage_evidence(storage_binding, storage_evidence)
         key = (project_id, runtime_digest, caller_scope, request_id)
         existing = self._requests.get(key)
         if existing is not None:
             job = self._job(existing)
             if job.launch != launch:
+                raise ClaimError("claim_conflict")
+            if ((storage_binding is not None and (job.context is None or storage_binding != job.context.storage_binding))
+                    or (storage_evidence is not None and (job.context is None or storage_evidence != job.context.storage_evidence))):
                 raise ClaimError("claim_conflict")
             if job.cancelled:
                 # Cancellation cannot be undone by a late duplicate. Keep its
@@ -136,6 +148,8 @@ class AccountClaimJobs:
             context, known, reason, provider = self._views._claim_preflight(
                 project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                 request_id=request_id, launch=launch, work_limits=self._work_limits,
+                storage_required=not self._allow_unleased_reference, storage_binding=storage_binding,
+                storage_evidence=storage_evidence,
             )
             job.context = context
             if known is not None:

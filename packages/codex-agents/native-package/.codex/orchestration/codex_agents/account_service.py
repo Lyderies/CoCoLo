@@ -54,7 +54,12 @@ _ADMISSION_INPUT_JOIN = (
 
 @dataclass(frozen=True)
 class AccountAuthorization:
-    """Trusted adapter output; never decoded from JSON or accepted as proof."""
+    """Trusted adapter output; never decoded from JSON or accepted as proof.
+
+    Storage scope is derived independently from enrolled supervisor ownership;
+    sealed evidence comes from its protected project writer. The data/HMAC do
+    not establish native provenance, current permissions or caller identity.
+    """
 
     project_id: str
     runtime_digest: str
@@ -62,6 +67,8 @@ class AccountAuthorization:
     source: str
     allowed_operations: frozenset[str]
     caller_scope: str | None = None
+    storage_binding: object = None
+    storage_evidence: bytes | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -73,6 +80,15 @@ class AccountAuthorization:
             or not self.allowed_operations <= ACCOUNT_OPERATIONS
             or (self.caller_scope is not None and not matches(self.caller_scope, _DIGEST))
         ):
+            raise AccountError("account_not_authorized")
+        from .claim_storage import capture_storage_evidence
+
+        invalid = False
+        try:
+            capture_storage_evidence(self.storage_binding, self.storage_evidence)
+        except ClaimError:
+            invalid = True
+        if invalid:
             raise AccountError("account_not_authorized")
 
 
@@ -130,10 +146,12 @@ class AccountOwnerViews:
         return self._owner_key_view(project_id, include_public_key=True)
 
     def claim_launch(self, project_id: str, *, runtime_digest: str, caller_scope: str,
-                     request_id: str, launch: LaunchClaimInput) -> dict:
+                     request_id: str, launch: LaunchClaimInput, storage_required=False,
+                     storage_binding=None, storage_evidence=None) -> dict:
         self._guard()
         return self._ledger.claim_launch(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
-                                         request_id=request_id, launch=launch)
+                                         request_id=request_id, launch=launch, storage_required=storage_required,
+                                         storage_binding=storage_binding, storage_evidence=storage_evidence)
 
     def capacity_status(self, project_id: str, status: CapacityStatusInput) -> dict:
         self._guard()
@@ -143,10 +161,13 @@ class AccountOwnerViews:
             self._project_locked(project_id)
             return self._ledger._capacity_status(project_id, status)
 
-    def _claim_preflight(self, project_id, *, runtime_digest, caller_scope, request_id, launch, work_limits=None):
+    def _claim_preflight(self, project_id, *, runtime_digest, caller_scope, request_id, launch, work_limits=None,
+                         storage_required=False, storage_binding=None, storage_evidence=None):
         self._guard()
         return self._ledger._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
-                                             request_id=request_id, launch=launch, work_limits=work_limits)
+                                             request_id=request_id, launch=launch, work_limits=work_limits,
+                                             storage_required=storage_required, storage_binding=storage_binding,
+                                             storage_evidence=storage_evidence)
 
     def _claim_commit_denied(self, context, reason, work_limits=None):
         self._guard()
@@ -563,6 +584,9 @@ class AccountService:
     and operation scope independently. Default denial grants no usable endpoint.
     Closing this handler never closes the shared account owner.
     begin() defers claim signature work to explicitly configured owner jobs.
+    New claims require armed protected-store evidence by default. The explicit
+    unleased reference switch is trusted startup/test state, never wire input
+    or an automatic fallback. Matching configured jobs enforce the same mode.
     Native authentication, bounded final admission work and normal-client
     migration remain required before endpoint activation.
     """
@@ -571,17 +595,21 @@ class AccountService:
         self, runtime_digest: str, views: AccountOwnerViews, *,
         authorizer: Callable[[AccountRequest, object], AccountAuthorization | None] | None = None,
         claim_jobs=None,
+        allow_unleased_claim_reference=False,
     ) -> None:
-        if not matches(runtime_digest, _DIGEST) or not isinstance(views, AccountOwnerViews) or (authorizer is not None and not callable(authorizer)):
+        if (not matches(runtime_digest, _DIGEST) or not isinstance(views, AccountOwnerViews)
+                or (authorizer is not None and not callable(authorizer)) or type(allow_unleased_claim_reference) is not bool):
             raise AccountError("account_invalid_request")
         if claim_jobs is not None:
             from .account_claim_jobs import AccountClaimJobs
 
-            if type(claim_jobs) is not AccountClaimJobs or claim_jobs._views is not views:
+            if (type(claim_jobs) is not AccountClaimJobs or claim_jobs._views is not views
+                    or claim_jobs._allow_unleased_reference != allow_unleased_claim_reference):
                 raise AccountError("account_invalid_request")
             claim_jobs._guard()
         self._runtime, self._views, self._authorizer = runtime_digest, views, authorizer
         self._claim_jobs = claim_jobs
+        self._allow_unleased_reference = allow_unleased_claim_reference
         self._pid = os.getpid()
         self._closed = False
         self._front_lock = threading.Lock()
@@ -674,17 +702,24 @@ class AccountService:
             ):
                 raise AccountError("account_not_authorized")
             if operation == "account.claim_launch":
+                from .claim_storage import capture_storage_evidence
+
+                storage_binding, storage_evidence = capture_storage_evidence(
+                    authorization.storage_binding, authorization.storage_evidence)
                 if deferred:
                     if self._claim_jobs is None:
                         raise ClaimError("claim_unavailable")
                     return self._claim_jobs.submit(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
-                                                   request_id=identity, launch=launch, _ingress=ingress)
+                                                   request_id=identity, launch=launch, _ingress=ingress,
+                                                   storage_binding=storage_binding, storage_evidence=storage_evidence)
                 if self._claim_jobs is not None:
                     # Configured asynchronous owners never block or bypass their
                     # queue with the legacy synchronous reference operation.
                     raise ClaimError("claim_unavailable")
                 result = self._views.claim_launch(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
-                                                  request_id=identity, launch=launch)
+                                                  request_id=identity, launch=launch,
+                                                  storage_required=not self._allow_unleased_reference,
+                                                  storage_binding=storage_binding, storage_evidence=storage_evidence)
             elif request.operation == "account.health":
                 result = {"transport_alive": True, "database_checked": False}
             elif request.operation == "account.project":

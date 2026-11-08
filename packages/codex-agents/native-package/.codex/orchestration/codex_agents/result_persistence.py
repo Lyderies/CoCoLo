@@ -15,6 +15,7 @@ import time
 import weakref
 
 from .bridge_liveness import BridgeLivenessOwner, CodexOwnerResult
+from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES
 from .codex_worker import CodexWorkerError, CodexWorkerHandle, CodexWorkerPacket, CodexWorkerPool, MAX_INPUT_BYTES, MAX_PACKET_BYTES, _decode_input
 from .contracts import ContractError
 from .history_contracts import AttemptBinding, HistoryError, TerminalDelivery, valid_integer
@@ -26,7 +27,7 @@ from .result_contracts import (
 )
 
 _TIME_NS = time.time_ns
-MAX_PERSISTENCE_ENTRY_BYTES = MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES + MAX_PACKET_BYTES
+MAX_PERSISTENCE_ENTRY_BYTES = MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES + MAX_PACKET_BYTES + MAX_STORAGE_EVIDENCE_BYTES
 
 
 class ResultPersistenceHandle:
@@ -51,6 +52,7 @@ class _Pending:
     lease_binding: ResultLeaseBinding | None = None
     lease: object = None
     claim_binding: AttemptBinding | None = None
+    storage_evidence: bytes | None = None
 
 
 class ResultPersistenceLane:
@@ -173,6 +175,14 @@ class ResultPersistenceLane:
                 raise HistoryError("history_result_not_ready")
             pending.state, pending.reason = "arming", None
             self._incoming.put_nowait(("arm", handle))
+
+    def storage_evidence(self, handle):
+        """Immutable server-to-server data, not a client or native grant."""
+        pending = self._job(handle)
+        with self._lock:
+            if pending.state != "claim_pending" or pending.storage_evidence is None:
+                raise HistoryError("history_result_not_ready")
+            return pending.storage_evidence
 
     def bind_claim(self, handle, binding, *, hard_deadline_at_ms):
         """After trusted account checks, queue the exact actual claim bind.
@@ -328,7 +338,9 @@ class ResultPersistenceLane:
 
     def _arm(self, pending):
         lease = self._history().arm_result_lease(pending.lease_binding)
+        evidence = self._history().attest_result_lease(pending.lease_binding)
         with self._lock:
+            pending.storage_evidence = evidence
             pending.lease, pending.state, pending.reason = lease, "claim_pending", None
 
     def _bind_claim(self, pending):
@@ -338,6 +350,7 @@ class ResultPersistenceLane:
         lease = self._history().result_lease(pending.lease_binding)
         with self._lock:
             pending.binding = pending.claim_binding
+            pending.storage_evidence = None
             pending.lease, pending.state, pending.reason = lease, "reserved", None
 
     def _publish(self, pending):

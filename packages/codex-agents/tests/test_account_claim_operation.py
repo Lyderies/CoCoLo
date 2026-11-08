@@ -48,7 +48,9 @@ class AccountClaimOperationTests(unittest.TestCase):
                 return None
             return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
                                         source, frozenset({"account.claim_launch"}), scope)
-        service = AccountService(COLLECTOR_RUNTIME_DIGEST, self.views, authorizer=authorize)
+        # Explicit old-path reference fixture; new services require armed storage.
+        service = AccountService(COLLECTOR_RUNTIME_DIGEST, self.views, authorizer=authorize,
+                                 allow_unleased_claim_reference=True)
         self.addCleanup(service.close)
         return service
 

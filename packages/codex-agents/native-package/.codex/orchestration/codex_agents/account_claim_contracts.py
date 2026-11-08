@@ -10,6 +10,7 @@ CLAIM_ERROR_CODES = frozenset({
     "claim_invalid_request", "claim_conflict", "claim_unavailable", "claim_busy",
     "claim_cancelled", "claim_preparation_failed",
     "claim_preparation_stale",
+    "claim_storage_required", "claim_storage_invalid", "claim_storage_expired",
 })
 CLAIM_DENIAL_CODES = frozenset(ADMISSION_REASON_CODES - {"admitted"}) | frozenset({
     "claim_not_open", "claim_already_consumed", "claim_context_missing",

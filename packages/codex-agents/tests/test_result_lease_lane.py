@@ -9,6 +9,7 @@ import tests.support  # noqa: F401
 from tests import test_result_persistence as fixtures
 
 from codex_agents import result_persistence
+from codex_agents.claim_storage import MAX_STORAGE_EVIDENCE_BYTES
 from codex_agents.history_contracts import HistoryError
 from codex_agents.project_history import ProjectHistory
 from codex_agents.result_contracts import LEASE_SCOPE_FIELDS, ResultLeaseBinding
@@ -29,6 +30,8 @@ class ResultLeaseLaneTests(unittest.TestCase):
         self.handles[worker_handle], self.scopes[worker_handle] = handle, scope
         self.worker.until(lambda: self.lane.snapshot(handle)["state"] != "preparing")
         self.assertEqual("reserved", self.lane.snapshot(handle)["state"])
+        with self.assertRaisesRegex(HistoryError, "history_result_not_ready"):
+            self.lane.storage_evidence(handle)
         self.assertIsNone(self.lane.lease(handle).claim_id)
         self.assertEqual(0, len(self.worker.registry._issued))
         with self.assertRaisesRegex(HistoryError, "history_result_not_ready"):
@@ -36,6 +39,10 @@ class ResultLeaseLaneTests(unittest.TestCase):
         self.lane.arm(handle)
         self.worker.until(lambda: self.lane.snapshot(handle)["state"] != "arming")
         self.assertEqual("claim_pending", self.lane.snapshot(handle)["state"])
+        evidence = self.lane.storage_evidence(handle)
+        self.assertIs(evidence, self.lane.storage_evidence(handle))
+        self.assertLessEqual(len(evidence), MAX_STORAGE_EVIDENCE_BYTES)
+        self.assertNotIn(b"PRIVATE", evidence)
         self.assertEqual(0, len(self.worker.registry._issued))
         self.lane.bind_claim(handle, target, hard_deadline_at_ms=self.composition.deadline_ms)
         if waiting is not None:
@@ -43,6 +50,8 @@ class ResultLeaseLaneTests(unittest.TestCase):
         self.worker.until(lambda: self.lane.snapshot(handle)["state"] != "binding_claim")
         self.assertEqual("reserved", self.lane.snapshot(handle)["state"], self.lane.snapshot(handle))
         self.assertEqual("bound", self.lane.lease(handle).state)
+        with self.assertRaisesRegex(HistoryError, "history_result_not_ready"):
+            self.lane.storage_evidence(handle)
 
     def after(self, target, worker_handle):
         self.lane.bind(self.handles[worker_handle])
