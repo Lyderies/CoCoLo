@@ -4513,9 +4513,24 @@ class LearningLedger:
                 # durable, so a mode/path refusal cannot lose a committed handle.
                 self.state.harden_database_files()
                 self._connection.commit()
-            except BaseException:
-                with contextlib.suppress(sqlite3.Error):
-                    self._connection.rollback()
+            except BaseException as original:
+                # Restoration can already have poisoned/closed this connection.
+                # Trusted cleanup must not replace the operation's interruption
+                # with the ordinary wrapper's unusable-connection error.
+                cleanup_failure = None
+                try:
+                    sqlite3.Connection.rollback(self._connection)
+                except BaseException as rollback_failure:
+                    cleanup_failure = rollback_failure
+                    self._connection._sql_unusable = True
+                    try:
+                        sqlite3.Connection.close(self._connection)
+                    except BaseException as close_failure:
+                        if isinstance(cleanup_failure, Exception):
+                            cleanup_failure = close_failure
+                if (isinstance(original, Exception) and cleanup_failure is not None
+                        and not isinstance(cleanup_failure, Exception)):
+                    raise cleanup_failure
                 raise
 
     def open_host_run(
@@ -5996,14 +6011,27 @@ class LearningLedger:
             raise ClaimError("claim_unavailable")
         return known, timestamp
 
-    def _claim_scalar_context_locked(self, project_id, handle, launch, timestamp):
-        """Fresh fixed run/observation columns; never parse stored JSON here."""
-        from .providers import BILLING_MAX_AGE_MS
-
+    def _claim_run_rows_locked(self, project_id, handle):
+        """Read all fixed scalar inputs before any eligibility short circuit."""
         binding = self._connection.execute(
             "SELECT run_id,binding_state,consumed_at_ms,client_version,expires_at_ms,created_at_ms "
             "FROM host_run_bindings WHERE project_id=? AND handle_digest=?", (project_id, handle),
         ).fetchone()
+        inputs = self._connection.execute(
+            "SELECT run_id,provider,runtime_digest,model,effort,hard_timeout_seconds "
+            "FROM launch_inputs WHERE project_id=? AND handle_digest=?", (project_id, handle),
+        ).fetchone()
+        observed = self._connection.execute(
+            "SELECT identity_digest,observed_at_ms FROM launch_observations WHERE project_id=? AND handle_digest=?",
+            (project_id, handle),
+        ).fetchone()
+        return binding, inputs, observed
+
+    def _claim_scalar_context_locked(self, project_id, handle, launch, timestamp, *, rows=None):
+        """Fresh fixed run/observation columns; never parse stored JSON here."""
+        from .providers import BILLING_MAX_AGE_MS
+
+        binding, inputs, observed = self._claim_run_rows_locked(project_id, handle) if rows is None else rows
         if binding is None:
             return "claim_not_open", None, None, None
         if (binding["binding_state"] != "pending" or binding["consumed_at_ms"] is not None
@@ -6016,18 +6044,10 @@ class LearningLedger:
             (project_id, handle, binding["run_id"]),
         ).fetchone() is not None:
             return "claim_already_consumed", binding, None, None
-        inputs = self._connection.execute(
-            "SELECT run_id,provider,runtime_digest,model,effort,hard_timeout_seconds "
-            "FROM launch_inputs WHERE project_id=? AND handle_digest=?", (project_id, handle),
-        ).fetchone()
         if inputs is None or inputs["run_id"] != binding["run_id"] or inputs["provider"] not in {"codex", "claude"}:
             return "claim_context_missing", binding, None, None
         if inputs["runtime_digest"] != COLLECTOR_RUNTIME_DIGEST:
             return "claim_runtime_mismatch", binding, inputs, None
-        observed = self._connection.execute(
-            "SELECT identity_digest,observed_at_ms FROM launch_observations WHERE project_id=? AND handle_digest=?",
-            (project_id, handle),
-        ).fetchone()
         if (observed is None or observed["identity_digest"] != launch.identity_digest
                 or not binding["created_at_ms"] <= observed["observed_at_ms"] <= timestamp
                 or timestamp - observed["observed_at_ms"] > BILLING_MAX_AGE_MS):
@@ -6063,9 +6083,12 @@ class LearningLedger:
             )
             if not same_admission_inputs(snapshot, current):
                 raise ClaimError("claim_preparation_stale")
-            state = self._claim_scalar_context_locked(context.project_id, context.handle, context.launch, current.captured_at_ms)
-            if state[0] is None and context.run_context != self._claim_run_columns(*state[1:]):
+            rows = self._claim_run_rows_locked(context.project_id, context.handle)
+            if context.run_context != tuple(None if row is None else tuple(row) for row in rows):
                 raise ClaimError("claim_preparation_stale")
+            state = self._claim_scalar_context_locked(
+                context.project_id, context.handle, context.launch, current.captured_at_ms, rows=rows,
+            )
             return (*state, current.captured_at_ms)
 
         reason, binding, inputs, observed, timestamp = self._connection.transaction_read_call(work_limits, read)

@@ -1,9 +1,11 @@
 """Deferred claims with real disposable signature workers and fake providers."""
 import json
+import hashlib
 from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 import subprocess
+import sqlite3
 import sys
 import threading
 import time
@@ -20,8 +22,8 @@ from codex_agents.account_api import (
 from codex_agents.account_claim_contracts import ClaimError, LaunchClaimInput
 from codex_agents.account_claim_jobs import AccountClaimJobs
 from codex_agents.account_service import AccountAuthorization, AccountService
-from codex_agents.learning_contracts import content_digest
-from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST
+from codex_agents.learning_contracts import canonical_json, content_digest
+from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST, LedgerError
 from codex_agents.signature_job_intake import SignatureIntakeLimits
 from codex_agents.signature_worker_pool import SignatureWorkerLimits
 from codex_agents.sql_read_budget import SQLReadLimits
@@ -330,9 +332,80 @@ class AccountClaimJobTests(unittest.TestCase):
             self.assertTrue(started.wait(2))
             self.ledger._connection.execute("UPDATE launch_observations SET identity_digest=?", ("e" * 64,))
             gate.set()
-            result = decode_account_response(self.pump(ticket), self.request())
-        self.assertEqual(("denied", "claim_observation_missing"), (result["state"], result["reason_code"]))
+            self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
         self.fixture.assert_no_claim()
+        self.assertEqual(0, self.fixture.count("launch_receipts"))
+        self.ledger._connection.execute("UPDATE launch_observations SET identity_digest=?", (self.launch.identity_digest,))
+        self.assertEqual("claimed", decode_account_response(self.pump(self.begin()), self.request())["state"])
+
+    def test_missing_captured_launch_input_is_stale_and_can_be_explicitly_prepared_again(self):
+        original = dict(self.ledger._connection.execute("SELECT * FROM launch_inputs").fetchone())
+        gate, started, patcher = self.gate_first_project()
+        with patcher:
+            ticket = self.begin()
+            self.jobs.drive()
+            self.assertTrue(started.wait(2))
+            self.ledger._connection.execute("DELETE FROM launch_inputs")
+            gate.set()
+            self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
+        self.assertEqual(0, self.fixture.count("launch_receipts"))
+        self.fixture.assert_no_claim()
+        names = list(original)
+        self.ledger._connection.execute("INSERT INTO launch_inputs (" + ",".join(names) + ") VALUES("
+                                        + ",".join("?" for _ in names) + ")", [original[name] for name in names])
+        self.assertEqual("claimed", decode_account_response(self.pump(self.begin()), self.request())["state"])
+
+    def test_unchanged_expired_run_keeps_ordinary_denial_instead_of_stale_failure(self):
+        expires = self.ledger._connection.execute("SELECT expires_at_ms FROM host_run_bindings").fetchone()[0]
+        gate, started, patcher = self.gate_first_project()
+        with patcher:
+            ticket = self.begin()
+            self.jobs.drive()
+            self.assertTrue(started.wait(2))
+            self.fixture.stamp = expires + 1
+            gate.set()
+            result = decode_account_response(self.pump(ticket), self.request())
+        self.assertEqual(("denied", "claim_not_open"), (result["state"], result["reason_code"]))
+        self.assertEqual(1, self.fixture.count("launch_receipts"))
+        self.fixture.assert_no_claim()
+
+    def test_transaction_restoration_interrupt_preserves_nonlocal_fault_and_returned_custody(self):
+        self.begin()
+        self.jobs.drive()
+        started = time.monotonic()
+        while not any(not slot.outgoing.empty() for slot in self.jobs._pool._slots):
+            self.assertLess(time.monotonic() - started, 8)
+            time.sleep(.002)
+        restore = self.ledger._connection._restore_read_settings
+        interrupted = []
+
+        def interrupt(prior, scope, **kwargs):
+            restore(prior, scope, **kwargs)
+            if kwargs.get("transaction") and not interrupted:
+                interrupted.append(True)
+                raise KeyboardInterrupt("fixture transaction restoration")
+
+        with mock.patch.object(self.ledger._connection, "_restore_read_settings", side_effect=interrupt), \
+                self.assertRaisesRegex(KeyboardInterrupt, "fixture transaction restoration"):
+            self.jobs.drive()
+        self.assertTrue(self.jobs.snapshot()["faulted"])
+        self.assertEqual(1, self.jobs.snapshot()["tickets"])
+        self.assertEqual(1, self.jobs._intake.snapshot().returned)
+        with mock.patch.object(self.jobs._pool, "offer_next", side_effect=AssertionError("fault drain offer")), \
+                mock.patch.object(self.views, "_claim_from_signature_job", side_effect=AssertionError("fault drain commit")):
+            self.jobs.request_close()
+            started = time.monotonic()
+            while not self.jobs.drain():
+                self.assertLess(time.monotonic() - started, 8)
+                time.sleep(.002)
+        # Independent fixture verification of the poisoned/closed owner's file;
+        # this read-only connection is never a normal-client fallback.
+        check = sqlite3.connect(self.ledger.state.database.as_uri() + "?mode=ro", uri=True)
+        try:
+            self.assertEqual(0, check.execute("SELECT COUNT(*) FROM launch_claims").fetchone()[0])
+            self.assertEqual(0, check.execute("SELECT COUNT(*) FROM launch_receipts").fetchone()[0])
+        finally:
+            check.close()
 
     def test_changed_run_parameters_after_preparation_are_stale_without_claim(self):
         gate, started, patcher = self.gate_first_project()
@@ -396,6 +469,28 @@ class AccountClaimJobTests(unittest.TestCase):
         admission["evidence_digests"].append(cited)
         with self.assertRaisesRegex(ClaimError, "claim_preparation_failed"):
             claim_admission.claim_identity(prepared, run_id, self.launch.identity_digest)
+        self.fixture.assert_no_claim()
+
+    def test_wrong_source_local_admission_candidate_cannot_be_hidden_from_preparation(self):
+        row = self.ledger._connection.execute(
+            "SELECT * FROM records WHERE project_id=? AND record_type='admission_decision' AND source='lifecycle' LIMIT 1",
+            (self.project,),
+        ).fetchone()
+        values = dict(row)
+        record = json.loads(bytes(values["content"]))
+        run_id = record["run_id"]
+        record["record_id"] = "admission_decision:" + hashlib.sha256(b"wrong-source-admission-fixture").hexdigest()
+        values.update(record_id=record["record_id"], source="owner", content=canonical_json(record),
+                      source_sequence=self.ledger._connection.execute(
+                          "SELECT MAX(source_sequence)+100 FROM records WHERE project_id=?", (self.project,),
+                      ).fetchone()[0])
+        values["content_digest"] = hashlib.sha256(values["content"]).hexdigest()
+        names = list(values)
+        self.ledger._connection.execute("INSERT INTO records (" + ",".join(names) + ") VALUES("
+                                        + ",".join("?" for _ in names) + ")", [values[name] for name in names])
+        with self.assertRaises(LedgerError):
+            self.ledger._run_admission_locked(self.project, run_id)
+        self.assert_wire_error(self.pump(self.begin()), self.request(), "claim_preparation_failed")
         self.fixture.assert_no_claim()
 
     def test_request_mutation_in_authorizer_is_denied_before_ticket_reservation(self):

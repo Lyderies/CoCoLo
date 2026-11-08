@@ -1313,6 +1313,10 @@ Configured claim jobs reserve their combined admission and signature row/field
 share before capture. The original owner captures every candidate in the six
 closed admission record families, including foreign-project/provider restrictions.
 Headers and aggregate limits precede copying bodies; overflow refuses the job.
+Local run-admission candidates are charged regardless of their source label.
+A wrongly sourced local admission cannot disappear before cardinality/source
+validation; malformed sources fail preparation instead of weakening the original
+run-admission fence. Global account history retains its producer-source rules.
 Local billing signature inputs are derived from that same immutable raw capture.
 They are charged again conservatively against the combined share. Slot/project
 ceilings still cover queued, active and returned data. Parsed metadata remains
@@ -1332,6 +1336,9 @@ The final atomic transaction re-captures raw rows with bounded SELECT work and
 compares every row, owner generation, public signer, project creation and policy
 field exactly. Capture timestamps differ; all decision inputs must match.
 The captured run/approved-launch/observation columns must also remain unchanged.
+All three scalar rows are compared before eligibility checks, including missing
+rows; a changed input cannot instead create a permanent denial receipt. Unchanged
+inputs that have simply expired still receive the ordinary durable denial.
 Fresh run state, observation age, wall clock and account restrictions are checked
 before the same one-time intent/consumption/receipt commit. Ordered validated
 metadata replaces stored-JSON parsing and SQL JSON extraction in this deferred
@@ -1356,6 +1363,9 @@ accepts a callback or SQL. SQLite's `query_only` setting alone is insufficient t
 prevent commits, as its [documentation](https://www.sqlite.org/pragma.html#pragma_query_only)
 explains. Scope faults restore settings or fence the connection; they never infer
 that an unknown worker has stopped or replay a claim.
+Account rollback uses trusted native cleanup even if restoration already closed
+the connection. Cleanup errors cannot replace an operation's nonlocal interruption;
+failed rollback fences/closes the connection and preserves returned-job custody.
 
 Regressions exercise actual fixed helpers and Unix-wire claims, forbid legacy
 owner JSON paths, test foreign restrictions and explicit stale retries, candidate

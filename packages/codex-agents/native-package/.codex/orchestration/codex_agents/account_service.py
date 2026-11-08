@@ -40,7 +40,7 @@ from .account_claim_contracts import ClaimError, LaunchClaimInput, decode_claim_
 # Fixed owner query: do not parse JSON or select variable record values during
 # preliminary quota checks. Foreign-account/provider candidates are charged too.
 _ADMISSION_INPUT_SCOPE = (
-    "((r.project_id=? AND r.record_type IN ('provider_identity','billing_attestation')) "
+    "((r.project_id=? AND r.record_type IN ('provider_identity','billing_attestation','admission_decision')) "
     "OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom')) "
     "OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission')))"
 )
