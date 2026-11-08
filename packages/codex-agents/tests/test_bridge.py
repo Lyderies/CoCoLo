@@ -2495,6 +2495,25 @@ class BridgeLifecycleTests(CliTestCase):
             execution_configuration=route["execution_configuration"],
         )
 
+    @parser_matrix_capacity
+    def test_local_liveness_reasons_keep_exact_fenced_terminal_states(self) -> None:
+        self.admit("codex")
+        for reason, terminal in (("cancelled", "cancelled"), ("startup_silence", "timed_out"),
+                                 ("work_silence", "timed_out"), ("monitor_unavailable", "failed")):
+            with self.subTest(reason=reason):
+                route = self.bridged_route("codex")
+                assigned = self.assignment_for(route)
+                handle = self.open(route, assigned)
+                with mock.patch.object(bridge, "run_codex", return_value=(None, {"outcome": reason})):
+                    output = self.dispatch(route, assigned, handle)
+                self.assertEqual(reason, output["bridge_report"]["outcome"])
+                self.assertEqual(terminal, output["bridge_report"]["terminal_state"])
+                self.assertEqual(terminal, output["result"]["execution_state"])
+                validate_result(output["result"], assignment=assigned)
+                committed = self.commit(route, assigned, handle, output["result"], terminal)
+                self.assertFalse(committed["outcome"]["accepted"])
+                self.assertEqual(terminal, committed["outcome"]["execution_state"])
+
     def test_a_fence_cannot_be_dropped_or_invented(self) -> None:
         route, assigned, handle = self.claude_run(timeout_seconds=1)
         self.frames("claude", [init_frame(), {"sleep": 60}])

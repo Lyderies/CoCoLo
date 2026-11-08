@@ -729,6 +729,25 @@ def run_child(
     buffer = b""
     received = 0
     execution_bound = False
+    cleanup_entered = False
+
+    def requested_abort():
+        if _execution is None:
+            return None
+        return {"cancel_requested": "cancelled", "absolute_deadline": "timed_out",
+                "startup_silence": "startup_silence", "work_silence": "work_silence",
+                "monitor_unavailable": "monitor_unavailable"}.get(_execution.stop_reason())
+
+    def check_stop():
+        requested = requested_abort()
+        if requested is not None:
+            raise _Abort(requested)
+
+    def check_running():
+        check_stop()
+        if time.monotonic() >= deadline:
+            raise _Abort("timed_out")
+
     try:
         try:
             factory = popen if _execution is None else _execution.spawn
@@ -743,11 +762,16 @@ def run_child(
             )
         except (OSError, ExecutionCustodyError) as error:
             expired = isinstance(error, ExecutionCustodyError) and error.reason_code == "execution_deadline_expired"
-            outcome["abort"] = "timed_out" if expired else "launch_failed"
+            cancelled = isinstance(error, ExecutionCustodyError) and error.reason_code == "execution_cancel_requested"
+            outcome["abort"] = (requested_abort() if cancelled else None) or (
+                "timed_out" if expired else "cancelled" if cancelled else "launch_failed")
             return outcome
         tree = ProcessTree(process.pid) if _execution is None else _execution.tree(process)
         _ACTIVE_CHILDREN[process.pid] = (process, tree)
-        if not tree.identify(process_table()):
+        check_stop()
+        identified = tree.identify(process_table())
+        check_stop()
+        if not identified:
             raise _Abort("process_tracking_unavailable")
         if _execution is not None:
             try:
@@ -763,6 +787,7 @@ def run_child(
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
             while True:
+                check_running()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise _Abort("timed_out")
@@ -780,8 +805,7 @@ def run_child(
                     raise _Abort("stream_too_large")
                 buffer += chunk
                 while b"\n" in buffer:
-                    if time.monotonic() >= deadline:
-                        raise _Abort("timed_out")
+                    check_running()
                     line, buffer = buffer.split(b"\n", 1)
                     if len(line) > MAX_LINE_BYTES:
                         raise _Abort("stream_too_large")
@@ -793,15 +817,14 @@ def run_child(
             if len(buffer) > MAX_LINE_BYTES:
                 raise _Abort("stream_too_large")
             if buffer.strip():
-                if time.monotonic() >= deadline:
-                    raise _Abort("timed_out")
+                check_running()
                 _deliver(buffer, on_frame)
         # The output is closed. Wait for the child to exit without reaping it; an
         # exit first seen after the deadline (a snapshot can block) is a timeout.
         while True:
+            check_running()
             _track(tree)
-            if time.monotonic() >= deadline:
-                raise _Abort("timed_out")
+            check_running()
             if tree.root_exited():
                 break
             time.sleep(min(TRACK_INTERVAL_SECONDS, max(deadline - time.monotonic(), 0.0)))
@@ -809,33 +832,41 @@ def run_child(
         outcome["abort"] = abort.reason
     finally:
         original_error = sys.exc_info()[1]
-        try:
+        cleanup_error = None
+
+        def cleanup_step(operation, *, ignored=()):
+            nonlocal cleanup_error
             try:
-                if process is not None:
-                    _stop_child(process, tree)
-                elif _execution is not None:
-                    try:
-                        _execution.abort_handoff()
-                    except ExecutionCustodyError:
-                        pass  # Invalid/unentered tickets provide no child to stop.
-            finally:
-                try:
-                    if process is not None:
-                        _ACTIVE_CHILDREN.pop(process.pid, None)
-                        process.stdout.close()
-                finally:
-                    watchdog_reaped = watchdog.reap()
-                    if not watchdog_reaped and outcome["abort"] is None:
-                        outcome["abort"] = "watchdog_unavailable"
-                    if watchdog_reaped and execution_bound:
-                        try:
-                            _execution.finish(process, tree)
-                        except ExecutionCustodyError:
-                            pass  # Unconfirmed custody retains its capacity reservation.
-        except BaseException:
+                return True, operation()
+            except BaseException as error:
+                if not isinstance(error, ignored):
+                    if cleanup_error is None or (isinstance(cleanup_error, Exception)
+                                                 and not isinstance(error, Exception)):
+                        cleanup_error = error
+                return False, None
+
+        # Every stage runs even if an earlier cleanup stage failed. Preserve
+        # the first nonlocal exit, and never infer custody from a failed step.
+        if process is not None:
+            if _execution is not None:
+                cleanup_entered, _ = cleanup_step(_execution.begin_cleanup)
+            cleanup_step(lambda: _stop_child(process, tree))
+        elif _execution is not None:
+            cleanup_step(_execution.abort_handoff, ignored=(ExecutionCustodyError,))
+        if process is not None:
+            _ACTIVE_CHILDREN.pop(process.pid, None)
+            cleanup_step(process.stdout.close)
+        _, watchdog_reaped = cleanup_step(watchdog.reap)
+        if not watchdog_reaped and outcome["abort"] is None:
+            outcome["abort"] = "watchdog_unavailable"
+        if watchdog_reaped and execution_bound and cleanup_entered:
+            cleanup_step(lambda: _execution.finish(process, tree), ignored=(ExecutionCustodyError,))
+        if cleanup_error is not None:
             if original_error is not None and not isinstance(original_error, Exception):
                 raise original_error
-            raise
+            raise cleanup_error
+    if outcome["abort"] is None:
+        outcome["abort"] = requested_abort()
     if outcome["abort"] is None:
         outcome["returncode"] = process.returncode
     return outcome
@@ -892,7 +923,7 @@ def _fenced_result(assignment: dict[str, Any], state: str, reason: str) -> dict[
     # An outcome the bridge cannot prove is recorded as a failure, never success.
     return {
         "assignment_id": assignment["assignment_id"],
-        "status": "failed",
+        "status": legacy_result_status(state, "not-applicable"),
         "execution_state": state,
         "semantic_verdict": "not-applicable",
         "admission_state": "unverified",
@@ -1863,7 +1894,8 @@ def dispatch(
     if result_validation_reason_code is not None:
         report["result_validation_reason_code"] = result_validation_reason_code
     if result is None:
-        state = "timed_out" if report["outcome"] == "timed_out" else "failed"
+        state = {"timed_out": "timed_out", "startup_silence": "timed_out",
+                 "work_silence": "timed_out", "cancelled": "cancelled"}.get(report["outcome"], "failed")
         result = _fenced_result(assignment, state, report["outcome"])
     fenced = report["outcome"] != "result"
     terminal_state = result["execution_state"] if fenced else None

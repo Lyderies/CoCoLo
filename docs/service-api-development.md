@@ -739,6 +739,46 @@ failures. They do not establish a native frontend, connection-admission fairness
 reserved native-event/terminal lanes, actual provider observation, cleanup or
 full C5/C16. Independent review remains required before installation or activation.
 
+## Bridge execution and independent local stop ownership
+
+`OwnedExecutionRegistry.handoff` transfers one issued execution ticket to one
+not-yet-started executor thread. The original issuing thread retains a registered
+`ExecutionSupervisor` handle for bounded observations and stop requests. It loses
+spawn/bind authority. Constructed/copied handles, foreign threads/processes and a
+second transfer are refused. The actual raw run handle is retained in memory only;
+the ledger's keyed handle binding and durable registration remain unchanged.
+
+`bridge_liveness.BridgeLivenessOwner` connects those handles to the existing
+`ProjectMonitor` and `ControlLoop`. Attachment compares project, run handle, run ID,
+bridge claim and original absolute deadline against the complete registered monitor
+binding. The owner applies latched timer/control stops before and after bounded
+control I/O, including error/interruption paths. A failed clock latches monitoring
+unavailable and stops other bound executions; a closed control loop can still
+observe subsequent cleanup through this owner. Retained bindings are bounded by
+the monitor's explicit attempt capacity.
+
+The initial stop signals only the actual factory-created child's still-unreaped,
+new-session process group. It needs no SQL, executor callback, process snapshot,
+wait or join. Before the executor may reap that root, it revokes this signalling
+eligibility under the registry lock. Repeated stops cannot signal a later reused
+group. If cleanup entry fails, the bridge still performs its existing stop/wait
+and preserves an original nonlocal interruption; it does not create a cleanup
+credential. The tracked-tree executor and detached absolute watchdog remain.
+
+Only the actual retained root wait and original pair's positive tracked-tree
+cleanup advance terminal/cleanup observations. Stop acceptance alone never does.
+Startup/work silence retains its fixed reason and fences as `timed_out`;
+cancellation fences as `cancelled`, and monitor failure as `failed`. A pre-launch
+or pre-bind stop remains conservatively held without fabricated completion.
+
+Inert-child/socketpair tests exercise blocked frame callbacks and snapshots,
+timer cutoffs, quiet/stale/recovery, two-child cancellation isolation, first-stop
+precedence and cleanup faults. This internal composition is not enabled in normal
+dispatch. Native enrollment, qualified/attributed provider-event intake, calibrated
+timing, the Popen-internal creation gap, closed descendants, normal-client API
+migration and real installed two-project acceptance remain required. These local
+thread handles are not native authority or account-release credentials.
+
 ## Detached watchdog process ownership
 
 The bridge retains its exact detached watchdog process handle before waiting for

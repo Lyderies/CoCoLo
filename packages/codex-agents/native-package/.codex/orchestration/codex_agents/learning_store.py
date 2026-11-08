@@ -6113,7 +6113,7 @@ class LearningLedger:
         # Issue usable process custody only after the registration is durable.
         # A rolled-back commit must not burn an unreturned registry key/slot.
         try:
-            return self._capacity_executions.issue(key, deadline_ns=deadline_ns)
+            return self._capacity_executions.issue(key, deadline_ns=deadline_ns, run_handle=run_handle)
         except ExecutionCustodyError:
             raise LedgerError("owned execution deadline is unavailable") from None
 

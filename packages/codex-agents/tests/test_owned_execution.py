@@ -207,6 +207,52 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
         self.assertNotIn(entry.process.pid, bridge._ACTIVE_CHILDREN)
         self.assert_custody_held(registry, ticket)
 
+    def test_cleanup_entry_fault_cannot_skip_stop_wait_or_mask_original_interrupt(self):
+        for interrupted in (False, True):
+            with self.subTest(interrupted=interrupted):
+                registry, ticket, entry = self.owned_ticket()
+                original = KeyboardInterrupt("original frame") if interrupted else bridge._Abort("cancelled")
+                cleanup = OSError("cleanup entry unavailable")
+
+                def abort(_frame):
+                    raise original
+
+                expected = KeyboardInterrupt if interrupted else OSError
+                with mock.patch.object(registry, "begin_cleanup", side_effect=cleanup), \
+                        self.assertRaises(expected) as caught:
+                    bridge.run_child([sys.executable, "-I", "-B", "-c",
+                                      "import time; print('{}', flush=True); time.sleep(30)"],
+                                     environment={"PATH": os.defpath}, cwd=Path("/private/tmp"),
+                                     deadline_seconds=5, on_frame=abort, _execution=ticket)
+                self.assertIs(original if interrupted else cleanup, caught.exception)
+                self.assertIsNotNone(entry.process.returncode)
+                self.assertTrue(entry.process.stdout.closed)
+                self.assert_custody_held(registry, ticket)
+
+    def test_first_cleanup_interrupt_survives_later_ordinary_stop_error(self):
+        registry, ticket, entry = self.owned_ticket()
+        first = SystemExit(7)
+        stop = bridge._stop_child
+
+        def stop_then_fail(process, tree):
+            stop(process, tree)
+            raise OSError("later cleanup error")
+
+        def abort(_frame):
+            raise bridge._Abort("cancelled")
+
+        with mock.patch.object(registry, "begin_cleanup", side_effect=first), \
+                mock.patch.object(bridge, "_stop_child", side_effect=stop_then_fail), \
+                self.assertRaises(SystemExit) as caught:
+            bridge.run_child([sys.executable, "-I", "-B", "-c",
+                              "import time; print('{}', flush=True); time.sleep(30)"],
+                             environment={"PATH": os.defpath}, cwd=Path("/private/tmp"),
+                             deadline_seconds=5, on_frame=abort, _execution=ticket)
+        self.assertIs(first, caught.exception)
+        self.assertIsNotNone(entry.process.returncode)
+        self.assertTrue(entry.process.stdout.closed)
+        self.assert_custody_held(registry, ticket)
+
     def test_interruption_after_factory_return_before_local_assignment_still_reaps_child(self):
         registry, ticket, entry = self.owned_ticket()
         error = KeyboardInterrupt("after factory return")
