@@ -4,6 +4,63 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; the source codec does not enable a service.
 
+## Worker result persistence lane
+
+`result_persistence.ResultPersistenceLane` connects the registered bridge owner to
+one prestarted project persistence thread. It opens and closes its `ProjectHistory`
+on that thread. Assignment/result parsing, artifact I/O and SQL stay there; normal
+control-owner methods use bounded metadata and immutable byte references, without
+starting/joining threads, opening a store or waiting for a write. This is internal
+composition; it enables no native listener, caller enrollment or normal client.
+
+Trusted construction supplies the original `BridgeLivenessOwner`, fixed Codex pool,
+history factory and explicit finite entry/retained-byte limits. Every retained entry
+charges the maximum supported input, assignment and packet byte budgets; failed,
+unknown and committed entries count too. These are retained serialized-byte bounds,
+not a claim about the Python parser's peak allocation or measured live latency.
+
+`prepare` takes only the original pool's prepared, unlaunched handle, a complete
+monitor binding and original wall deadline. It asynchronously validates the exact
+immutable worker input and reserves result storage for its original assignment.
+Repeated identical preparation retrieves the same local handle; changed scope or
+deadline conflicts. Preparation failure cannot issue an execution ticket or start
+model work. The trusted frontend must reserve before consuming account launch
+authority. This lane does not implement that account admission sequence.
+
+After original execution registration, pool handoff and monitor binding, `bind`
+checks the exact retained pool job, input reference and supervisor. `submit` then
+takes the actual owner's once-selected return. It accepts no caller packet, result,
+assignment, observation, record ID, key, timestamp or cleanup flag. Copied/foreign
+handles and other threads are refused. Binding and returned-value snapshots avoid
+mutable metadata aliases; the supported 1 MiB result body is passed by immutable
+reference. Original owner stop/completion arbitration remains authoritative.
+
+The writer uses existing `publish_result` to commit exact validated bytes, safe
+fence/diagnostic facts, terminal metadata and the project outbox. The first selection
+captures one observation time; explicit persistence retries retain it and the same
+assignment/body. A lost commit reply can retrieve the same durable delivery without
+another launch, changed fence, replacement result or refreshed retention. An ordinary
+failure requires explicit persistence retry. An interrupted writer marks outstanding
+jobs unknown and is never automatically replaced. Fixed failure codes contain no
+exception strings, input, rejected answers or reasoning.
+
+`delivery` returns copied durable metadata, not acceptance or a capacity release.
+Only a committed job whose original execution is already released may retire its
+local slot; the lane does not release account capacity. `close` stops new intake
+without joining or interrupting an active write; already accepted writes drain on
+the original writer. Orchestration closure/body retirement and expiry scheduling
+still need lifecycle integration. Committed outbox records remain readable on a
+subsequent history open; uncommitted in-memory selection is not reconstructed after
+process loss.
+
+Inert executable tests cover a blocked actual writer while another child's Unix
+control cancellation and result intake progress, late polling after the deadline,
+1 MiB body transfer, lost commit replies, exact retries, failed preparation, privacy,
+unknown writer custody and nonblocking close. This does not prove native caller
+authority, the account claim/terminal/release delivery sequence, complete crash
+reconciliation, normal-client migration or real-model/two-project acceptance. Those
+remain mandatory activation and release gates, with the existing review limits.
+
 The [native caller enrollment proposal](native-caller-enrollment-design.md) maps the
 retained entry checks and the bootstrap, actual-primary and descriptor-custody proofs
 needed before privileged integration. It does not enable the authorization adapters.

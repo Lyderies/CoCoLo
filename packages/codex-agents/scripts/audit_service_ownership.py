@@ -27,6 +27,7 @@ DEFAULT_CLIENT_ROOTS = (
 PERSISTENCE_MODULES = frozenset({
     "sqlite3", "_sqlite3", "codex_agents.learning_store", "codex_agents.project_history",
     "codex_agents.history_service", "codex_agents.account_service", "codex_agents.result_read_service",
+    "codex_agents.result_persistence",
 })
 SELECTED_METHODS = frozenset({"append", "_append_checked_locked", "_append_locked", "commit_owner_record"})
 KEY_METHODS = frozenset({"keyed_digest", "external_id", "digest_key"})

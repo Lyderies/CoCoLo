@@ -57,7 +57,8 @@ class CodexWorkerTests(unittest.TestCase):
             slot.thread.join(6)
             self.assertFalse(slot.thread.is_alive(), "fixture worker did not stop")
 
-    def prepare(self, number=1, *, value=None, rows=None, deadline=60, submit=True, mutate=None):
+    def prepare(self, number=1, *, value=None, rows=None, deadline=60, submit=True, mutate=None,
+                before_bind=None, after_bind=None):
         root = Path(self.temporary.name) / f"job-{len(self.workspaces)}"
         root.mkdir(mode=0o700)
         self.workspaces.append(root)
@@ -105,10 +106,15 @@ for row in json.loads((root / "frames.json").read_text()):
         hard_deadline = self.origin + deadline * SECOND
         self.monitor.register(target, hard_deadline_ns=hard_deadline)
         key = OwnedExecutionKey(target.project_id, f"{number:064x}", target.run_id, target.claim_id)
+        handle = self.pool.prepare(payload)
+        if before_bind is not None:
+            before_bind(target, handle)
         ticket = self.registry.issue(key, deadline_ns=hard_deadline, run_handle=target.run_handle)
-        handle = self.pool.reserve(ticket, payload)
+        self.pool.bind(handle, ticket)
         supervisor = self.pool.supervisor(handle)
         self.owner.bind(target, supervisor)
+        if after_bind is not None:
+            after_bind(target, handle)
         if submit:
             self.pool.submit(handle)
         return root, target, ticket, handle, supervisor, assignment
