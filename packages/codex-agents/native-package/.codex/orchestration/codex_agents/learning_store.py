@@ -280,7 +280,8 @@ _BACKUP_TABLE_COLUMNS = {
     "launch_receipts": ("scope_digest", "request_digest", "parameters_digest", "handle_digest", "receipt_digest",
                         "run_id", "state", "reason_code", "bridge_run_id", "deadline_at_ms", "recorded_at_ms"),
     "active_run_capacity": ("handle_digest", "run_id", "bridge_run_id", "kind", "provider", "account_fingerprint",
-                            "runtime_digest", "policy_digest", "claimed_at_ms", "deadline_at_ms", "released_at_ms", "release_digest"),
+                            "runtime_digest", "policy_digest", "claimed_at_ms", "deadline_at_ms",
+                            "clock_reference_ns", "execution_deadline_ns", "clock_owner_digest", "released_at_ms", "release_digest"),
     "capacity_completions": ("handle_digest", "run_id", "bridge_run_id", "terminal_record_id", "terminal_content_digest",
                              "released_at_ms", "receipt_digest"),
     "capacity_executions": ("handle_digest", "run_id", "bridge_run_id", "owner_digest"),
@@ -6032,13 +6033,39 @@ class LearningLedger:
             raise ClaimError("claim_busy")
         return policy
 
-    def _reserve_active_capacity_locked(self, project, handle, run, bridge, provider, account, policy, timestamp, deadline):
+    def _capacity_clock_reference(self):
+        try:
+            reference = time.monotonic_ns()
+        except Exception:
+            raise ClaimError("claim_unavailable") from None
+        if type(reference) is not int or not 0 <= reference <= (1 << 63) - 1:
+            raise ClaimError("claim_unavailable")
+        return reference
+
+    def _capacity_clock_owner(self, key, reference, deadline, claimed_at, wall_deadline):
+        return keyed_digest(self.state.digest_key(), canonical_json({
+            "domain": "capacity-claim-clock-v1", "project_id": key.project_id, "handle_digest": key.handle_digest,
+            "run_id": key.run_id, "bridge_run_id": key.bridge_run_id, "owner": self._capacity_execution_origin,
+            "runtime_digest": COLLECTOR_RUNTIME_DIGEST, "clock_reference_ns": reference,
+            "execution_deadline_ns": deadline, "claimed_at_ms": claimed_at, "deadline_at_ms": wall_deadline,
+        }))
+
+    def _reserve_active_capacity_locked(self, project, handle, run, bridge, provider, account, policy, timestamp, deadline, reference):
         if not self._connection.in_transaction:
             raise ClaimError("claim_unavailable")
+        deadline_ns = reference + (deadline - timestamp) * 1_000_000
+        now = self._capacity_clock_reference()
+        if not reference <= now < deadline_ns <= (1 << 63) - 1:
+            raise ClaimError("claim_unavailable")
+        clock_owner = self._capacity_clock_owner(
+            OwnedExecutionKey(project, handle, run, bridge), reference, deadline_ns, timestamp, deadline,
+        )
         self._connection.execute(
             "INSERT INTO active_run_capacity(project_id,handle_digest,run_id,bridge_run_id,kind,provider,"
-            "account_fingerprint,runtime_digest,policy_digest,claimed_at_ms,deadline_at_ms) VALUES(?,?,?,?,'claimed',?,?,?,?,?,?)",
-            (project, handle, run, bridge, provider, account, COLLECTOR_RUNTIME_DIGEST, policy.digest, timestamp, deadline),
+            "account_fingerprint,runtime_digest,policy_digest,claimed_at_ms,deadline_at_ms,"
+            "clock_reference_ns,execution_deadline_ns,clock_owner_digest) VALUES(?,?,?,?,'claimed',?,?,?,?,?,?,?,?,?)",
+            (project, handle, run, bridge, provider, account, COLLECTOR_RUNTIME_DIGEST, policy.digest, timestamp, deadline,
+             reference, deadline_ns, clock_owner),
         )
 
     def _new_owned_execution(self, project_id, run_handle, bridge_run_id):
@@ -6046,7 +6073,10 @@ class LearningLedger:
         handle = keyed_digest(self.state.digest_key(), run_handle)
         with self._account_transaction():
             row = self._connection.execute(
-                "SELECT a.run_id,a.bridge_run_id,a.kind,a.runtime_digest,a.released_at_ms,a.claimed_at_ms,a.deadline_at_ms "
+                "SELECT a.run_id,a.bridge_run_id,a.kind,a.runtime_digest,a.released_at_ms,a.claimed_at_ms,a.deadline_at_ms,"
+                "a.clock_reference_ns,a.execution_deadline_ns,a.clock_owner_digest,"
+                "EXISTS(SELECT 1 FROM capacity_executions e WHERE e.project_id=a.project_id "
+                "AND e.handle_digest=a.handle_digest) AS execution_registered "
                 "FROM active_run_capacity a "
                 "JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id "
                 "WHERE a.project_id=? AND a.handle_digest=? AND h.binding_state='pending' AND h.consumed_at_ms IS NULL "
@@ -6058,19 +6088,33 @@ class LearningLedger:
             if (row is None or row["kind"] != "claimed" or row["released_at_ms"] is not None
                     or row["bridge_run_id"] != bridge_run_id or row["runtime_digest"] != COLLECTOR_RUNTIME_DIGEST):
                 raise LedgerError("owned execution is unavailable")
+            if row["execution_registered"]:
+                raise LedgerError("owned execution was already registered")
+            key = OwnedExecutionKey(project_id, handle, row["run_id"], bridge_run_id)
             monotonic_reference = time.monotonic_ns()
             now = self._clock_ms()
-            if type(now) is not int or not row["claimed_at_ms"] <= now < row["deadline_at_ms"]:
+            if (type(now) is not int or not row["claimed_at_ms"] <= now < row["deadline_at_ms"]
+                    or type(monotonic_reference) is not int
+                    or not row["clock_reference_ns"] <= monotonic_reference < row["execution_deadline_ns"]
+                    or not secrets.compare_digest(row["clock_owner_digest"], self._capacity_clock_owner(
+                        key, row["clock_reference_ns"], row["execution_deadline_ns"],
+                        row["claimed_at_ms"], row["deadline_at_ms"]))):
                 raise LedgerError("owned execution deadline is unavailable")
-            deadline_ns = monotonic_reference + (row["deadline_at_ms"] - now) * 1_000_000
-            key = OwnedExecutionKey(project_id, handle, row["run_id"], bridge_run_id)
+            # Only the claiming owner retains this clock-domain association.
+            # A later wall sample or reopened owner cannot recreate its budget.
+            deadline_ns = row["execution_deadline_ns"]
             owner = self._capacity_execution_owner(key)
             try:
                 self._connection.execute("INSERT INTO capacity_executions VALUES(?,?,?,?,?)",
                                          (project_id, handle, row["run_id"], bridge_run_id, owner))
             except sqlite3.IntegrityError:
                 raise LedgerError("owned execution was already registered") from None
+        # Issue usable process custody only after the registration is durable.
+        # A rolled-back commit must not burn an unreturned registry key/slot.
+        try:
             return self._capacity_executions.issue(key, deadline_ns=deadline_ns)
+        except ExecutionCustodyError:
+            raise LedgerError("owned execution deadline is unavailable") from None
 
     def _capacity_execution_owner(self, key):
         return keyed_digest(self.state.digest_key(), canonical_json({
@@ -6100,7 +6144,7 @@ class LearningLedger:
         material = {"domain": "active-capacity-release-v1", **{name: row[name] for name in (
             "project_id", "handle_digest", "run_id", "bridge_run_id", "provider", "account_fingerprint",
             "runtime_digest", "policy_digest", "claimed_at_ms", "deadline_at_ms", "terminal_record_id", "terminal_content_digest",
-            "execution_owner_digest",
+            "clock_reference_ns", "execution_deadline_ns", "clock_owner_digest", "execution_owner_digest",
         )}, "released_at_ms": timestamp}
         return keyed_digest(self.state.digest_key(), canonical_json(material))
 
@@ -6234,17 +6278,18 @@ class LearningLedger:
         if type(context) is not _ClaimRequest or context.origin is not self._attestation_origin:
             raise ClaimError("claim_invalid_request")
 
-    def _claim_commit_header(self, context):
+    def _claim_commit_header(self, context, *, capture_clock=False):
         project = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (context.project_id,)).fetchone()
         if project is None or project[0] != "active":
             raise ClaimError("claim_unavailable")
         known = self._known_claim_receipt_locked(context.project_id, context.scope, context.request, context.parameters)
         if known is not None:
-            return known, None
+            return (known, None, None) if capture_clock else (known, None)
+        reference = self._capacity_clock_reference() if capture_clock else None
         timestamp = self._clock_ms()
         if type(timestamp) is not int or not 0 <= timestamp <= MAX_CLAIM_INTEGER:
             raise ClaimError("claim_unavailable")
-        return known, timestamp
+        return (known, timestamp, reference) if capture_clock else (known, timestamp)
 
     def _claim_run_rows_locked(self, project_id, handle):
         """Read all fixed scalar inputs before any eligibility short circuit."""
@@ -6344,9 +6389,9 @@ class LearningLedger:
         scope, request, parameters, handle = context.scope, context.request, context.parameters, context.handle
         with self._account_transaction():
             def header():
-                return self._claim_commit_header(context)
-            known, timestamp = (header() if work_limits is None else
-                                self._connection.transaction_read_call(work_limits, header))
+                return self._claim_commit_header(context, capture_clock=True)
+            known, timestamp, monotonic_reference = (header() if work_limits is None else
+                                                     self._connection.transaction_read_call(work_limits, header))
             if known is not None:
                 return known
             if admission is not None:
@@ -6410,7 +6455,8 @@ class LearningLedger:
                 self._connection.execute("INSERT INTO launch_claims VALUES(?,?,?,'claimed',?,?)",
                                          (project_id, handle, run_id, timestamp, bridge))
                 self._reserve_active_capacity_locked(project_id, handle, run_id, bridge, inputs["provider"],
-                                                     admitted["account_fingerprint"], policy, timestamp, deadline)
+                                                     admitted["account_fingerprint"], policy, timestamp, deadline,
+                                                     monotonic_reference)
                 self._append_checked_locked(project_id, record, producer="lifecycle", timestamp=timestamp)
             return self._store_claim_receipt_locked(project_id, scope, request, parameters, handle, {
                 "state": "claimed" if reason is None else "denied", "run_id": run_id, "reason_code": reason,
@@ -6438,11 +6484,15 @@ class LearningLedger:
         can happen before anything is exported or launched.
         """
 
+        if type(claim) is not bool:
+            raise LedgerError("dispatch claim flag is invalid")
+        try:
+            monotonic_reference = self._capacity_clock_reference() if claim else None
+        except ClaimError:
+            raise LedgerError("dispatch deadline is unavailable") from None
         timestamp = self._clock_ms()
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
         bridge_run_id = f"brg_{secrets.token_hex(16)}"
-        if type(claim) is not bool:
-            raise LedgerError("dispatch claim flag is invalid")
         # Preflight reads do not acquire SQLite's write reservation.
         with self._account_transaction() if claim else self._lock:
             binding = self._connection.execute(
@@ -6513,9 +6563,12 @@ class LearningLedger:
                 "VALUES(?,?,?,'claimed',?,?)",
                 (project_id, handle_digest, run_id, timestamp, bridge_run_id),
             )
-            self._reserve_active_capacity_locked(project_id, handle_digest, run_id, bridge_run_id,
-                                                 route["provider"], admission["account_fingerprint"], policy, timestamp,
-                                                 record["deadline_at_ms"])
+            try:
+                self._reserve_active_capacity_locked(project_id, handle_digest, run_id, bridge_run_id,
+                                                     route["provider"], admission["account_fingerprint"], policy, timestamp,
+                                                     record["deadline_at_ms"], monotonic_reference)
+            except ClaimError:
+                raise LedgerError("dispatch deadline is unavailable") from None
             self._append_checked_locked(
                 project_id, record, producer="lifecycle", timestamp=timestamp
             )

@@ -298,8 +298,13 @@ class ProcessTree:
                     continue
                 record = process_record(pid)
                 if record is None or record[0] not in live:
+                    # The snapshot put this candidate under an owned parent.
+                    # It may have escaped/reparented before this read; absence
+                    # or an unreadable identity cannot prove it stopped.
+                    self._cleanup_incomplete = True
                     continue
                 if self._record(record[0]) is None:
+                    self._cleanup_incomplete = True
                     continue
                 self.tracked[pid] = record[2]
                 self._remember_cleanup(pid, record[2], record)

@@ -43,6 +43,16 @@ class CleanupEvidenceTests(unittest.TestCase):
             self.assertFalse(tree.cleanup_after_owned_wait(root))
         self.assertIn((20001, "child"), tree._cleanup_seen)
 
+    def test_unresolved_adoption_candidate_cannot_prove_a_clean_tree(self):
+        for candidate in (None, (1, 20001, "escaped", False)):
+            with self.subTest(candidate=candidate):
+                records = {20000: (1, 20000, "root", False), 20001: candidate}
+                tree = process_tree.ProcessTree(20000)
+                with mock.patch.object(process_tree, "process_record", side_effect=records.get):
+                    self.assertTrue(tree.identify({20000: 1, 20001: 20000}))
+                    self.assertNotIn(20001, tree.tracked)
+                    self.assertFalse(tree.cleanup_after_owned_wait(SimpleNamespace(pid=20000, returncode=0)))
+
     def test_positive_exit_survives_later_disappearance(self):
         tree, records, root = self.identified(child_exited=True)
         records.pop(20001)
@@ -191,6 +201,25 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
             bridge.run_child([sys.executable, "-I", "-B", "-c", "import time; print('{}', flush=True); time.sleep(30)"],
                              environment={"PATH": os.defpath}, cwd=Path("/private/tmp"),
                              deadline_seconds=5, on_frame=interrupt, _execution=ticket)
+        self.assertIs(error, caught.exception)
+        self.assertIsNotNone(entry.process.returncode)
+        self.assertTrue(entry.process.stdout.closed)
+        self.assertNotIn(entry.process.pid, bridge._ACTIVE_CHILDREN)
+        self.assert_custody_held(registry, ticket)
+
+    def test_interruption_after_factory_return_before_local_assignment_still_reaps_child(self):
+        registry, ticket, entry = self.owned_ticket()
+        error = KeyboardInterrupt("after factory return")
+        original_spawn = ExecutionTicket.spawn
+
+        def handoff(value, *args, **kwargs):
+            original_spawn(value, *args, **kwargs)
+            raise error
+
+        with mock.patch.object(ExecutionTicket, "spawn", handoff), self.assertRaises(KeyboardInterrupt) as caught:
+            bridge.run_child([sys.executable, "-I", "-B", "-c", "import time; time.sleep(30)"],
+                             environment={"PATH": os.defpath}, cwd=Path("/private/tmp"),
+                             deadline_seconds=5, on_frame=lambda frame: None, _execution=ticket)
         self.assertIs(error, caught.exception)
         self.assertIsNotNone(entry.process.returncode)
         self.assertTrue(entry.process.stdout.closed)
@@ -348,8 +377,6 @@ class CapacityCompletionTests(unittest.TestCase):
         return handle, intent, ticket
 
     def test_registration_time_consumes_the_original_claimed_budget(self):
-        handle, intent = self.reserve_claim()
-        claimed = self.ledger._connection.execute("SELECT claimed_at_ms FROM active_run_capacity").fetchone()[0]
         clock = [100_000_000_000]
         execute = self.ledger._connection.execute
 
@@ -359,11 +386,56 @@ class CapacityCompletionTests(unittest.TestCase):
                 clock[0] += 1_000_000_000
             return result
 
-        with mock.patch.object(owned_execution.time, "monotonic_ns", side_effect=lambda: clock[0]), \
-                mock.patch.object(self.ledger, "_clock_ms", return_value=claimed + 8000), \
-                mock.patch.object(self.ledger._connection, "execute", side_effect=delayed):
-            ticket = self.ledger._new_owned_execution(self.fixture.project_id, handle, intent["bridge_run_id"])
-        self.assertEqual(102_000_000_000, ticket.deadline_ns())
+        with mock.patch.object(owned_execution.time, "monotonic_ns", side_effect=lambda: clock[0]):
+            handle, intent = self.reserve_claim()
+            claimed = self.ledger._connection.execute("SELECT claimed_at_ms FROM active_run_capacity").fetchone()[0]
+            clock[0] += 8_000_000_000
+            with mock.patch.object(self.ledger, "_clock_ms", return_value=claimed + 8000), \
+                    mock.patch.object(self.ledger._connection, "execute", side_effect=delayed):
+                ticket = self.ledger._new_owned_execution(self.fixture.project_id, handle, intent["bridge_run_id"])
+        self.assertEqual(110_000_000_000, ticket.deadline_ns())
+
+    def test_partial_wall_clock_rollback_cannot_renew_the_claim_budget(self):
+        clock = [100_000_000_000]
+        with mock.patch.object(owned_execution.time, "monotonic_ns", side_effect=lambda: clock[0]):
+            handle, intent = self.reserve_claim()
+            claimed = self.ledger._connection.execute("SELECT claimed_at_ms FROM active_run_capacity").fetchone()[0]
+            clock[0] += 9_000_000_000
+            with mock.patch.object(self.ledger, "_clock_ms", return_value=claimed + 1000):
+                ticket = self.ledger._new_owned_execution(self.fixture.project_id, handle, intent["bridge_run_id"])
+            self.assertEqual(110_000_000_000, ticket.deadline_ns())
+
+    def test_original_monotonic_expiry_or_regression_refuses_registration_despite_valid_wall_time(self):
+        for registration in (99_000_000_000, 110_000_000_000):
+            with self.subTest(registration=registration):
+                clock = [100_000_000_000]
+                with mock.patch.object(owned_execution.time, "monotonic_ns", side_effect=lambda: clock[0]):
+                    handle, intent = self.reserve_claim()
+                    row = self.ledger._connection.execute(
+                        "SELECT claimed_at_ms FROM active_run_capacity WHERE bridge_run_id=?", (intent["bridge_run_id"],),
+                    ).fetchone()
+                    clock[0] = registration
+                    with mock.patch.object(self.ledger, "_clock_ms", return_value=row[0] + 1000), \
+                            self.assertRaisesRegex(LedgerError, "deadline"):
+                        self.ledger._new_owned_execution(self.fixture.project_id, handle, intent["bridge_run_id"])
+                self.assertEqual(0, self.ledger._connection.execute("SELECT COUNT(*) FROM capacity_executions").fetchone()[0])
+
+    def test_clock_owner_cannot_be_reconstructed_after_restart_before_registration(self):
+        handle, intent = self.reserve_claim()
+        self.reopen()
+        with self.assertRaisesRegex(LedgerError, "deadline"):
+            self.ledger._new_owned_execution(self.fixture.project_id, handle, intent["bridge_run_id"])
+        self.assertEqual(0, self.ledger._connection.execute("SELECT COUNT(*) FROM capacity_executions").fetchone()[0])
+        self.assertEqual(1, self.held())
+
+    def test_structurally_valid_clock_owner_tampering_refuses_registration(self):
+        handle, intent = self.reserve_claim()
+        with self.ledger._connection:
+            self.ledger._connection.execute("UPDATE active_run_capacity SET clock_owner_digest=?", ("0" * 64,))
+        with self.assertRaisesRegex(LedgerError, "deadline"):
+            self.ledger._new_owned_execution(self.fixture.project_id, handle, intent["bridge_run_id"])
+        self.assertEqual(0, self.ledger._connection.execute("SELECT COUNT(*) FROM capacity_executions").fetchone()[0])
+        self.assertEqual(1, self.held())
 
     def test_expired_claim_refuses_registration_without_reissuing_execution(self):
         handle, intent = self.reserve_claim()
@@ -378,6 +450,21 @@ class CapacityCompletionTests(unittest.TestCase):
         self.reopen()
         with self.assertRaisesRegex(LedgerError, "already registered"):
             self.ledger._new_owned_execution(self.fixture.project_id, handle, intent["bridge_run_id"])
+        self.assertEqual(1, self.held())
+
+    def test_registration_commit_rollback_does_not_burn_an_unreturned_ticket(self):
+        handle, intent = self.reserve_claim()
+        error = KeyboardInterrupt("registration before commit")
+        with mock.patch.object(self.ledger.state, "harden_database_files", side_effect=error), \
+                self.assertRaises(KeyboardInterrupt) as caught:
+            self.ledger._new_owned_execution(self.fixture.project_id, handle, intent["bridge_run_id"])
+        self.assertIs(error, caught.exception)
+        self.assertEqual(0, self.ledger._connection.execute("SELECT COUNT(*) FROM capacity_executions").fetchone()[0])
+        ticket = self.ledger._new_owned_execution(self.fixture.project_id, handle, intent["bridge_run_id"])
+        self.assertEqual(1, self.ledger._connection.execute("SELECT COUNT(*) FROM capacity_executions").fetchone()[0])
+        self.assertEqual(1, len(self.ledger._capacity_executions._pending))
+        row = self.ledger._connection.execute("SELECT execution_deadline_ns FROM active_run_capacity").fetchone()
+        self.assertEqual(row[0], ticket.deadline_ns())
         self.assertEqual(1, self.held())
 
     def test_terminal_record_and_caller_flags_without_actual_execution_cannot_release(self):

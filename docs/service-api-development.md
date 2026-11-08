@@ -1380,8 +1380,9 @@ reviewed installed D8 and all four liveness/release paths remain mandatory.
 ### Durable active-run capacity (uninstalled candidate)
 
 The account owner reserves active capacity in the same transaction as the unique
-launch marker, intent and receipt. Both the deferred service path and legacy
-owner reference enforce the installed candidate policy: two machine-wide slots
+launch marker and intent. The service claim and direct claim reference also commit
+their keyed claim receipt there. The legacy bridge intent path has no service
+claim receipt. All three paths enforce the installed candidate policy: two machine-wide slots
 and two slots per eligible provider account. Requests and model output cannot
 raise these limits. Indexed counts stop at the policy limit; a full lane returns
 retryable `claim_busy` without a new receipt, marker or reservation. Known receipt
@@ -1393,30 +1394,46 @@ cannot erase unreconciled active capacity. A dropped socket, elapsed deadline,
 missing local history or reported terminal result does not establish cleanup.
 No public release endpoint is enabled. The internal fixed bridge now registers
 one execution durably before creating its process. Registration cannot be repeated
-after restart. Its immutable ticket preserves the original claimed deadline:
-registration/commit delays consume that budget, and process creation cannot restart
-it. Expired or regressed clock observations refuse launch and retain uncertainty.
+after restart. Its registry ticket is issued only after the registration commit;
+a rolled-back commit leaves no unreturned ticket blocking an explicit retry.
+Claim creation captures the absolute monotonic deadline before its
+wall-clock sample. The capacity row retains that reference and deadline with a
+keyed association to the claiming ledger instance. Registration/commit delays consume
+that original budget; later wall samples cannot extend it. A reopened owner cannot
+recreate the clock association, even if registration never happened. Expired,
+regressed or unauthenticated clock observations refuse launch and retain uncertainty.
 Its owner-local registry creates and retains the actual Popen/tree
 pair; caller-constructed tickets, process objects, trees and success flags cannot
 substitute for that association.
 
 The fixed factory requires a new process session. If registry handoff fails after
 process creation, it retains the actual child, kills its still-owned group before
-waiting and closes its pipes. The bridge also enters cleanup before retrieving
-the registered tree. Tracking errors cannot skip that group kill or owned wait,
+waiting and closes its pipes. The bridge enters cleanup before calling the factory
+and can recover the registry's retained process if interruption prevents local
+assignment. Tracking errors cannot skip that group kill or owned wait,
 and cleanup errors cannot replace the original nonlocal interruption. Failed
 handoff or incomplete tracking retains uncertain custody and held capacity;
 these paths do not create a completion receipt or authorize another launch.
 
 The tracker retains bounded positive exit/generation evidence separately from its
-signalling set. Missing/unreadable process records, snapshot loss and identity
-overflow leave cleanup unknown. Release requires the registered original pair,
+signalling set. Missing/unreadable process records, unresolved adoption candidates
+(including possible reparenting), snapshot loss and identity overflow leave cleanup
+unknown. Unverified candidates are never adopted or signalled. Release requires the registered original pair,
 its owned root wait, positive evidence for tracked descendants and a durable
 matching result binding. A short transaction commits both the released reservation
 and a keyed completion receipt; registry acknowledgement follows that commit.
 Lost acknowledgements retrieve the same receipt without another launch, including
 after clock rollback. A new release refuses clock rollback and retains ready
 custody. Result persistence does not by itself release capacity.
+
+Polling cannot establish that every descendant was observed: a child that
+daemonizes between snapshots can escape the tracked set and its original group.
+The current positive receipt covers observed identities and cannot prove complete
+account quiescence in that case. Native containment/custody proof remains a safety
+gate before activating this release path. Ordinary short-lived descendants can
+also retain capacity conservatively when their exit was never positively observed.
+The Popen-internal creation interval before an actual process is returned remains
+part of the native-launch containment gate.
 
 Completion metadata survives record retention and restart; backups validate the
 matching execution/completion parents. A restarted owner can retrieve an already
@@ -1429,6 +1446,10 @@ Schema 9 requires verified schema-8 backups before migration. Existing consumed
 or fenced launch markers become `legacy_unknown` reservations; migration does
 not infer that historical execution never happened or invent account/cleanup
 evidence. Unknown reservations count conservatively for every candidate account.
+At the two-slot policy, two historical markers therefore block all new claims and
+held projects cannot be deleted. Trusted drained migration and orphan reconciliation
+must resolve this before a usable upgrade. Service-path execution/release integration
+and recovery after an uncertain or committed registration also remain incomplete.
 Migration and capacity backfill commit together or roll back together. Current
 startup refuses missing/mismatched reservation coverage instead of rebuilding an
 empty capacity pool. Sanitized and standalone owner backups retain the capacity

@@ -724,25 +724,27 @@ def run_child(
         except ExecutionCustodyError:
             return {"returncode": None, "abort": "launch_failed"}
     watchdog = _WatchdogOwner()
-    try:
-        factory = popen if _execution is None else _execution.spawn
-        process = factory(
-            arguments,
-            cwd=cwd,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except (OSError, ExecutionCustodyError) as error:
-        expired = isinstance(error, ExecutionCustodyError) and error.reason_code == "execution_deadline_expired"
-        return {"returncode": None, "abort": "timed_out" if expired else "launch_failed"}
+    process = None
     tree = None
     buffer = b""
     received = 0
     execution_bound = False
     try:
+        try:
+            factory = popen if _execution is None else _execution.spawn
+            process = factory(
+                arguments,
+                cwd=cwd,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except (OSError, ExecutionCustodyError) as error:
+            expired = isinstance(error, ExecutionCustodyError) and error.reason_code == "execution_deadline_expired"
+            outcome["abort"] = "timed_out" if expired else "launch_failed"
+            return outcome
         tree = ProcessTree(process.pid) if _execution is None else _execution.tree(process)
         _ACTIVE_CHILDREN[process.pid] = (process, tree)
         if not tree.identify(process_table()):
@@ -805,11 +807,18 @@ def run_child(
         original_error = sys.exc_info()[1]
         try:
             try:
-                _stop_child(process, tree)
+                if process is not None:
+                    _stop_child(process, tree)
+                elif _execution is not None:
+                    try:
+                        _execution.abort_handoff()
+                    except ExecutionCustodyError:
+                        pass  # Invalid/unentered tickets provide no child to stop.
             finally:
-                _ACTIVE_CHILDREN.pop(process.pid, None)
                 try:
-                    process.stdout.close()
+                    if process is not None:
+                        _ACTIVE_CHILDREN.pop(process.pid, None)
+                        process.stdout.close()
                 finally:
                     watchdog_reaped = watchdog.reap()
                     if not watchdog_reaped and outcome["abort"] is None:

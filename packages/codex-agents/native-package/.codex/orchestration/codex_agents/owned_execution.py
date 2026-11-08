@@ -91,6 +91,9 @@ class ExecutionTicket:
     def finish(self, process, tree):
         return self._registry.finish(self, process, tree)
 
+    def abort_handoff(self):
+        self._registry.abort_handoff(self)
+
 
 @dataclass
 class _Owned:
@@ -202,6 +205,21 @@ class OwnedExecutionRegistry:
             if entry.state != "launching" or process is not entry.process or entry.tree is None:
                 raise ExecutionCustodyError()
             return entry.tree
+
+    def abort_handoff(self, ticket):
+        # The caller may have been interrupted before assigning the factory's
+        # return value. Recover only our actual retained child, never a PID or
+        # caller-supplied process. This path cannot produce cleanup authority.
+        with self._lock:
+            entry = self._entry(ticket)
+            if self._pending.get(ticket) is not entry or entry.state not in {"launching", "unknown"}:
+                raise ExecutionCustodyError()
+            entry.state = "unknown"
+            process, tree = entry.process, entry.tree
+            if process is not None and type(process) is not _POPEN:
+                raise ExecutionCustodyError()
+        if process is not None:
+            _abort_spawn(process, tree)
 
     def finish(self, ticket, process, tree):
         with self._lock:

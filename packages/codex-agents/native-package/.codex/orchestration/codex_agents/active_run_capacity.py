@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS active_run_capacity (
     policy_digest TEXT,
     claimed_at_ms INTEGER NOT NULL CHECK(typeof(claimed_at_ms)='integer' AND claimed_at_ms>=0),
     deadline_at_ms INTEGER,
+    clock_reference_ns INTEGER,
+    execution_deadline_ns INTEGER,
+    clock_owner_digest TEXT,
     released_at_ms INTEGER,
     release_digest TEXT,
     PRIMARY KEY(project_id,handle_digest),
@@ -58,9 +61,15 @@ CREATE TABLE IF NOT EXISTS active_run_capacity (
         AND runtime_digest NOT GLOB '*[^0-9a-f]*'
         AND typeof(policy_digest)='text' AND length(policy_digest)=64
         AND policy_digest NOT GLOB '*[^0-9a-f]*'
-        AND typeof(deadline_at_ms)='integer' AND deadline_at_ms>claimed_at_ms)
+        AND typeof(deadline_at_ms)='integer' AND deadline_at_ms>claimed_at_ms
+        AND typeof(clock_reference_ns)='integer' AND clock_reference_ns>=0
+        AND typeof(execution_deadline_ns)='integer' AND execution_deadline_ns>clock_reference_ns
+        AND execution_deadline_ns-clock_reference_ns=(deadline_at_ms-claimed_at_ms)*1000000
+        AND typeof(clock_owner_digest)='text' AND length(clock_owner_digest)=64
+        AND clock_owner_digest NOT GLOB '*[^0-9a-f]*')
         OR (kind='legacy_unknown' AND provider IS NULL AND account_fingerprint IS NULL
-        AND runtime_digest IS NULL AND policy_digest IS NULL AND deadline_at_ms IS NULL)),
+        AND runtime_digest IS NULL AND policy_digest IS NULL AND deadline_at_ms IS NULL
+        AND clock_reference_ns IS NULL AND execution_deadline_ns IS NULL AND clock_owner_digest IS NULL)),
     CHECK((released_at_ms IS NULL AND release_digest IS NULL)
         OR (typeof(released_at_ms)='integer' AND released_at_ms>=claimed_at_ms
         AND typeof(release_digest)='text' AND length(release_digest)=64
