@@ -16,8 +16,7 @@ import tests.test_bridge as bridge_fixtures
 import tests.test_bridge_liveness as owner_fixtures
 from tests.test_liveness_clock import SECOND
 
-from codex_agents import bridge
-from codex_agents.control_api import ControlError
+from codex_agents import bridge, codex_activity, process_tree
 from codex_agents.liveness_clock import MAX_RECEIVED_EVENTS
 from codex_agents.owned_execution import ExecutionSupervisor, OwnedExecutionKey, OwnedExecutionRegistry
 
@@ -188,6 +187,9 @@ time.sleep(30)
         self.assertIsNone(self.monitor._entry(execution[1]).clock._last_activity)
 
     def test_activity_queue_overflow_fences_and_stops_monitoring_instead_of_renewing_work(self):
+        other = owner_fixtures.BridgeLivenessTests.execution(self, 2)
+        other[4].start()
+        self.assertTrue(other[6].wait(5))
         execution = self.execution([*PREFIX, *(reasoning(i) for i in range(MAX_RECEIVED_EVENTS + 1))])
         _, target, _, _, entry, worker, _, outcomes, errors = execution
         worker.join(6)  # Deliberately do not consume this bounded overload.
@@ -195,7 +197,27 @@ time.sleep(30)
         self.assertEqual([], errors)
         self.assertEqual("monitor_unavailable", outcomes[0][1]["outcome"])
         self.assertTrue(entry.activity.failed)
-        with self.assertRaisesRegex(ControlError, "control_unavailable"):
-            self.owner.run_once()
+        self.owner.run_once()
         self.assertEqual("monitor_unavailable", self.monitor.status(target).stop_reason)
         self.assertTrue(self.monitor.status(target).cleanup_confirmed)
+        self.assertFalse(self.monitor._clock_failed)
+        self.assertFalse(other[5].snapshot()["stop_requested"])
+        self.assertFalse(process_tree.process_record(other[3].process.pid)[3])
+        self.request(other[0])
+        owner_fixtures.BridgeLivenessTests.complete(self, other)
+
+    def test_classifier_capacity_failure_is_attempt_local_and_closes_its_activity_source(self):
+        other = owner_fixtures.BridgeLivenessTests.execution(self, 2)
+        other[4].start()
+        self.assertTrue(other[6].wait(5))
+        with mock.patch.object(codex_activity, "MAX_ACTIVITY_ITEMS", 1):
+            execution = self.execution([*PREFIX, reasoning(1), reasoning(2)])
+            self.finished(execution, "monitor_unavailable")
+        self.assertTrue(execution[4].activity.failed)
+        self.assertEqual("activity_invalid", execution[4].activity.failure_code)
+        self.assertEqual("monitor_unavailable", self.monitor.status(execution[1]).stop_reason)
+        self.assertFalse(self.monitor._clock_failed)
+        self.assertFalse(other[5].snapshot()["stop_requested"])
+        self.assertFalse(process_tree.process_record(other[3].process.pid)[3])
+        self.request(other[0])
+        owner_fixtures.BridgeLivenessTests.complete(self, other)

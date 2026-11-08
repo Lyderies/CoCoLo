@@ -1453,6 +1453,7 @@ def run_codex(
             try:
                 category = activity.observe(frame)
             except CodexActivityError as error:
+                _execution.fail_activity()
                 raise _Abort(error.reason_code) from None
             if category is not None:
                 try:

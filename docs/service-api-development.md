@@ -791,7 +791,9 @@ observation. Delayed consumption cannot renew old work, and a valid queued
 sequence cannot be cut off by polling today's time between its older records.
 Existing stop decisions remain final. Overflow, clock rollback, malformed receipt
 ordering and clock failure latch monitoring unavailable instead of dropping old
-records to claim health. The detached absolute watchdog remains independent.
+records to claim health. Overload, classifier failure and invalid receipts stop
+only the affected attempt; an actual shared-clock failure still stops every
+undecided attempt in that project. The detached absolute watchdog remains independent.
 
 The buffer retains at most 256 category/timestamp pairs per execution. It stores
 no event body, provider timestamp, message, command, reasoning or item identity.
@@ -814,7 +816,9 @@ describes JSONL thread/turn/item events and examples with item identities. It do
 not establish this package's pinned 0.164.0 behavior, continuous reasoning cadence,
 all path coverage or threshold calibration. Inert exec-protocol tests cover the
 actual bridge reader, delayed receipts, a publication/timer race, invalid-tool
-ordering, rerouting, ignored provider time and overload fencing. Real reviewed
+ordering, rerouting, ignored provider time and overload fencing. Two-child tests
+also prove that one child's queue/classifier overload leaves the other running.
+Real reviewed
 client capability/cadence evidence remains required. Normal dispatch still does
 not enable this composition, and native caller/run enrollment, closed containment,
 service migration and all installed/release gates remain open.

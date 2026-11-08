@@ -108,6 +108,7 @@ class _Attempt:
     terminal_observed: bool = False
     cleanup_confirmed: bool = False
     activity_source: object = None
+    monitor_failed: bool = False
 
 
 def _capture_binding(binding: AttemptBinding) -> AttemptBinding:
@@ -260,7 +261,7 @@ class ProjectMonitor:
             if entry.activity_source is not source:
                 raise ProjectMonitorError("monitor_binding_conflict")
             return
-        if entry.decision is not None or entry.cleanup_confirmed or self._clock_failed:
+        if entry.decision is not None or entry.cleanup_confirmed or entry.monitor_failed or self._clock_failed:
             raise ProjectMonitorError("monitor_unavailable")
         source.enable_activity(clock_ns=self._clock)
         entry.activity_source = source
@@ -273,7 +274,7 @@ class ProjectMonitor:
         if self._loading_activity:
             self._clock_failed = True
             raise LivenessClockError("liveness_invalid_clock")
-        if (entry.activity_source is None or entry.decision is not None or self._clock_failed
+        if (entry.activity_source is None or entry.decision is not None or entry.monitor_failed or self._clock_failed
                 or (entry.cleanup_confirmed and not (final_cleanup_poll or final_terminal_poll))):
             return self._observe_clock(entry, operation, final_cleanup_poll=final_cleanup_poll,
                                        final_terminal_poll=final_terminal_poll)
@@ -281,6 +282,8 @@ class ProjectMonitor:
         try:
             batch = entry.activity_source.receive_activity()
             if batch.failed or self._clock_failed:
+                if batch.failure_code == "activity_clock_unavailable":
+                    self._clock_failed = True
                 raise LivenessClockError("liveness_invalid_clock")
             self._source_sample = batch.observed_ns
             entry.clock.received(batch.events)
@@ -288,7 +291,7 @@ class ProjectMonitor:
                                        final_terminal_poll=final_terminal_poll)
         except Exception:
             # Broken/overflowed receipt streams never become a healthy label.
-            self._clock_failed = True
+            entry.monitor_failed = True
             entry.stop_reason = entry.stop_reason or "monitor_unavailable"
             return self._observe_clock(entry, "poll", final_cleanup_poll=final_cleanup_poll,
                                        final_terminal_poll=final_terminal_poll)
@@ -312,7 +315,7 @@ class ProjectMonitor:
         elif entry.cleanup_confirmed and not (final_cleanup_poll or final_terminal_poll):
             # No later observation can reactivate a confirmed cleaned tree.
             pass
-        elif self._clock_failed:
+        elif self._clock_failed or entry.monitor_failed:
             entry.stop_reason = entry.stop_reason or "monitor_unavailable"
         else:
             try:

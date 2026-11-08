@@ -96,17 +96,29 @@ class ActivityReceiptTests(unittest.TestCase):
         with self.assertRaises(ActivityUnavailable):
             buffer.publish("activity")
         self.assertEqual(MAX_RECEIVED_EVENTS, len(buffer.events))
-        self.assertTrue(buffer.receive().failed)
+        failure = buffer.receive()
+        self.assertTrue(failure.failed)
+        self.assertEqual("activity_capacity_exceeded", failure.failure_code)
         self.assertEqual([], buffer.events)
         for failure in (ValueError("PRIVATE-CLOCK"), KeyboardInterrupt("PRIVATE-INTERRUPT")):
             buffer = ActivityBuffer(lambda: (_ for _ in ()).throw(failure))
             if isinstance(failure, Exception):
-                self.assertTrue(buffer.receive().failed)
+                observed = buffer.receive()
+                self.assertTrue(observed.failed)
+                self.assertEqual("activity_clock_unavailable", observed.failure_code)
             else:
                 with self.assertRaises(KeyboardInterrupt) as caught:
                     buffer.receive()
                 self.assertIs(failure, caught.exception)
             self.assertTrue(buffer.failed)
+
+    def test_failure_codes_are_closed_and_the_first_failure_cannot_be_relabelled(self):
+        buffer = ActivityBuffer()
+        buffer.fail("PRIVATE-UNAPPROVED-REASON")
+        buffer.fail("activity_clock_unavailable")
+        batch = buffer.receive()
+        self.assertEqual("activity_invalid", batch.failure_code)
+        self.assertNotIn("PRIVATE", repr(batch))
 
 
 if __name__ == "__main__":

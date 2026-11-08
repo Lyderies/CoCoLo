@@ -116,6 +116,9 @@ class ExecutionTicket:
     def publish_activity(self, category):
         return self._registry.publish_activity(self, category)
 
+    def fail_activity(self):
+        self._registry.fail_activity(self)
+
 
 class ExecutionSupervisor:
     """Original owner's opaque stop/observation handle, never an RPC grant.
@@ -317,6 +320,12 @@ class OwnedExecutionRegistry:
             if entry.activity is None:
                 raise ExecutionCustodyError()
             return entry.activity.receive()
+
+    def fail_activity(self, ticket):
+        with self._lock:
+            entry = self._entry(ticket)
+            if entry.activity is not None:
+                entry.activity.fail()
 
     def _begin_cleanup(self, entry):
         if not entry.cleanup_started:
