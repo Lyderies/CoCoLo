@@ -19,11 +19,14 @@ from .learning_contracts import canonical_json, parse_bounded_json
 from .owner_key_contracts import checked_public_key
 from .service_transport import MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
 from .account_claim_contracts import CLAIM_ERROR_CODES, ClaimError, LaunchClaimInput, checked_claim_receipt, decode_claim_input
+from .capacity_status_contracts import CapacityStatusInput, checked_capacity_status, decode_capacity_status_input
 
 ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
 MAX_ACCOUNT_INTEGER = (1 << 63) - 1
-ACCOUNT_READ_OPERATIONS = frozenset({"account.health", "account.project", "account.owner_key", "account.owner_public_key"})
+ACCOUNT_READ_OPERATIONS = frozenset({
+    "account.health", "account.project", "account.owner_key", "account.owner_public_key", "account.capacity_status",
+})
 ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {"account.claim_launch"}
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
@@ -90,6 +93,11 @@ def _checked_request(data: object) -> None:
             decode_claim_input(data["payload"])
         except ClaimError:
             raise AccountError("account_invalid_request") from None
+    elif data["operation"] == "account.capacity_status":
+        try:
+            decode_capacity_status_input(data["payload"])
+        except ValueError:
+            raise AccountError("account_invalid_request") from None
     elif data["payload"]:
         raise AccountError("account_invalid_request")
 
@@ -130,6 +138,11 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
         try:
             return checked_claim_receipt(result)
         except ClaimError:
+            raise AccountError("account_invalid_response") from None
+    elif request.operation == "account.capacity_status":
+        try:
+            return checked_capacity_status(result)
+        except ValueError:
             raise AccountError("account_invalid_response") from None
     elif request.operation == "account.health":
         if set(result) != {"transport_alive", "database_checked"} or result["transport_alive"] is not True or result["database_checked"] is not False:
@@ -248,6 +261,31 @@ class AccountClient:
         except ClaimError:
             raise AccountError("account_invalid_request") from None
         request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, "account.claim_launch", request_id,
+                                 self._project, self._runtime, payload)
+        raw = encode_account_request(request)
+        try:
+            reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError:
+            failed = True
+        else:
+            failed = False
+        if failed:
+            raise AccountError("account_unavailable")
+        return decode_account_response(reply, request)
+
+    def capacity_status(self, run_handle: str, bridge_run_id: str, *, request_id: str | None = None) -> dict:
+        """Read the current reservation/receipt, including after a lost reply.
+
+        Unknown or held never permits relaunch or frees a slot. A released
+        receipt is owner metadata, not fresh process cleanup evidence. Each
+        explicit call makes one exchange, with no database fallback or retry.
+        """
+        try:
+            payload = CapacityStatusInput(run_handle, bridge_run_id).payload()
+        except ValueError:
+            raise AccountError("account_invalid_request") from None
+        identity = "read-" + secrets.token_hex(16) if request_id is None else request_id
+        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, "account.capacity_status", identity,
                                  self._project, self._runtime, payload)
         raw = encode_account_request(request)
         try:

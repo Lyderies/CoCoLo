@@ -40,6 +40,7 @@ RUNTIME_FILES = (
     "codex_agents/admission_inputs.py",
     "codex_agents/admission_metadata.py",
     "codex_agents/bridge.py",
+    "codex_agents/capacity_status_contracts.py",
     "codex_agents/catalog.py",
     "codex_agents/claim_admission.py",
     "codex_agents/claude_host.py",

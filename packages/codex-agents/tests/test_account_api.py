@@ -61,7 +61,9 @@ class AccountApiTests(unittest.TestCase):
         self.addCleanup(self.service.close)
 
     def request(self, operation="account.health", *, project=None, runtime=RUNTIME, identity="read-1"):
-        return AccountRequest(ACCOUNT_PROTOCOL_VERSION, operation, identity, project or self.projects[0], runtime, {})
+        payload = ({"run_handle": "hrn_" + "0" * 48, "bridge_run_id": "brg_" + "1" * 32}
+                   if operation == "account.capacity_status" else {})
+        return AccountRequest(ACCOUNT_PROTOCOL_VERSION, operation, identity, project or self.projects[0], runtime, payload)
 
     def call(self, request, *, service=None, context=TOKEN):
         return decode_account_response((service or self.service).handle(encode_account_request(request), context), request)

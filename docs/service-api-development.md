@@ -1454,3 +1454,36 @@ Migration and capacity backfill commit together or roll back together. Current
 startup refuses missing/mismatched reservation coverage instead of rebuilding an
 empty capacity pool. Sanitized and standalone owner backups retain the capacity
 rows and validate their exact launch parents; older manifests remain unchanged.
+
+### Capacity status and lost-reply recovery (uninstalled candidate)
+
+`AccountClient.capacity_status(run_handle, bridge_run_id)` sends one closed
+`account.capacity_status` read to the account owner. The existing default-deny
+adapter must authorize the exact request for source `host`, its project/runtime,
+operation and caller scope. Hook, app-server and owner-source grants do not admit
+this operation. No PID, path, cleanup flag, process object or release instruction
+is accepted. Native caller and endpoint authentication remain activation gates.
+
+The owner uses its existing connection and indexed project/handle/bridge binding.
+It returns only `state`, `receipt_digest` and `released_at_ms`:
+
+- `unknown`: no matching scoped reservation metadata; neither a free slot nor an
+  absent process is proved.
+- `held`: the reservation is unreleased, including after expiry, a terminal result
+  or restart with lost cleanup custody. Receipt and release time remain null.
+- `released`: the existing keyed completion receipt matches the reservation,
+  execution registration and exact terminal binding. A missing or altered parent,
+  release digest or completion is an error, never a repaired receipt.
+
+Each explicit read obtains current metadata, even when a caller reuses its request
+ID. The response digest binds the entire original request, including its run and
+bridge attempt. After a dropped response or account-owner restart, another explicit
+read retrieves the same committed release without creating an execution or touching
+capacity. The client does not retry automatically or open SQLite if the service is
+unavailable. An active owner transaction is not exposed or committed by this read.
+
+The receipt retains the limits of its original evidence: current tracked-process
+observations do not establish closed descendant containment. Reading a receipt is
+not a new cleanup credential, a release request or permission to rerun a child.
+Service-path execution and actual release delivery, native containment/custody,
+orphan/drained migration and full normal-client migration remain mandatory.

@@ -36,6 +36,7 @@ from .signature_inputs import (
     SignatureCaptureError, SignatureCaptureLimits, SignatureInputSnapshot, signature_input_size,
 )
 from .account_claim_contracts import ClaimError, LaunchClaimInput, decode_claim_input
+from .capacity_status_contracts import CapacityStatusInput, decode_capacity_status_input
 
 # Fixed owner query: do not parse JSON or select variable record values during
 # preliminary quota checks. Foreign-account/provider candidates are charged too.
@@ -133,6 +134,12 @@ class AccountOwnerViews:
         self._guard()
         return self._ledger.claim_launch(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                                          request_id=request_id, launch=launch)
+
+    def capacity_status(self, project_id: str, status: CapacityStatusInput) -> dict:
+        self._guard()
+        with self._ledger._lock:
+            self._project_locked(project_id)
+            return self._ledger._capacity_status(project_id, status)
 
     def _claim_preflight(self, project_id, *, runtime_digest, caller_scope, request_id, launch, work_limits=None):
         self._guard()
@@ -635,6 +642,7 @@ class AccountService:
             # sees its mutable request object. The digest still binds its exact
             # original envelope; no JSON field supplies caller/role authority.
             launch = decode_claim_input(request.payload) if operation == "account.claim_launch" else None
+            status = decode_capacity_status_input(request.payload) if operation == "account.capacity_status" else None
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -659,7 +667,7 @@ class AccountService:
                 or request.operation not in authorization.allowed_operations
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
-                or (operation == "account.claim_launch" and
+                or (operation in {"account.claim_launch", "account.capacity_status"} and
                     (authorization.source != "host" or authorization.caller_scope is None))
             ):
                 raise AccountError("account_not_authorized")
@@ -679,6 +687,8 @@ class AccountService:
                 result = {"transport_alive": True, "database_checked": False}
             elif request.operation == "account.project":
                 result = self._views.project(request.project_id)
+            elif operation == "account.capacity_status":
+                result = self._views.capacity_status(project, status)
             elif request.operation == "account.owner_public_key":
                 result = self._views.owner_public_key(request.project_id)
             else:

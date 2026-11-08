@@ -33,6 +33,7 @@ from .collector_client import (
 from .active_run_capacity import CAPACITY_OBJECTS, CAPACITY_SCHEMA, CAPACITY_PARENT_SCHEMA, CAPACITY_COMPLETIONS_SCHEMA, CAPACITY_EXECUTIONS_SCHEMA
 from .active_run_capacity import INSTALLED_ACTIVE_RUN_LIMITS
 from .owned_execution import ExecutionCustodyError, OwnedExecutionKey, OwnedExecutionRegistry
+from .capacity_status_contracts import CapacityStatusInput, checked_capacity_status
 from .collector_contracts import (
     COLLECTOR_PROTOCOL_VERSION as COLLECTOR_PROTOCOL_VERSION,
     LEDGER_SCHEMA_VERSION as LEDGER_SCHEMA_VERSION,
@@ -6208,6 +6209,38 @@ class LearningLedger:
             if not secrets.compare_digest(digest, row["receipt_digest"]):
                 raise LedgerError("capacity completion is unavailable")
             return {"state": "released", "receipt_digest": digest, "released_at_ms": row["released_at_ms"], "known": True}
+
+    def _capacity_status(self, project_id, status):
+        """Current bounded owner view; never releases, registers or launches.
+
+        Expired, terminal or unreconciled reservations stay held. Missing
+        scoped metadata is unknown, not proof of a free slot or absent process.
+        Released observations require the original keyed completion receipt.
+        """
+        if not claim_matches(project_id, _CLAIM_PROJECT) or type(status) is not CapacityStatusInput:
+            raise LedgerError("capacity status is unavailable")
+        status.__post_init__()
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("capacity status is unavailable")
+            self.state.harden_database_files()
+            handle = keyed_digest(self.state.digest_key(), status.run_handle)
+            cap = self._connection.execute(
+                "SELECT run_id,released_at_ms FROM active_run_capacity "
+                "WHERE project_id=? AND handle_digest=? AND bridge_run_id=?",
+                (project_id, handle, status.bridge_run_id),
+            ).fetchone()
+            result = {"state": "unknown", "receipt_digest": None, "released_at_ms": None}
+            if cap is not None:
+                result["state"] = "held"
+                if cap["released_at_ms"] is not None:
+                    key = OwnedExecutionKey(project_id, handle, cap["run_id"], status.bridge_run_id)
+                    row = self._capacity_completion_locked(key)
+                    digest = self._capacity_completion_digest(row, row["released_at_ms"])
+                    if not secrets.compare_digest(digest, row["receipt_digest"]):
+                        raise LedgerError("capacity status is unavailable")
+                    result = {"state": "released", "receipt_digest": digest, "released_at_ms": row["released_at_ms"]}
+            return checked_capacity_status(result)
 
     def claim_launch(
         self, project_id: str, *, runtime_digest: str, caller_scope: str,
