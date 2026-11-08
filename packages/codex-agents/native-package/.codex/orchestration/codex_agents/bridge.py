@@ -780,6 +780,8 @@ def run_child(
                     raise _Abort("stream_too_large")
                 buffer += chunk
                 while b"\n" in buffer:
+                    if time.monotonic() >= deadline:
+                        raise _Abort("timed_out")
                     line, buffer = buffer.split(b"\n", 1)
                     if len(line) > MAX_LINE_BYTES:
                         raise _Abort("stream_too_large")
@@ -791,6 +793,8 @@ def run_child(
             if len(buffer) > MAX_LINE_BYTES:
                 raise _Abort("stream_too_large")
             if buffer.strip():
+                if time.monotonic() >= deadline:
+                    raise _Abort("timed_out")
                 _deliver(buffer, on_frame)
         # The output is closed. Wait for the child to exit without reaping it; an
         # exit first seen after the deadline (a snapshot can block) is a timeout.
