@@ -1173,8 +1173,8 @@ class WizardTerminalTests(unittest.TestCase):
             os.kill(self.pid, 9)
         except OSError:
             pass
-        end = time.time() + 5
-        while time.time() < end:
+        end = time.monotonic() + 5
+        while time.monotonic() < end:
             try:
                 done, _ = os.waitpid(self.pid, os.WNOHANG)
             except OSError:
@@ -1186,8 +1186,8 @@ class WizardTerminalTests(unittest.TestCase):
     def expect(self, text: str, timeout: float = 25.0) -> None:
         import select
 
-        end = time.time() + timeout
-        while time.time() < end:
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
             if text in self.screen:
                 return
             ready, _, _ = select.select([self.fd], [], [], 0.2)
@@ -1205,8 +1205,8 @@ class WizardTerminalTests(unittest.TestCase):
     def settle(self, seconds: float = 0.6) -> None:
         import select
 
-        end = time.time() + seconds
-        while time.time() < end:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
             ready, _, _ = select.select([self.fd], [], [], 0.1)
             if ready:
                 chunk = os.read(self.fd, 65536).decode(errors="replace")
@@ -1218,10 +1218,10 @@ class WizardTerminalTests(unittest.TestCase):
         os.write(self.fd, data.encode())
 
     def finish(self, timeout: float = 10.0) -> int:
-        end = time.time() + timeout
+        end = time.monotonic() + timeout
         import select
 
-        while time.time() < end:
+        while time.monotonic() < end:
             done, status = os.waitpid(self.pid, os.WNOHANG)
             if done:
                 self.pid = 0
