@@ -16,6 +16,12 @@ from codex_agents.learning_contracts import canonical_json
 from codex_agents.learning_store import DEFAULT_RETENTION_MS, LearningLedger, LedgerError, StateError
 
 
+def drop_active_capacity_for_legacy_fixture(ledger):
+    ledger._connection.execute("DROP TRIGGER preserve_active_capacity_on_project_deletion")
+    ledger._connection.execute("DROP TABLE active_run_capacity")
+    ledger._connection.execute("DROP INDEX active_capacity_parent")
+
+
 class AccountLaunchClaimsTests(unittest.TestCase):
     def setUp(self):
         self.fixture = bridge_fixture.BridgeTestCase()
@@ -151,7 +157,7 @@ class AccountLaunchClaimsTests(unittest.TestCase):
             self.project, file_id="claim_fixture_backup", expires_at_ms=self.stamp + 60_000,
         )
         checked = self.ledger.verify_sanitized_backup(self.project, file_id="claim_fixture_backup")
-        self.assertEqual(8, checked["ledger_schema_version"])
+        self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, checked["ledger_schema_version"])
         self.assertEqual(1, checked["counts"]["launch_claims"])
         body = json.loads(backup.read_bytes())["body"]
         row = body["tables"]["launch_claims"][0]
@@ -160,14 +166,16 @@ class AccountLaunchClaimsTests(unittest.TestCase):
         with self.assertRaisesRegex(LedgerError, "restoration rejected"):
             learning_store._verify_project_backup_body(body)
 
-    def test_explicit_project_deletion_removes_consumption(self):
+    def test_explicit_project_deletion_cannot_erase_unreconciled_capacity(self):
         self.claim()
-        with mock.patch.object(self.ledger, "_clock_ms", return_value=self.stamp + DEFAULT_RETENTION_MS):
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=self.stamp + DEFAULT_RETENTION_MS), \
+                self.assertRaisesRegex(LedgerError, "project_has_active_launch_capacity"):
             self.ledger.delete_project(self.project)
-        self.assertEqual([], self.markers())
+        self.assertEqual(1, len(self.markers()))
 
     def downgrade_to_six(self):
         with self.ledger._account_transaction():
+            drop_active_capacity_for_legacy_fixture(self.ledger)
             self.ledger._connection.execute("DROP TRIGGER cleanup_launch_operation_state")
             for name in ("launch_inputs", "launch_observations", "launch_receipts"):
                 self.ledger._connection.execute("DROP TABLE " + name)
@@ -220,7 +228,7 @@ class AccountLaunchClaimsTests(unittest.TestCase):
         self.ledger.close()
         self.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
         self.addCleanup(self.ledger.close)
-        self.assertEqual(8, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
         self.assertEqual("legacy_fenced", self.markers()[0][2])
         self.assertEqual(signed_before, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_attestations").fetchall()])
         self.assertEqual(records_before, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid").fetchall()])
@@ -254,6 +262,7 @@ class AccountLaunchClaimsTests(unittest.TestCase):
     def test_missing_schema_seven_consumption_is_not_recreated_as_empty(self):
         self.claim()
         with self.ledger._account_transaction():
+            drop_active_capacity_for_legacy_fixture(self.ledger)
             self.ledger._connection.execute("DROP TABLE launch_claims")
         self.ledger.close()
         with self.assertRaisesRegex(LedgerError, "launch claim state is unavailable"):

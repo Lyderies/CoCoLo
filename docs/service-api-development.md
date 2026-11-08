@@ -1376,3 +1376,31 @@ custody and reserved-lane enrollment remain unproved. Fixed public-key/config an
 file-hardening observations still need whole-operation latency evidence. Active
 capacity/orphan recovery, complete normal C19 migration, staged legacy migration,
 reviewed installed D8 and all four liveness/release paths remain mandatory.
+
+### Durable active-run capacity (uninstalled candidate)
+
+The account owner reserves active capacity in the same transaction as the unique
+launch marker, intent and receipt. Both the deferred service path and legacy
+owner reference enforce the installed candidate policy: two machine-wide slots
+and two slots per eligible provider account. Requests and model output cannot
+raise these limits. Indexed counts stop at the policy limit; a full lane returns
+retryable `claim_busy` without a new receipt, marker or reservation. Known receipt
+lookup precedes capacity checks and never repeats a launch.
+
+Reservations retain their project/run/handle/bridge, account, runtime and policy
+bindings across history expiry, wall-clock changes and restart. Project deletion
+cannot erase unreconciled active capacity. A dropped socket, elapsed deadline,
+missing local history or reported terminal result does not establish cleanup.
+No automatic release endpoint is enabled in this candidate: confirmed native
+cleanup and conservative cross-store reconciliation must be integrated before
+activation. The reservation implementation alone does not establish completed
+capacity/recovery or actual concurrent-client acceptance.
+
+Schema 9 requires verified schema-8 backups before migration. Existing consumed
+or fenced launch markers become `legacy_unknown` reservations; migration does
+not infer that historical execution never happened or invent account/cleanup
+evidence. Unknown reservations count conservatively for every candidate account.
+Migration and capacity backfill commit together or roll back together. Current
+startup refuses missing/mismatched reservation coverage instead of rebuilding an
+empty capacity pool. Sanitized and standalone owner backups retain the capacity
+rows and validate their exact launch parents; older manifests remain unchanged.

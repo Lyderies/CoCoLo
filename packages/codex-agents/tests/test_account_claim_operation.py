@@ -276,11 +276,12 @@ class AccountClaimOperationTests(unittest.TestCase):
             self.ledger._connection.execute("DELETE FROM launch_claims")
         self.assertEqual((1, 1), (self.count("launch_claims"), self.count("launch_receipts")))
 
-    def test_project_deletion_removes_receipts_before_consumption(self):
+    def test_project_deletion_preserves_unreconciled_capacity_and_receipts(self):
         self.claim()
         self.stamp += DEFAULT_RETENTION_MS
-        self.ledger.delete_project(self.project)
-        self.assertEqual((0, 0, 0, 0), tuple(self.count(table) for table in
+        with self.assertRaisesRegex(LedgerError, "project_has_active_launch_capacity"):
+            self.ledger.delete_project(self.project)
+        self.assertEqual((1, 1, 1, 1), tuple(self.count(table) for table in
                          ("launch_claims", "launch_receipts", "launch_inputs", "launch_observations")))
 
     def test_unknown_run_denial_is_durable_and_changed_retry_conflicts(self):
@@ -327,6 +328,7 @@ class AccountClaimOperationTests(unittest.TestCase):
             orchestration_handle=orchestration["orchestration_handle"], now_ms=self.stamp,
         )
         with self.ledger._account_transaction():
+            fixture_module.drop_active_capacity_for_legacy_fixture(self.ledger)
             self.ledger._connection.execute("DROP TRIGGER cleanup_launch_operation_state")
             for table in ("launch_receipts", "launch_inputs", "launch_observations"):
                 self.ledger._connection.execute("DROP TABLE " + table)
@@ -351,7 +353,7 @@ class AccountClaimOperationTests(unittest.TestCase):
         self.ledger.close()
         self.ledger = LearningLedger(self.fixture.fixture.state, client_capabilities=self.fixture.fixture.clients)
         self.addCleanup(self.ledger.close)
-        self.assertEqual(8, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
         markers = [tuple(row) for row in self.ledger._connection.execute("SELECT kind,bridge_run_id FROM launch_claims ORDER BY kind")]
         self.assertEqual([("claimed", first["bridge_run_id"]), ("legacy_fenced", None)], markers)
         self.assertEqual(before, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid")])

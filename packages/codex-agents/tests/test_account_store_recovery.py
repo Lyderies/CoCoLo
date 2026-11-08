@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 import tests.test_learning_store as fixture_module
+from codex_agents import learning_store
 from codex_agents.learning_store import LearningLedger, LearningState, LedgerError, StateError
 from tests.support import REPOSITORY_ROOT
 
@@ -167,7 +168,7 @@ LearningLedger(LearningState(root))
         self.crash_marker_creation(state.root, "ledger-initialized")
         reopened = LearningLedger(LearningState(state.root))
         self.addCleanup(reopened.close)
-        self.assertEqual(8, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX process exit")
     def test_process_death_before_bootstrap_marker_contents_can_resume_empty_root(self):
@@ -175,7 +176,7 @@ LearningLedger(LearningState(root))
         self.crash_marker_creation(root, "ledger-initializing")
         reopened = LearningLedger(LearningState(root))
         self.addCleanup(reopened.close)
-        self.assertEqual(8, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def test_interrupted_fresh_initialization_rolls_back_all_schema_and_reopens(self):
         class FixtureStop(BaseException):
@@ -194,7 +195,7 @@ LearningLedger(LearningState(root))
         self.assertEqual((0, []), self.version_and_tables(state))
         reopened = LearningLedger(LearningState(state.root))
         self.addCleanup(reopened.close)
-        self.assertEqual(8, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX process exit")
     def test_process_death_during_initial_schema_recovers_without_partial_tables(self):
@@ -217,7 +218,7 @@ LearningLedger(LearningState(Path(sys.argv[1])))
         self.assertEqual((0, []), self.version_and_tables(state))
         reopened = LearningLedger(LearningState(state.root))
         self.addCleanup(reopened.close)
-        self.assertEqual(8, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def test_fresh_schema_mode_failure_rolls_back_before_commit_and_can_resume(self):
         state = self.fresh_state()
@@ -248,7 +249,7 @@ LearningLedger(LearningState(Path(sys.argv[1])))
         self.assertEqual((0, []), self.version_and_tables(state))
         reopened = LearningLedger(LearningState(state.root))
         self.addCleanup(reopened.close)
-        self.assertEqual(8, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, reopened._connection.execute("PRAGMA user_version").fetchone()[0])
 
 
 if __name__ == "__main__":

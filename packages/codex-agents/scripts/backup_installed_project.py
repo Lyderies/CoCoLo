@@ -97,6 +97,8 @@ _TABLE_COLUMNS = {
     "launch_observations": ("handle_digest", "identity_digest", "observed_at_ms"),
     "launch_receipts": ("scope_digest", "request_digest", "parameters_digest", "handle_digest", "receipt_digest",
                         "run_id", "state", "reason_code", "bridge_run_id", "deadline_at_ms", "recorded_at_ms"),
+    "active_run_capacity": ("handle_digest", "run_id", "bridge_run_id", "kind", "provider", "account_fingerprint",
+                            "runtime_digest", "policy_digest", "claimed_at_ms", "released_at_ms", "release_digest"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -141,6 +143,7 @@ _TABLE_ORDER = {
     "launch_inputs": ("handle_digest",),
     "launch_observations": ("handle_digest",),
     "launch_receipts": ("scope_digest", "request_digest"),
+    "active_run_capacity": ("handle_digest",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -151,6 +154,8 @@ _TABLE_ORDER = {
 
 
 def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 9 and table == "active_run_capacity":
+        return ()
     if schema_version < 8 and table in {"launch_inputs", "launch_observations", "launch_receipts"}:
         return ()
     if schema_version < 7 and table == "launch_claims":
@@ -168,12 +173,13 @@ def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
 
 
 def _tables(schema_version: int) -> tuple[str, ...]:
-    if schema_version not in {5, 6, 7, 8}:
+    if schema_version not in {5, 6, 7, 8, 9}:
         raise RuntimeError("installed ledger schema does not support this backup")
     return tuple(table for table in _TABLE_COLUMNS
                  if (schema_version >= 7 or table != "launch_claims")
                  and (schema_version >= 8 or table not in {
-                     "launch_inputs", "launch_observations", "launch_receipts"}))
+                     "launch_inputs", "launch_observations", "launch_receipts"})
+                 and (schema_version >= 9 or table != "active_run_capacity"))
 
 
 def _encode(value: object) -> object:
@@ -221,6 +227,13 @@ def _verify_relational_restore(
             if parent_index is None:
                 raise RuntimeError("project backup launch receipt parent is unavailable")
             restored.execute(str(parent_index[0]))
+        if body["ledger_schema_version"] >= 9:
+            parent_index = source_connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='active_capacity_parent'"
+            ).fetchone()
+            if parent_index is None:
+                raise RuntimeError("project backup active capacity parent is unavailable")
+            restored.execute(str(parent_index[0]))
         project = body["project"]
         restored.execute(
             f"INSERT INTO projects({','.join(_PROJECT_COLUMNS)}) VALUES(?,?,?,?,?,?)",
@@ -254,6 +267,12 @@ def _verify_relational_restore(
                 )
         if restored.execute("PRAGMA foreign_key_check").fetchall():
             raise RuntimeError("project backup foreign-key verification failed")
+        if body["ledger_schema_version"] >= 9 and restored.execute(
+            "SELECT 1 FROM launch_claims c LEFT JOIN active_run_capacity a "
+            "ON a.project_id=c.project_id AND a.handle_digest=c.handle_digest "
+            "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
+        ).fetchone() is not None:
+            raise RuntimeError("project backup capacity coverage is incomplete")
         if restored.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise RuntimeError("project backup integrity verification failed")
         for table in _tables(body["ledger_schema_version"]):
@@ -318,7 +337,7 @@ def _main() -> int:
         project_id = ledger.project_for_root(target)
         connection = ledger._connection
         schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if schema_version not in {5, 6, 7, 8}:
+        if schema_version not in {5, 6, 7, 8, 9}:
             raise RuntimeError("installed ledger schema does not support this backup")
         project_columns = {
             str(row[1])

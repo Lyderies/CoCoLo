@@ -30,6 +30,8 @@ from .collector_client import (
     PACKAGE_VERSION as PACKAGE_VERSION,
     CollectorClient as CollectorClient,
 )
+from .active_run_capacity import CAPACITY_OBJECTS, CAPACITY_SCHEMA, CAPACITY_PARENT_SCHEMA
+from .active_run_capacity import INSTALLED_ACTIVE_RUN_LIMITS
 from .collector_contracts import (
     COLLECTOR_PROTOCOL_VERSION as COLLECTOR_PROTOCOL_VERSION,
     LEDGER_SCHEMA_VERSION as LEDGER_SCHEMA_VERSION,
@@ -276,6 +278,8 @@ _BACKUP_TABLE_COLUMNS = {
     "launch_observations": ("handle_digest", "identity_digest", "observed_at_ms"),
     "launch_receipts": ("scope_digest", "request_digest", "parameters_digest", "handle_digest", "receipt_digest",
                         "run_id", "state", "reason_code", "bridge_run_id", "deadline_at_ms", "recorded_at_ms"),
+    "active_run_capacity": ("handle_digest", "run_id", "bridge_run_id", "kind", "provider", "account_fingerprint",
+                            "runtime_digest", "policy_digest", "claimed_at_ms", "released_at_ms", "release_digest"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -327,6 +331,7 @@ _BACKUP_ORDER_COLUMNS = {
     "launch_inputs": ("handle_digest",),
     "launch_observations": ("handle_digest",),
     "launch_receipts": ("scope_digest", "request_digest"),
+    "active_run_capacity": ("handle_digest",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -360,6 +365,8 @@ def _backup_decode_value(value: Any) -> Any:
 
 
 def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 9 and table == "active_run_capacity":
+        return ()
     if schema_version < 8 and table in {"launch_inputs", "launch_observations", "launch_receipts"}:
         return ()
     if schema_version < 7 and table == "launch_claims":
@@ -377,7 +384,8 @@ def _backup_tables(schema_version: int) -> tuple[str, ...]:
     # a launch_claims entry, even an empty one.
     return tuple(table for table in _BACKUP_TABLE_COLUMNS
                  if (schema_version >= 7 or table != "launch_claims")
-                 and (schema_version >= 8 or table not in {"launch_inputs", "launch_observations", "launch_receipts"}))
+                 and (schema_version >= 8 or table not in {"launch_inputs", "launch_observations", "launch_receipts"})
+                 and (schema_version >= 9 or table != "active_run_capacity"))
 
 
 def _snapshot_project_partition(
@@ -540,7 +548,7 @@ _BACKUP_RESTORE_SCHEMA = """
 CREATE TABLE projects(project_id TEXT PRIMARY KEY,canonical_root TEXT,root_digest TEXT,
  status TEXT NOT NULL CHECK(status IN ('active','deleted')),created_at_ms INTEGER NOT NULL,
  deleted_at_ms INTEGER);
-""" + _LAUNCH_CLAIMS_SCHEMA + ";\n" + _LAUNCH_RECEIPT_PARENT_SCHEMA + ";\n" + _LAUNCH_INPUTS_SCHEMA + ";\n" + _LAUNCH_OBSERVATIONS_SCHEMA + ";\n" + _LAUNCH_RECEIPTS_SCHEMA + ";\n" + """
+""" + _LAUNCH_CLAIMS_SCHEMA + ";\n" + _LAUNCH_RECEIPT_PARENT_SCHEMA + ";\n" + _LAUNCH_INPUTS_SCHEMA + ";\n" + _LAUNCH_OBSERVATIONS_SCHEMA + ";\n" + _LAUNCH_RECEIPTS_SCHEMA + ";\n" + CAPACITY_PARENT_SCHEMA + ";\n" + CAPACITY_SCHEMA + ";\n" + """
 CREATE TABLE sessions(project_id TEXT NOT NULL,session_digest TEXT NOT NULL,producer TEXT NOT NULL,
  created_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,session_digest,producer),
  FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE);
@@ -626,7 +634,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -697,6 +705,12 @@ def _verify_project_backup_body(
         foreign_keys = restored.execute("PRAGMA foreign_key_check").fetchall()
         if foreign_keys:
             raise LedgerError("isolated project backup foreign-key check failed")
+        if schema_version >= 9 and restored.execute(
+            "SELECT 1 FROM launch_claims c LEFT JOIN active_run_capacity a "
+            "ON a.project_id=c.project_id AND a.handle_digest=c.handle_digest "
+            "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
+        ).fetchone() is not None:
+            raise LedgerError("project backup capacity coverage is incomplete")
         integrity = restored.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise LedgerError("isolated project backup integrity check failed")
@@ -2331,6 +2345,8 @@ class LearningLedger:
                         ("table", "launch_receipts", _LAUNCH_RECEIPTS_SCHEMA),
                         ("index", "launch_receipt_parent", _LAUNCH_RECEIPT_PARENT_SCHEMA),
                         ("trigger", "cleanup_launch_operation_state", _LAUNCH_CLEANUP_SCHEMA)]
+        if version >= 9:
+            schemas += list(CAPACITY_OBJECTS)
 
         def normalized(sql):
             return " ".join(sql.replace("IF NOT EXISTS ", "").strip().rstrip(";").split())
@@ -2348,6 +2364,19 @@ class LearningLedger:
         self._connection.execute(_LAUNCH_CLEANUP_SCHEMA)
         self._assert_launch_schema_locked(8)
 
+    def _initialize_active_capacity_locked(self):
+        for _kind, _name, sql in CAPACITY_OBJECTS:
+            self._connection.execute(sql)
+        # Historical consumption has no durable proof of confirmed cleanup.
+        # Retention, a consumed binding or a result record cannot free capacity.
+        self._connection.execute(
+            "INSERT INTO active_run_capacity(project_id,handle_digest,run_id,bridge_run_id,kind,claimed_at_ms) "
+            "SELECT c.project_id,c.handle_digest,c.run_id,c.bridge_run_id,'legacy_unknown',c.claimed_at_ms "
+            "FROM launch_claims c WHERE NOT EXISTS(SELECT 1 FROM active_run_capacity a "
+            "WHERE a.project_id=c.project_id AND a.handle_digest=c.handle_digest)"
+        )
+        self._assert_launch_schema_locked(9)
+
     def _migrate_six_or_seven_to_current(self, version: int) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -2362,7 +2391,8 @@ class LearningLedger:
                     "WHERE c.project_id=h.project_id AND (c.handle_digest=h.handle_digest OR c.run_id=h.run_id))"
                 )
             self._initialize_launch_operations_locked()
-            self._connection.execute("PRAGMA user_version = 8")
+            self._initialize_active_capacity_locked()
+            self._connection.execute("PRAGMA user_version = 9")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
         except BaseException:
@@ -2459,7 +2489,8 @@ class LearningLedger:
             )
             self._initialize_launch_claims_locked(backfill=True)
             self._initialize_launch_operations_locked()
-            self._connection.execute("PRAGMA user_version = 8")
+            self._initialize_active_capacity_locked()
+            self._connection.execute("PRAGMA user_version = 9")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
         except BaseException:
@@ -2479,19 +2510,32 @@ class LearningLedger:
         if 0 < current < 5:
             raise LedgerError("legacy ledger requires a verified drained staged migration")
         if current == 5:
-            self._require_project_migration_backups(5, 8)
+            self._require_project_migration_backups(5, 9)
             self._migrate_five_to_current()
             self.state.harden_database_files()
             return
         if current in {6, 7}:
             if current == 7:
                 self._assert_launch_schema_locked(7)
-            self._require_project_migration_backups(current, 8)
+            self._require_project_migration_backups(current, 9)
             self._migrate_six_or_seven_to_current(current)
             self.state.harden_database_files()
             return
         if current == 8:
             self._assert_launch_schema_locked(8)
+            self._require_project_migration_backups(8, 9)
+            with self._account_transaction():
+                self._initialize_active_capacity_locked()
+                self._connection.execute("PRAGMA user_version = 9")
+            return
+        if current == 9:
+            self._assert_launch_schema_locked(9)
+            if self._connection.execute(
+                "SELECT 1 FROM launch_claims c LEFT JOIN active_run_capacity a "
+                "ON a.project_id=c.project_id AND a.handle_digest=c.handle_digest "
+                "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
+            ).fetchone() is not None:
+                raise LedgerError("active capacity coverage is unavailable")
         with self._account_transaction():
             self._migrate_layout_locked(current)
 
@@ -3077,6 +3121,7 @@ class LearningLedger:
             if current < 5:
                 self._initialize_launch_claims_locked(backfill=current != 0)
                 self._initialize_launch_operations_locked()
+                self._initialize_active_capacity_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
         self.state.harden_database_files()
 
@@ -5930,6 +5975,44 @@ class LearningLedger:
                 return context, known, None, None
         return replace(context, run_context=columns), None, early_reason, provider
 
+    def _check_active_capacity_locked(self, provider, account):
+        """Bounded fresh counts inside the same transaction as consumption."""
+        from .active_run_capacity import ActiveRunLimits
+
+        policy = INSTALLED_ACTIVE_RUN_LIMITS
+        if (type(policy) is not ActiveRunLimits or provider not in {"codex", "claude"}
+                or (account is not None and not claim_matches(account, _CLAIM_DIGEST))):
+            raise ClaimError("claim_unavailable")
+        policy.__post_init__()
+        active = self._connection.execute(
+            "SELECT 1 FROM active_run_capacity INDEXED BY active_capacity_machine "
+            "WHERE released_at_ms IS NULL LIMIT ?", (policy.machine,),
+        ).fetchall()
+        if len(active) >= policy.machine:
+            raise ClaimError("claim_busy")
+        # A legacy unknown account consumes a slot for every candidate. A
+        # provider-known but account-unknown reservation counts for that whole
+        # provider. Machine counting first bounds this read to fewer than 64
+        # active rows even after a large conservative historical backfill.
+        account_active = self._connection.execute(
+            "SELECT 1 FROM active_run_capacity INDEXED BY active_capacity_account "
+            "WHERE released_at_ms IS NULL AND (provider IS NULL OR (provider=? "
+            "AND (? IS NULL OR account_fingerprint IS NULL OR account_fingerprint=?))) LIMIT ?",
+            (provider, account, account, policy.account),
+        ).fetchall()
+        if len(account_active) >= policy.account:
+            raise ClaimError("claim_busy")
+        return policy
+
+    def _reserve_active_capacity_locked(self, project, handle, run, bridge, provider, account, policy, timestamp):
+        if not self._connection.in_transaction:
+            raise ClaimError("claim_unavailable")
+        self._connection.execute(
+            "INSERT INTO active_run_capacity(project_id,handle_digest,run_id,bridge_run_id,kind,provider,"
+            "account_fingerprint,runtime_digest,policy_digest,claimed_at_ms) VALUES(?,?,?,?,'claimed',?,?,?,?,?)",
+            (project, handle, run, bridge, provider, account, COLLECTOR_RUNTIME_DIGEST, policy.digest, timestamp),
+        )
+
     def claim_launch(
         self, project_id: str, *, runtime_digest: str, caller_scope: str,
         request_id: str, launch: LaunchClaimInput,
@@ -6160,6 +6243,10 @@ class LearningLedger:
                     }, run_id=None, timestamp=timestamp)
             bridge = deadline = None
             if reason is None:
+                def capacity():
+                    return self._check_active_capacity_locked(inputs["provider"], admitted["account_fingerprint"])
+                policy = (capacity() if work_limits is None else
+                          self._connection.transaction_read_call(work_limits, capacity))
                 bridge = "brg_" + secrets.token_hex(16)
                 deadline = timestamp + inputs["hard_timeout_seconds"] * 1000
                 if not timestamp < deadline <= MAX_CLAIM_INTEGER:
@@ -6170,6 +6257,8 @@ class LearningLedger:
                 record = validate_learning_record({**material, "record_id": "dispatch_intent:" + content_digest(material)})
                 self._connection.execute("INSERT INTO launch_claims VALUES(?,?,?,'claimed',?,?)",
                                          (project_id, handle, run_id, timestamp, bridge))
+                self._reserve_active_capacity_locked(project_id, handle, run_id, bridge, inputs["provider"],
+                                                     admitted["account_fingerprint"], policy, timestamp)
                 self._append_checked_locked(project_id, record, producer="lifecycle", timestamp=timestamp)
             return self._store_claim_receipt_locked(project_id, scope, request, parameters, handle, {
                 "state": "claimed" if reason is None else "denied", "run_id": run_id, "reason_code": reason,
@@ -6244,6 +6333,10 @@ class LearningLedger:
                 (project_id, run_id),
             ).fetchone() is not None:
                 raise LedgerError("host run was already dispatched")
+            try:
+                policy = self._check_active_capacity_locked(route["provider"], admission["account_fingerprint"])
+            except ClaimError as error:
+                raise LedgerError("active launch capacity is unavailable") from error
             if not claim:
                 return {"run_id": run_id}
             material = {
@@ -6268,6 +6361,8 @@ class LearningLedger:
                 "VALUES(?,?,?,'claimed',?,?)",
                 (project_id, handle_digest, run_id, timestamp, bridge_run_id),
             )
+            self._reserve_active_capacity_locked(project_id, handle_digest, run_id, bridge_run_id,
+                                                 route["provider"], admission["account_fingerprint"], policy, timestamp)
             self._append_checked_locked(
                 project_id, record, producer="lifecycle", timestamp=timestamp
             )
@@ -10213,6 +10308,11 @@ class LearningLedger:
         with self._lock:
             if self._active_readers:
                 raise LedgerError("project deletion requires closed scoped readers")
+            if self._connection.execute(
+                "SELECT 1 FROM active_run_capacity WHERE project_id=? AND released_at_ms IS NULL LIMIT 1",
+                (project_id,),
+            ).fetchone() is not None:
+                raise LedgerError("project_has_active_launch_capacity")
             # Account restrictions are read from every project, so deleting the
             # project that holds one would lift it. The ledger's own clock
             # decides, never the caller's time.
@@ -10234,6 +10334,7 @@ class LearningLedger:
                 self._connection.execute("DELETE FROM launch_receipts WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM launch_observations WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM launch_inputs WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM active_run_capacity WHERE project_id=? AND released_at_ms IS NOT NULL", (project_id,))
                 self._connection.execute("DELETE FROM launch_claims WHERE project_id=?", (project_id,))
                 updated = self._connection.execute(
                     "UPDATE projects SET canonical_root=NULL,root_digest=NULL,status='deleted',deleted_at_ms=? "

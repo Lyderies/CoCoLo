@@ -15,17 +15,18 @@ TOOL = runpy.run_path(str(REPOSITORY_ROOT / "scripts/backup_installed_project.py
 
 class InstalledBackupManifestTests(unittest.TestCase):
     def test_exact_version_manifests_match_owner_reader_and_keep_old_tables_absent(self):
-        for version in (5, 6, 7, 8):
+        for version in (5, 6, 7, 8, 9):
             with self.subTest(version=version):
                 tables = TOOL["_tables"](version)
                 self.assertEqual(learning_store._backup_tables(version), tables)
                 self.assertEqual(version >= 7, "launch_claims" in tables)
                 self.assertEqual(version >= 8, "launch_receipts" in tables)
+                self.assertEqual(version >= 9, "active_run_capacity" in tables)
                 for table in tables:
                     self.assertEqual(learning_store._backup_expected_columns(version, table),
                                      TOOL["_expected_columns"](version, table))
                     self.assertEqual(learning_store._BACKUP_ORDER_COLUMNS[table], TOOL["_TABLE_ORDER"][table])
-        for version in (0, 4, 9):
+        for version in (0, 4, 10):
             with self.subTest(unsupported=version), self.assertRaises(RuntimeError):
                 TOOL["_tables"](version)
 
@@ -50,6 +51,18 @@ class InstalledBackupManifestTests(unittest.TestCase):
         body = self.restore(case, 8)
         self.assertEqual(1, body["counts"]["launch_claims"])
         self.assertEqual(1, body["counts"]["launch_receipts"])
+
+    def test_schema_nine_restores_capacity_and_rejects_erased_reservation(self):
+        case = self.fixture()
+        self.assertEqual("claimed", case.claim()["state"])
+        body = self.restore(case, 9)
+        self.assertEqual(1, body["counts"]["active_run_capacity"])
+        body["tables"]["active_run_capacity"] = []
+        body["counts"]["active_run_capacity"] = 0
+        with self.assertRaisesRegex(RuntimeError, "capacity coverage is incomplete"):
+            TOOL["_verify_relational_restore"](case.ledger._connection, body,
+                                                validate_learning_record=validate_learning_record,
+                                                content_digest=content_digest)
 
     def test_schema_seven_claim_restore_uses_exact_older_manifest(self):
         case = self.fixture()

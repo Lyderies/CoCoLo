@@ -26,6 +26,7 @@ from tests.support import FIXTURES_ROOT, ORCHESTRATION_ROOT, TEMP_ROOT
 
 import cli
 from codex_agents import bridge, claude_host, learning_store, process_tree
+from codex_agents.active_run_capacity import ActiveRunLimits
 from codex_agents.bridge import (
     BridgeRefused,
     dispatch,
@@ -74,6 +75,16 @@ PARENT_GRANT = {
     "network": False, "mcps": [], "external_effects": False,
 }
 CLEAN: dict[str, str] = {}
+
+
+def parser_matrix_capacity(test):
+    """Keep every ambiguous claim while exercising up to 24 parser examples.
+
+    This explicit installed test policy changes no production limit and never
+    infers cleanup from a result. Dedicated capacity/API tests use the default
+    two-slot policy; these matrices test fencing and result binding instead.
+    """
+    return mock.patch("codex_agents.learning_store.INSTALLED_ACTIVE_RUN_LIMITS", ActiveRunLimits(64, 64))(test)
 
 
 def git(root: Path, *arguments: str) -> None:
@@ -453,6 +464,7 @@ class ClaudeBridgeTests(BridgeTestCase):
             "pass", self.ledger.host_run_admission(self.project_id, reopened)["decision"]
         )
 
+    @parser_matrix_capacity
     def test_every_init_frame_violation_fails_closed_and_kills_the_child(self) -> None:
         cases = {
             "init_api_key_source": init_frame(apiKeySource="ANTHROPIC_API_KEY"),
@@ -494,6 +506,7 @@ class ClaudeBridgeTests(BridgeTestCase):
         self.assert_process_gone(child)
         self.assertEqual([], self.workspace_entries())
 
+    @parser_matrix_capacity
     def test_unparseable_output_fails_closed(self) -> None:
         for frames, reason in (
             ([init_frame(), {"raw": "not json"}], "unparseable_stream"),
@@ -1091,6 +1104,7 @@ class ReviewHardeningTests(BridgeTestCase):
         with self.ledger.repository(self.project_id) as repository:
             self.assertEqual([], repository.records("dispatch_intent"))
 
+    @parser_matrix_capacity
     def test_model_fallback_after_init_is_unreviewed(self) -> None:
         for frames in (
             [init_frame(),
@@ -2017,6 +2031,7 @@ class CodexBridgeTests(BridgeTestCase):
                 with self.ledger.repository(self.project_id) as repository:
                     self.assertEqual(1, len(repository.records("dispatch_intent")))
 
+    @parser_matrix_capacity
     def test_disallowed_codex_events_abort_the_child(self) -> None:
         cases = {
             "mcp_tool_call": [{"type": "item.started", "item": {"type": "mcp_tool_call"}}],
@@ -2221,6 +2236,7 @@ class CodexBridgeTests(BridgeTestCase):
                 self.assertEqual("not-applicable", output["result"]["semantic_verdict"])
                 validate_result(output["result"], assignment=assigned)
 
+    @parser_matrix_capacity
     def test_reroute_annotation_cannot_repair_malformed_result_fields(self) -> None:
         for changes, reason in (
             ({"unverified_claims": None}, "invalid_shape"),
@@ -2647,6 +2663,7 @@ class BridgeLifecycleTests(CliTestCase):
         with self.ledger.repository(self.project_id) as repository:
             self.assertEqual(recorded, repository.records("dispatch_result"))
 
+    @parser_matrix_capacity
     def test_malformed_child_axes_are_fenced_and_durably_diagnosed(self) -> None:
         for field in ("execution_state", "semantic_verdict", "admission_state"):
             for value in (["CANARY-AXIS"], {"CANARY-AXIS": "CANARY-VALUE"}):
@@ -2672,6 +2689,7 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertNotIn("CANARY-AXIS", json.dumps(records))
         self.assertNotIn("CANARY-VALUE", json.dumps(records))
 
+    @parser_matrix_capacity
     def test_result_evidence_capacity_is_fenced_before_immutable_binding(self) -> None:
         self.admit("codex")
         for count, expected in ((62, "result"), (63, "result_too_large"), (64, "result_too_large")):
@@ -2696,6 +2714,7 @@ class BridgeLifecycleTests(CliTestCase):
                 self.assertLessEqual(len(committed["outcome"]["evidence_digests"]), 64)
                 self.assertFalse(committed["outcome"]["accepted"])
 
+    @parser_matrix_capacity
     def test_schema_valid_child_axes_always_leave_a_committable_result(self) -> None:
         from codex_agents.contracts import EXECUTION_STATES, SEMANTIC_VERDICTS, legacy_result_status
 
@@ -2741,6 +2760,7 @@ class BridgeLifecycleTests(CliTestCase):
                     )
                     self.assertFalse(committed["outcome"]["accepted"])
 
+    @parser_matrix_capacity
     def test_rerouted_blocked_result_has_no_host_created_validator_reason(self) -> None:
         for provider in ("codex", "claude"):
             self.admit(provider)
@@ -2798,6 +2818,7 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertNotIn("CANARY", json.dumps([output, committed]))
         self.assertEqual([], self.workspace_entries())
 
+    @parser_matrix_capacity
     def test_malformed_claude_init_tools_leave_a_committable_fence(self) -> None:
         for tools in ([[]], [{}], ["Read", []], ["Read", {"CANARY-INIT": "value"}],
                       [False], [1], None, "Read"):
@@ -2824,6 +2845,7 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertTrue(all(item["result_validation_reason_code"] is None for item in records))
         self.assertNotIn("CANARY", json.dumps(records))
 
+    @parser_matrix_capacity
     def test_child_cannot_claim_host_admission_or_timeout(self) -> None:
         for changes in (
             {"admission_state": "accepted"},
@@ -2959,6 +2981,7 @@ class BridgeLifecycleTests(CliTestCase):
         if version == 1:
             self.assertNotIn("result_validation_reason_code", records[0])
 
+    @parser_matrix_capacity
     def test_client_observations_are_durable_bounded_and_do_not_change_fences(self) -> None:
         typed_error = {"type": "assistant", "error": "server_error",
                        "message": {"model": "<synthetic>", "content": ["CANARY-CLIENT-TEXT"]}}
