@@ -135,16 +135,16 @@ class AccountClaimJobs:
             self._counts[project_id] = count + 1
             context, known, reason, provider = self._views._claim_preflight(
                 project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
-                request_id=request_id, launch=launch,
+                request_id=request_id, launch=launch, work_limits=self._work_limits,
             )
             job.context = context
             if known is not None:
                 job.result, job.state = known, "ready"
             elif reason is not None:
-                job.result = self._views._claim_commit_denied(context, reason)
+                job.result = self._views._claim_commit_denied(context, reason, self._work_limits)
                 job.state = "ready"
             else:
-                job.signature_handle = self._intake.capture(project_id, provider, self._work_limits)
+                job.signature_handle = self._intake.capture_admission(project_id, provider, self._work_limits)
                 self._signatures[job.signature_handle] = ticket
                 job.state = "pending"
             return ticket

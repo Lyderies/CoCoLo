@@ -39,6 +39,67 @@ class SQLReadBudgetTests(unittest.TestCase):
         return self.connection.read_call(self.limits if limits is None else limits,
                                          lambda: self.connection.execute(sql).fetchall())
 
+    def test_transaction_read_preserves_outer_writes_settings_and_caller_rollback(self):
+        before = self.settings()
+        self.connection.execute("BEGIN IMMEDIATE")
+        self.connection.execute("INSERT INTO data VALUES(?)", (b"PENDING",))
+        result = self.connection.transaction_read_call(
+            self.limits, lambda: self.connection.execute("SELECT COUNT(*) FROM data").fetchone()[0],
+        )
+        self.assertEqual(2, result)
+        self.assertTrue(self.connection.in_transaction)
+        self.assertEqual(before, self.settings())
+        self.connection.rollback()
+        self.assertEqual(1, self.connection.execute("SELECT COUNT(*) FROM data").fetchone()[0])
+
+    def test_transaction_read_fault_does_not_commit_or_rollback_outer_writes(self):
+        before = self.settings()
+        self.connection.execute("BEGIN IMMEDIATE")
+        self.connection.execute("INSERT INTO data VALUES(?)", (b"PENDING",))
+        self.assert_fixed("sql_read_work_limit", lambda: self.connection.transaction_read_call(
+            self.limits, lambda: self.connection.execute(LONG_QUERY).fetchall(),
+        ))
+        self.assertTrue(self.connection.in_transaction)
+        self.assertEqual(before, self.settings())
+        self.assertEqual(2, self.connection.execute("SELECT COUNT(*) FROM data").fetchone()[0])
+        self.connection.rollback()
+        self.assertEqual(1, self.connection.execute("SELECT COUNT(*) FROM data").fetchone()[0])
+
+    def test_transaction_read_requires_outer_transaction_and_cannot_write(self):
+        self.assert_fixed("sql_read_unavailable", lambda: self.connection.transaction_read_call(self.limits, lambda: None))
+        self.connection.execute("BEGIN IMMEDIATE")
+        self.assert_fixed("sql_read_unavailable", self.run_query)
+        self.assert_fixed("sql_read_unavailable", lambda: self.connection.transaction_read_call(
+            self.limits, lambda: self.connection.execute("DELETE FROM data"),
+        ))
+        self.assertTrue(self.connection.in_transaction)
+        self.connection.rollback()
+
+    def test_transaction_read_cannot_end_or_reconfigure_the_outer_transaction(self):
+        for command in ("COMMIT", "ROLLBACK", "SAVEPOINT nested", "PRAGMA query_only=OFF", "commit", "rollback", "context"):
+            with self.subTest(command=command):
+                connection = sqlite3.connect(":memory:", factory=SQLReadConnection, isolation_level=None)
+                self.addCleanup(connection.close)
+                connection.execute("CREATE TABLE data(value)")
+                connection.execute("INSERT INTO data VALUES(1)")
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute("INSERT INTO data VALUES(2)")
+
+                def action():
+                    if command in {"commit", "rollback"}:
+                        getattr(connection, command)()
+                    elif command == "context":
+                        with connection:
+                            pass
+                    else:
+                        connection.execute(command)
+
+                self.assert_fixed("sql_read_unavailable", lambda: connection.transaction_read_call(self.limits, action))
+                self.assertTrue(connection.in_transaction)
+                self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM data").fetchone()[0])
+                connection.rollback()
+                self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM data").fetchone()[0])
+
     def settings(self):
         return (self.connection.execute("PRAGMA query_only").fetchone()[0],
                 self.connection.execute("PRAGMA busy_timeout").fetchone()[0],

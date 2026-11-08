@@ -1,5 +1,7 @@
 """Deferred claims with real disposable signature workers and fake providers."""
 import json
+from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
@@ -23,6 +25,8 @@ from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST
 from codex_agents.signature_job_intake import SignatureIntakeLimits
 from codex_agents.signature_worker_pool import SignatureWorkerLimits
 from codex_agents.sql_read_budget import SQLReadLimits
+from codex_agents.admission_inputs import AdmissionCaptureError, AdmissionInputPolicy
+from codex_agents import claim_admission
 
 
 MACOS_WORKER = sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file()
@@ -37,7 +41,7 @@ class AccountClaimJobTests(unittest.TestCase):
         self.ledger, self.views = self.fixture.ledger, self.fixture.views
         self.project, self.launch = self.fixture.project, self.fixture.launch
         self.gates = []
-        self.jobs = AccountClaimJobs(self.views, SignatureIntakeLimits(2, 2, 8, 65_536, 2),
+        self.jobs = AccountClaimJobs(self.views, SignatureIntakeLimits(2, 2, 128, 262_144, 2),
                                      SignatureWorkerLimits(2, 4 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000),
                                      SQLReadLimits(10_000, 1000, 1_048_576))
         self.jobs.bootstrap()
@@ -236,7 +240,7 @@ class AccountClaimJobTests(unittest.TestCase):
             attest_provider(self.ledger, self.project, bridge.owner_key, "codex",
                             self.fixture.identity["account_fingerprint"], issued_at=2)
             gate.set()
-            self.assert_wire_error(self.pump(ticket), self.request(), "claim_unavailable")
+            self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
         self.fixture.assert_no_claim()
 
     def test_invalid_actual_signature_cannot_become_an_affirmative_claim(self):
@@ -262,8 +266,136 @@ class AccountClaimJobTests(unittest.TestCase):
             self.assertTrue(started.wait(2))
             self.ledger._store_provider_observations(project, [record], timestamp=self.fixture.stamp + 1)
             gate.set()
-            result = decode_account_response(self.pump(ticket), self.request())
+            self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
+            self.fixture.assert_no_claim()
+            # New evidence needs explicit new bounded preparation. It cannot be
+            # parsed under the final writer or silently ignored as a cache miss.
+            result = decode_account_response(self.pump(self.begin()), self.request())
         self.assertEqual(("denied", "codex_spend_control_reached"), (result["state"], result["reason_code"]))
+        self.fixture.assert_no_claim()
+
+    def test_complete_admission_parsing_is_off_owner_and_legacy_json_paths_are_unused(self):
+        owner, parsed, sql_json = threading.current_thread(), [], []
+        decode = claim_admission.decode_admission_inputs
+
+        def off_owner(*args, **kwargs):
+            self.assertIsNot(owner, threading.current_thread())
+            parsed.append(True)
+            return decode(*args, **kwargs)
+
+        self.ledger._connection.set_trace_callback(lambda sql: sql_json.append("json_extract" in sql.lower()))
+        try:
+            with ExitStack() as stack:
+                for method in ("_claim_context_locked", "_launch_identity_locked", "admitted_client",
+                               "_run_admission_locked", "_account_records_locked", "_prepared_attestations_locked",
+                               "client_version_reviewed"):
+                    stack.enter_context(mock.patch.object(self.ledger, method, side_effect=AssertionError("legacy owner JSON")))
+                stack.enter_context(mock.patch.object(claim_admission, "decode_admission_inputs", side_effect=off_owner))
+                stack.enter_context(mock.patch("sqlite3.connect", side_effect=AssertionError("extra SQLite")))
+                stack.enter_context(mock.patch.object(threading.Thread, "start", side_effect=AssertionError("new thread")))
+                stack.enter_context(mock.patch.object(threading.Thread, "join", side_effect=AssertionError("owner join")))
+                self.assertEqual("claimed", decode_account_response(self.pump(self.begin()), self.request())["state"])
+        finally:
+            self.ledger._connection.set_trace_callback(None)
+        self.assertEqual([True], parsed)
+        self.assertFalse(any(sql_json), "deferred owner used SQL JSON parsing")
+
+    def test_deleted_candidate_after_preparation_is_stale_without_claim(self):
+        gate, started, patcher = self.gate_first_project()
+        with patcher:
+            ticket = self.begin()
+            self.jobs.drive()
+            self.assertTrue(started.wait(2))
+            self.ledger._connection.execute("DELETE FROM records WHERE record_type='provider_headroom'")
+            gate.set()
+            self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
+        self.fixture.assert_no_claim()
+
+    def test_changed_policy_after_preparation_is_stale_without_claim(self):
+        gate, started, patcher = self.gate_first_project()
+        with patcher:
+            ticket = self.begin()
+            self.jobs.drive()
+            self.assertTrue(started.wait(2))
+            gate.set()
+            with mock.patch.object(self.views, "_claim_policy", return_value=AdmissionInputPolicy("999.0.0", "1000.0.0", None)):
+                self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
+        self.fixture.assert_no_claim()
+
+    def test_changed_before_observation_after_preparation_is_rechecked(self):
+        gate, started, patcher = self.gate_first_project()
+        with patcher:
+            ticket = self.begin()
+            self.jobs.drive()
+            self.assertTrue(started.wait(2))
+            self.ledger._connection.execute("UPDATE launch_observations SET identity_digest=?", ("e" * 64,))
+            gate.set()
+            result = decode_account_response(self.pump(ticket), self.request())
+        self.assertEqual(("denied", "claim_observation_missing"), (result["state"], result["reason_code"]))
+        self.fixture.assert_no_claim()
+
+    def test_changed_run_parameters_after_preparation_are_stale_without_claim(self):
+        gate, started, patcher = self.gate_first_project()
+        with patcher:
+            ticket = self.begin()
+            self.jobs.drive()
+            self.assertTrue(started.wait(2))
+            self.ledger._connection.execute("UPDATE launch_inputs SET hard_timeout_seconds=hard_timeout_seconds+1")
+            gate.set()
+            self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
+        self.fixture.assert_no_claim()
+
+    def test_foreign_preparation_object_cannot_replace_actual_returned_capture(self):
+        ticket = self.begin()
+        self.jobs.drive()
+        started = time.monotonic()
+        while not self.jobs._pool.poll():
+            self.assertLess(time.monotonic() - started, 8)
+            time.sleep(.002)
+        handle = self.jobs._jobs[ticket].signature_handle
+        actual = self.jobs._pool.result(handle)
+        forged = replace(actual, prepared=replace(actual.prepared, snapshot=replace(actual.prepared.snapshot, origin=object())))
+        with mock.patch.object(self.jobs._pool, "result", return_value=forged), self.assertRaisesRegex(ClaimError, "claim_unavailable"):
+            self.views._claim_from_signature_job(self.jobs._jobs[ticket].context, self.jobs._pool, handle)
+        self.fixture.assert_no_claim()
+
+    def test_complete_capture_overflow_releases_reservation_before_helper_work(self):
+        base = fixture_module.AccountClaimOperationTests("test_handler_claims_with_owner_deadline_and_returns_known_state")
+        base.setUp()
+        try:
+            jobs = AccountClaimJobs(base.views, SignatureIntakeLimits(1, 1, 1, 262_144, 1),
+                                    SignatureWorkerLimits(1, 2 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000),
+                                    SQLReadLimits(10_000, 1000, 1_048_576))
+            jobs.bootstrap()
+            try:
+                with mock.patch.object(subprocess, "Popen", side_effect=AssertionError("overflow helper")), \
+                        self.assertRaises(AdmissionCaptureError):
+                    jobs.submit(base.project, runtime_digest=COLLECTOR_RUNTIME_DIGEST, caller_scope="a" * 64,
+                                request_id="overflow", launch=base.launch)
+                self.assertEqual(0, jobs.snapshot()["tickets"])
+                self.assertEqual(0, jobs._intake.snapshot().jobs)
+                base.assert_no_claim()
+            finally:
+                jobs.request_close()
+                started = time.monotonic()
+                while not jobs.drain():
+                    self.assertLess(time.monotonic() - started, 8)
+                    time.sleep(.002)
+        finally:
+            self.assertTrue(base.doCleanups())
+
+    def test_worker_projection_does_not_collapse_duplicate_admitted_identity_citations(self):
+        ticket = self.begin()
+        handle = self.jobs._jobs[ticket].signature_handle
+        snapshot = self.jobs._intake._jobs[handle].admission
+        prepared = claim_admission.prepare_claim_admission(snapshot, claim_admission.AdmissionCaptureLimits(128, 262_144))
+        run_id = self.ledger._connection.execute("SELECT run_id FROM host_run_bindings").fetchone()[0]
+        self.assertIsNone(claim_admission.claim_identity(prepared, run_id, self.launch.identity_digest)[0])
+        admission = prepared.admissions[run_id][0]
+        cited = next(digest for digest in admission["evidence_digests"] if digest in prepared.identities)
+        admission["evidence_digests"].append(cited)
+        with self.assertRaisesRegex(ClaimError, "claim_preparation_failed"):
+            claim_admission.claim_identity(prepared, run_id, self.launch.identity_digest)
         self.fixture.assert_no_claim()
 
     def test_request_mutation_in_authorizer_is_denied_before_ticket_reservation(self):

@@ -1232,9 +1232,10 @@ re-enters claim commit. The fixed pool cancels queued as well as active work,
 releases only confirmed stopped inputs/completion metadata, and preserves unknown
 custody. Coordinator ticket metadata is cleared only after actual pool closure;
 durable receipts remain available for explicit retries after owner recovery.
-Preflight/final admission still uses legacy JSON and filesystem work, and the
-helper's broad-read guard remains experimental. Bounded final owner operations,
-full admission-data preparation, durable orphan reconciliation, active-run capacity,
+The synchronous reference still uses legacy JSON and filesystem work, and the
+helper's broad-read guard remains experimental. Deferred claim jobs use the
+complete bounded preparation described below. Whole-owner latency evidence,
+durable orphan reconciliation, active-run capacity,
 actual native caller/fresh environment custody, normal-client migration and the
 complete release gates remain required. No listener, profile or installed runtime
 is enabled by this source integration.
@@ -1263,8 +1264,9 @@ Health executes on the front thread and reports only transport availability with
 `database_checked=false`. The trusted authorizer must be thread-safe and use
 bounded, already verified in-memory state; slow native/signature enrollment
 belongs elsewhere. Normal frames pass through bounded slots to `pump_owner` on
-the original owner thread. Legacy capture/final JSON, filesystem and policy work
-still runs there, so this transport is not a complete admission latency bound.
+the original owner thread. Bounded raw capture/freshness reads and fixed filesystem
+and policy observations still run there. This transport does not prove a complete
+admission latency bound.
 
 An attached socket holds its quota through framing and reply delivery. If it
 disconnects after owner handoff, bounded metadata stays charged until the owner
@@ -1304,3 +1306,63 @@ front thread and fixed pool stop. It leaves the service and SQL connection open.
 Actual native enrollment/reserved-lane custody, fully bounded admission work,
 active-account capacity and orphan reconciliation, complete C19 client migration,
 independent review and all release gates remain required before activation.
+
+### Complete deferred admission preparation
+
+Configured claim jobs reserve their combined admission and signature row/field
+share before capture. The original owner captures every candidate in the six
+closed admission record families, including foreign-project/provider restrictions.
+Headers and aggregate limits precede copying bodies; overflow refuses the job.
+Local billing signature inputs are derived from that same immutable raw capture.
+They are charged again conservatively against the combined share. Slot/project
+ceilings still cover queued, active and returned data. Parsed metadata remains
+with the same reserved job; field and protocol budgets are not exact Python heap
+or operating-system memory quotas.
+
+The prestarted fixed workers parse/validate all stored JSON and prepare ordered
+billing/headroom vectors, local identity/admission indexes and reviewed-version
+metadata. They also use the existing fixed signature execution. No worker opens
+SQLite, and no request starts or joins a thread. The original owner accepts parsed
+data only from its actual registered returned-worker registry, bound by identity
+to the original retained admission capture and its exact derived signature rows.
+Types, origin brands, parsed objects and completion flags supplied by a caller
+remain insufficient. Neither parsing nor a valid signature authorizes a launch.
+
+The final atomic transaction re-captures raw rows with bounded SELECT work and
+compares every row, owner generation, public signer, project creation and policy
+field exactly. Capture timestamps differ; all decision inputs must match.
+The captured run/approved-launch/observation columns must also remain unchanged.
+Fresh run state, observation age, wall clock and account restrictions are checked
+before the same one-time intent/consumption/receipt commit. Ordered validated
+metadata replaces stored-JSON parsing and SQL JSON extraction in this deferred
+path. Repeated admitted-identity citations retain their original multiplicity;
+indexing cannot silently turn an invalid multi-identity admission into a valid one.
+
+New, deleted or changed candidates fail with the closed
+`claim_preparation_stale` reason and no new claim. An explicit new request attempt
+must obtain new bounded preparation; there is no automatic child or synchronous
+verification retry. A known durable receipt still returns before preparation,
+including after a lost reply or wall-clock rollback. Capturing all candidates is
+conservative: unrelated history changes can require new preparation too. Fair
+progress during sustained evidence churn still needs release evidence.
+
+`SQLReadConnection.transaction_read_call` permits fixed owner SELECT work inside
+an already-open owner transaction, preserving its writes, settings and caller-owned
+commit/rollback. The ordinary `read_call` still refuses an outer transaction.
+Transaction scopes reject ordinary commit/rollback, context-manager and SQL
+transaction/PRAGMA controls. They remain cooperative trusted-code boundaries:
+retained native/base-class capabilities are outside this contract, and no RPC
+accepts a callback or SQL. SQLite's `query_only` setting alone is insufficient to
+prevent commits, as its [documentation](https://www.sqlite.org/pragma.html#pragma_query_only)
+explains. Scope faults restore settings or fence the connection; they never infer
+that an unknown worker has stopped or replay a claim.
+
+Regressions exercise actual fixed helpers and Unix-wire claims, forbid legacy
+owner JSON paths, test foreign restrictions and explicit stale retries, candidate
+deletion, policy/run/observation changes, duplicate identity citations, mismatched
+returned captures, overflow before helper work, transaction-control refusal,
+rollback and public faulted drain. Native caller/session/fresh-environment/root
+custody and reserved-lane enrollment remain unproved. Fixed public-key/config and
+file-hardening observations still need whole-operation latency evidence. Active
+capacity/orphan recovery, complete normal C19 migration, staged legacy migration,
+reviewed installed D8 and all four liveness/release paths remain mandatory.

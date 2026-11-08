@@ -16,7 +16,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -1964,6 +1964,7 @@ class _ClaimRequest:
     scope: str
     request: str
     parameters: str
+    run_context: tuple | None = None
 
 
 class LearningLedger:
@@ -5879,7 +5880,7 @@ class LearningLedger:
 
     def _claim_preflight(
         self, project_id: str, *, runtime_digest: str, caller_scope: str,
-        request_id: str, launch: LaunchClaimInput,
+        request_id: str, launch: LaunchClaimInput, work_limits=None,
     ):
         """Capture a request and current state; perform no signature work."""
         if (not claim_matches(project_id, _CLAIM_PROJECT) or not claim_matches(runtime_digest, _CLAIM_DIGEST)
@@ -5898,17 +5899,21 @@ class LearningLedger:
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
             self.state.harden_database_files()
-            project = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (project_id,)).fetchone()
-            if project is None or project[0] != "active":
-                raise ClaimError("claim_unavailable")
-            known = self._known_claim_receipt_locked(project_id, scope, request, parameters)
+            def read():
+                known, timestamp = self._claim_commit_header(context)
+                if known is not None:
+                    return known, None, None, None
+                check = self._claim_context_locked if work_limits is None else self._claim_scalar_context_locked
+                early, binding, inputs, observed = check(project_id, handle, launch, timestamp)
+                columns = (self._claim_run_columns(binding, inputs, observed)
+                           if work_limits is not None and early is None else None)
+                return None, early, None if inputs is None else inputs["provider"], columns
+
+            known, early_reason, provider, columns = (read() if work_limits is None else
+                                                     self._connection.read_call(work_limits, read))
             if known is not None:
                 return context, known, None, None
-            timestamp = self._clock_ms()
-            if type(timestamp) is not int or not 0 <= timestamp <= MAX_CLAIM_INTEGER:
-                raise ClaimError("claim_unavailable")
-            early_reason, _, inputs, _ = self._claim_context_locked(project_id, handle, launch, timestamp)
-        return context, None, early_reason, None if inputs is None else inputs["provider"]
+        return replace(context, run_context=columns), None, early_reason, provider
 
     def claim_launch(
         self, project_id: str, *, runtime_digest: str, caller_scope: str,
@@ -5950,40 +5955,157 @@ class LearningLedger:
         inputs = intake.returned_inputs(handle)
         if (inputs.origin is not self._attestation_origin or inputs.project_id != context.project_id):
             raise ClaimError("claim_unavailable")
+        admission, work_limits = intake.returned_admission(handle)
         # Even a failed verification job may retrieve a durable receipt produced
         # independently while it waited. This never releases an active worker.
         with self._lock:
-            known = self._known_claim_receipt_locked(context.project_id, context.scope,
-                                                     context.request, context.parameters)
+            known = self._connection.read_call(work_limits, lambda: self._known_claim_receipt_locked(
+                context.project_id, context.scope, context.request, context.parameters,
+            ))
         if known is not None:
             return known
         if result.reason != "signature_execution_completed":
             raise ClaimError("claim_preparation_failed")
+        from .claim_admission import PreparedClaimAdmission, admission_signature_rows
+
+        if (type(result.prepared) is not PreparedClaimAdmission or result.prepared.snapshot is not admission
+                or admission.origin is not intake._views._admission_capture_origin
+                or admission.project_id != context.project_id or admission.provider != inputs.provider
+                or admission.owner != inputs.owner or admission.signer != inputs.signer
+                or inputs.rows != admission_signature_rows(admission)):
+            raise ClaimError("claim_unavailable")
         prepared = _PreparedAttestations(
             self._attestation_origin, inputs.project_id, inputs.provider, inputs.owner, inputs.signer,
             inputs.rows, frozenset(inputs.rows[index][0] for index in result.indices),
         )
-        return self._claim_commit(context, prepared, None)
+        return self._claim_commit(context, prepared, None, admission=result.prepared, work_limits=work_limits)
 
     def _check_claim_context(self, context):
         if type(context) is not _ClaimRequest or context.origin is not self._attestation_origin:
             raise ClaimError("claim_invalid_request")
 
-    def _claim_commit(self, context, prepared, early_reason):
+    def _claim_commit_header(self, context):
+        project = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (context.project_id,)).fetchone()
+        if project is None or project[0] != "active":
+            raise ClaimError("claim_unavailable")
+        known = self._known_claim_receipt_locked(context.project_id, context.scope, context.request, context.parameters)
+        if known is not None:
+            return known, None
+        timestamp = self._clock_ms()
+        if type(timestamp) is not int or not 0 <= timestamp <= MAX_CLAIM_INTEGER:
+            raise ClaimError("claim_unavailable")
+        return known, timestamp
+
+    def _claim_scalar_context_locked(self, project_id, handle, launch, timestamp):
+        """Fresh fixed run/observation columns; never parse stored JSON here."""
+        from .providers import BILLING_MAX_AGE_MS
+
+        binding = self._connection.execute(
+            "SELECT run_id,binding_state,consumed_at_ms,client_version,expires_at_ms,created_at_ms "
+            "FROM host_run_bindings WHERE project_id=? AND handle_digest=?", (project_id, handle),
+        ).fetchone()
+        if binding is None:
+            return "claim_not_open", None, None, None
+        if (binding["binding_state"] != "pending" or binding["consumed_at_ms"] is not None
+                or binding["client_version"] != "bridge-v1" or binding["expires_at_ms"] <= timestamp):
+            return "claim_not_open", binding, None, None
+        if not claim_matches(binding["run_id"], _CLAIM_RUN):
+            raise ClaimError("claim_unavailable")
+        if self._connection.execute(
+            "SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?)",
+            (project_id, handle, binding["run_id"]),
+        ).fetchone() is not None:
+            return "claim_already_consumed", binding, None, None
+        inputs = self._connection.execute(
+            "SELECT run_id,provider,runtime_digest,model,effort,hard_timeout_seconds "
+            "FROM launch_inputs WHERE project_id=? AND handle_digest=?", (project_id, handle),
+        ).fetchone()
+        if inputs is None or inputs["run_id"] != binding["run_id"] or inputs["provider"] not in {"codex", "claude"}:
+            return "claim_context_missing", binding, None, None
+        if inputs["runtime_digest"] != COLLECTOR_RUNTIME_DIGEST:
+            return "claim_runtime_mismatch", binding, inputs, None
+        observed = self._connection.execute(
+            "SELECT identity_digest,observed_at_ms FROM launch_observations WHERE project_id=? AND handle_digest=?",
+            (project_id, handle),
+        ).fetchone()
+        if (observed is None or observed["identity_digest"] != launch.identity_digest
+                or not binding["created_at_ms"] <= observed["observed_at_ms"] <= timestamp
+                or timestamp - observed["observed_at_ms"] > BILLING_MAX_AGE_MS):
+            return "claim_observation_missing", binding, inputs, None
+        return None, binding, inputs, observed
+
+    @staticmethod
+    def _claim_run_columns(binding, inputs, observed):
+        # A bounded metadata tuple retained with the already reserved ticket.
+        # No unbounded database string is retained as preparation context.
+        if (type(inputs["model"]) is not str or not 0 < len(inputs["model"].encode()) <= 160
+                or type(inputs["effort"]) is not str or not 0 < len(inputs["effort"].encode()) <= 32
+                or type(inputs["hard_timeout_seconds"]) is not int or inputs["hard_timeout_seconds"] < 1
+                or type(binding["created_at_ms"]) is not int or binding["created_at_ms"] < 0
+                or type(binding["expires_at_ms"]) is not int or binding["expires_at_ms"] < binding["created_at_ms"]):
+            raise ClaimError("claim_unavailable")
+        return (tuple(binding), tuple(inputs), tuple(observed))
+
+    def _claim_admission_context(self, context, prepared, work_limits):
+        from .admission_inputs import AdmissionCaptureLimits
+        from .claim_admission import claim_identity, same_admission_inputs
+
+        intake = self._signature_job_intake
+        view, limits = intake._views, intake._limits
+        snapshot = prepared.snapshot
+        signer = self._current_signer_bytes()
+        policy = view._claim_policy(snapshot.provider)
+
+        def read():
+            current = view._capture_admission_rows_locked(
+                context.project_id, snapshot.provider, policy,
+                AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer,
+            )
+            if not same_admission_inputs(snapshot, current):
+                raise ClaimError("claim_preparation_stale")
+            state = self._claim_scalar_context_locked(context.project_id, context.handle, context.launch, current.captured_at_ms)
+            if state[0] is None and context.run_context != self._claim_run_columns(*state[1:]):
+                raise ClaimError("claim_preparation_stale")
+            return (*state, current.captured_at_ms)
+
+        reason, binding, inputs, observed, timestamp = self._connection.transaction_read_call(work_limits, read)
+        identity = admission = None
+        if reason is None:
+            if inputs["provider"] != snapshot.provider:
+                raise ClaimError("claim_preparation_stale")
+            reason, admission, identity = claim_identity(prepared, binding["run_id"], context.launch.identity_digest)
+            if reason is None and identity["observed_at_ms"] != observed["observed_at_ms"]:
+                reason = "claim_client_changed"
+            if reason is None and identity["client_version"] not in prepared.reviewed_versions:
+                reason = "client_version_unreviewed"
+        return reason, binding, inputs, identity, admission, timestamp
+
+    def _claim_commit(self, context, prepared, early_reason, *, admission=None, work_limits=None):
         self._check_claim_context(context)
         project_id, launch = context.project_id, context.launch
         scope, request, parameters, handle = context.scope, context.request, context.parameters, context.handle
         with self._account_transaction():
-            project = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (project_id,)).fetchone()
-            if project is None or project[0] != "active":
-                raise ClaimError("claim_unavailable")
-            known = self._known_claim_receipt_locked(project_id, scope, request, parameters)
+            def header():
+                return self._claim_commit_header(context)
+            known, timestamp = (header() if work_limits is None else
+                                self._connection.transaction_read_call(work_limits, header))
             if known is not None:
                 return known
-            timestamp = self._clock_ms()
-            if type(timestamp) is not int or not 0 <= timestamp <= MAX_CLAIM_INTEGER:
-                raise ClaimError("claim_unavailable")
-            reason, binding, inputs, identity = self._claim_context_locked(project_id, handle, launch, timestamp)
+            if admission is not None:
+                reason, binding, inputs, identity, admitted, fresh_timestamp = self._claim_admission_context(
+                    context, admission, work_limits,
+                )
+                if fresh_timestamp < timestamp:
+                    raise ClaimError("claim_unavailable")
+                timestamp = fresh_timestamp
+            elif work_limits is not None:
+                if early_reason is None:
+                    raise ClaimError("claim_unavailable")
+                reason, binding, inputs, identity = self._connection.transaction_read_call(
+                    work_limits, lambda: self._claim_scalar_context_locked(project_id, handle, launch, timestamp),
+                )
+            else:
+                reason, binding, inputs, identity = self._claim_context_locked(project_id, handle, launch, timestamp)
             reason = early_reason or reason
             run_id = None if binding is None else binding["run_id"]
             if not claim_matches(run_id, _CLAIM_RUN):
@@ -5993,18 +6115,24 @@ class LearningLedger:
             if reason is None:
                 from .providers import evaluate_launch
 
-                admission, identity_digest = self._launch_identity_locked(project_id, launch.run_handle, identity)
-                attestations = self._prepared_attestations_locked(prepared, project_id, inputs["provider"])
-                billing, _ = self._account_records_locked(project_id, "provider_billing", inputs["provider"])
-                headroom, _ = self._account_records_locked(project_id, "provider_headroom", inputs["provider"])
+                if admission is None:
+                    admitted, identity_digest = self._launch_identity_locked(project_id, launch.run_handle, identity)
+                    attestations = self._prepared_attestations_locked(prepared, project_id, inputs["provider"])
+                    billing, _ = self._account_records_locked(project_id, "provider_billing", inputs["provider"])
+                    headroom, _ = self._account_records_locked(project_id, "provider_headroom", inputs["provider"])
+                else:
+                    identity_digest = launch.identity_digest
+                    billing, headroom = admission.billing, admission.headroom
+                    attestations = [(record, digest) for identifier, record, digest in admission.attestations
+                                    if identifier in prepared.verified]
                 reason = evaluate_launch(
                     provider=inputs["provider"], identity=identity, billing=billing, headroom=headroom,
-                    now_ms=timestamp, attestations=attestations, bootstrap=admission["admission_basis"] == "bootstrap",
+                    now_ms=timestamp, attestations=attestations, bootstrap=admitted["admission_basis"] == "bootstrap",
                 )
                 if reason is not None:
                     self._store_admission_locked(project_id, {
                         "provider": inputs["provider"], "decision": "deny", "reason_code": reason,
-                        "admission_basis": None, "account_fingerprint": admission["account_fingerprint"],
+                        "admission_basis": None, "account_fingerprint": admitted["account_fingerprint"],
                         "evidence_digests": [identity_digest], "observed_at_ms": timestamp,
                     }, run_id=None, timestamp=timestamp)
             bridge = deadline = None

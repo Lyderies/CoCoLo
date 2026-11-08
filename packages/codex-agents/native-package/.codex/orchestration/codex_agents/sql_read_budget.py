@@ -65,6 +65,7 @@ class _ReadScope:
     reason: str | None = None
     interruption: BaseException | None = None
     cursors: list[sqlite3.Cursor] = field(default_factory=list)
+    transaction: bool = False
 
     def poll(self) -> None:
         if self.reason is not None:
@@ -192,11 +193,18 @@ class SQLReadConnection(sqlite3.Connection):
             scope.cursors.append(cursor)
         return cursor
 
-    def _before_statement(self) -> None:
+    def _before_statement(self, sql=None) -> None:
         self._usable()
         scope = self._sql_scope
         if scope is not None:
             self._read_owner()
+            if scope.transaction and sql is not None:
+                # Fixed trusted SELECTs only. This prevents accidental COMMIT,
+                # savepoint or PRAGMA changes through the ordinary API; it is
+                # not a parser/sandbox for arbitrary native SQL capabilities.
+                words = sql.lstrip().split(None, 1) if type(sql) is str else ()
+                if not words or words[0].upper() not in {"SELECT", "WITH"}:
+                    raise SQLReadError("sql_read_unavailable")
             scope.poll()
             if scope.reason is None and len(scope.cursors) >= MAX_SQL_READ_CURSORS:
                 scope.reason = "sql_read_work_limit"
@@ -204,10 +212,31 @@ class SQLReadConnection(sqlite3.Connection):
                 raise SQLReadError(scope.reason)
 
     def execute(self, sql, parameters=(), /):
-        self._before_statement()
+        self._before_statement(sql)
         cursor = self._track(super().execute(sql, parameters))
         scope = self._sql_scope
         return cursor if scope is None else _SQLReadView(self, scope, cursor)
+
+    def _transaction_control(self):
+        self._usable()
+        if self._sql_scope is not None and self._sql_scope.transaction:
+            raise SQLReadError("sql_read_unavailable")
+
+    def commit(self):
+        self._transaction_control()
+        return super().commit()
+
+    def rollback(self):
+        self._transaction_control()
+        return super().rollback()
+
+    def __enter__(self):
+        self._transaction_control()
+        return super().__enter__()
+
+    def __exit__(self, *args):
+        self._transaction_control()
+        return super().__exit__(*args)
 
     def cursor(self, *args, **kwargs):
         self._before_statement()
@@ -243,14 +272,14 @@ class SQLReadConnection(sqlite3.Connection):
             raise ValueError("invalid owner setting")
         return row[0]
 
-    def _restore_read_settings(self, prior: tuple[int, int, int], scope: _ReadScope) -> None:
+    def _restore_read_settings(self, prior: tuple[int, int, int], scope: _ReadScope, *, transaction=False) -> None:
         # Finish every scope-owned cursor before removing the handler, so a
         # returned cursor cannot later resume this job with another job's budget.
         for cursor in scope.cursors:
             cursor.close()
         super().set_progress_handler(None, 0)
-        if self.in_transaction:
-            raise ValueError("read operation left a transaction open")
+        if self.in_transaction is not transaction:
+            raise ValueError("read operation changed transaction state")
         query_only, busy_timeout, value_limit = prior
         self.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, value_limit)
         if self.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) != value_limit:
@@ -266,6 +295,18 @@ class SQLReadConnection(sqlite3.Connection):
         Keeping this boundary outside context-manager exception propagation lets
         fixed backend errors have neither a raw cause nor a raw context.
         """
+        return self._read_call(limits, operation, transaction=False)
+
+    def transaction_read_call(self, limits: SQLReadLimits, operation):
+        """Fixed owner SELECT work inside its already-open write transaction.
+
+        The caller owns commit/rollback. This cooperative scope neither starts
+        nor ends that transaction, and it is not an arbitrary SQL/callback RPC.
+        Native/base-class capabilities remain outside this trusted contract.
+        """
+        return self._read_call(limits, operation, transaction=True)
+
+    def _read_call(self, limits, operation, *, transaction):
         self._read_owner()
         if type(limits) is not SQLReadLimits or not callable(operation):
             raise SQLReadError("sql_read_invalid_limits")
@@ -280,10 +321,10 @@ class SQLReadConnection(sqlite3.Connection):
         fixed_reason = None
         result = None
         try:
-            if self._sql_scope is not None or self._sql_foreign_progress or self.in_transaction:
+            if self._sql_scope is not None or self._sql_foreign_progress or self.in_transaction is not transaction:
                 raise SQLReadError("sql_read_unavailable")
             now = _clock_ns()
-            scope = _ReadScope(limits, now, now + limits.max_duration_ms * 1_000_000)
+            scope = _ReadScope(limits, now, now + limits.max_duration_ms * 1_000_000, transaction=transaction)
             prior = (self._pragma_integer("query_only"), self._pragma_integer("busy_timeout"),
                      self.getlimit(sqlite3.SQLITE_LIMIT_LENGTH))
             if prior[0] not in {0, 1} or prior[1] < 0 or prior[2] < 1:
@@ -322,7 +363,10 @@ class SQLReadConnection(sqlite3.Connection):
         finally:
             if scope is not None and self._sql_scope is scope:
                 try:
-                    self._restore_read_settings(prior, scope)
+                    if transaction:
+                        self._restore_read_settings(prior, scope, transaction=True)
+                    else:
+                        self._restore_read_settings(prior, scope)
                 except BaseException as error:
                     self._sql_unusable = True
                     reason = "sql_read_unavailable"

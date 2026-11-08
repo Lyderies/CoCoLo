@@ -134,16 +134,25 @@ class AccountOwnerViews:
         return self._ledger.claim_launch(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                                          request_id=request_id, launch=launch)
 
-    def _claim_preflight(self, project_id, *, runtime_digest, caller_scope, request_id, launch):
+    def _claim_preflight(self, project_id, *, runtime_digest, caller_scope, request_id, launch, work_limits=None):
         self._guard()
         return self._ledger._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
-                                             request_id=request_id, launch=launch)
+                                             request_id=request_id, launch=launch, work_limits=work_limits)
 
-    def _claim_commit_denied(self, context, reason):
+    def _claim_commit_denied(self, context, reason, work_limits=None):
         self._guard()
         if reason is None:
             raise ClaimError("claim_unavailable")
-        return self._ledger._claim_commit(context, None, reason)
+        return self._ledger._claim_commit(context, None, reason, work_limits=work_limits)
+
+    def _claim_policy(self, provider):
+        self._guard()
+        settings = self._ledger._admission_settings(provider)
+        if settings is None:
+            raise ClaimError("claim_unavailable")
+        return AdmissionInputPolicy(settings["client_versions"]["minimum"],
+                                    settings["client_versions"]["maximum_exclusive"],
+                                    settings.get("max_admissions_per_window"))
 
     def _claim_from_signature_job(self, context, pool, handle):
         self._guard()

@@ -17,6 +17,9 @@ import time
 from .signature_input_wire import SignatureWireLimits
 from .signature_job_intake import SignatureJobIntake
 from .signature_payloads import SignaturePayloadError
+from .admission_inputs import AdmissionCaptureLimits
+from .admission_input_decode import AdmissionDecodeError
+from .claim_admission import PreparedClaimAdmission, prepare_claim_admission
 from . import signature_execution as execution
 
 _MAX_NS = (1 << 63) - 1
@@ -66,6 +69,7 @@ class SignatureWorkerResult:
     finished_ns: int | None
     roots_reaped: int
     no_process_started: bool
+    prepared: PreparedClaimAdmission | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -92,6 +96,7 @@ class _Envelope:
     inputs: object
     cancelled: threading.Event
     deadline_ns: int
+    admission: object = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -131,21 +136,32 @@ def _worker_loop(slot, wire_limits, poll_ns, cleanup_ns):
                 return
         token = envelope.token
         inputs, cancelled, deadline = envelope.inputs, envelope.cancelled, envelope.deadline_ns
+        admission = envelope.admission
+        prepared = None
         retained = None
         try:
+            if admission is not None:
+                prepared = prepare_claim_admission(
+                    admission, AdmissionCaptureLimits(wire_limits.max_rows, wire_limits.max_field_bytes),
+                )
             actual = execution._execute_signature_job(inputs, wire_limits, deadline, cancelled, poll_ns, cleanup_ns)
             result = SignatureWorkerResult(actual.reason, actual.indices, actual.finished_ns,
-                                actual.roots_reaped, actual.no_process_started)
+                                actual.roots_reaped, actual.no_process_started,
+                                prepared if actual.reason == 'signature_execution_completed' else None)
         except execution.SignatureExecutionUnconfirmed as error:
             retained = error.context
             result = None
         except SignaturePayloadError:
             result = SignatureWorkerResult('signature_execution_invalid_output', (), None, 0, False)
+        except AdmissionDecodeError:
+            # Parsing precedes execution: no helper has started on this path.
+            result = SignatureWorkerResult('signature_execution_invalid_output', (), None, 0, True)
         except BaseException:
             result = SignatureWorkerResult('signature_execution_internal_failure', (), None, 0, False)
         # No complete job retains a full input/wire/payload in its mailbox or
         # this persistent worker's locals. Exception handlers have also ended.
         inputs = None
+        admission = prepared = None
         envelope = None
         cancelled = None
         if retained is not None:
@@ -276,7 +292,7 @@ class SignatureWorkerPool:
                 return None
             active = _Active(item.handle, token, cancelled, now, now + self._limits.timeout_ns, len(item.inputs.rows))
             slot.current = active
-            slot.incoming.put_nowait(_Envelope(token, item.inputs, cancelled, active.deadline_ns))
+            slot.incoming.put_nowait(_Envelope(token, item.inputs, cancelled, active.deadline_ns, item.admission))
             return item.handle
         except BaseException:
             # No inference of no-start after an ambiguous queue/publication
@@ -312,6 +328,13 @@ class SignatureWorkerPool:
         return result
 
     def _valid_result(self, result, active):
+        admission = self._intake._job(active.handle).admission
+        if (type(result) is SignatureWorkerResult and result.reason == 'signature_execution_completed'
+                and admission is not None
+                and (type(result.prepared) is not PreparedClaimAdmission or result.prepared.snapshot is not admission
+                     or len(result.prepared.rows) != len(admission.rows)
+                     or any(item.raw is not raw for item, raw in zip(result.prepared.rows, admission.rows, strict=True)))):
+            return False
         if (type(result) is not SignatureWorkerResult or type(result.reason) is not str or result.reason not in _REASONS
                 or type(result.indices) is not tuple or len(result.indices) > active.row_count
                 or type(result.roots_reaped) is not int or not 0 <= result.roots_reaped <= active.row_count + 1

@@ -21,6 +21,8 @@ from .signature_inputs import (
     SignatureInputSnapshot, signature_input_size,
 )
 from .sql_read_budget import SQLReadError, SQLReadLimits
+from .admission_inputs import AdmissionCaptureLimits, AdmissionInputSnapshot
+from .claim_admission import admission_signature_rows
 
 MAX_SIGNATURE_JOB_PROJECTS = 256
 MAX_SIGNATURE_JOB_SLOTS = 4096
@@ -85,6 +87,7 @@ class SignatureWorkItem:
     project_id: str
     provider: str
     inputs: SignatureInputSnapshot
+    admission: AdmissionInputSnapshot | None = None
 
 
 @dataclass(repr=False)
@@ -94,6 +97,8 @@ class _Job:
     state: str = "reserved"
     inputs: SignatureInputSnapshot | None = None
     cancel_requested: bool = False
+    admission: AdmissionInputSnapshot | None = None
+    work_limits: SQLReadLimits | None = None
 
 
 class SignatureJobIntake:
@@ -182,6 +187,7 @@ class SignatureJobIntake:
         else:
             self._project_jobs[job.project_id] = count - 1
         job.inputs = None
+        job.admission = job.work_limits = None
         del self._jobs[handle]
 
     def _validate_inputs(self, inputs: SignatureInputSnapshot, project_id: str, provider: str) -> None:
@@ -279,7 +285,7 @@ class SignatureJobIntake:
                 raise SignatureJobError("signature_job_unavailable")
             job.state = "selected"
             self._selected_projects.add(project_id)
-            return SignatureWorkItem(handle, project_id, job.provider, job.inputs)
+            return SignatureWorkItem(handle, project_id, job.provider, job.inputs, job.admission)
         return None
 
     def cancel(self, handle: object) -> str:
@@ -331,6 +337,53 @@ class SignatureJobIntake:
         if job.state != "returned" or job.inputs is None:
             raise SignatureJobError("signature_job_invalid_transition")
         return job.inputs
+
+    def capture_admission(self, project_id, provider, work_limits):
+        """Reserve the combined raw admission/signature field share first.
+
+        All candidates are captured before provider filtering. Signature rows
+        are a conservative local billing subset; filtering/JSON parsing belongs
+        to the actual fixed worker. No caller supplies a snapshot or parser.
+        """
+        self._guard()
+        if (not matches(project_id, _PROJECT) or type(provider) is not str or provider not in {"codex", "claude"}
+                or type(work_limits) is not SQLReadLimits):
+            raise SignatureJobError("signature_job_invalid_request")
+        work_limits.__post_init__()
+        handle = self._reserve(project_id, provider)
+        try:
+            limits = self._limits
+            policy = self._views._claim_policy(provider)
+            admission = self._views.capture_admission_inputs(
+                project_id, provider, policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), work_limits,
+            )
+            if (type(admission) is not AdmissionInputSnapshot
+                    or admission.origin is not self._views._admission_capture_origin):
+                raise SignatureJobError("signature_job_capture_incompatible")
+            rows = admission_signature_rows(admission)
+            size = signature_input_size(project_id, provider, admission.owner, admission.signer, rows)
+            if (len(rows) + len(admission.rows) > limits.rows_per_job
+                    or size + admission.retained_bytes > limits.bytes_per_job):
+                raise SignatureJobError("signature_job_project_full")
+            inputs = SignatureInputSnapshot(self._views._ledger._attestation_origin, project_id, provider,
+                                            admission.owner, admission.signer, rows, size)
+            self._validate_inputs(inputs, project_id, provider)
+            job = self._job(handle)
+            job.admission = admission
+            job.work_limits = SQLReadLimits(work_limits.max_callbacks, work_limits.max_duration_ms,
+                                             work_limits.max_value_bytes)
+            self._publish(handle, inputs)
+            return handle
+        except BaseException:
+            self._release(handle)
+            raise
+
+    def returned_admission(self, handle):
+        self._guard()
+        job = self._job(handle)
+        if job.state != "returned" or job.admission is None or job.work_limits is None:
+            raise SignatureJobError("signature_job_invalid_transition")
+        return job.admission, job.work_limits
 
     def discard_returned(self, handle: object) -> None:
         self._guard()
