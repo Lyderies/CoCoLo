@@ -129,9 +129,44 @@ class AccountIngressTests(unittest.TestCase):
         claim.settimeout(2)
         self.assertEqual(b"", claim.recv(1))
         self.assertEqual(0, self.jobs.snapshot()["tickets"])
+        # EOF precedes the front thread's slot-retirement publication. Wait
+        # for actual capacity before testing the next request's authorization.
+        self.wait(lambda: self.ingress.snapshot()["health"] == 0, pump=False)
         health = self.request("unauthorized", operation="account.health")
         with self.assertRaisesRegex(AccountError, "account_not_authorized"):
             self.read(self.pair(health, health=True, authorized=False), health, pump=False)
+
+    def test_health_eof_does_not_prove_front_slot_retirement(self):
+        self.start()
+        closed, resume = threading.Event(), threading.Event()
+        self.addCleanup(resume.set)
+        original = socket.socket.close
+
+        def stop_after_actual_close(connection):
+            original(connection)
+            if threading.current_thread() is self.ingress._thread and not closed.is_set():
+                # _drop has already unregistered this exact socket. Pause in
+                # its real close call before it publishes slot retirement.
+                closed.set()
+                if not resume.wait(5):
+                    raise RuntimeError("fixture socket-retirement gate expired")
+
+        with mock.patch.object(socket.socket, "close", new=stop_after_actual_close):
+            try:
+                claim = self.pair(self.request(), health=True)
+                self.assertTrue(closed.wait(5))
+                self.assertEqual(b"", claim.recv(1))
+                self.assertEqual(1, self.ingress.snapshot()["health"])
+                self.assertFalse(self.ingress.snapshot()["faulted"])
+                with self.assertRaisesRegex(AccountError, "account_unavailable"):
+                    self.pair(health=True)
+                resume.set()
+                self.wait(lambda: self.ingress.snapshot()["health"] == 0, pump=False)
+                health = self.request("unauthorized", operation="account.health")
+                with self.assertRaisesRegex(AccountError, "account_not_authorized"):
+                    self.read(self.pair(health, health=True, authorized=False), health, pump=False)
+            finally:
+                resume.set()
 
     def test_disconnected_handoff_keeps_slot_until_owner_ack(self):
         self.start(ordinary=1)
