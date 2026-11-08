@@ -18,7 +18,7 @@ from tests.learning_support import generate_test_owner_key
 from tests.test_owner_key_contracts import public_value
 
 from codex_agents.account_api import (
-    ACCOUNT_OPERATIONS, ACCOUNT_PROTOCOL_VERSION, MAX_ACCOUNT_FRAME_BYTES,
+    ACCOUNT_READ_OPERATIONS as ACCOUNT_OPERATIONS, ACCOUNT_PROTOCOL_VERSION, MAX_ACCOUNT_FRAME_BYTES,
     AccountClient, AccountError, AccountRequest, account_request_digest,
     decode_account_request, decode_account_response, encode_account_request,
 )

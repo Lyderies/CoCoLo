@@ -315,6 +315,9 @@ class LearningStoreTests(unittest.TestCase):
 
     def _downgrade_fixture_to_schema_five(self) -> None:
         with self.ledger._connection:
+            self.ledger._connection.execute("DROP TRIGGER cleanup_launch_operation_state")
+            for name in ("launch_inputs", "launch_observations", "launch_receipts"):
+                self.ledger._connection.execute("DROP TABLE " + name)
             self.ledger._connection.execute("DROP TABLE launch_claims")
             self.ledger._connection.execute("DROP TABLE orchestration_checkpoints")
             for column in (
@@ -576,7 +579,7 @@ class LearningStoreTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        self.assertEqual(7, version)
+        self.assertEqual(8, version)
         self.assertIn("host_run_bindings", tables)
         self.assertIn("hook_ingestion", tables)
         self.assertIn("orchestrations", tables)
@@ -616,7 +619,7 @@ class LearningStoreTests(unittest.TestCase):
         connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         snapshot = self.ledger.ingestion_snapshot(self.project_a_id, now_ms=30)
-        self.assertEqual(7, self.ledger._connection.execute(
+        self.assertEqual(8, self.ledger._connection.execute(
             "PRAGMA user_version"
         ).fetchone()[0])
         self.assertEqual(1, snapshot["accepted_hook_event_count"])
@@ -2598,6 +2601,7 @@ class LearningStoreTests(unittest.TestCase):
             "sessions", "run_provenance", "records", "record_links",
             "stored_files", "collector_health", "consumed_grants",
             "owner_attestations", "repair_receipts", "host_run_bindings", "launch_claims",
+            "launch_inputs", "launch_observations", "launch_receipts",
             "hook_ingestion", "orchestrations", "orchestration_checkpoints",
             "operational_qa", "operational_check_receipts", "tombstones",
         })
@@ -2712,31 +2716,27 @@ class LearningStoreTests(unittest.TestCase):
         with self.ledger.repository(self.project_a_id) as repository:
             self.assertEqual([], repository.records())
 
-    def test_schema_one_migrates_and_legacy_owner_records_remain_unattested(self) -> None:
+    def test_legacy_schema_one_refuses_automatic_upgrade_before_any_schema_changes(self) -> None:
         self.ledger.close()
         connection = sqlite3.connect(self.state.database)
-        connection.execute("DROP TABLE owner_attestations")
-        connection.execute("DROP TABLE repair_receipts")
-        connection.execute("PRAGMA user_version = 1")
-        connection.commit()
-        connection.close()
-        self.ledger = LearningLedger(
-            self.state, client_capabilities=self.clients
-        )
-        version = self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
-        tables = {
-            row[0]
-            for row in self.ledger._connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        attestations = self.ledger._connection.execute(
-            "SELECT COUNT(*) FROM owner_attestations"
-        ).fetchone()[0]
-        self.assertEqual(7, version)
-        self.assertIn("owner_attestations", tables)
-        self.assertIn("repair_receipts", tables)
-        self.assertEqual(0, attestations)
+        try:
+            connection.execute("DROP TABLE owner_attestations")
+            connection.execute("DROP TABLE repair_receipts")
+            connection.execute("PRAGMA user_version = 1")
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(LedgerError, "verified drained staged migration"):
+            LearningLedger(self.state, client_capabilities=self.clients)
+        connection = sqlite3.connect(self.state.database)
+        try:
+            self.assertEqual(1, connection.execute("PRAGMA user_version").fetchone()[0])
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertNotIn("owner_attestations", tables)
+            self.assertNotIn("repair_receipts", tables)
+        finally:
+            connection.close()
+        self._leave_ledger_closed()
 
     def test_schema_five_absent_checkpoint_table_cannot_verify_phantom_rows(self) -> None:
         self._downgrade_fixture_to_schema_five()
@@ -2804,7 +2804,7 @@ class LearningStoreTests(unittest.TestCase):
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
 
         self.assertEqual(
-            7, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+            8, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         )
         checkpoint = self.ledger._connection.execute(
             "SELECT sequence,status,observed_at_ms FROM orchestration_checkpoints "
@@ -2871,7 +2871,7 @@ class LearningStoreTests(unittest.TestCase):
         finally:
             connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        self.assertEqual(7, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(8, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def test_schema_five_migration_rolls_back_an_injected_schema_failure(self) -> None:
         self._downgrade_fixture_to_schema_five()
@@ -3394,7 +3394,7 @@ class LearningStoreTests(unittest.TestCase):
         self.addCleanup(server.stop)
         client = CollectorClient(self.state.socket, timeout=0.2)
         health = client.health(self.project_a)
-        self.assertEqual(7, health["schema_version"])
+        self.assertEqual(8, health["schema_version"])
         self.assertEqual(PACKAGE_VERSION, health["runtime_version"])
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, health["runtime_digest"])
         self.assertIsInstance(health["started_at_ms"], int)
@@ -3442,7 +3442,7 @@ class LearningStoreTests(unittest.TestCase):
             "_request",
             return_value={
                 "ok": True,
-                "schema_version": 7,
+                "schema_version": 8,
                 "runtime_version": PACKAGE_VERSION,
                 "runtime_digest": "0" * 64,
             },
@@ -3652,7 +3652,7 @@ class LearningStoreTests(unittest.TestCase):
         shutdown.assert_not_called()
 
         healthy = {
-            "schema_version": 7,
+            "schema_version": 8,
             "runtime_version": PACKAGE_VERSION,
             "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
         }
@@ -3689,7 +3689,7 @@ class LearningStoreTests(unittest.TestCase):
 
     def test_client_rejects_older_or_newer_schema_with_matching_runtime(self) -> None:
         client = CollectorClient(self.state.socket)
-        for schema, error in ((6, CollectorUpgradeRequired), (8, CollectorNewerVersionError)):
+        for schema, error in ((6, CollectorUpgradeRequired), (7, CollectorUpgradeRequired), (9, CollectorNewerVersionError)):
             with self.subTest(schema=schema), mock.patch.object(client, "_request", return_value={
                 "ok": True, "schema_version": schema,
                 "runtime_version": PACKAGE_VERSION, "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
@@ -3741,7 +3741,7 @@ class LearningStoreTests(unittest.TestCase):
     def test_detached_collector_receives_no_inherited_environment(self) -> None:
         healthy = {
             "ok": True,
-            "schema_version": 7,
+            "schema_version": 8,
             "runtime_version": PACKAGE_VERSION,
             "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
             "started_at_ms": 1,

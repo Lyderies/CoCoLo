@@ -1,8 +1,8 @@
-"""Closed account read contracts/client; no persistence or native authority.
+"""Closed account metadata contracts/client; no persistence or native authority.
 
-Read IDs correlate fresh views, not durable snapshots. Endpoint identity and
-caller enrollment remain separate mandatory gates. No startup, retries or SQLite
-fallback are performed here.
+Read IDs correlate fresh views. Claim IDs retrieve durable known metadata, never
+execution permission. Endpoint identity and caller enrollment remain mandatory
+gates. No startup, automatic retries or SQLite fallback are performed here.
 """
 
 from __future__ import annotations
@@ -18,16 +18,18 @@ from .contracts import ContractError
 from .learning_contracts import canonical_json, parse_bounded_json
 from .owner_key_contracts import checked_public_key
 from .service_transport import MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
+from .account_claim_contracts import CLAIM_ERROR_CODES, ClaimError, LaunchClaimInput, checked_claim_receipt, decode_claim_input
 
 ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
 MAX_ACCOUNT_INTEGER = (1 << 63) - 1
-ACCOUNT_OPERATIONS = frozenset({"account.health", "account.project", "account.owner_key", "account.owner_public_key"})
+ACCOUNT_READ_OPERATIONS = frozenset({"account.health", "account.project", "account.owner_key", "account.owner_public_key"})
+ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {"account.claim_launch"}
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
     "account_not_authorized", "account_wrong_owner", "account_unavailable",
     "account_incompatible", "account_project_not_found",
-})
+}) | CLAIM_ERROR_CODES
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}")
 _PROJECT = re.compile(r"prj_[0-9a-f]{32}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -80,8 +82,15 @@ def _checked_request(data: object) -> None:
         or type(data["protocol_version"]) is not int or data["protocol_version"] != ACCOUNT_PROTOCOL_VERSION
         or type(data["operation"]) is not str or data["operation"] not in ACCOUNT_OPERATIONS
         or not matches(data["request_id"], _ID) or not matches(data["project_id"], _PROJECT)
-        or not matches(data["runtime_digest"], _DIGEST) or type(data["payload"]) is not dict or data["payload"]
+        or not matches(data["runtime_digest"], _DIGEST) or type(data["payload"]) is not dict
     ):
+        raise AccountError("account_invalid_request")
+    if data["operation"] == "account.claim_launch":
+        try:
+            decode_claim_input(data["payload"])
+        except ClaimError:
+            raise AccountError("account_invalid_request") from None
+    elif data["payload"]:
         raise AccountError("account_invalid_request")
 
 
@@ -117,7 +126,12 @@ def account_request_digest(request: AccountRequest) -> str:
 def _checked_result(result: object, request: AccountRequest) -> dict:
     if type(result) is not dict:
         raise AccountError("account_invalid_response")
-    if request.operation == "account.health":
+    if request.operation == "account.claim_launch":
+        try:
+            return checked_claim_receipt(result)
+        except ClaimError:
+            raise AccountError("account_invalid_response") from None
+    elif request.operation == "account.health":
         if set(result) != {"transport_alive", "database_checked"} or result["transport_alive"] is not True or result["database_checked"] is not False:
             raise AccountError("account_invalid_response")
     elif request.operation == "account.project":
@@ -185,7 +199,11 @@ def decode_account_response(raw: bytes, request: AccountRequest) -> dict:
 
 
 class AccountClient:
-    """One bounded exchange per view; no database import, fallback or startup."""
+    """One exchange per operation; no database fallback, startup or auto retry.
+
+    Claim replies describe durable state, never an executable launch grant.
+    A lost reply stays ambiguous; this client cannot start or resend model work.
+    """
 
     def __init__(self, socket_path: Path, project_id: str, runtime_digest: str, *, timeout: float = 1.0) -> None:
         if (
@@ -223,3 +241,21 @@ class AccountClient:
 
     def owner_public_key(self, *, request_id: str | None = None) -> dict:
         return self._read("account.owner_public_key", request_id)
+
+    def claim_launch(self, run_handle: str, identity_digest: str, *, request_id: str) -> dict:
+        try:
+            payload = LaunchClaimInput(run_handle, identity_digest).payload()
+        except ClaimError:
+            raise AccountError("account_invalid_request") from None
+        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, "account.claim_launch", request_id,
+                                 self._project, self._runtime, payload)
+        raw = encode_account_request(request)
+        try:
+            reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError:
+            failed = True
+        else:
+            failed = False
+        if failed:
+            raise AccountError("account_unavailable")
+        return decode_account_response(reply, request)

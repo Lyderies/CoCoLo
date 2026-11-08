@@ -151,7 +151,7 @@ class AccountLaunchClaimsTests(unittest.TestCase):
             self.project, file_id="claim_fixture_backup", expires_at_ms=self.stamp + 60_000,
         )
         checked = self.ledger.verify_sanitized_backup(self.project, file_id="claim_fixture_backup")
-        self.assertEqual(7, checked["ledger_schema_version"])
+        self.assertEqual(8, checked["ledger_schema_version"])
         self.assertEqual(1, checked["counts"]["launch_claims"])
         body = json.loads(backup.read_bytes())["body"]
         row = body["tables"]["launch_claims"][0]
@@ -168,6 +168,9 @@ class AccountLaunchClaimsTests(unittest.TestCase):
 
     def downgrade_to_six(self):
         with self.ledger._account_transaction():
+            self.ledger._connection.execute("DROP TRIGGER cleanup_launch_operation_state")
+            for name in ("launch_inputs", "launch_observations", "launch_receipts"):
+                self.ledger._connection.execute("DROP TABLE " + name)
             self.ledger._connection.execute("DROP TABLE IF EXISTS launch_claims")
             self.ledger._connection.execute("PRAGMA user_version=6")
 
@@ -217,7 +220,7 @@ class AccountLaunchClaimsTests(unittest.TestCase):
         self.ledger.close()
         self.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
         self.addCleanup(self.ledger.close)
-        self.assertEqual(7, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(8, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
         self.assertEqual("legacy_fenced", self.markers()[0][2])
         self.assertEqual(signed_before, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_attestations").fetchall()])
         self.assertEqual(records_before, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid").fetchall()])

@@ -1126,3 +1126,45 @@ receipts. No account mutation RPC, native caller enrollment, listener or normal
 CLI/hook/bridge API migration is enabled by this increment. Those operations,
 bounded admission work, cross-store recovery and independent release review
 remain required.
+
+
+## Closed account claim operation in the uninstalled candidate
+
+`account.claim_launch` accepts only a run handle and a provider-identity digest,
+plus the existing request envelope. Its caller cannot choose a model, deadline,
+role, SQL, executable, process or environment. The owner stores approved bridge
+provider/model/effort/effective timeout/runtime when it opens the validated run.
+A successful trusted before-launch observation binds its identity to that run;
+starting another observation invalidates the previous binding even if it fails.
+
+The reference owner operation verifies immutable signature inputs outside its
+mutex. Its final explicit write transaction rechecks the open run, exact current
+observation, admitted client, owner/signature inputs, account-wide restrictions
+and clock. It commits either a fixed denial or the consumed marker and validated
+intent together with the request receipt. The admission run cap is not charged
+again. Scoped request identifiers, parameters and receipt integrity use owner-keyed
+digests. An identical retry retrieves known durable metadata; changed parameters
+conflict. A lost response, restart, event expiry or clock rollback cannot issue a
+fresh claim. The client sends one exchange and never automatically retries or
+starts a child. Neither the first nor a known receipt is executable permission.
+
+Schema 8 adds the approved launch inputs, observation binding and permanent
+receipts. A composite foreign key ties each claimed receipt to its exact consumed
+marker/run/bridge identity. Restore refuses an orphan receipt, and deleting a
+marker cannot leave its claimed receipt behind. Explicit project deletion removes
+child receipts before markers. Current-schema opens check the expected table,
+index and cleanup definitions; missing or weakened consumed-state schemas are
+refused. Schema 5/6/7 backups retain their exact earlier manifests. Verified exact
+backups precede atomic upgrades; existing claims survive and other old bindings
+are conservatively fenced. Schemas 1-4 refuse automatic upgrade: a verified drained
+staged migration remains required work before release.
+
+The handler remains default-deny. Claim authorization requires a trusted adapter's
+host operation scope and caller scope, separately from JSON. Fixture authorization
+objects and callback contexts prove no actual native caller enrollment, fresh
+caller environment or root custody. No listener, active profile, installation or
+normal CLI/hook/bridge migration is enabled here. Signature preparation remains
+synchronous in this reference call, and legacy JSON/filesystem/policy reads remain
+inside the final lock. Bounded asynchronous admission-job integration, active-run
+capacity/reconciliation, actual native authentication and the complete release
+checks remain required before normal API activation.

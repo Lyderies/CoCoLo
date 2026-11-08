@@ -82,6 +82,12 @@ from .owner_key_contracts import (
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .runtime_files import ORCHESTRATION_PREFIX, RUNTIME_FILES, runtime_digest
 from .sql_read_budget import SQLReadConnection
+from .account_claim_contracts import (
+    CLAIM_DENIAL_CODES, MAX_CLAIM_INTEGER, ClaimError, LaunchClaimInput,
+    _DIGEST as _CLAIM_DIGEST, _REQUEST_ID as _CLAIM_REQUEST_ID, _PROJECT as _CLAIM_PROJECT,
+    _RUN as _CLAIM_RUN,
+    checked_claim_receipt, matches as claim_matches,
+)
 
 COLLECTOR_AUTHORIZATION_SCHEMA_VERSION = 1
 # The one line `install_owner_public_key` writes; the allowed-signers file holds nothing else.
@@ -266,6 +272,10 @@ _BACKUP_TABLE_COLUMNS = {
         "expires_at_ms", "consumed_at_ms", "run_id",
     ),
     "launch_claims": ("handle_digest", "run_id", "kind", "claimed_at_ms", "bridge_run_id"),
+    "launch_inputs": ("handle_digest", "run_id", "runtime_digest", "provider", "model", "effort", "hard_timeout_seconds"),
+    "launch_observations": ("handle_digest", "identity_digest", "observed_at_ms"),
+    "launch_receipts": ("scope_digest", "request_digest", "parameters_digest", "handle_digest", "receipt_digest",
+                        "run_id", "state", "reason_code", "bridge_run_id", "deadline_at_ms", "recorded_at_ms"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -314,6 +324,9 @@ _BACKUP_ORDER_COLUMNS = {
     "repair_receipts": ("receipt_id",),
     "host_run_bindings": ("created_at_ms", "run_id"),
     "launch_claims": ("handle_digest",),
+    "launch_inputs": ("handle_digest",),
+    "launch_observations": ("handle_digest",),
+    "launch_receipts": ("scope_digest", "request_digest"),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -347,6 +360,8 @@ def _backup_decode_value(value: Any) -> Any:
 
 
 def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 8 and table in {"launch_inputs", "launch_observations", "launch_receipts"}:
+        return ()
     if schema_version < 7 and table == "launch_claims":
         return ()
     if schema_version == 5:
@@ -360,7 +375,9 @@ def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]
 def _backup_tables(schema_version: int) -> tuple[str, ...]:
     # Preserve the exact old manifest. Older verified backups never contained
     # a launch_claims entry, even an empty one.
-    return tuple(table for table in _BACKUP_TABLE_COLUMNS if schema_version >= 7 or table != "launch_claims")
+    return tuple(table for table in _BACKUP_TABLE_COLUMNS
+                 if (schema_version >= 7 or table != "launch_claims")
+                 and (schema_version >= 8 or table not in {"launch_inputs", "launch_observations", "launch_receipts"}))
 
 
 def _snapshot_project_partition(
@@ -448,11 +465,82 @@ CREATE TABLE IF NOT EXISTS launch_claims (
 """
 
 
+_LAUNCH_INPUTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS launch_inputs (
+    project_id TEXT NOT NULL,
+    handle_digest TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    runtime_digest TEXT NOT NULL CHECK(length(runtime_digest)=64 AND runtime_digest NOT GLOB '*[^0-9a-f]*'),
+    provider TEXT NOT NULL CHECK(provider IN ('codex','claude')),
+    model TEXT NOT NULL CHECK(typeof(model)='text' AND length(model) BETWEEN 1 AND 160),
+    effort TEXT NOT NULL CHECK(typeof(effort)='text' AND length(effort) BETWEEN 1 AND 32),
+    hard_timeout_seconds INTEGER NOT NULL CHECK(typeof(hard_timeout_seconds)='integer' AND hard_timeout_seconds>0),
+    PRIMARY KEY(project_id,handle_digest),
+    UNIQUE(project_id,run_id),
+    FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+)
+"""
+
+_LAUNCH_RECEIPT_PARENT_SCHEMA = """
+CREATE UNIQUE INDEX IF NOT EXISTS launch_receipt_parent
+ON launch_claims(project_id,handle_digest,run_id,bridge_run_id)
+"""
+
+_LAUNCH_OBSERVATIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS launch_observations (
+    project_id TEXT NOT NULL,
+    handle_digest TEXT NOT NULL,
+    identity_digest TEXT NOT NULL CHECK(length(identity_digest)=64 AND identity_digest NOT GLOB '*[^0-9a-f]*'),
+    observed_at_ms INTEGER NOT NULL CHECK(typeof(observed_at_ms)='integer' AND observed_at_ms>=0),
+    PRIMARY KEY(project_id,handle_digest),
+    FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+)
+"""
+
+_LAUNCH_RECEIPTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS launch_receipts (
+    project_id TEXT NOT NULL,
+    scope_digest TEXT NOT NULL CHECK(length(scope_digest)=64 AND scope_digest NOT GLOB '*[^0-9a-f]*'),
+    request_digest TEXT NOT NULL CHECK(length(request_digest)=64 AND request_digest NOT GLOB '*[^0-9a-f]*'),
+    parameters_digest TEXT NOT NULL CHECK(length(parameters_digest)=64 AND parameters_digest NOT GLOB '*[^0-9a-f]*'),
+    handle_digest TEXT NOT NULL CHECK(length(handle_digest)=64 AND handle_digest NOT GLOB '*[^0-9a-f]*'),
+    receipt_digest TEXT NOT NULL CHECK(length(receipt_digest)=64 AND receipt_digest NOT GLOB '*[^0-9a-f]*'),
+    run_id TEXT,
+    state TEXT NOT NULL CHECK(state IN ('claimed','denied')),
+    reason_code TEXT,
+    bridge_run_id TEXT,
+    deadline_at_ms INTEGER,
+    recorded_at_ms INTEGER NOT NULL CHECK(typeof(recorded_at_ms)='integer' AND recorded_at_ms>=0),
+    PRIMARY KEY(project_id,scope_digest,request_digest),
+    UNIQUE(project_id,receipt_digest),
+    CHECK((state='claimed' AND run_id IS NOT NULL AND bridge_run_id IS NOT NULL
+        AND typeof(deadline_at_ms)='integer' AND deadline_at_ms>recorded_at_ms AND reason_code IS NULL)
+        OR (state='denied' AND bridge_run_id IS NULL AND deadline_at_ms IS NULL AND reason_code IN (
+""" + ",".join("'" + code + "'" for code in sorted(CLAIM_DENIAL_CODES)) + """))),
+    FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
+    FOREIGN KEY(project_id,handle_digest,run_id,bridge_run_id)
+        REFERENCES launch_claims(project_id,handle_digest,run_id,bridge_run_id)
+)
+"""
+
+_LAUNCH_CLEANUP_SCHEMA = """
+CREATE TRIGGER IF NOT EXISTS cleanup_launch_operation_state
+AFTER UPDATE OF status ON projects
+WHEN NEW.status='deleted' AND OLD.status<>'deleted'
+BEGIN
+    DELETE FROM launch_inputs WHERE project_id=NEW.project_id;
+    DELETE FROM launch_observations WHERE project_id=NEW.project_id;
+    DELETE FROM launch_receipts WHERE project_id=NEW.project_id;
+    DELETE FROM launch_claims WHERE project_id=NEW.project_id;
+END
+"""
+
+
 _BACKUP_RESTORE_SCHEMA = """
 CREATE TABLE projects(project_id TEXT PRIMARY KEY,canonical_root TEXT,root_digest TEXT,
  status TEXT NOT NULL CHECK(status IN ('active','deleted')),created_at_ms INTEGER NOT NULL,
  deleted_at_ms INTEGER);
-""" + _LAUNCH_CLAIMS_SCHEMA + ";\n" + """
+""" + _LAUNCH_CLAIMS_SCHEMA + ";\n" + _LAUNCH_RECEIPT_PARENT_SCHEMA + ";\n" + _LAUNCH_INPUTS_SCHEMA + ";\n" + _LAUNCH_OBSERVATIONS_SCHEMA + ";\n" + _LAUNCH_RECEIPTS_SCHEMA + ";\n" + """
 CREATE TABLE sessions(project_id TEXT NOT NULL,session_digest TEXT NOT NULL,producer TEXT NOT NULL,
  created_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,session_digest,producer),
  FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE);
@@ -538,7 +626,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6, 7}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -2123,11 +2211,46 @@ class LearningLedger:
                 "SELECT project_id,handle_digest,run_id,'legacy_fenced',created_at_ms,NULL FROM host_run_bindings"
             )
 
-    def _migrate_six_to_seven(self) -> None:
+    def _assert_launch_schema_locked(self, version: int) -> None:
+        schemas = [("table", "launch_claims", _LAUNCH_CLAIMS_SCHEMA)]
+        if version >= 8:
+            schemas += [("table", "launch_inputs", _LAUNCH_INPUTS_SCHEMA),
+                        ("table", "launch_observations", _LAUNCH_OBSERVATIONS_SCHEMA),
+                        ("table", "launch_receipts", _LAUNCH_RECEIPTS_SCHEMA),
+                        ("index", "launch_receipt_parent", _LAUNCH_RECEIPT_PARENT_SCHEMA),
+                        ("trigger", "cleanup_launch_operation_state", _LAUNCH_CLEANUP_SCHEMA)]
+
+        def normalized(sql):
+            return " ".join(sql.replace("IF NOT EXISTS ", "").strip().rstrip(";").split())
+
+        for kind, name, expected in schemas:
+            row = self._connection.execute("SELECT sql FROM sqlite_master WHERE type=? AND name=?", (kind, name)).fetchone()
+            if row is None or type(row[0]) is not str or normalized(row[0]) != normalized(expected):
+                raise LedgerError("launch claim state is unavailable or incompatible")
+
+    def _initialize_launch_operations_locked(self) -> None:
+        self._connection.execute(_LAUNCH_RECEIPT_PARENT_SCHEMA)
+        self._connection.execute(_LAUNCH_INPUTS_SCHEMA)
+        self._connection.execute(_LAUNCH_OBSERVATIONS_SCHEMA)
+        self._connection.execute(_LAUNCH_RECEIPTS_SCHEMA)
+        self._connection.execute(_LAUNCH_CLEANUP_SCHEMA)
+        self._assert_launch_schema_locked(8)
+
+    def _migrate_six_or_seven_to_current(self, version: int) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
-            self._initialize_launch_claims_locked(backfill=True)
-            self._connection.execute("PRAGMA user_version = 7")
+            self._initialize_launch_claims_locked(backfill=version == 6)
+            if version == 7:
+                # Preserve existing consumption and fence every older ambiguous
+                # pending run; its approved launch inputs were not stored yet.
+                self._connection.execute(
+                    "INSERT INTO launch_claims(project_id,handle_digest,run_id,kind,claimed_at_ms,bridge_run_id) "
+                    "SELECT h.project_id,h.handle_digest,h.run_id,'legacy_fenced',h.created_at_ms,NULL "
+                    "FROM host_run_bindings h WHERE NOT EXISTS(SELECT 1 FROM launch_claims c "
+                    "WHERE c.project_id=h.project_id AND (c.handle_digest=h.handle_digest OR c.run_id=h.run_id))"
+                )
+            self._initialize_launch_operations_locked()
+            self._connection.execute("PRAGMA user_version = 8")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
         except BaseException:
@@ -2223,7 +2346,8 @@ class LearningLedger:
                 "FROM orchestrations"
             )
             self._initialize_launch_claims_locked(backfill=True)
-            self._connection.execute("PRAGMA user_version = 7")
+            self._initialize_launch_operations_locked()
+            self._connection.execute("PRAGMA user_version = 8")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
         except BaseException:
@@ -2235,21 +2359,22 @@ class LearningLedger:
         current = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
         if current > LEDGER_SCHEMA_VERSION:
             raise LedgerError("ledger schema is newer than this package")
+        if 0 < current < 5:
+            raise LedgerError("legacy ledger requires a verified drained staged migration")
         if current == 5:
-            self._require_project_migration_backups(5, 7)
+            self._require_project_migration_backups(5, 8)
             self._migrate_five_to_current()
             self.state.harden_database_files()
             return
-        if current == 6:
-            self._require_project_migration_backups(6, 7)
-            self._migrate_six_to_seven()
+        if current in {6, 7}:
+            if current == 7:
+                self._assert_launch_schema_locked(7)
+            self._require_project_migration_backups(current, 8)
+            self._migrate_six_or_seven_to_current(current)
             self.state.harden_database_files()
             return
-        if current == 7 and self._connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='launch_claims'"
-        ).fetchone() is None:
-            # Never recreate an empty consumed set after corruption/deletion.
-            raise LedgerError("launch claim state is unavailable")
+        if current == 8:
+            self._assert_launch_schema_locked(8)
         had_hook_ingestion = self._connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hook_ingestion'"
         ).fetchone() is not None
@@ -2812,6 +2937,7 @@ class LearningLedger:
                 )
             if current < 5:
                 self._initialize_launch_claims_locked(backfill=current != 0)
+                self._initialize_launch_operations_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
         self.state.harden_database_files()
 
@@ -4471,6 +4597,13 @@ class LearningLedger:
                     "INSERT OR IGNORE INTO sessions VALUES(?,?,?,?)",
                     (project_id, handle_digest, "host", timestamp),
                 )
+                if route.get("dispatch") == "bridge":
+                    self._connection.execute(
+                        "INSERT INTO launch_inputs VALUES(?,?,?,?,?,?,?,?)",
+                        (project_id, handle_digest, run_id, COLLECTOR_RUNTIME_DIGEST,
+                         provider, checked_assignment["model"], checked_assignment["effort"],
+                         min(route["bounds"]["timeout_seconds"], checked_assignment["bounds"]["timeout_seconds"])),
+                    )
                 self._connection.execute(
                     "INSERT INTO run_provenance VALUES(?,?,?,?,?,?)",
                     (
@@ -4600,8 +4733,13 @@ class LearningLedger:
         if provider not in {"claude", "codex"}:
             raise LedgerError("provider is unsupported")
         if run_handle is not None:
-            with self._lock:
+            with self._account_transaction():
                 run_id = self._open_run_for_provider_locked(project_id, run_handle, provider)
+                if phase == "before":
+                    self._connection.execute(
+                        "DELETE FROM launch_observations WHERE project_id=? AND handle_digest=?",
+                        (project_id, keyed_digest(self.state.digest_key(), run_handle)),
+                    )
         timestamp = self._clock_ms()
         untrusted = self._registered_roots(project_id)
         # The client's TMPDIR is a fresh owner-only directory under the learning
@@ -4633,6 +4771,18 @@ class LearningLedger:
         finally:
             remove_private_directory(tmpdir)
         self._store_provider_observations(project_id, records, timestamp=timestamp)
+        if run_handle is not None and phase == "before":
+            with self._account_transaction():
+                self._open_run_for_provider_locked(project_id, run_handle, provider)
+                identities = [record for record in records if record["record_type"] == "provider_identity"]
+                if len(identities) != 1:
+                    raise LedgerError("launch observation has no single identity")
+                self._connection.execute(
+                    "INSERT INTO launch_observations VALUES(?,?,?,?) "
+                    "ON CONFLICT(project_id,handle_digest) DO UPDATE SET "
+                    "identity_digest=excluded.identity_digest,observed_at_ms=excluded.observed_at_ms",
+                    (project_id, keyed_digest(self.state.digest_key(), run_handle), content_digest(identities[0]), timestamp),
+                )
         return records
 
     def _registered_roots(self, project_id: str) -> tuple[Path, ...]:
@@ -5506,6 +5656,179 @@ class LearningLedger:
         if decision["record_type"] != "admission_decision" or decision["decision"] != "pass":
             raise LedgerError("host run admission is not a pass")
         return decision
+
+    def _claim_context_locked(self, project_id, handle_digest, launch, timestamp):
+        from .providers import BILLING_MAX_AGE_MS
+
+        binding = self._connection.execute(
+            "SELECT * FROM host_run_bindings WHERE project_id=? AND handle_digest=?", (project_id, handle_digest),
+        ).fetchone()
+        if binding is None:
+            return "claim_not_open", None, None, None
+        if (binding["binding_state"] != "pending" or binding["consumed_at_ms"] is not None
+                or binding["client_version"] != "bridge-v1" or binding["expires_at_ms"] <= timestamp):
+            return "claim_not_open", binding, None, None
+        if self._connection.execute(
+            "SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?)",
+            (project_id, handle_digest, binding["run_id"]),
+        ).fetchone() is not None:
+            return "claim_already_consumed", binding, None, None
+        inputs = self._connection.execute(
+            "SELECT * FROM launch_inputs WHERE project_id=? AND handle_digest=?", (project_id, handle_digest),
+        ).fetchone()
+        if inputs is None or inputs["run_id"] != binding["run_id"]:
+            return "claim_context_missing", binding, None, None
+        if inputs["runtime_digest"] != COLLECTOR_RUNTIME_DIGEST:
+            return "claim_runtime_mismatch", binding, inputs, None
+        observed = self._connection.execute(
+            "SELECT identity_digest,observed_at_ms FROM launch_observations WHERE project_id=? AND handle_digest=?",
+            (project_id, handle_digest),
+        ).fetchone()
+        if (observed is None or observed["identity_digest"] != launch.identity_digest
+                or not binding["created_at_ms"] <= observed["observed_at_ms"] <= timestamp
+                or timestamp - observed["observed_at_ms"] > BILLING_MAX_AGE_MS):
+            return "claim_observation_missing", binding, inputs, None
+        row = self._connection.execute(
+            "SELECT content FROM records WHERE project_id=? AND content_digest=? "
+            "AND record_type='provider_identity' AND source='provider'", (project_id, launch.identity_digest),
+        ).fetchone()
+        if row is None:
+            return "claim_observation_missing", binding, inputs, None
+        identity = validate_learning_record(json.loads(bytes(row[0])))
+        admission, digest = self._launch_identity_locked(project_id, launch.run_handle, identity)
+        admitted = self.admitted_client(project_id, launch.run_handle)
+        if (digest != launch.identity_digest or identity["observed_at_ms"] != observed["observed_at_ms"]
+                or admission["provider"] != inputs["provider"]
+                or identity["client_version"] is None or identity["client_version"] != admitted["client_version"]):
+            return "claim_client_changed", binding, inputs, identity
+        if not self.client_version_reviewed(inputs["provider"], identity["client_version"]):
+            return "client_version_unreviewed", binding, inputs, identity
+        return None, binding, inputs, identity
+
+    def _claim_receipt_material(self, project_id, scope, request, parameters, handle, body):
+        return {"project_id": project_id, "scope": scope, "request": request,
+                "parameters": parameters, "handle": handle, **body}
+
+    def _known_claim_receipt_locked(self, project_id, scope, request, parameters):
+        row = self._connection.execute(
+            "SELECT * FROM launch_receipts WHERE project_id=? AND scope_digest=? AND request_digest=?",
+            (project_id, scope, request),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["parameters_digest"] != parameters:
+            raise ClaimError("claim_conflict")
+        body = {name: row[name] for name in
+                ("state", "run_id", "reason_code", "bridge_run_id", "deadline_at_ms", "recorded_at_ms")}
+        expected = keyed_digest(self.state.digest_key(), canonical_json(self._claim_receipt_material(
+            project_id, scope, request, parameters, row["handle_digest"], body,
+        )))
+        if expected != row["receipt_digest"]:
+            raise ClaimError("claim_unavailable")
+        return checked_claim_receipt({**body, "receipt_digest": expected, "known": True})
+
+    def _store_claim_receipt_locked(self, project_id, scope, request, parameters, handle, body):
+        digest = keyed_digest(self.state.digest_key(), canonical_json(self._claim_receipt_material(
+            project_id, scope, request, parameters, handle, body,
+        )))
+        result = checked_claim_receipt({**body, "receipt_digest": digest, "known": False})
+        self._connection.execute(
+            "INSERT INTO launch_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (project_id, scope, request, parameters, handle, digest, body["run_id"], body["state"],
+             body["reason_code"], body["bridge_run_id"], body["deadline_at_ms"], body["recorded_at_ms"]),
+        )
+        return result
+
+    def claim_launch(
+        self, project_id: str, *, runtime_digest: str, caller_scope: str,
+        request_id: str, launch: LaunchClaimInput,
+    ) -> dict[str, Any]:
+        """Owner-only idempotent launch metadata, never an executable grant.
+
+        Caller scope is trusted-adapter output, not a JSON role or native proof.
+        Runtime/caller authentication and fresh environment/root custody precede
+        this operation. No client or child is started. A known reply cannot
+        authorize another spawn. Signature preparation releases the mutex; the
+        final launch check, marker/intent and request receipt commit together.
+        Legacy JSON/filesystem work remains: bounded service jobs and actual
+        native caller enrollment are mandatory before normal API activation.
+        """
+        if (not claim_matches(project_id, _CLAIM_PROJECT) or not claim_matches(runtime_digest, _CLAIM_DIGEST)
+                or runtime_digest != COLLECTOR_RUNTIME_DIGEST or not claim_matches(caller_scope, _CLAIM_DIGEST)
+                or not claim_matches(request_id, _CLAIM_REQUEST_ID) or type(launch) is not LaunchClaimInput):
+            raise ClaimError("claim_invalid_request")
+        launch = LaunchClaimInput(launch.run_handle, launch.identity_digest)
+        key = self.state.digest_key()
+        handle = keyed_digest(key, launch.run_handle)
+        scope = keyed_digest(key, canonical_json({"project": project_id, "runtime": runtime_digest, "caller": caller_scope}))
+        request = keyed_digest(key, request_id)
+        parameters = keyed_digest(key, canonical_json(launch.payload()))
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
+            self.state.harden_database_files()
+            project = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (project_id,)).fetchone()
+            if project is None or project[0] != "active":
+                raise ClaimError("claim_unavailable")
+            known = self._known_claim_receipt_locked(project_id, scope, request, parameters)
+            if known is not None:
+                return known
+            timestamp = self._clock_ms()
+            if type(timestamp) is not int or not 0 <= timestamp <= MAX_CLAIM_INTEGER:
+                raise ClaimError("claim_unavailable")
+            early_reason, _, inputs, _ = self._claim_context_locked(project_id, handle, launch, timestamp)
+        prepared = None if early_reason else self._prepare_attestations(project_id, inputs["provider"])
+        with self._account_transaction():
+            project = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (project_id,)).fetchone()
+            if project is None or project[0] != "active":
+                raise ClaimError("claim_unavailable")
+            known = self._known_claim_receipt_locked(project_id, scope, request, parameters)
+            if known is not None:
+                return known
+            timestamp = self._clock_ms()
+            if type(timestamp) is not int or not 0 <= timestamp <= MAX_CLAIM_INTEGER:
+                raise ClaimError("claim_unavailable")
+            reason, binding, inputs, identity = self._claim_context_locked(project_id, handle, launch, timestamp)
+            reason = early_reason or reason
+            run_id = None if binding is None else binding["run_id"]
+            if not claim_matches(run_id, _CLAIM_RUN):
+                # Older fenced bindings can retain historical identifiers
+                # outside this wire contract. Do not reinterpret or export one.
+                run_id = None
+            if reason is None:
+                from .providers import evaluate_launch
+
+                admission, identity_digest = self._launch_identity_locked(project_id, launch.run_handle, identity)
+                attestations = self._prepared_attestations_locked(prepared, project_id, inputs["provider"])
+                billing, _ = self._account_records_locked(project_id, "provider_billing", inputs["provider"])
+                headroom, _ = self._account_records_locked(project_id, "provider_headroom", inputs["provider"])
+                reason = evaluate_launch(
+                    provider=inputs["provider"], identity=identity, billing=billing, headroom=headroom,
+                    now_ms=timestamp, attestations=attestations, bootstrap=admission["admission_basis"] == "bootstrap",
+                )
+                if reason is not None:
+                    self._store_admission_locked(project_id, {
+                        "provider": inputs["provider"], "decision": "deny", "reason_code": reason,
+                        "admission_basis": None, "account_fingerprint": admission["account_fingerprint"],
+                        "evidence_digests": [identity_digest], "observed_at_ms": timestamp,
+                    }, run_id=None, timestamp=timestamp)
+            bridge = deadline = None
+            if reason is None:
+                bridge = "brg_" + secrets.token_hex(16)
+                deadline = timestamp + inputs["hard_timeout_seconds"] * 1000
+                if not timestamp < deadline <= MAX_CLAIM_INTEGER:
+                    raise ClaimError("claim_unavailable")
+                material = {"schema_version": 1, "record_type": "dispatch_intent", "run_id": run_id,
+                            "bridge_run_id": bridge, "provider": inputs["provider"], "model": inputs["model"],
+                            "effort": inputs["effort"], "deadline_at_ms": deadline, "observed_at_ms": timestamp}
+                record = validate_learning_record({**material, "record_id": "dispatch_intent:" + content_digest(material)})
+                self._connection.execute("INSERT INTO launch_claims VALUES(?,?,?,'claimed',?,?)",
+                                         (project_id, handle, run_id, timestamp, bridge))
+                self._append_checked_locked(project_id, record, producer="lifecycle", timestamp=timestamp)
+            return self._store_claim_receipt_locked(project_id, scope, request, parameters, handle, {
+                "state": "claimed" if reason is None else "denied", "run_id": run_id, "reason_code": reason,
+                "bridge_run_id": bridge, "deadline_at_ms": deadline, "recorded_at_ms": timestamp,
+            })
 
     def record_dispatch_intent(
         self,
@@ -9562,6 +9885,9 @@ class LearningLedger:
                 self._connection.execute("DELETE FROM collector_health WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM repair_receipts WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM host_run_bindings WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM launch_receipts WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM launch_observations WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM launch_inputs WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM launch_claims WHERE project_id=?", (project_id,))
                 updated = self._connection.execute(
                     "UPDATE projects SET canonical_root=NULL,root_digest=NULL,status='deleted',deleted_at_ms=? "

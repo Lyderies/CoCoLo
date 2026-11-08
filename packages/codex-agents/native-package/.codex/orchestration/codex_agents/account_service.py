@@ -1,4 +1,4 @@
-"""Default-deny account read handler over one already opened account owner.
+"""Default-deny account metadata handler over one already opened account owner.
 
 This module is a persistence-owner component, never a client dependency. Native
 caller enrollment and endpoint identity are unimplemented gates, not a socket,
@@ -35,6 +35,7 @@ from .sql_read_budget import SQLReadError, SQLReadLimits
 from .signature_inputs import (
     SignatureCaptureError, SignatureCaptureLimits, SignatureInputSnapshot, signature_input_size,
 )
+from .account_claim_contracts import ClaimError, LaunchClaimInput, decode_claim_input
 
 # Fixed owner query: do not parse JSON or select variable record values during
 # preliminary quota checks. Foreign-account/provider candidates are charged too.
@@ -59,6 +60,7 @@ class AccountAuthorization:
     request_digest: str
     source: str
     allowed_operations: frozenset[str]
+    caller_scope: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -68,15 +70,16 @@ class AccountAuthorization:
             or type(self.allowed_operations) is not frozenset or not self.allowed_operations
             or any(type(operation) is not str for operation in self.allowed_operations)
             or not self.allowed_operations <= ACCOUNT_OPERATIONS
+            or (self.caller_scope is not None and not matches(self.caller_scope, _DIGEST))
         ):
             raise AccountError("account_not_authorized")
 
 
 class AccountOwnerViews:
-    """Read views over ONE existing global owner; no constructors or migrations.
+    """Views and closed claim metadata over ONE existing global owner.
 
     The launcher owns this ledger's lifetime. These methods never create another
-    LearningState, key, writer or read-only connection and cannot mutate/register.
+    LearningState, key, writer or read-only connection and cannot register/migrate.
     Only the owning process/thread may access its SQL.
     """
 
@@ -124,6 +127,12 @@ class AccountOwnerViews:
 
     def owner_public_key(self, project_id: str) -> dict:
         return self._owner_key_view(project_id, include_public_key=True)
+
+    def claim_launch(self, project_id: str, *, runtime_digest: str, caller_scope: str,
+                     request_id: str, launch: LaunchClaimInput) -> dict:
+        self._guard()
+        return self._ledger.claim_launch(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                         request_id=request_id, launch=launch)
 
     def capture_admission_inputs(
         self, project_id: str, provider: str, policy: AdmissionInputPolicy,
@@ -514,12 +523,14 @@ class AccountOwnerViews:
 
 
 class AccountService:
-    """Closed read dispatcher; health never calls the persistence backend.
+    """Closed dispatcher; health never calls the persistence backend.
 
     The preopened owner is supplied by trusted startup, not constructed on a
     request. A native adapter must verify fresh caller/project/session/generation
     and operation scope independently. Default denial grants no usable endpoint.
     Closing this handler never closes the shared account owner.
+    The reference claim operation still needs bounded asynchronous signature and
+    admission-job integration before normal endpoint/client activation.
     """
 
     def __init__(
@@ -546,6 +557,12 @@ class AccountService:
         try:
             request = decode_account_request(raw)
             digest = account_request_digest(request)
+            operation = request.operation
+            project, runtime, identity = request.project_id, request.runtime_digest, request.request_id
+            # Capture immutable scalar claim input before the trusted adapter
+            # sees its mutable request object. The digest still binds its exact
+            # original envelope; no JSON field supplies caller/role authority.
+            launch = decode_claim_input(request.payload) if operation == "account.claim_launch" else None
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -570,9 +587,14 @@ class AccountService:
                 or request.operation not in authorization.allowed_operations
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
+                or (operation == "account.claim_launch" and
+                    (authorization.source != "host" or authorization.caller_scope is None))
             ):
                 raise AccountError("account_not_authorized")
-            if request.operation == "account.health":
+            if operation == "account.claim_launch":
+                result = self._views.claim_launch(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
+                                                  request_id=identity, launch=launch)
+            elif request.operation == "account.health":
                 result = {"transport_alive": True, "database_checked": False}
             elif request.operation == "account.project":
                 result = self._views.project(request.project_id)
@@ -586,6 +608,8 @@ class AccountService:
             decode_account_response(reply, request)
             return reply
         except AccountError as exc:
+            reason = exc.reason_code
+        except ClaimError as exc:
             reason = exc.reason_code
         except Exception:
             reason = "account_unavailable"
