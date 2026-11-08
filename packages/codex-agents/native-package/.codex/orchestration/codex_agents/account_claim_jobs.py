@@ -61,6 +61,13 @@ class AccountClaimJobs:
         self._counts: dict[str, int] = {}
         self._signatures: dict[object, object] = {}
         self._started = self._closing = self._faulted = False
+        self._ingress_owner = None
+
+    def _delivery(self, ingress):
+        # A bound transport owns all subscribers to a deduplicated ticket.
+        # This is internal delivery custody, never native caller authority.
+        if self._ingress_owner is not None and ingress is not self._ingress_owner:
+            raise ClaimError("claim_unavailable")
 
     def _guard(self, *, allow_faulted=False):
         self._views._guard()
@@ -93,8 +100,9 @@ class AccountClaimJobs:
             self._counts[job.key[0]] = count - 1
         del self._jobs[ticket]
 
-    def submit(self, project_id, *, runtime_digest, caller_scope, request_id, launch):
+    def submit(self, project_id, *, runtime_digest, caller_scope, request_id, launch, _ingress=None):
         self._guard()
+        self._delivery(_ingress)
         if not self._started or self._closing:
             raise ClaimError("claim_unavailable")
         if (not matches(project_id, _PROJECT) or not matches(runtime_digest, _DIGEST)
@@ -187,8 +195,9 @@ class AccountClaimJobs:
             self._faulted = True
             raise
 
-    def take(self, ticket):
+    def take(self, ticket, *, _ingress=None):
         self._guard()
+        self._delivery(_ingress)
         job = self._job(ticket)
         if job.state != "ready":
             return None
@@ -200,8 +209,9 @@ class AccountClaimJobs:
             raise
         return reply
 
-    def cancel(self, ticket):
+    def cancel(self, ticket, *, _ingress=None):
         self._guard()
+        self._delivery(_ingress)
         job = self._job(ticket)
         if job.state == "ready":
             return "complete"

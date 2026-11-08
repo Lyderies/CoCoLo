@@ -1238,3 +1238,57 @@ full admission-data preparation, durable orphan reconciliation, active-run capac
 actual native caller/fresh environment custody, normal-client migration and the
 complete release gates remain required. No listener, profile or installed runtime
 is enabled by this source integration.
+
+### Bounded account socket ingress
+
+`account_ingress.AccountIngress` separates accepted Unix-stream I/O from the
+original account database owner. Trusted startup supplies exclusively transferred
+connected sockets and bounded opaque authorization contexts. The component binds
+no listener and discovers or enrolls no caller. The default-deny service remains
+responsible for each complete request's authorization and digest binding. The
+fixture listener and contexts establish no native identity or fresh environment.
+
+Startup explicitly bootstraps one front thread after the fixed claim workers.
+It handles nonblocking framing, reads, writes and absolute connection deadlines.
+Fixed ordinary and reserved-health slot shares total at most 256. Each direction
+is bounded to one 16 KiB frame including newline; partial traffic cannot extend
+the at-most-60-second lifetime. Round-robin I/O steps, owner request batches and
+the front poll interval are configured with hard ceilings. These are source
+configuration bounds, not calibrated installed defaults. No request starts or
+joins a thread, waits on socket I/O in the database owner, or opens another ledger.
+
+The reserved health classification is a trusted startup input, never a request
+field. That lane accepts only `account.health` and still requires authorization.
+Health executes on the front thread and reports only transport availability with
+`database_checked=false`. The trusted authorizer must be thread-safe and use
+bounded, already verified in-memory state; slow native/signature enrollment
+belongs elsewhere. Normal frames pass through bounded slots to `pump_owner` on
+the original owner thread. Legacy capture/final JSON, filesystem and policy work
+still runs there, so this transport is not a complete admission latency bound.
+
+An attached socket holds its quota through framing and reply delivery. If it
+disconnects after owner handoff, bounded metadata stays charged until the owner
+acknowledges it. This prevents an unbounded disconnect-notice backlog during an
+owner stall. Reserved health connections need no owner acknowledgement. Closed
+malformed or extra frames execute no second request. EOF after handoff is treated
+as disconnect; clients keep the connection open for their single response.
+
+One ingress exclusively owns ticket delivery and coordinator shutdown. Binding
+requires an empty, bootstrapped coordinator; other direct submit/take/cancel
+consumers and replacement ingress instances are refused. The private issuer is
+internal delivery custody and supplies no caller authority. Matching scoped IDs
+share one ticket and fan out its exact bound reply. Dropping one subscriber leaves
+the others intact. After the last subscriber leaves, only signature preparation
+is cancelled, and detached ticket quota remains until the actual worker returns.
+Unknown worker custody is never released by a disconnect or timeout. A committed
+claim and its receipt remain durable after lost delivery; explicit retry retrieves
+known state without new signature work. These receipts grant no model execution.
+
+Owner faults permanently stop ordinary admission while cheap health can remain
+available. Front faults close I/O and latch unavailable. Public owner-checked
+`request_close` and `drain` remain available after faults. Draining never offers or
+commits a claim, joins no thread, and reports completion only after the actual
+front thread and fixed pool stop. It leaves the service and SQL connection open.
+Actual native enrollment/reserved-lane custody, fully bounded admission work,
+active-account capacity and orphan reconciliation, complete C19 client migration,
+independent review and all release gates remain required before activation.

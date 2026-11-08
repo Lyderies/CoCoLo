@@ -579,24 +579,24 @@ class AccountService:
     def handle(self, raw: bytes, transport_context: object = None) -> bytes:
         return self._handle(raw, transport_context, deferred=False)
 
-    def begin(self, raw: bytes, transport_context: object = None):
+    def begin(self, raw: bytes, transport_context: object = None, *, _ingress=None):
         """Return an immediate wire reply or an owner-local pending ticket.
 
         A transport retains its connection outside the database request loop.
         Tickets are never serialized to clients and authorize no execution.
         There is no synchronous signature fallback for this entry point.
         """
-        return self._handle(raw, transport_context, deferred=True)
+        return self._handle(raw, transport_context, deferred=True, ingress=_ingress)
 
     def drive_claims(self):
         if self._claim_jobs is None:
             raise ClaimError("claim_unavailable")
         self._claim_jobs.drive()
 
-    def take_claim_reply(self, ticket):
+    def take_claim_reply(self, ticket, *, _ingress=None):
         if self._claim_jobs is None:
             raise ClaimError("claim_unavailable")
-        reply = self._claim_jobs.take(ticket)
+        reply = self._claim_jobs.take(ticket, _ingress=_ingress)
         if reply is None:
             return None
         context = reply.context
@@ -615,7 +615,7 @@ class AccountService:
                 raise
         return raw
 
-    def _handle(self, raw: bytes, transport_context: object, *, deferred: bool):
+    def _handle(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
         labels = {"request_id": None, "project_id": None, "runtime_digest": None, "request_digest": None}
         try:
             request = decode_account_request(raw)
@@ -659,7 +659,7 @@ class AccountService:
                     if self._claim_jobs is None:
                         raise ClaimError("claim_unavailable")
                     return self._claim_jobs.submit(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
-                                                   request_id=identity, launch=launch)
+                                                   request_id=identity, launch=launch, _ingress=ingress)
                 if self._claim_jobs is not None:
                     # Configured asynchronous owners never block or bypass their
                     # queue with the legacy synchronous reference operation.
