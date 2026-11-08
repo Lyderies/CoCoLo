@@ -1950,6 +1950,22 @@ class _PreparedAttestations:
     verified: frozenset[str]
 
 
+@dataclass(frozen=True, repr=False)
+class _ClaimRequest:
+    """Captured owner-local request data; never a launch or caller capability."""
+
+    origin: object
+    project_id: str
+    runtime_digest: str
+    caller_scope: str
+    request_id: str
+    launch: LaunchClaimInput
+    handle: str
+    scope: str
+    request: str
+    parameters: str
+
+
 class LearningLedger:
     """The only SQLite writer. Callers receive scoped repositories, never its connection."""
 
@@ -5861,20 +5877,11 @@ class LearningLedger:
         )
         return result
 
-    def claim_launch(
+    def _claim_preflight(
         self, project_id: str, *, runtime_digest: str, caller_scope: str,
         request_id: str, launch: LaunchClaimInput,
-    ) -> dict[str, Any]:
-        """Owner-only idempotent launch metadata, never an executable grant.
-
-        Caller scope is trusted-adapter output, not a JSON role or native proof.
-        Runtime/caller authentication and fresh environment/root custody precede
-        this operation. No client or child is started. A known reply cannot
-        authorize another spawn. Signature preparation releases the mutex; the
-        final launch check, marker/intent and request receipt commit together.
-        Legacy JSON/filesystem work remains: bounded service jobs and actual
-        native caller enrollment are mandatory before normal API activation.
-        """
+    ):
+        """Capture a request and current state; perform no signature work."""
         if (not claim_matches(project_id, _CLAIM_PROJECT) or not claim_matches(runtime_digest, _CLAIM_DIGEST)
                 or runtime_digest != COLLECTOR_RUNTIME_DIGEST or not claim_matches(caller_scope, _CLAIM_DIGEST)
                 or not claim_matches(request_id, _CLAIM_REQUEST_ID) or type(launch) is not LaunchClaimInput):
@@ -5885,6 +5892,8 @@ class LearningLedger:
         scope = keyed_digest(key, canonical_json({"project": project_id, "runtime": runtime_digest, "caller": caller_scope}))
         request = keyed_digest(key, request_id)
         parameters = keyed_digest(key, canonical_json(launch.payload()))
+        context = _ClaimRequest(self._attestation_origin, project_id, runtime_digest, caller_scope,
+                                request_id, launch, handle, scope, request, parameters)
         with self._lock:
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
@@ -5894,12 +5903,76 @@ class LearningLedger:
                 raise ClaimError("claim_unavailable")
             known = self._known_claim_receipt_locked(project_id, scope, request, parameters)
             if known is not None:
-                return known
+                return context, known, None, None
             timestamp = self._clock_ms()
             if type(timestamp) is not int or not 0 <= timestamp <= MAX_CLAIM_INTEGER:
                 raise ClaimError("claim_unavailable")
             early_reason, _, inputs, _ = self._claim_context_locked(project_id, handle, launch, timestamp)
-        prepared = None if early_reason else self._prepare_attestations(project_id, inputs["provider"])
+        return context, None, early_reason, None if inputs is None else inputs["provider"]
+
+    def claim_launch(
+        self, project_id: str, *, runtime_digest: str, caller_scope: str,
+        request_id: str, launch: LaunchClaimInput,
+    ) -> dict[str, Any]:
+        """Legacy synchronous owner reference; replies are metadata, never grants.
+
+        The asynchronous service path uses the same preflight and commit with an
+        actually returned fixed signature job. Native caller/environment custody,
+        bounded final admission work and normal-client migration remain required.
+        """
+        context, known, early_reason, provider = self._claim_preflight(
+            project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+            request_id=request_id, launch=launch,
+        )
+        if known is not None:
+            return known
+        prepared = None if early_reason else self._prepare_attestations(project_id, provider)
+        return self._claim_commit(context, prepared, early_reason)
+
+    def _claim_from_signature_job(self, context, pool, handle):
+        """Consume only an actually returned job from this owner's fixed pool.
+
+        No caller-selected indices, snapshot, callback or verification flag is
+        accepted. A pool/dataclass alone is not proof: the registered pool's
+        private completion registry and original retained inputs must agree.
+        The coordinator retains the reservation through commit/publication.
+        """
+        from .signature_worker_pool import SignatureWorkerPool
+
+        self._check_claim_context(context)
+        intake = getattr(self, "_signature_job_intake", None)
+        if (type(pool) is not SignatureWorkerPool or intake is None or pool._intake is not intake
+                or getattr(intake, "_signature_worker_pool", None) is not pool
+                or intake._views._ledger is not self):
+            raise ClaimError("claim_unavailable")
+        pool._owner()
+        result = pool.result(handle)
+        inputs = intake.returned_inputs(handle)
+        if (inputs.origin is not self._attestation_origin or inputs.project_id != context.project_id):
+            raise ClaimError("claim_unavailable")
+        # Even a failed verification job may retrieve a durable receipt produced
+        # independently while it waited. This never releases an active worker.
+        with self._lock:
+            known = self._known_claim_receipt_locked(context.project_id, context.scope,
+                                                     context.request, context.parameters)
+        if known is not None:
+            return known
+        if result.reason != "signature_execution_completed":
+            raise ClaimError("claim_preparation_failed")
+        prepared = _PreparedAttestations(
+            self._attestation_origin, inputs.project_id, inputs.provider, inputs.owner, inputs.signer,
+            inputs.rows, frozenset(inputs.rows[index][0] for index in result.indices),
+        )
+        return self._claim_commit(context, prepared, None)
+
+    def _check_claim_context(self, context):
+        if type(context) is not _ClaimRequest or context.origin is not self._attestation_origin:
+            raise ClaimError("claim_invalid_request")
+
+    def _claim_commit(self, context, prepared, early_reason):
+        self._check_claim_context(context)
+        project_id, launch = context.project_id, context.launch
+        scope, request, parameters, handle = context.scope, context.request, context.parameters, context.handle
         with self._account_transaction():
             project = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (project_id,)).fetchone()
             if project is None or project[0] != "active":

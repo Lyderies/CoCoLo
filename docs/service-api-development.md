@@ -1191,3 +1191,44 @@ restore, including the schema-8 receipt-parent uniqueness constraint. This does 
 complete the staged legacy migration or cross-store release recovery gates.
 Envelope hashing uses the owner's canonical ASCII escaping, including for Unicode
 project paths, so the normal owner reader can verify these backups.
+
+### Deferred signature-backed claim requests
+
+`AccountService.begin` authorizes the same closed `account.claim_launch` request,
+then returns either its immediate wire reply or a private owner-local ticket.
+The ticket never crosses the client protocol and grants no execution authority.
+A transport can retain its waiting connection outside the database request loop,
+call `drive_claims`, and retrieve the original request-bound reply with
+`take_claim_reply`. Health replies use the existing independent path. Configuring
+deferred jobs makes synchronous claim handling refuse; `begin` also refuses a
+claim when jobs are absent. Neither path falls back to synchronous verification.
+
+`AccountClaimJobs` uses explicit startup limits and the existing prestarted fixed
+signature pool. It reserves per-project ticket capacity before capture or writes.
+Queued requests and completed, unconsumed replies count against the same quota.
+The intake reserves row/byte capacity before reading inputs, rotates projects,
+and keeps active or ambiguous worker custody. Request methods create no worker
+thread or process and wait for no worker. Same scoped pending IDs share a ticket;
+changed parameters conflict. After reply consumption, an explicit retry retrieves
+the durable receipt without another signature job or launch claim.
+
+Only an actually returned handle in this owner's registered pool can supply
+verification indices. The owner retrieves its retained original inputs, then
+rechecks current owner/signature rows, run, observation, account restrictions and
+clock before the unchanged atomic intent/consumption/receipt commit. No request
+accepts a caller's verification flags, indices, snapshot or callback. Cancellation
+of active signature work stays pending until actual cleanup confirmation; this
+does not claim cancellation of a model child. Commit/publication interruptions
+fence the coordinator and retain reservations instead of replaying work.
+
+Disposable tests use real fixed signature helpers, synthetic provider clients and
+temporary owner keys. They exercise a second project's claim and health while the
+first project's signature worker waits, invalid signatures, fresh foreign
+restrictions, stale signed inputs, quotas, retries, cancellation and interrupted
+commit/publication. They prove no real model execution or native enrollment.
+Preflight/final admission still uses legacy JSON and filesystem work, and the
+helper's broad-read guard remains experimental. Bounded final owner operations,
+full admission-data preparation, durable orphan reconciliation, active-run capacity,
+actual native caller/fresh environment custody, normal-client migration and the
+complete release gates remain required. No listener, profile or installed runtime
+is enabled by this source integration.

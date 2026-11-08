@@ -6,7 +6,10 @@ import re
 
 from .learning_contracts import ADMISSION_REASON_CODES
 
-CLAIM_ERROR_CODES = frozenset({"claim_invalid_request", "claim_conflict", "claim_unavailable"})
+CLAIM_ERROR_CODES = frozenset({
+    "claim_invalid_request", "claim_conflict", "claim_unavailable", "claim_busy",
+    "claim_cancelled", "claim_preparation_failed",
+})
 CLAIM_DENIAL_CODES = frozenset(ADMISSION_REASON_CODES - {"admitted"}) | frozenset({
     "claim_not_open", "claim_already_consumed", "claim_context_missing",
     "claim_runtime_mismatch", "claim_observation_missing", "claim_client_changed",

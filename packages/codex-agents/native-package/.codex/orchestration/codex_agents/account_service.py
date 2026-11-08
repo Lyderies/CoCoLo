@@ -134,6 +134,21 @@ class AccountOwnerViews:
         return self._ledger.claim_launch(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                                          request_id=request_id, launch=launch)
 
+    def _claim_preflight(self, project_id, *, runtime_digest, caller_scope, request_id, launch):
+        self._guard()
+        return self._ledger._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                             request_id=request_id, launch=launch)
+
+    def _claim_commit_denied(self, context, reason):
+        self._guard()
+        if reason is None:
+            raise ClaimError("claim_unavailable")
+        return self._ledger._claim_commit(context, None, reason)
+
+    def _claim_from_signature_job(self, context, pool, handle):
+        self._guard()
+        return self._ledger._claim_from_signature_job(context, pool, handle)
+
     def capture_admission_inputs(
         self, project_id: str, provider: str, policy: AdmissionInputPolicy,
         limits: AdmissionCaptureLimits, work_limits: SQLReadLimits,
@@ -529,17 +544,26 @@ class AccountService:
     request. A native adapter must verify fresh caller/project/session/generation
     and operation scope independently. Default denial grants no usable endpoint.
     Closing this handler never closes the shared account owner.
-    The reference claim operation still needs bounded asynchronous signature and
-    admission-job integration before normal endpoint/client activation.
+    begin() defers claim signature work to explicitly configured owner jobs.
+    Native authentication, bounded final admission work and normal-client
+    migration remain required before endpoint activation.
     """
 
     def __init__(
         self, runtime_digest: str, views: AccountOwnerViews, *,
         authorizer: Callable[[AccountRequest, object], AccountAuthorization | None] | None = None,
+        claim_jobs=None,
     ) -> None:
         if not matches(runtime_digest, _DIGEST) or not isinstance(views, AccountOwnerViews) or (authorizer is not None and not callable(authorizer)):
             raise AccountError("account_invalid_request")
+        if claim_jobs is not None:
+            from .account_claim_jobs import AccountClaimJobs
+
+            if type(claim_jobs) is not AccountClaimJobs or claim_jobs._views is not views:
+                raise AccountError("account_invalid_request")
+            claim_jobs._guard()
         self._runtime, self._views, self._authorizer = runtime_digest, views, authorizer
+        self._claim_jobs = claim_jobs
         self._pid = os.getpid()
         self._closed = False
         self._front_lock = threading.Lock()
@@ -553,6 +577,45 @@ class AccountService:
         })
 
     def handle(self, raw: bytes, transport_context: object = None) -> bytes:
+        return self._handle(raw, transport_context, deferred=False)
+
+    def begin(self, raw: bytes, transport_context: object = None):
+        """Return an immediate wire reply or an owner-local pending ticket.
+
+        A transport retains its connection outside the database request loop.
+        Tickets are never serialized to clients and authorize no execution.
+        There is no synchronous signature fallback for this entry point.
+        """
+        return self._handle(raw, transport_context, deferred=True)
+
+    def drive_claims(self):
+        if self._claim_jobs is None:
+            raise ClaimError("claim_unavailable")
+        self._claim_jobs.drive()
+
+    def take_claim_reply(self, ticket):
+        if self._claim_jobs is None:
+            raise ClaimError("claim_unavailable")
+        reply = self._claim_jobs.take(ticket)
+        if reply is None:
+            return None
+        context = reply.context
+        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, "account.claim_launch", context.request_id,
+                                 context.project_id, context.runtime_digest, context.launch.payload())
+        labels = {"request_id": context.request_id, "project_id": context.project_id,
+                  "runtime_digest": context.runtime_digest, "request_digest": account_request_digest(request)}
+        raw = self._reply(labels, result=reply.result, reason=reply.reason)
+        try:
+            decode_account_response(raw, request)
+        except AccountError as error:
+            # The decoder also raises the validated public failure reason.
+            # Preserve that wire reply; only a different validation error is
+            # a malformed response, rather than a failed claim operation.
+            if error.reason_code != reply.reason:
+                raise
+        return raw
+
+    def _handle(self, raw: bytes, transport_context: object, *, deferred: bool):
         labels = {"request_id": None, "project_id": None, "runtime_digest": None, "request_digest": None}
         try:
             request = decode_account_request(raw)
@@ -592,6 +655,15 @@ class AccountService:
             ):
                 raise AccountError("account_not_authorized")
             if operation == "account.claim_launch":
+                if deferred:
+                    if self._claim_jobs is None:
+                        raise ClaimError("claim_unavailable")
+                    return self._claim_jobs.submit(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
+                                                   request_id=identity, launch=launch)
+                if self._claim_jobs is not None:
+                    # Configured asynchronous owners never block or bypass their
+                    # queue with the legacy synchronous reference operation.
+                    raise ClaimError("claim_unavailable")
                 result = self._views.claim_launch(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
                                                   request_id=identity, launch=launch)
             elif request.operation == "account.health":
