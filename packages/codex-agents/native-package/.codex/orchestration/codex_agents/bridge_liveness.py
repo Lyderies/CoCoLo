@@ -65,6 +65,7 @@ class BridgeLivenessOwner:
             return
         if len(self._attempts) >= self._monitor._maximum:
             raise ControlError("control_unavailable")
+        self._monitor.bind_activity(binding, supervisor)
         self._attempts[key] = (binding, supervisor)
 
     def _synchronize(self):

@@ -107,6 +107,7 @@ class _Attempt:
     stop_reason: str | None = None
     terminal_observed: bool = False
     cleanup_confirmed: bool = False
+    activity_source: object = None
 
 
 def _capture_binding(binding: AttemptBinding) -> AttemptBinding:
@@ -155,6 +156,8 @@ class ProjectMonitor:
         self._last_clock_sample: int | None = None
         self._clock_failed = False
         self._sampling_clock = False
+        self._source_sample = None
+        self._loading_activity = False
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._attempts: dict[tuple[str, int], _Attempt] = {}
 
@@ -218,7 +221,7 @@ class ProjectMonitor:
         self._sampling_clock = True
         try:
             try:
-                value = self._clock()
+                value = self._clock() if self._source_sample is None else self._source_sample
             except Exception:
                 invalid = True
             else:
@@ -237,7 +240,67 @@ class ProjectMonitor:
         finally:
             self._sampling_clock = False
 
+    def bind_activity(self, binding: AttemptBinding, source) -> None:
+        """Attach an actual original-owner receiver before its worker starts.
+
+        The buffer clock is the same trusted bounded source as this monitor.
+        Internal custody labels/handles are not native enrollment or RPC grants.
+        """
+        from .owned_execution import ExecutionSupervisor
+
+        entry = self._entry(binding)
+        if type(source) is not ExecutionSupervisor:
+            raise ProjectMonitorError("monitor_invalid_input")
+        if source.target() != {
+            "project_id": binding.project_id, "run_handle": binding.run_handle,
+            "run_id": binding.run_id, "claim_id": binding.claim_id, "deadline_ns": entry.deadline,
+        }:
+            raise ProjectMonitorError("monitor_binding_conflict")
+        if entry.activity_source is not None:
+            if entry.activity_source is not source:
+                raise ProjectMonitorError("monitor_binding_conflict")
+            return
+        if entry.decision is not None or entry.cleanup_confirmed or self._clock_failed:
+            raise ProjectMonitorError("monitor_unavailable")
+        source.enable_activity(clock_ns=self._clock)
+        entry.activity_source = source
+
     def _observe(
+        self, entry: _Attempt, operation: str, *, final_cleanup_poll: bool = False,
+        final_terminal_poll: bool = False,
+    ) -> AttemptStatus:
+        self._owner()
+        if self._loading_activity:
+            self._clock_failed = True
+            raise LivenessClockError("liveness_invalid_clock")
+        if (entry.activity_source is None or entry.decision is not None or self._clock_failed
+                or (entry.cleanup_confirmed and not (final_cleanup_poll or final_terminal_poll))):
+            return self._observe_clock(entry, operation, final_cleanup_poll=final_cleanup_poll,
+                                       final_terminal_poll=final_terminal_poll)
+        self._loading_activity = True
+        try:
+            batch = entry.activity_source.receive_activity()
+            if batch.failed or self._clock_failed:
+                raise LivenessClockError("liveness_invalid_clock")
+            self._source_sample = batch.observed_ns
+            entry.clock.received(batch.events)
+            return self._observe_clock(entry, operation, final_cleanup_poll=final_cleanup_poll,
+                                       final_terminal_poll=final_terminal_poll)
+        except Exception:
+            # Broken/overflowed receipt streams never become a healthy label.
+            self._clock_failed = True
+            entry.stop_reason = entry.stop_reason or "monitor_unavailable"
+            return self._observe_clock(entry, "poll", final_cleanup_poll=final_cleanup_poll,
+                                       final_terminal_poll=final_terminal_poll)
+        except BaseException:
+            self._clock_failed = True
+            entry.stop_reason = entry.stop_reason or "monitor_unavailable"
+            raise
+        finally:
+            self._source_sample = None
+            self._loading_activity = False
+
+    def _observe_clock(
         self, entry: _Attempt, operation: str, *, final_cleanup_poll: bool = False,
         final_terminal_poll: bool = False,
     ) -> AttemptStatus:

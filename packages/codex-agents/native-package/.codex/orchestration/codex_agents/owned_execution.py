@@ -17,6 +17,7 @@ import time
 import weakref
 
 from .account_claim_contracts import _BRIDGE, _DIGEST, _HANDLE, _PROJECT, _RUN, matches
+from .execution_activity import ActivityBuffer, ActivityUnavailable
 from .process_tree import ProcessTree
 
 _POPEN = subprocess.Popen
@@ -109,6 +110,12 @@ class ExecutionTicket:
     def stop_reason(self):
         return self._registry.stop_reason(self)
 
+    def activity_enabled(self):
+        return self._registry.activity_enabled(self)
+
+    def publish_activity(self, category):
+        return self._registry.publish_activity(self, category)
+
 
 class ExecutionSupervisor:
     """Original owner's opaque stop/observation handle, never an RPC grant.
@@ -130,6 +137,12 @@ class ExecutionSupervisor:
     def request_stop(self, reason="cancel_requested"):
         return self._registry.supervisor_stop(self, reason)
 
+    def enable_activity(self, *, clock_ns=time.monotonic_ns):
+        self._registry.enable_activity(self, clock_ns)
+
+    def receive_activity(self):
+        return self._registry.receive_activity(self)
+
 
 @dataclass
 class _Owned:
@@ -149,6 +162,7 @@ class _Owned:
     stop_signal_attempted: bool = False
     stop_signal_sent: bool = False
     cleanup_started: bool = False
+    activity: object = None
 
 
 class OwnedExecutionRegistry:
@@ -261,8 +275,48 @@ class OwnedExecutionRegistry:
             if entry.state not in {"cleaned", "released"}:
                 entry.stop_requested = True
                 entry.stop_reason = entry.stop_reason or reason
+                if entry.activity is not None:
+                    entry.activity.events.clear()
                 self._signal_owned_group(entry)
             return self._supervisor_view(entry)
+
+    def enable_activity(self, handle, clock_ns):
+        with self._lock:
+            entry = self._supervisor_entry(handle)
+            if entry.activity is not None:
+                if entry.activity.clock is not clock_ns:
+                    raise ExecutionCustodyError()
+                return
+            if entry.state != "issued" or entry.thread.ident is not None:
+                raise ExecutionCustodyError()
+            try:
+                entry.activity = ActivityBuffer(clock_ns)
+            except ActivityUnavailable:
+                raise ExecutionCustodyError() from None
+
+    def activity_enabled(self, ticket):
+        with self._lock:
+            return self._entry(ticket).activity is not None
+
+    def publish_activity(self, ticket, category):
+        with self._lock:
+            entry = self._entry(ticket)
+            if entry.activity is None or entry.stop_requested or entry.cleanup_started:
+                return False
+            if entry.state != "active":
+                raise ExecutionCustodyError()
+            try:
+                entry.activity.publish(category)
+            except ActivityUnavailable:
+                raise ExecutionCustodyError() from None
+            return True
+
+    def receive_activity(self, handle):
+        with self._lock:
+            entry = self._supervisor_entry(handle)
+            if entry.activity is None:
+                raise ExecutionCustodyError()
+            return entry.activity.receive()
 
     def _begin_cleanup(self, entry):
         if not entry.cleanup_started:

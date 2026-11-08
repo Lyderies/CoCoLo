@@ -17,6 +17,7 @@ from typing import Callable
 
 MAX_CLOCK_NS = (1 << 63) - 1
 MAX_ACTIVITY_EVENTS = (1 << 31) - 1
+MAX_RECEIVED_EVENTS = 256
 NS_PER_MS = 1_000_000
 CLOCK_REASON_CODES = frozenset({
     "liveness_invalid_limits", "liveness_invalid_deadline", "liveness_invalid_clock",
@@ -160,7 +161,11 @@ class LivenessClock:
         self._owner()
         if self._decision_at is not None:
             return self._decision_at
-        now = self._sample()
+        return self._evaluate_at(self._sample())
+
+    def _evaluate_at(self, now: int) -> int:
+        if self._decision_at is not None:
+            return self._decision_at
         silence_base = self._started if self._last_activity is None else self._last_activity
         duration = self._limits.startup_ns if self._last_activity is None else self._limits.silence_ns
         reason = "startup_silence" if self._last_activity is None else "work_silence"
@@ -170,6 +175,48 @@ class LivenessClock:
         if now >= due:
             self._stop_reason, self._decision_at = reason, now
         return now
+
+    def received(self, events: tuple[tuple[str, int], ...]) -> LivenessSnapshot:
+        """Apply one trusted, ordered receipt batch before its atomic watermark.
+
+        The clock source for this call must return the watermark sampled under
+        the actual local publisher's lock. These are not provider timestamps or
+        a wire API. Sampling time after replaying each old record would either
+        renew old work or falsely cut off a healthy queued sequence.
+        """
+        self._owner()
+        if self._decision_at is not None:
+            return self._snapshot(self._decision_at)
+        previous = self._last_sample
+        now = self._sample()
+        valid = type(events) is tuple and len(events) <= MAX_RECEIVED_EVENTS
+        last = previous
+        if valid:
+            for event in events:
+                if (type(event) is not tuple or len(event) != 2
+                        or type(event[0]) is not str or event[0] not in {"startup", "activity"}
+                        or not _integer(event[1]) or not self._started <= event[1] <= now
+                        or (last is not None and event[1] < last)):
+                    valid = False
+                    break
+                last = event[1]
+        if not valid:
+            self._clock_failed = True
+            raise LivenessClockError("liveness_invalid_clock")
+        for category, received in events:
+            self._evaluate_at(received)
+            if self._decision_at is not None:
+                break
+            if category == "startup":
+                if self._last_activity is None:
+                    self._last_activity, self._last_category = received, "startup"
+            elif self._last_activity is None:
+                self._clock_failed = True
+                raise LivenessClockError("liveness_invalid_transition")
+            else:
+                self._last_activity, self._last_category = received, "qualifying_work"
+                self._activity_events = min(MAX_ACTIVITY_EVENTS, self._activity_events + 1)
+        return self._snapshot(self._evaluate_at(now))
 
     @staticmethod
     def _remaining_ms(due: int, now: int) -> int:

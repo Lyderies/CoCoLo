@@ -26,6 +26,7 @@ from typing import Any
 from .owned_execution import ExecutionCustodyError, ExecutionTicket
 
 from .catalog import CatalogError, parse_claude_agent
+from .codex_activity import CodexActivity, CodexActivityError
 from .contracts import (
     ONE_EVIDENCE_ENTRY_RULE,
     RESULT_VALIDATION_REASON_CODES,
@@ -1415,6 +1416,8 @@ def run_codex(
     state: dict[str, Any] = {
         "usage": None, "rerouted": False, "observed_model": None, "failed": False,
     }
+    activity = (CodexActivity() if type(_execution) is ExecutionTicket
+                and _execution.activity_enabled() else None)
 
     def on_frame(frame: dict[str, Any]) -> None:
         kind = frame.get("type")
@@ -1446,6 +1449,16 @@ def run_codex(
             }
         if kind in {"turn.failed", "error"}:
             state["failed"] = True
+        if activity is not None and not state["rerouted"] and not state["failed"]:
+            try:
+                category = activity.observe(frame)
+            except CodexActivityError as error:
+                raise _Abort(error.reason_code) from None
+            if category is not None:
+                try:
+                    _execution.publish_activity(category)
+                except ExecutionCustodyError:
+                    raise _Abort("monitor_unavailable") from None
 
     started = time.monotonic()
     outcome = run_child(

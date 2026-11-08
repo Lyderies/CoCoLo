@@ -779,6 +779,46 @@ timing, the Popen-internal creation gap, closed descendants, normal-client API
 migration and real installed two-project acceptance remain required. These local
 thread handles are not native authority or account-release credentials.
 
+## Codex activity receipts and timer ordering
+
+An attached bridge owner now enables a bounded activity buffer on its actual
+registry-issued execution before the worker starts. Only that worker can publish
+the fixed `startup` and `activity` categories. Only the original owner can drain
+them. Publication and receipt-watermark sampling share the custody lock; the
+monitor applies each bounded batch at its original monotonic receipt times, then
+evaluates timers at that watermark. A later publication cannot predate that
+observation. Delayed consumption cannot renew old work, and a valid queued
+sequence cannot be cut off by polling today's time between its older records.
+Existing stop decisions remain final. Overflow, clock rollback, malformed receipt
+ordering and clock failure latch monitoring unavailable instead of dropping old
+records to claim health. The detached absolute watchdog remains independent.
+
+The buffer retains at most 256 category/timestamp pairs per execution. It stores
+no event body, provider timestamp, message, command, reasoning or item identity.
+The executor's classifier retains at most 4096 bounded item identities/stages in
+memory for deduplication; these are never persisted or added to reports. These
+limits are implementation ceilings, not measured real-client defaults.
+
+For the opt-in Codex bridge path, the existing event/tool/model fences run first.
+The first matching `thread.started` identifies the stream; the first subsequent
+`turn.started` ends startup. Repeated startup does not count as work. Nonempty
+reasoning/agent-message item stages and command start/completion count once per
+increasing item stage. Repeated item stages, unchanged running-command updates,
+usage, plan/file metadata and terminal assertions cannot keep a run alive. Model
+rerouting or a reported failure disables further activity qualification. Without
+per-update event sequence IDs, repeated updates are conservatively ignored rather
+than claiming complete delta-level deduplication or progress proof.
+
+The [official non-interactive documentation](https://learn.chatgpt.com/docs/non-interactive-mode)
+describes JSONL thread/turn/item events and examples with item identities. It does
+not establish this package's pinned 0.164.0 behavior, continuous reasoning cadence,
+all path coverage or threshold calibration. Inert exec-protocol tests cover the
+actual bridge reader, delayed receipts, a publication/timer race, invalid-tool
+ordering, rerouting, ignored provider time and overload fencing. Real reviewed
+client capability/cadence evidence remains required. Normal dispatch still does
+not enable this composition, and native caller/run enrollment, closed containment,
+service migration and all installed/release gates remain open.
+
 ## Detached watchdog process ownership
 
 The bridge retains its exact detached watchdog process handle before waiting for
