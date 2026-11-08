@@ -18,6 +18,9 @@ from typing import Callable
 MAX_CLOCK_NS = (1 << 63) - 1
 MAX_ACTIVITY_EVENTS = (1 << 31) - 1
 MAX_RECEIVED_EVENTS = 256
+LIVENESS_STOP_REASONS = frozenset({
+    "cancel_requested", "startup_silence", "work_silence", "absolute_deadline", "monitor_unavailable",
+})
 NS_PER_MS = 1_000_000
 CLOCK_REASON_CODES = frozenset({
     "liveness_invalid_limits", "liveness_invalid_deadline", "liveness_invalid_clock",
@@ -189,16 +192,30 @@ class LivenessClock:
             return self._snapshot(self._decision_at)
         previous = self._last_sample
         now = self._sample()
-        valid = type(events) is tuple and len(events) <= MAX_RECEIVED_EVENTS
+        valid = type(events) is tuple and len(events) <= MAX_RECEIVED_EVENTS + 2
         last = previous
+        stopped = False
+        activity_count = 0
         if valid:
-            for event in events:
+            for index, event in enumerate(events):
                 if (type(event) is not tuple or len(event) != 2
-                        or type(event[0]) is not str or event[0] not in {"startup", "activity"}
+                        or type(event[0]) is not str
+                        or event[0] not in {"startup", "activity", "terminal"} | LIVENESS_STOP_REASONS
+                        or (event[0] == "terminal" and index != len(events) - 1)
                         or not _integer(event[1]) or not self._started <= event[1] <= now
                         or (last is not None and event[1] < last)):
                     valid = False
                     break
+                if event[0] in LIVENESS_STOP_REASONS:
+                    if stopped:
+                        valid = False
+                        break
+                    stopped = True
+                elif event[0] in {"startup", "activity"}:
+                    activity_count += 1
+                    if stopped or activity_count > MAX_RECEIVED_EVENTS:
+                        valid = False
+                        break
                 last = event[1]
         if not valid:
             self._clock_failed = True
@@ -207,7 +224,11 @@ class LivenessClock:
             self._evaluate_at(received)
             if self._decision_at is not None:
                 break
-            if category == "startup":
+            if category == "terminal":
+                self._terminal, self._decision_at = True, received
+            elif category in LIVENESS_STOP_REASONS:
+                self._stop_reason, self._decision_at = category, received
+            elif category == "startup":
                 if self._last_activity is None:
                     self._last_activity, self._last_category = received, "startup"
             elif self._last_activity is None:

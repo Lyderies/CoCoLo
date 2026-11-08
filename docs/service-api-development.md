@@ -823,6 +823,54 @@ client capability/cadence evidence remains required. Normal dispatch still does
 not enable this composition, and native caller/run enrollment, closed containment,
 service migration and all installed/release gates remain open.
 
+## Fixed Codex worker return and owner result arbitration
+
+`codex_worker.CodexWorkerPool` bootstraps fixed threads before control intake.
+`prepare` reserves a slot and the full supported result budget before account
+admission; it stores bounded immutable input bytes without parsing them. `bind`
+then accepts the actual execution ticket for that prepared slot. Binding and
+submission create no thread, parse no JSON, open no database and join no worker.
+Submitting the same actual handle again cannot launch twice. Withdrawing an
+unbound preparation frees local space only, never account capacity.
+
+Each worker uses the existing Codex runner, validates its original task/route/
+assignment/parent bounds, enforces the read-only and key-free contract, and shares
+the legacy bridge's pure result-validation/fencing function. It retains at most
+the supported 1 MiB result body plus 16 KiB of closed report metadata. Unknown
+model text and invalid usage values do not enter metadata. Safe validator reasons
+survive failed result delivery; rejected result text and input-bearing tracebacks
+are not retained. Input, result and thread counts remain explicitly bounded;
+these protocol reservations are not exact Python heap or latency guarantees.
+
+Only the actual registered fixed loop publishes completion. Its reserved
+category/timestamp slot and the owner's first-stop slot cannot be displaced by a full activity queue, and share
+the original receipt-watermark ordering. A completion before a bound wins a later
+owner poll/cancel; an earlier owner stop or elapsed bound wins over a late valid
+result. Pool closure and handled process signals use that same ordered stop lane.
+The signal guard uses the retained execution's pre-wait guard for worker-owned
+children, so it cannot fall back to signalling a reaped root group. Fixed result parsing/validation remains part of this timed operation.
+Physical child cleanup alone does not freeze that operation's timer; its terminal
+and cleanup observations are published when fixed result preparation returns.
+
+`BridgeLivenessOwner.result` checks the original binding, actual pool/handle and
+completion custody, then selects immutable validated bytes or a small fixed stop
+fence once. It parses no large result body and performs no persistence. A stopped
+candidate's model body is discarded. Missing publication leaves unknown custody
+and no deliverable success, marks that attempt's monitor unavailable immediately,
+and discards the candidate body. Returned/unknown jobs remain charged until the
+original released execution retires the slot; no timeout, result flag, copied
+handle or fabricated packet releases it. Explicit body discard after durable
+delivery/orchestration closure does not free uncertain execution capacity.
+
+Inert executable tests cover completion/cancel/limit races, delayed observation,
+slow result validation while control remains responsive, full-size result handoff,
+safe rejection reasons, input bounds, slot charging and publication faults. These
+are internal business-path proofs. Actual native caller/client/root custody,
+authenticated persistence-lane handoff, cross-store result/outbox/release delivery,
+orphan/drained recovery, normal CLI/hook/bridge API migration, both real Codex paths,
+Claude and installed/release review remain required. No new listener or normal
+dispatch path is enabled by constructing this pool or its delivery values.
+
 ## Detached watchdog process ownership
 
 The bridge retains its exact detached watchdog process handle before waiting for

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import time
 
-from .liveness_clock import MAX_CLOCK_NS, MAX_RECEIVED_EVENTS
+from .liveness_clock import LIVENESS_STOP_REASONS, MAX_CLOCK_NS, MAX_RECEIVED_EVENTS
 
 
 class ActivityUnavailable(RuntimeError):
@@ -35,6 +35,10 @@ class ActivityBuffer:
         self.failed = False
         self.failure_code = None
         self.sampling = False
+        self.completion_ns = None
+        self.completion_seen = False
+        self.stop_event = None
+        self.stop_seen = False
 
     def fail(self, code="activity_invalid"):
         self.failed = True
@@ -66,6 +70,8 @@ class ActivityBuffer:
             self.sampling = False
 
     def publish(self, category):
+        if self.completion_seen or self.stop_seen:
+            return  # A late producer cannot invalidate or renew actual completion.
         if type(category) is not str or category not in {"startup", "activity"}:
             self.fail("activity_invalid")
             raise ActivityUnavailable()
@@ -73,6 +79,22 @@ class ActivityBuffer:
             self.fail("activity_capacity_exceeded")
             raise ActivityUnavailable()
         self.events.append((category, self._sample()))
+
+    def complete(self):
+        """Reserved, once-only lane used only by the actual fixed worker loop."""
+        if self.completion_seen:
+            raise ActivityUnavailable()
+        self.completion_seen = True
+        self.completion_ns = self._sample()
+
+    def stop(self, reason):
+        if self.completion_seen or self.stop_seen:
+            return
+        if type(reason) is not str or reason not in LIVENESS_STOP_REASONS:
+            self.fail()
+            raise ActivityUnavailable()
+        self.stop_seen = True
+        self.stop_event = (reason, self._sample())
 
     def receive(self):
         # The clock sample and drain share the publisher's external lock. An
@@ -82,6 +104,13 @@ class ActivityBuffer:
         except ActivityUnavailable:
             self.events.clear()
             return ActivityBatch((), None, True, self.failure_code)
-        batch = ActivityBatch(tuple(self.events), observed, False, None)
+        events = tuple(self.events)
+        if self.stop_event is not None:
+            events += (self.stop_event,)
+            self.stop_event = None
+        if self.completion_ns is not None:
+            events += (("terminal", self.completion_ns),)
+            self.completion_ns = None
+        batch = ActivityBatch(events, observed, False, None)
         self.events.clear()
         return batch

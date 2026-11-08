@@ -120,6 +120,53 @@ class ActivityReceiptTests(unittest.TestCase):
         self.assertEqual("activity_invalid", batch.failure_code)
         self.assertNotIn("PRIVATE", repr(batch))
 
+    def test_reserved_completion_keeps_its_receipt_time_and_wins_later_cancel(self):
+        clock, buffer, timer = self.make()
+        buffer.publish("startup")
+        clock.at(9)
+        buffer.complete()
+        clock.at(25)
+        status = timer.received(buffer.receive().events)
+        self.assertTrue(status.terminal)
+        self.assertIsNone(status.stop_reason)
+        self.assertEqual(9000, status.elapsed_ms)
+        self.assertEqual(status, timer.cancel())
+        buffer.publish("activity")
+        self.assertEqual((), buffer.receive().events)
+        with self.assertRaises(ActivityUnavailable):
+            buffer.complete()
+
+    def test_reserved_completion_fits_a_full_activity_queue_but_cannot_beat_an_elapsed_timer(self):
+        clock, buffer, timer = self.make()
+        buffer.publish("startup")
+        for _ in range(MAX_RECEIVED_EVENTS - 1):
+            buffer.publish("activity")
+        clock.at(9)
+        buffer.complete()
+        self.assertEqual(MAX_RECEIVED_EVENTS + 1, len(buffer.receive().events))
+        clock, buffer, timer = self.make()
+        buffer.publish("startup")
+        clock.at(10)
+        buffer.complete()
+        stopped = timer.received(buffer.receive().events)
+        self.assertFalse(stopped.terminal)
+        self.assertEqual("work_silence", stopped.stop_reason)
+
+    def test_reserved_stop_preserves_earlier_work_and_precedes_later_completion(self):
+        clock, buffer, timer = self.make()
+        buffer.publish("startup")
+        clock.at(9)
+        buffer.publish("activity")
+        clock.at(12)
+        buffer.stop("cancel_requested")
+        clock.at(20)
+        buffer.complete()
+        clock.at(25)
+        stopped = timer.received(buffer.receive().events)
+        self.assertEqual("cancel_requested", stopped.stop_reason)
+        self.assertEqual(12000, stopped.elapsed_ms)
+        self.assertFalse(stopped.terminal)
+
 
 if __name__ == "__main__":
     unittest.main()

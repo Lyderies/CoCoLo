@@ -574,7 +574,7 @@ def dispatch_preflight(
 
 
 # Each running child's process and its tracked tree, for the signal guard.
-_ACTIVE_CHILDREN: dict[int, tuple[Any, ProcessTree]] = {}
+_ACTIVE_CHILDREN: dict[int, tuple[Any, ProcessTree, ExecutionTicket | None]] = {}
 # A detached watchdog enforces the deadline even if the bridge is SIGKILLed: it
 # verifies the child's identity, tracks its tree itself, and kills the tree at the
 # deadline or once the child has exited. It runs the standard-library process_tree
@@ -649,8 +649,14 @@ def signal_guard():
     """
 
     def handler(signum: int, _frame: Any) -> None:
-        for process, tree in list(_ACTIVE_CHILDREN.values()):
-            _kill_child(process, tree)
+        for process, tree, execution in list(_ACTIVE_CHILDREN.values()):
+            try:
+                if execution is None:
+                    _kill_child(process, tree)
+                else:
+                    execution._signal_stop(process)
+            except BaseException:
+                pass  # Attempt other children; preserve the actual termination signal.
         raise BridgeInterrupted(128 + signum)
 
     signals = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
@@ -768,7 +774,7 @@ def run_child(
                 "timed_out" if expired else "cancelled" if cancelled else "launch_failed")
             return outcome
         tree = ProcessTree(process.pid) if _execution is None else _execution.tree(process)
-        _ACTIVE_CHILDREN[process.pid] = (process, tree)
+        _ACTIVE_CHILDREN[process.pid] = (process, tree, _execution)
         check_stop()
         identified = tree.identify(process_table())
         check_stop()
@@ -1876,6 +1882,37 @@ def dispatch(
         _record_usage(ledger, project_id, run_handle, provider, route["model"], report)
     finally:
         remove_private_directory(workspace)
+    result, report, fenced, reviewed, terminal_state, result_validation_reason_code = prepare_dispatch_result(
+        assignment, result, report,
+    )
+    # The ledger binds a keyed digest of this result and these flags to the run;
+    # recording the run later requires the same result and terminal state.
+    ledger.record_dispatch_result(
+        project_id, run_handle=run_handle, bridge_run_id=intent["bridge_run_id"],
+        result=result, fenced=fenced, reviewed=reviewed, terminal_state=terminal_state,
+        result_validation_reason_code=result_validation_reason_code,
+        client_diagnostics=report.get("client_diagnostics"),
+    )
+    report["capacity_state"] = ledger._finish_owned_execution(execution)["state"]
+    report.update(
+        effective_bounds=effective_dispatch_bounds(route, assignment),
+        bridge_run_id=intent["bridge_run_id"],
+        export_file_count=file_count,
+        export_commit=export_info["commit"],
+        export_manifest_digest=export_info["manifest_digest"],
+        verification_input=worker_result_path,
+        reviewed=reviewed,
+        terminal_state=terminal_state,
+    )
+    return {"result": result, "bridge_report": report}
+
+
+def prepare_dispatch_result(assignment, result, report):
+    """Pure existing validation/fencing, shared by legacy and fixed workers.
+
+    This prepares bytes for a later owner decision; it grants no commit, native
+    caller, process-cleanup or account-release authority.
+    """
     reviewed = True
     result_validation_reason_code = None
     if result is not None and report.get("rerouted"):
@@ -1913,28 +1950,7 @@ def dispatch(
         result = _fenced_result(assignment, state, report["outcome"])
     fenced = report["outcome"] != "result"
     terminal_state = result["execution_state"] if fenced else None
-    # The ledger binds a keyed digest of this result and these flags to the run;
-    # recording the run later requires the same result and terminal state.
-    ledger.record_dispatch_result(
-        project_id, run_handle=run_handle, bridge_run_id=intent["bridge_run_id"],
-        result=result, fenced=fenced, reviewed=reviewed, terminal_state=terminal_state,
-        result_validation_reason_code=result_validation_reason_code,
-        client_diagnostics=report.get("client_diagnostics"),
-    )
-    report["capacity_state"] = ledger._finish_owned_execution(execution)["state"]
-    report.update(
-        effective_bounds=effective_dispatch_bounds(route, assignment),
-        bridge_run_id=intent["bridge_run_id"],
-        export_file_count=file_count,
-        export_commit=export_info["commit"],
-        export_manifest_digest=export_info["manifest_digest"],
-        verification_input=worker_result_path,
-        reviewed=reviewed,
-        # A fenced terminal state is an authoritative host fact for the
-        # observation; a child's own result carries its state in the result.
-        terminal_state=terminal_state,
-    )
-    return {"result": result, "bridge_report": report}
+    return result, report, fenced, reviewed, terminal_state, result_validation_reason_code
 
 
 def _unrecordable(

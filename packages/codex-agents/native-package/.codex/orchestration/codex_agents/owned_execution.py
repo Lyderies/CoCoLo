@@ -18,13 +18,12 @@ import weakref
 
 from .account_claim_contracts import _BRIDGE, _DIGEST, _HANDLE, _PROJECT, _RUN, matches
 from .execution_activity import ActivityBuffer, ActivityUnavailable
+from .liveness_clock import LIVENESS_STOP_REASONS
 from .process_tree import ProcessTree
 
 _POPEN = subprocess.Popen
 MAX_OWNED_EXECUTIONS = 64
-EXECUTION_STOP_REASONS = frozenset({
-    "cancel_requested", "startup_silence", "work_silence", "absolute_deadline", "monitor_unavailable",
-})
+EXECUTION_STOP_REASONS = LIVENESS_STOP_REASONS
 
 
 def _abort_spawn(process, tree):
@@ -119,6 +118,9 @@ class ExecutionTicket:
     def fail_activity(self):
         self._registry.fail_activity(self)
 
+    def _signal_stop(self, process):
+        self._registry._signal_stop(self, process)
+
 
 class ExecutionSupervisor:
     """Original owner's opaque stop/observation handle, never an RPC grant.
@@ -166,6 +168,9 @@ class _Owned:
     stop_signal_sent: bool = False
     cleanup_started: bool = False
     activity: object = None
+    worker_pool: object = None
+    worker_handle: object = None
+    worker_returned: bool = False
 
 
 class OwnedExecutionRegistry:
@@ -176,6 +181,7 @@ class OwnedExecutionRegistry:
         self._pending = {}
         self._keys = set()
         self._supervisors = weakref.WeakKeyDictionary()
+        self._worker_pools = weakref.WeakSet()
 
     def _entry(self, ticket, *, issuer=False):
         if self._pid != os.getpid() or type(ticket) is not ExecutionTicket or ticket._registry is not self:
@@ -240,6 +246,8 @@ class OwnedExecutionRegistry:
                 or (process is not None and type(process.returncode) is int),
                 "stop_requested": entry.stop_requested, "stop_signal_sent": entry.stop_signal_sent,
                 "stop_reason": entry.stop_reason,
+                "completion_expected": entry.worker_pool is not None,
+                "worker_returned": entry.worker_returned,
                 "cleanup_confirmed": entry.state in {"cleaned", "released"}}
 
     def supervisor_target(self, handle):
@@ -275,13 +283,36 @@ class OwnedExecutionRegistry:
             if type(reason) is not str or reason not in EXECUTION_STOP_REASONS:
                 raise ExecutionCustodyError()
             entry = self._supervisor_entry(handle)
-            if entry.state not in {"cleaned", "released"}:
-                entry.stop_requested = True
-                entry.stop_reason = entry.stop_reason or reason
-                if entry.activity is not None:
-                    entry.activity.events.clear()
-                self._signal_owned_group(entry)
+            self._request_stop(entry, reason)
             return self._supervisor_view(entry)
+
+    def _request_stop(self, entry, reason):
+        if entry.state not in {"cleaned", "released"} or (entry.worker_pool is not None and not entry.worker_returned):
+            entry.stop_requested = True
+            entry.stop_reason = entry.stop_reason or reason
+            try:
+                if entry.activity is not None and not entry.worker_returned:
+                    entry.activity.stop(entry.stop_reason)
+            except ActivityUnavailable:
+                pass  # Failed timing never skips the actual owned stop.
+            finally:
+                self._signal_owned_group(entry)
+
+    def _signal_stop(self, ticket, process):
+        """Whole-process signal guard only; never an RPC/primary capability.
+
+        The actual active bridge record supplies both objects. Main-thread
+        signal delivery may differ from the executor/issuer, but it can stop
+        only this registry's exact retained pair, under its pre-wait guard.
+        """
+        with self._lock:
+            if (self._pid != os.getpid() or type(ticket) is not ExecutionTicket
+                    or ticket._registry is not self):
+                raise ExecutionCustodyError()
+            entry = self._issued.get(ticket)
+            if entry is None or entry.process is not process or type(process) is not _POPEN:
+                raise ExecutionCustodyError()
+            self._request_stop(entry, "cancel_requested")
 
     def enable_activity(self, handle, clock_ns):
         with self._lock:
@@ -290,7 +321,8 @@ class OwnedExecutionRegistry:
                 if entry.activity.clock is not clock_ns:
                     raise ExecutionCustodyError()
                 return
-            if entry.state != "issued" or entry.thread.ident is not None:
+            if (entry.state != "issued" or (entry.thread.ident is not None
+                    and (entry.worker_pool is None or not entry.worker_pool._reserved(entry.worker_handle)))):
                 raise ExecutionCustodyError()
             try:
                 entry.activity = ActivityBuffer(clock_ns)
@@ -326,6 +358,49 @@ class OwnedExecutionRegistry:
             entry = self._entry(ticket)
             if entry.activity is not None:
                 entry.activity.fail()
+
+    def _register_worker_pool(self, pool):
+        from .codex_worker import CodexWorkerPool
+
+        if type(pool) is not CodexWorkerPool or pool._registry is not self:
+            raise ExecutionCustodyError()
+        pool._owner()
+        with self._lock:
+            self._worker_pools.add(pool)
+
+    def _handoff_worker(self, ticket, pool, handle):
+        with self._lock:
+            entry = self._entry(ticket)
+            if pool not in self._worker_pools:
+                raise ExecutionCustodyError()
+            job = pool._job(handle)
+            if (job.ticket is not ticket or not pool._reserved(handle)
+                    or self._pending.get(ticket) is not entry or entry.state != "issued"
+                    or entry.transferred or entry.run_handle is None):
+                raise ExecutionCustodyError()
+            supervisor = ExecutionSupervisor(self)
+            self._supervisors[supervisor] = entry
+            entry.thread, entry.transferred = job.slot.thread, True
+            entry.worker_pool, entry.worker_handle = pool, handle
+            job.supervisor = supervisor
+
+    def _complete_worker(self, pool, handle):
+        with self._lock:
+            if pool not in self._worker_pools:
+                raise ExecutionCustodyError()
+            job = pool._jobs.get(handle)
+            if job is None or job.state != "finishing" or job.packet is None:
+                raise ExecutionCustodyError()
+            entry = self._entry(job.ticket)
+            if entry.worker_pool is not pool or entry.worker_handle is not handle or entry.worker_returned:
+                raise ExecutionCustodyError()
+            entry.worker_returned = True
+            if entry.activity is None:
+                raise ExecutionCustodyError()
+            try:
+                entry.activity.complete()
+            except ActivityUnavailable:
+                pass  # Actual return remains known; failed timing fences acceptance.
 
     def _begin_cleanup(self, entry):
         if not entry.cleanup_started:

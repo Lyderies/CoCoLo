@@ -287,6 +287,8 @@ class ProjectMonitor:
                 raise LivenessClockError("liveness_invalid_clock")
             self._source_sample = batch.observed_ns
             entry.clock.received(batch.events)
+            if any(category == "terminal" for category, _ in batch.events):
+                entry.terminal_observed = True
             return self._observe_clock(entry, operation, final_cleanup_poll=final_cleanup_poll,
                                        final_terminal_poll=final_terminal_poll)
         except Exception:
