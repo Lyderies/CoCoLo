@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 from .contracts import ContractError, result_axes, validate_assignment_shape, validate_result
-from .history_contracts import MAX_SEQUENCE, AttemptBinding, HistoryError, _DIGEST, _ID, matches, valid_integer
+from .history_contracts import (
+    MAX_ATTEMPT, MAX_SEQUENCE, AttemptBinding, HistoryError, _DIGEST, _ID, _ORCHESTRATION,
+    _PROJECT, _RUN, matches, valid_integer,
+)
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_OUTCOME_EVIDENCE_DIGESTS, MAX_RECORD_BYTES,
     canonical_json, parse_bounded_json, validate_learning_record,
@@ -15,6 +18,86 @@ MAX_RESULT_BODY_BYTES = 1_048_576
 MAX_RESULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 MAX_ASSIGNMENT_CANONICAL_BYTES = 6 * 1_048_576
 RESULT_STATES = frozenset({"reserved", "committed", "retiring", "expired"})
+LEASE_SCOPE_FIELDS = ("project_id", "primary_session_id", "runtime_digest", "supervisor_instance_id",
+                      "supervisor_generation", "orchestration_handle", "run_handle", "run_id", "attempt")
+
+
+@dataclass(frozen=True)
+class ResultLeaseBinding:
+    """Pre-claim storage identity, without an invented or consumed launch claim.
+
+    The request fields name the original account claim request. They are not
+    caller authentication, an account receipt or permission to launch anything.
+    """
+    project_id: str
+    primary_session_id: str
+    runtime_digest: str
+    supervisor_instance_id: str
+    supervisor_generation: int
+    orchestration_handle: str
+    run_handle: str
+    run_id: str
+    attempt: int
+    claim_request_id: str
+    claim_request_digest: str
+
+    def __post_init__(self):
+        for value, pattern in (
+            (self.project_id, _PROJECT), (self.primary_session_id, _ID),
+            (self.runtime_digest, _DIGEST), (self.supervisor_instance_id, _ID),
+            (self.orchestration_handle, _ORCHESTRATION), (self.run_handle, _RUN),
+            (self.run_id, _ID), (self.claim_request_id, _ID), (self.claim_request_digest, _DIGEST),
+        ):
+            if not matches(value, pattern):
+                raise HistoryError("history_invalid_input")
+        if (not valid_integer(self.supervisor_generation, minimum=1)
+                or not valid_integer(self.attempt, minimum=1, maximum=MAX_ATTEMPT)):
+            raise HistoryError("history_invalid_input")
+
+    def as_data(self):
+        self.__post_init__()
+        return asdict(self)
+
+    def matches_attempt(self, binding):
+        self.__post_init__()
+        if type(binding) is not AttemptBinding:
+            return False
+        binding.as_data()
+        return all(getattr(self, name) == getattr(binding, name) for name in LEASE_SCOPE_FIELDS)
+
+
+@dataclass(frozen=True)
+class ResultLease:
+    """Bounded durable metadata, never an account or native authorization grant."""
+    binding: ResultLeaseBinding
+    assignment_digest: str
+    created_at_ms: int
+    reserved_until_ms: int
+    state: str
+    lease_digest: str
+    claim_id: str | None = None
+    claim_digest: str | None = None
+    hard_deadline_at_ms: int | None = None
+    claim_binding_digest: str | None = None
+
+    def __post_init__(self):
+        if (type(self.binding) is not ResultLeaseBinding or not matches(self.assignment_digest, _DIGEST)
+                or not matches(self.lease_digest, _DIGEST)
+                or not valid_integer(self.created_at_ms, maximum=MAX_SEQUENCE - MAX_RESULT_RETENTION_MS)
+                or not valid_integer(self.reserved_until_ms, minimum=self.created_at_ms + 1)
+                or self.reserved_until_ms - self.created_at_ms > MAX_RESULT_RETENTION_MS
+                or type(self.state) is not str or self.state not in {"reserved", "claim_pending", "bound", "expired"}):
+            raise HistoryError("history_invalid_input")
+        self.binding.as_data()
+        if self.state == "bound":
+            if (not matches(self.claim_id, _ID) or not matches(self.claim_digest, _DIGEST)
+                    or not valid_integer(self.hard_deadline_at_ms, minimum=self.created_at_ms + 1,
+                                         maximum=self.reserved_until_ms - 1)
+                    or not matches(self.claim_binding_digest, _DIGEST)):
+                raise HistoryError("history_invalid_input")
+        elif any(value is not None for value in (self.claim_id, self.claim_digest,
+                                                 self.hard_deadline_at_ms, self.claim_binding_digest)):
+            raise HistoryError("history_invalid_input")
 
 
 @dataclass(frozen=True)

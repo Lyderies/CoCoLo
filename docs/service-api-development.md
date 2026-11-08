@@ -6,6 +6,70 @@ still use the installed 0.8.12 implementation; the source codec does not enable 
 
 ## Worker result persistence lane
 
+### Durable capacity before account claims
+
+The project store now reserves body capacity without needing a future claim ID.
+`reserve_result_lease` takes a closed `ResultLeaseBinding`: original supervisor
+scope, orchestration/run/attempt and canonical account request ID/digest. It stores
+only bounded metadata and a keyed assignment digest, with the full 1 MiB charged
+before a result or account claim exists. Exact retries/reopens retain the original
+creation and reservation expiry; neither policy changes nor binding refresh it.
+The returned lease is storage metadata, not native caller or account authority.
+
+Before the fixed frontend sends the account claim request, `arm_result_lease`
+durably changes the lease to `claim_pending`. Pending claims stay charged across
+expiry, disconnection and restart: a lost reply cannot establish that the request
+was never consumed. Only unarmed unused leases can expire and free body capacity.
+Their tombstones retain entry quota and cannot be reused. Bounded expiry sweeps
+advance past corrupt rows, leave them charged and report a fixed failure, so one
+bad row does not starve other selected leases. There is no caller-selected
+"not sent", "not running" or cleanup flag that releases a pending claim.
+
+After independently checking the actual account receipt and original request,
+`bind_result_lease` binds the complete actual `AttemptBinding`, assignment and
+original account deadline. That deadline must fit strictly inside the original
+lease window. One transaction inserts the result reservation and binds the lease;
+it transfers the existing charge, without double counting or new capacity. Exact
+lost-reply/restart retries retrieve that binding. Changed claim, assignment, scope
+or deadline conflicts. Account claim/release and native authority are not inferred
+from these data values, a hash, or the presence of a row.
+
+Leases share body and logical-entry limits with existing result reservations.
+Private keyed seals protect mutable lease state and the actual claim binding.
+Capacity checks validate at most the explicitly configured entry ceiling plus
+one bounded row position before excluding bound/expired leases; malformed state
+cannot free space. Neither assignments, results nor rejected content enter lease
+SQLite metadata. The known-claim `reserve_result` reference and metadata-only
+terminal commits cannot bypass an outstanding pre-claim lease.
+
+The asynchronous project lane exposes `prepare_lease`, `arm` and `bind_claim` for
+this sequence. It validates the supervisor scope without creating a placeholder
+monitor claim. Input/result parsing and all storage stages stay on its original
+writer; the control owner retains the immutable input reference across exact
+storage retries. A newly prepared handle for a known pending/bound/expired lease
+reports that existing state, rather than fresh readiness. A cancellation during
+preparation stops the frontend before execution registration; existing monitor
+refusal after a stop remains intact. The old `prepare` is a known-claim internal
+reference and cannot provide the pre-claim ordering guarantee.
+
+Project-history schema 3 adds the fixed lease table/index. Ordinary opens refuse
+schemas 1 and 2 without migration writes. Only the explicit trusted drained-owner
+upgrade option can migrate the exact recognized old schema, preserving signed
+record bytes, counters, outbox and result artifacts in one transaction. Unknown
+schema/trigger changes are refused. The option itself proves neither a drain nor
+native authority; no request can select it.
+
+Tests cover the actual fake-provider account handler minting its claim only after
+lease reservation/arming, exact bind and lost replies, writer-process death mid-
+bind and schema upgrade, mixed capacity limits, restart/expiry uncertainty, privacy
+and inert-worker delivery. Native caller authentication, account-side verification
+and enforcement of lease receipts, cross-owner execution custody, account-denial/
+orphan reconciliation, scheduled lifecycle expiry/retirement and normal-client
+migration remain separate mandatory integration/activation gates. No privileged
+endpoint or installed runtime is enabled here.
+
+### Fixed writer and result delivery
+
 `result_persistence.ResultPersistenceLane` connects the registered bridge owner to
 one prestarted project persistence thread. It opens and closes its `ProjectHistory`
 on that thread. Assignment/result parsing, artifact I/O and SQL stay there; normal
@@ -19,13 +83,14 @@ charges the maximum supported input, assignment and packet byte budgets; failed,
 unknown and committed entries count too. These are retained serialized-byte bounds,
 not a claim about the Python parser's peak allocation or measured live latency.
 
-`prepare` takes only the original pool's prepared, unlaunched handle, a complete
+The known-claim reference `prepare` takes the pool's prepared, unlaunched handle, a complete
 monitor binding and original wall deadline. It asynchronously validates the exact
 immutable worker input and reserves result storage for its original assignment.
 Repeated identical preparation retrieves the same local handle; changed scope or
 deadline conflicts. Preparation failure cannot issue an execution ticket or start
-model work. The trusted frontend must reserve before consuming account launch
-authority. This lane does not implement that account admission sequence.
+model work. Service composition uses the lease sequence above to reserve before
+consuming account launch authority. Account enforcement of that sequence remains
+an integration gate.
 
 After original execution registration, pool handoff and monitor binding, `bind`
 checks the exact retained pool job, input reference and supervisor. `submit` then
@@ -188,7 +253,7 @@ Missing, corrupt, expired or mismatched data stay unavailable. No previous lost
 report is reconstructed, and a full legacy `bridge_report` is not synthesized from
 the stored result and closed terminal metadata.
 
-Project-history schema 2 adds only fixed result metadata tables. Upgrade requires
+The earlier project-history schema 2 added only fixed result metadata tables. Upgrade requires
 the exact schema-1 DDL, columns, application ID and project identity before any
 migration write. Normal opens refuse schema 1 without changing it, even when a
 result key/policy is configured. Only a trusted persistence-owner upgrade path may

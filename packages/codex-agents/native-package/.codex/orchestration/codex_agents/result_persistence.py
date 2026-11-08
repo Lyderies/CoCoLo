@@ -7,7 +7,7 @@ and normal-client migration remain mandatory before production activation.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 import queue
 import threading
@@ -21,7 +21,9 @@ from .history_contracts import AttemptBinding, HistoryError, TerminalDelivery, v
 from .learning_contracts import parse_bounded_json
 from .project_history import ProjectHistory
 from .project_monitor import _capture_binding
-from .result_contracts import MAX_ASSIGNMENT_CANONICAL_BYTES, ResultObservation, assignment_bytes
+from .result_contracts import (
+    MAX_ASSIGNMENT_CANONICAL_BYTES, ResultLeaseBinding, ResultObservation, assignment_bytes,
+)
 
 _TIME_NS = time.time_ns
 MAX_PERSISTENCE_ENTRY_BYTES = MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES + MAX_PACKET_BYTES
@@ -33,11 +35,11 @@ class ResultPersistenceHandle:
 
 @dataclass(repr=False)
 class _Pending:
-    binding: AttemptBinding
+    binding: AttemptBinding | ResultLeaseBinding
     worker_handle: object
     original_job: object
     payload: bytes | None
-    deadline_ms: int
+    deadline_ms: int | None
     state: str = "preparing"
     assignment: bytes | None = None
     identity: tuple | None = None
@@ -46,15 +48,19 @@ class _Pending:
     observed_at_ms: int | None = None
     delivery: TerminalDelivery | None = None
     reason: str | None = None
+    lease_binding: ResultLeaseBinding | None = None
+    lease: object = None
+    claim_binding: AttemptBinding | None = None
 
 
 class ResultPersistenceLane:
     """One fixed project writer, with finite retained jobs and nonblocking intake.
 
-    prepare() must precede binding/submitting the provider worker. The trusted
-    frontend must additionally reserve before consuming account launch authority;
-    this lane does not admit, register or launch anything. bind() then associates
-    the actual registered execution. submit() accepts no caller result, flags,
+    prepare_lease()/arm() durably reserve before the trusted frontend consumes
+    account launch authority; bind_claim() associates its actual issued receipt.
+    prepare() retains the earlier known-claim internal reference only. This lane
+    does not admit, register or launch anything. bind() then associates the actual
+    registered execution. submit() accepts no caller result, flags,
     assignment, record, key, timestamp or cleanup claim. Explicit persistence
     retries retain the first selected bytes and observation time, never execution.
     """
@@ -96,10 +102,27 @@ class ResultPersistenceLane:
         return self._jobs[handle]
 
     def prepare(self, binding, worker_handle, *, hard_deadline_at_ms):
+        """Known-claim reference only; services use prepare_lease before claiming."""
         self._check_owner()
         binding = _capture_binding(binding)
         self._owner._monitor._entry(binding)
-        if type(worker_handle) is not CodexWorkerHandle or not valid_integer(hard_deadline_at_ms, minimum=1):
+        if not valid_integer(hard_deadline_at_ms, minimum=1):
+            raise HistoryError("history_invalid_input")
+        return self._prepare_entry(binding, worker_handle, hard_deadline_at_ms)
+
+    def prepare_lease(self, binding, worker_handle):
+        """Reserve before the account creates its claim ID; launch nothing."""
+        self._check_owner()
+        if type(binding) is not ResultLeaseBinding:
+            raise HistoryError("history_invalid_input")
+        binding = ResultLeaseBinding(**binding.as_data())
+        scope = self._owner._monitor.scope()
+        if any(getattr(scope, name) != getattr(binding, name) for name in vars(scope)):
+            raise HistoryError("history_not_authorized")
+        return self._prepare_entry(binding, worker_handle, None)
+
+    def _prepare_entry(self, binding, worker_handle, deadline):
+        if type(worker_handle) is not CodexWorkerHandle:
             raise HistoryError("history_invalid_input")
         with self._lock:
             if self._closed or self._fault:
@@ -107,7 +130,8 @@ class ResultPersistenceLane:
             previous = self._by_worker.get(worker_handle)
             if previous is not None:
                 pending = self._jobs[previous]
-                if pending.binding != binding or pending.deadline_ms != hard_deadline_at_ms:
+                initial = pending.lease_binding or pending.binding
+                if initial != binding or (pending.lease_binding is None and pending.deadline_ms != deadline):
                     raise HistoryError("history_conflict")
                 return previous
             if len(self._jobs) >= self._maximum:
@@ -119,15 +143,69 @@ class ResultPersistenceLane:
             payload = original.payload
         handle = ResultPersistenceHandle()
         with self._lock:
-            self._jobs[handle] = _Pending(binding, worker_handle, original, payload, hard_deadline_at_ms)
+            pending = _Pending(binding, worker_handle, original, payload, deadline)
+            if type(binding) is ResultLeaseBinding:
+                pending.lease_binding = binding
+            self._jobs[handle] = pending
             self._by_worker[worker_handle] = handle
             self._incoming.put_nowait(("prepare", handle))
         return handle
 
+    def lease(self, handle):
+        pending = self._job(handle)
+        with self._lock:
+            value = pending.lease
+            if value is None:
+                raise HistoryError("history_result_not_ready")
+            return replace(value, binding=ResultLeaseBinding(**value.binding.as_data()))
+
+    def arm(self, handle):
+        """Finish this durable marker before the trusted adapter sends a claim."""
+        pending = self._job(handle)
+        with self._lock:
+            if self._closed or self._fault:
+                raise HistoryError("history_service_unavailable")
+            if pending.lease_binding is None:
+                raise HistoryError("history_invalid_input")
+            if pending.state in {"arming", "claim_pending"} or pending.claim_binding is not None:
+                return
+            if pending.state not in {"reserved", "failed"} or pending.lease is None:
+                raise HistoryError("history_result_not_ready")
+            pending.state, pending.reason = "arming", None
+            self._incoming.put_nowait(("arm", handle))
+
+    def bind_claim(self, handle, binding, *, hard_deadline_at_ms):
+        """After trusted account checks, queue the exact actual claim bind.
+
+        This metadata is not account authentication. Native enrollment and the
+        actual account receipt checks still precede production activation.
+        """
+        pending = self._job(handle)
+        binding = _capture_binding(binding)
+        self._owner._monitor._entry(binding)
+        if not valid_integer(hard_deadline_at_ms, minimum=1):
+            raise HistoryError("history_invalid_input")
+        with self._lock:
+            if self._closed or self._fault:
+                raise HistoryError("history_service_unavailable")
+            if pending.lease_binding is None or not pending.lease_binding.matches_attempt(binding):
+                raise HistoryError("history_conflict")
+            if pending.claim_binding is not None:
+                if pending.claim_binding != binding or pending.deadline_ms != hard_deadline_at_ms:
+                    raise HistoryError("history_conflict")
+                if pending.state != "failed":
+                    return
+            elif pending.state != "claim_pending":
+                raise HistoryError("history_result_not_ready")
+            pending.claim_binding, pending.deadline_ms = binding, hard_deadline_at_ms
+            pending.state, pending.reason = "binding_claim", None
+            self._incoming.put_nowait(("bind_claim", handle))
+
     def bind(self, handle):
         pending = self._job(handle)
         with self._lock:
-            if self._closed or self._fault or pending.state != "reserved":
+            if (self._closed or self._fault or pending.state != "reserved"
+                    or type(pending.binding) is not AttemptBinding):
                 raise HistoryError("history_result_not_ready")
         binding = self._owner._worker(pending.binding, self._pool, pending.worker_handle)
         with self._pool._registry._lock:
@@ -236,12 +314,31 @@ class ResultPersistenceLane:
         if invalid:
             raise HistoryError("history_invalid_input")
         encoded = assignment_bytes(assignment, pending.binding)
-        self._history().reserve_result(pending.binding, assignment, hard_deadline_at_ms=pending.deadline_ms)
+        if pending.lease_binding is not None:
+            lease = self._history().reserve_result_lease(pending.lease_binding, assignment)
+        else:
+            self._history().reserve_result(pending.binding, assignment, hard_deadline_at_ms=pending.deadline_ms)
+            lease = None
         with self._lock:
             pending.assignment = encoded
             pending.identity = (assignment["assignment_id"], assignment["attempt"],
                                 assignment.get("retry_of_assignment_id"))
-            pending.state = "reserved"
+            pending.state = ("reserved" if lease is None or lease.state == "reserved" else "lease_" + lease.state)
+            pending.lease = lease
+
+    def _arm(self, pending):
+        lease = self._history().arm_result_lease(pending.lease_binding)
+        with self._lock:
+            pending.lease, pending.state, pending.reason = lease, "claim_pending", None
+
+    def _bind_claim(self, pending):
+        assignment = parse_bounded_json(pending.assignment, max_bytes=MAX_ASSIGNMENT_CANONICAL_BYTES)
+        self._history().bind_result_lease(pending.lease_binding, pending.claim_binding, assignment,
+                                         hard_deadline_at_ms=pending.deadline_ms)
+        lease = self._history().result_lease(pending.lease_binding)
+        with self._lock:
+            pending.binding = pending.claim_binding
+            pending.lease, pending.state, pending.reason = lease, "reserved", None
 
     def _publish(self, pending):
         selected = pending.selected.packet
@@ -258,6 +355,8 @@ class ResultPersistenceLane:
             pending.selected = None
 
     def _run(self):
+        operations = {"prepare": self._prepare, "publish": self._publish,
+                      "arm": self._arm, "bind_claim": self._bind_claim}
         self._ready.set()
         pending = None
         try:
@@ -271,13 +370,14 @@ class ResultPersistenceLane:
                     if operation == "publish":
                         pending.state = "committing"
                 try:
-                    (self._prepare if operation == "prepare" else self._publish)(pending)
+                    operations[operation](pending)
                 except Exception as error:
                     reason = (HistoryError(error.reason_code).reason_code if type(error) is HistoryError
                               else "history_service_unavailable")
                     with self._lock:
                         pending.state, pending.reason = "failed", reason
-                        pending.payload = None
+                        if operation == "prepare":
+                            pending.payload = None
                 pending = handle = command = None
         except BaseException:
             with self._lock:

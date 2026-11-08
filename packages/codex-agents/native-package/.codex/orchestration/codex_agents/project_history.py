@@ -18,6 +18,7 @@ import sqlite3
 import stat
 import threading
 import time
+from dataclasses import asdict, replace
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
@@ -33,11 +34,12 @@ from .learning_contracts import (
 )
 from .result_contracts import (
     MAX_ASSIGNMENT_CANONICAL_BYTES, MAX_RESULT_BODY_BYTES, MAX_RESULT_RETENTION_MS,
-    ResultCapacity, ResultObservation, ResultReservation, assignment_bytes, checked_result_body,
+    ResultCapacity, ResultLease, ResultLeaseBinding, ResultObservation, ResultReservation,
+    assignment_bytes, checked_result_body,
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding"})
 MAX_DELIVERY_PAGE_BYTES = 16_384
 MAX_BINDING_BYTES = 4096
@@ -83,7 +85,21 @@ CREATE TABLE result_reservations(
  FOREIGN KEY(project_id,terminal_record_id) REFERENCES records(project_id,record_id));
 CREATE INDEX result_expiry ON result_reservations(project_id,expires_at_ms);
 """
-_SCHEMA = _SCHEMA_V1 + _RESULT_SCHEMA
+_SCHEMA_V2 = _SCHEMA_V1 + _RESULT_SCHEMA
+_LEASE_SCHEMA = """
+CREATE TABLE result_leases(
+ project_id TEXT NOT NULL, run_handle TEXT NOT NULL, attempt INTEGER NOT NULL,
+ claim_request_id TEXT NOT NULL, binding BLOB NOT NULL, assignment_digest TEXT NOT NULL,
+ created_at_ms INTEGER NOT NULL, reserved_until_ms INTEGER NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('reserved','claim_pending','bound','expired')),
+ lease_digest TEXT NOT NULL, claim_id TEXT, claim_digest TEXT,
+ hard_deadline_at_ms INTEGER, claim_binding_digest TEXT, state_digest TEXT NOT NULL,
+ PRIMARY KEY(project_id,run_handle,attempt), UNIQUE(project_id,claim_request_id), UNIQUE(project_id,claim_id),
+ FOREIGN KEY(project_id) REFERENCES history_identity(project_id),
+ FOREIGN KEY(project_id,claim_id) REFERENCES result_reservations(project_id,claim_id));
+CREATE INDEX lease_expiry ON result_leases(project_id,state,reserved_until_ms);
+"""
+_SCHEMA = _SCHEMA_V2 + _LEASE_SCHEMA
 _COLUMNS = {
     "history_identity": ("project_id", "next_source_sequence", "next_delivery_sequence"),
     "records": ("project_id", "record_id", "record_type", "source", "source_sequence",
@@ -96,6 +112,9 @@ _COLUMNS = {
                             "expires_at_ms", "state", "prepared_digest", "prepared_at_ms", "retained_until_ms",
                             "committed_at_ms", "body_size", "result_digest",
                             "terminal_record_id"),
+    "result_leases": ("project_id", "run_handle", "attempt", "claim_request_id", "binding", "assignment_digest",
+                      "created_at_ms", "reserved_until_ms", "state", "lease_digest", "claim_id", "claim_digest",
+                      "hard_deadline_at_ms", "claim_binding_digest", "state_digest"),
 }
 
 
@@ -139,6 +158,7 @@ class ProjectHistory:
         self._result_key = None
         self._result_capacity = None
         self._result_expiry_cursor: int | None = None
+        self._lease_expiry_cursor: int | None = None
         self._result_clock = result_clock_ms if result_clock_ms is not None else (lambda: time.time_ns() // 1_000_000)
         if (
             type(allow_schema_upgrade) is not bool
@@ -286,17 +306,19 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif version == 1 and application == _APPLICATION_ID and actual_schema == schema_set(_SCHEMA_V1):
+        elif (version in {1, 2} and application == _APPLICATION_ID
+              and actual_schema == schema_set(_SCHEMA_V1 if version == 1 else _SCHEMA_V2)):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            self._check_schema_identity({name: columns for name, columns in _COLUMNS.items()
-                                         if name not in {"result_identity", "result_reservations"}})
+            omitted = {"result_leases", *({"result_identity", "result_reservations"} if version == 1 else set())}
+            self._check_schema_identity({name: columns for name, columns in _COLUMNS.items() if name not in omitted})
             with self._transaction():
-                for statement in _RESULT_SCHEMA.split(";"):
+                additions = (_RESULT_SCHEMA if version == 1 else "") + _LEASE_SCHEMA
+                for statement in additions.split(";"):
                     if statement.strip():
                         connection.execute(statement)
                 connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
@@ -516,6 +538,14 @@ class ProjectHistory:
             raise HistoryError("history_invalid_input")
         digest = hashlib.sha256(content).hexdigest()
         with self._transaction():
+            leased = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                                              (self.project_id, binding.run_handle, binding.attempt)).fetchone()
+            if leased is not None:
+                value = self._lease(leased)
+                if value.state != "bound":
+                    raise HistoryError("history_result_not_ready")
+                if value.claim_id != binding.claim_id or value.claim_digest != binding.claim_digest:
+                    raise HistoryError("history_conflict")
             reserved = self._connection.execute(
                 "SELECT * FROM result_reservations WHERE project_id=? AND "
                 "(claim_id=? OR (run_handle=? AND attempt=?) OR claim_digest=?) LIMIT 4",
@@ -622,6 +652,10 @@ class ProjectHistory:
         value = self._reservation(row)
         if value.binding != binding:
             raise HistoryError("history_conflict")
+        leased = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND claim_id=?",
+                                          (self.project_id, binding.claim_id)).fetchone()
+        if leased is not None:
+            self._lease(leased)
         return row, value
 
     def _live_result(self, binding: AttemptBinding, now: int):
@@ -631,12 +665,262 @@ class ProjectHistory:
             raise HistoryError("history_result_expired")
         return row, value
 
+    def _lease_binding(self, binding):
+        if type(binding) is not ResultLeaseBinding:
+            raise HistoryError("history_invalid_input")
+        binding = ResultLeaseBinding(**binding.as_data())
+        if binding.project_id != self.project_id or len(canonical_json(binding.as_data())) > MAX_BINDING_BYTES:
+            raise HistoryError("history_invalid_input")
+        return binding
+
+    def _lease_digest(self, binding, assignment_digest, created, until):
+        return keyed_digest(self._result_key, canonical_json({
+            "domain": "project-result-lease-v1", "binding": binding.as_data(),
+            "assignment_digest": assignment_digest, "created_at_ms": created, "reserved_until_ms": until,
+        }))
+
+    def _lease_seal(self, value):
+        return keyed_digest(self._result_key, canonical_json({"domain": "project-result-lease-state-v1", **asdict(value)}))
+
+    def _claim_lease_digest(self, value, binding, deadline):
+        return keyed_digest(self._result_key, canonical_json({
+            "domain": "project-result-claim-binding-v1", "lease_digest": value.lease_digest,
+            "binding": binding.as_data(), "hard_deadline_at_ms": deadline,
+        }))
+
+    def _lease(self, row):
+        invalid = False
+        try:
+            encoded = self._stored_blob(row["binding"], maximum=MAX_BINDING_BYTES)
+            binding = ResultLeaseBinding(**parse_bounded_json(encoded, max_bytes=MAX_BINDING_BYTES))
+            value = ResultLease(binding, *[row[name] for name in (
+                "assignment_digest", "created_at_ms", "reserved_until_ms", "state", "lease_digest",
+                "claim_id", "claim_digest", "hard_deadline_at_ms", "claim_binding_digest")])
+            invalid = (
+                encoded != canonical_json(binding.as_data()) or binding.project_id != self.project_id
+                or row["project_id"] != self.project_id or row["run_handle"] != binding.run_handle
+                or row["attempt"] != binding.attempt or row["claim_request_id"] != binding.claim_request_id
+                or not secrets.compare_digest(value.lease_digest, self._lease_digest(
+                    binding, value.assignment_digest, value.created_at_ms, value.reserved_until_ms))
+                or not matches(row["state_digest"], _DIGEST)
+                or not secrets.compare_digest(row["state_digest"], self._lease_seal(value))
+            )
+            if value.state == "bound":
+                parent = self._connection.execute("SELECT * FROM result_reservations WHERE project_id=? AND claim_id=?",
+                                                  (self.project_id, value.claim_id)).fetchone()
+                if parent is None:
+                    raise HistoryError("history_incompatible")
+                actual = self._reservation(parent)
+                invalid |= (
+                    not binding.matches_attempt(actual.binding) or actual.binding.claim_digest != value.claim_digest
+                    or actual.assignment_digest != value.assignment_digest or actual.created_at_ms != value.created_at_ms
+                    or actual.reserved_until_ms != value.reserved_until_ms
+                    or actual.hard_deadline_at_ms != value.hard_deadline_at_ms
+                    or not secrets.compare_digest(value.claim_binding_digest, self._claim_lease_digest(
+                        value, actual.binding, actual.hard_deadline_at_ms))
+                )
+        except (HistoryError, ContractError, KeyError, TypeError, ValueError, OverflowError, RecursionError):
+            invalid = True
+        if invalid:
+            raise HistoryError("history_incompatible")
+        return value
+
+    def _lease_row(self, binding):
+        row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                                       (self.project_id, binding.run_handle, binding.attempt)).fetchone()
+        if row is None:
+            raise HistoryError("history_result_not_reserved")
+        value = self._lease(row)
+        if value.binding != binding:
+            raise HistoryError("history_conflict")
+        return value
+
+    def _set_lease(self, value):
+        self._connection.execute(
+            "UPDATE result_leases SET state=?,claim_id=?,claim_digest=?,hard_deadline_at_ms=?,"
+            "claim_binding_digest=?,state_digest=? WHERE project_id=? AND run_handle=? AND attempt=?",
+            (value.state, value.claim_id, value.claim_digest, value.hard_deadline_at_ms,
+             value.claim_binding_digest, self._lease_seal(value), self.project_id,
+             value.binding.run_handle, value.binding.attempt),
+        )
+
+    def _check_result_capacity(self):
+        counts = self._connection.execute(
+            "SELECT COUNT(*),SUM(CASE WHEN state!='expired' THEN 1 ELSE 0 END) "
+            "FROM result_reservations WHERE project_id=?", (self.project_id,),
+        ).fetchone()
+        entries, charged = counts[0], counts[1] or 0
+        # Verify each bounded lease before trusting mutable state to exclude a
+        # tombstone or bound row. SQL labels alone cannot free reserved space.
+        positions = self._connection.execute("SELECT rowid FROM result_leases WHERE project_id=? LIMIT ?",
+                                             (self.project_id, self._result_capacity.max_entries + 1)).fetchall()
+        if len(positions) > self._result_capacity.max_entries:
+            raise HistoryError("history_result_capacity")
+        for position in positions:
+            row = self._connection.execute("SELECT * FROM result_leases WHERE rowid=?", (position[0],)).fetchone()
+            value = self._lease(row)
+            if value.state != "bound":
+                entries += 1
+                charged += value.state != "expired"
+        if (entries >= self._result_capacity.max_entries
+                or (charged + 1) * MAX_RESULT_BODY_BYTES > self._result_capacity.max_reserved_bytes):
+            raise HistoryError("history_result_capacity")
+
+    def _insert_result_reservation(self, value):
+        binding = value.binding
+        self._connection.execute(
+            "INSERT INTO result_reservations(project_id,claim_id,run_handle,attempt,claim_digest,orchestration_handle,"
+            "binding,assignment_digest,created_at_ms,hard_deadline_at_ms,reserved_until_ms,expires_at_ms,state) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (self.project_id, binding.claim_id, binding.run_handle, binding.attempt, binding.claim_digest,
+             binding.orchestration_handle, canonical_json(binding.as_data()), value.assignment_digest,
+             value.created_at_ms, value.hard_deadline_at_ms, value.reserved_until_ms, value.expires_at_ms, value.state),
+        )
+
+    @_operation
+    def reserve_result_lease(self, binding: ResultLeaseBinding, assignment: dict) -> ResultLease:
+        """Charge durable body capacity BEFORE consuming any account claim.
+
+        This is storage metadata, not authentication/admission. The future fixed
+        account adapter must check the actual protected lease and full request.
+        No placeholder bridge/claim ID or result is created here.
+        """
+        binding = self._lease_binding(binding)
+        encoded = assignment_bytes(assignment, binding)
+        now = self._result_now()
+        digest = keyed_digest(self._result_key, encoded)
+        with self._transaction():
+            previous = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                                                (self.project_id, binding.run_handle, binding.attempt)).fetchone()
+            if previous is not None:
+                value = self._lease(previous)
+                if value.binding != binding or value.assignment_digest != digest:
+                    raise HistoryError("history_conflict")
+                return value  # Never refresh, reuse or revive a known lease.
+            if (self._connection.execute("SELECT 1 FROM result_reservations WHERE project_id=? AND run_handle=? AND attempt=?",
+                                         (self.project_id, binding.run_handle, binding.attempt)).fetchone() is not None
+                    or self._connection.execute("SELECT 1 FROM terminal_outbox WHERE project_id=? AND run_handle=? AND attempt=?",
+                                                (self.project_id, binding.run_handle, binding.attempt)).fetchone() is not None):
+                raise HistoryError("history_conflict")
+            self._check_result_capacity()
+            until = now + self._result_capacity.reservation_ms
+            value = ResultLease(binding, digest, now, until, "reserved", self._lease_digest(binding, digest, now, until))
+            self._connection.execute("INSERT INTO result_leases VALUES(?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?)",
+                                     (self.project_id, binding.run_handle, binding.attempt, binding.claim_request_id,
+                                      canonical_json(binding.as_data()), digest, now, until, value.state,
+                                      value.lease_digest, self._lease_seal(value)))
+        return value
+
+    @_operation
+    def result_lease(self, binding: ResultLeaseBinding) -> ResultLease:
+        binding = self._lease_binding(binding)
+        self._result_now()
+        return self._lease_row(binding)
+
+    @_operation
+    def arm_result_lease(self, binding: ResultLeaseBinding) -> ResultLease:
+        """Durably mark claim-send uncertainty before sending the account request.
+
+        Armed leases never expire/free capacity on a timeout or restart. Only an
+        exact actual-claim bind is supplied here; account-denial/orphan recovery
+        requires separately proven integration, never a caller 'not sent' flag.
+        """
+        binding = self._lease_binding(binding)
+        now = self._result_now()
+        with self._transaction():
+            value = self._lease_row(binding)
+            if value.state in {"claim_pending", "bound"}:
+                return value
+            if value.state != "reserved" or now >= value.reserved_until_ms:
+                raise HistoryError("history_result_expired")
+            value = replace(value, state="claim_pending")
+            self._set_lease(value)
+        return value
+
+    @_operation
+    def bind_result_lease(self, lease_binding: ResultLeaseBinding, binding: AttemptBinding,
+                          assignment: dict, *, hard_deadline_at_ms: int) -> ResultReservation:
+        """Bind storage to the exact actual claim after trusted account checking.
+
+        Values are not that proof. The native/account adapter must authenticate
+        the original request, issued receipt, complete scope and deadline first.
+        The lease's creation/expiry and charge survive the atomic bind unchanged.
+        """
+        lease_binding = self._lease_binding(lease_binding)
+        binding = self._result_binding(binding)
+        if not lease_binding.matches_attempt(binding) or not valid_integer(hard_deadline_at_ms):
+            raise HistoryError("history_conflict")
+        digest = keyed_digest(self._result_key, assignment_bytes(assignment, binding))
+        now = self._result_now()
+        with self._transaction():
+            value = self._lease_row(lease_binding)
+            if value.assignment_digest != digest:
+                raise HistoryError("history_conflict")
+            if value.state == "bound":
+                _, actual = self._result_row(binding)
+                if actual.hard_deadline_at_ms != hard_deadline_at_ms:
+                    raise HistoryError("history_conflict")
+                return actual
+            if value.state != "claim_pending":
+                raise HistoryError("history_result_not_ready")
+            if not now < hard_deadline_at_ms < value.reserved_until_ms:
+                raise HistoryError("history_result_expired")
+            actual = ResultReservation(binding, digest, value.created_at_ms, hard_deadline_at_ms,
+                                       value.reserved_until_ms, value.reserved_until_ms, "reserved")
+            if self._connection.execute("SELECT 1 FROM terminal_outbox WHERE project_id=? AND "
+                                        "(claim_id=? OR (run_handle=? AND attempt=?) OR claim_digest=?)",
+                                        (self.project_id, binding.claim_id, binding.run_handle,
+                                         binding.attempt, binding.claim_digest)).fetchone() is not None:
+                raise HistoryError("history_conflict")
+            self._insert_result_reservation(actual)
+            value = replace(value, state="bound", claim_id=binding.claim_id, claim_digest=binding.claim_digest,
+                            hard_deadline_at_ms=hard_deadline_at_ms,
+                            claim_binding_digest=self._claim_lease_digest(value, binding, hard_deadline_at_ms))
+            self._set_lease(value)
+        return actual
+
+    @_operation
+    def expire_result_leases(self, *, limit: int = 10) -> int:
+        """Retire only unused leases; pending claims retain uncertain capacity."""
+        now = self._result_now()
+        if not valid_integer(limit, minimum=1, maximum=100):
+            raise HistoryError("history_invalid_input")
+        def candidates(after):
+            sql = "SELECT rowid FROM result_leases WHERE project_id=? AND state='reserved' AND reserved_until_ms<=?"
+            args = [self.project_id, now]
+            if after is not None:
+                sql += " AND rowid>?"
+                args.append(after)
+            return self._connection.execute(sql + " ORDER BY rowid LIMIT ?", (*args, limit)).fetchall()
+        rows = candidates(self._lease_expiry_cursor)
+        if not rows and self._lease_expiry_cursor is not None:
+            self._lease_expiry_cursor = None
+            rows = candidates(None)
+        failure = None
+        retired = 0
+        for position in rows:
+            self._lease_expiry_cursor = position[0]
+            try:
+                with self._transaction():
+                    row = self._connection.execute("SELECT * FROM result_leases WHERE rowid=?", (position[0],)).fetchone()
+                    value = self._lease(row)
+                    self._set_lease(replace(value, state="expired"))
+                retired += 1
+            except HistoryError as error:
+                failure = failure or error.reason_code
+            except (sqlite3.Error, OSError):
+                failure = failure or "history_unavailable"
+        if failure is not None:
+            raise HistoryError(failure)
+        return retired
+
     @_operation
     def reserve_result(self, binding: AttemptBinding, assignment: dict, *, hard_deadline_at_ms: int) -> ResultReservation:
         """Reserve storage before launch; this creates no launch/admission authority.
 
-        The service must independently prove the exact assignment, actual deadline
-        and complete claim before this call, and reserve before consuming launch.
+        This known-claim reference path remains for existing internal callers.
+        A service must use the pre-claim lease/arm/bind path to reserve durable
+        space before account claim consumption; this method cannot do that.
         """
         binding = self._result_binding(binding)
         encoded_assignment = assignment_bytes(assignment, binding)
@@ -657,26 +941,16 @@ class ProjectHistory:
                                   now + self._result_capacity.reservation_ms,
                                   now + self._result_capacity.reservation_ms, "reserved")
         with self._transaction():
+            if self._connection.execute("SELECT 1 FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                                        (self.project_id, binding.run_handle, binding.attempt)).fetchone() is not None:
+                raise HistoryError("history_conflict")
             if self._connection.execute("SELECT 1 FROM terminal_outbox WHERE project_id=? AND "
                                         "(claim_id=? OR (run_handle=? AND attempt=?) OR claim_digest=?)",
                                         (self.project_id, binding.claim_id, binding.run_handle,
                                          binding.attempt, binding.claim_digest)).fetchone() is not None:
                 raise HistoryError("history_conflict")
-            counts = self._connection.execute(
-                "SELECT COUNT(*),SUM(CASE WHEN state!='expired' THEN 1 ELSE 0 END) "
-                "FROM result_reservations WHERE project_id=?", (self.project_id,),
-            ).fetchone()
-            if (counts[0] >= self._result_capacity.max_entries
-                    or ((counts[1] or 0) + 1) * MAX_RESULT_BODY_BYTES > self._result_capacity.max_reserved_bytes):
-                raise HistoryError("history_result_capacity")
-            self._connection.execute(
-                "INSERT INTO result_reservations(project_id,claim_id,run_handle,attempt,claim_digest,orchestration_handle,"
-                "binding,assignment_digest,created_at_ms,hard_deadline_at_ms,reserved_until_ms,expires_at_ms,state) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (self.project_id, binding.claim_id, binding.run_handle, binding.attempt, binding.claim_digest,
-                 binding.orchestration_handle, canonical_json(binding.as_data()), digest, now, hard_deadline_at_ms,
-                 value.reserved_until_ms, value.expires_at_ms, value.state),
-            )
+            self._check_result_capacity()
+            self._insert_result_reservation(value)
         return value
 
     def _result_names(self, binding: AttemptBinding) -> tuple[str, str]:
