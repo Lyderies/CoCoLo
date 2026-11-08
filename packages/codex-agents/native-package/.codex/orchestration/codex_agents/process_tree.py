@@ -43,6 +43,7 @@ WATCHDOG_READY = b"ready\n"
 # Kill rounds: each takes a fresh snapshot, adopts what the tree started since and
 # kills every live tracked process, until a round finds none left alive.
 MAX_KILL_ROUNDS = 5
+MAX_CLEANUP_IDENTITIES = 4096
 KILL_ROUND_PAUSE_SECONDS = 0.05
 
 # macOS: sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID, pid) fills one 648-byte
@@ -215,6 +216,41 @@ class ProcessTree:
         self.tracked: dict[int, str] = {}
         # Until the root's birth time is known nothing is tracked or signalled.
         self.identified = False
+        # Unlike the signalling set, cleanup evidence never forgets an
+        # unreadable identity. None is not proof that a process has stopped.
+        self._cleanup_seen: dict[tuple[int, str], bool] = {}
+        self._cleanup_incomplete = False
+
+    def _remember_cleanup(self, pid: int, birth: str, record: Record | None) -> None:
+        identity = (pid, birth)
+        if identity not in self._cleanup_seen:
+            if len(self._cleanup_seen) >= MAX_CLEANUP_IDENTITIES:
+                self._cleanup_incomplete = True
+                return
+            self._cleanup_seen[identity] = False
+        if record is not None and (record[2] != birth or record[3]):
+            self._cleanup_seen[identity] = True
+        elif record is None and not self._cleanup_seen[identity]:
+            self._cleanup_incomplete = True
+
+    def cleanup_after_owned_wait(self, process) -> bool:
+        """Positive tracked-tree metadata, not a cleanup credential.
+
+        A registered execution owner must additionally prove that this is its
+        actual retained Popen/tree pair. The direct root's owned wait proves
+        that root stopped; other generations need positive kernel observations.
+        An unreadable/missing record, tracking loss or overflow remains unknown.
+        """
+        root = (self.root, self.root_birth)
+        if (not self.identified or self._cleanup_incomplete or root not in self._cleanup_seen
+                or process.pid != self.root or type(process.returncode) is not int):
+            return False
+        for (pid, birth), stopped in tuple(self._cleanup_seen.items()):
+            if not stopped and (pid, birth) != root:
+                self._remember_cleanup(pid, birth, process_record(pid))
+        return not self._cleanup_incomplete and all(
+            stopped or identity == root for identity, stopped in self._cleanup_seen.items()
+        )
 
     def identify(self, table: Table | None, birth: str | None = None) -> bool:
         """Record the root, which must be unreaped, and adopt what is already visible.
@@ -223,6 +259,7 @@ class ProcessTree:
         """
 
         if table is None:
+            self._cleanup_incomplete = True
             return False
         record = process_record(self.root)
         if record is None or (birth is not None and record[2] != birth):
@@ -230,6 +267,7 @@ class ProcessTree:
         self.root_birth = record[2]
         self.tracked = {self.root: record[2]}
         self.identified = True
+        self._remember_cleanup(self.root, record[2], record)
         self.update(table)
         return True
 
@@ -240,6 +278,7 @@ class ProcessTree:
         if birth is None or _excluded_pid(pid):
             return None
         record = process_record(pid)
+        self._remember_cleanup(pid, birth, record)
         return record if record is not None and record[2] == birth else None
 
     def update(self, table: Table) -> set[int]:
@@ -263,6 +302,7 @@ class ProcessTree:
                 if self._record(record[0]) is None:
                     continue
                 self.tracked[pid] = record[2]
+                self._remember_cleanup(pid, record[2], record)
                 live.add(pid)
                 grew = True
         # Exited processes are forgotten; their pids may belong to anything later.
@@ -291,6 +331,8 @@ class ProcessTree:
             table = process_table()
             if table is not None:
                 self.update(table)
+            else:
+                self._cleanup_incomplete = True
             records = {pid: self._record(pid) for pid in sorted(self.tracked)}
             running = [pid for pid, record in records.items() if record and not record[3]]
             if round_number and not running:

@@ -98,7 +98,10 @@ _TABLE_COLUMNS = {
     "launch_receipts": ("scope_digest", "request_digest", "parameters_digest", "handle_digest", "receipt_digest",
                         "run_id", "state", "reason_code", "bridge_run_id", "deadline_at_ms", "recorded_at_ms"),
     "active_run_capacity": ("handle_digest", "run_id", "bridge_run_id", "kind", "provider", "account_fingerprint",
-                            "runtime_digest", "policy_digest", "claimed_at_ms", "released_at_ms", "release_digest"),
+                            "runtime_digest", "policy_digest", "claimed_at_ms", "deadline_at_ms", "released_at_ms", "release_digest"),
+    "capacity_completions": ("handle_digest", "run_id", "bridge_run_id", "terminal_record_id", "terminal_content_digest",
+                             "released_at_ms", "receipt_digest"),
+    "capacity_executions": ("handle_digest", "run_id", "bridge_run_id", "owner_digest"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -144,6 +147,8 @@ _TABLE_ORDER = {
     "launch_observations": ("handle_digest",),
     "launch_receipts": ("scope_digest", "request_digest"),
     "active_run_capacity": ("handle_digest",),
+    "capacity_completions": ("handle_digest",),
+    "capacity_executions": ("handle_digest",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -154,7 +159,7 @@ _TABLE_ORDER = {
 
 
 def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
-    if schema_version < 9 and table == "active_run_capacity":
+    if schema_version < 9 and table in {"active_run_capacity", "capacity_completions", "capacity_executions"}:
         return ()
     if schema_version < 8 and table in {"launch_inputs", "launch_observations", "launch_receipts"}:
         return ()
@@ -179,7 +184,7 @@ def _tables(schema_version: int) -> tuple[str, ...]:
                  if (schema_version >= 7 or table != "launch_claims")
                  and (schema_version >= 8 or table not in {
                      "launch_inputs", "launch_observations", "launch_receipts"})
-                 and (schema_version >= 9 or table != "active_run_capacity"))
+                 and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"}))
 
 
 def _encode(value: object) -> object:
@@ -273,6 +278,16 @@ def _verify_relational_restore(
             "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
         ).fetchone() is not None:
             raise RuntimeError("project backup capacity coverage is incomplete")
+        if body["ledger_schema_version"] >= 9 and restored.execute(
+            "SELECT 1 FROM active_run_capacity a LEFT JOIN capacity_completions c "
+            "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
+            "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
+            "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
+            "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
+            "WHERE a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
+            "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
+        ).fetchone() is not None:
+            raise RuntimeError("project backup completion coverage is incomplete")
         if restored.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise RuntimeError("project backup integrity verification failed")
         for table in _tables(body["ledger_schema_version"]):

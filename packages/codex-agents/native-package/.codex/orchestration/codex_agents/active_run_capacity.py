@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS active_run_capacity (
     runtime_digest TEXT,
     policy_digest TEXT,
     claimed_at_ms INTEGER NOT NULL CHECK(typeof(claimed_at_ms)='integer' AND claimed_at_ms>=0),
+    deadline_at_ms INTEGER,
     released_at_ms INTEGER,
     release_digest TEXT,
     PRIMARY KEY(project_id,handle_digest),
@@ -56,9 +57,10 @@ CREATE TABLE IF NOT EXISTS active_run_capacity (
         AND typeof(runtime_digest)='text' AND length(runtime_digest)=64
         AND runtime_digest NOT GLOB '*[^0-9a-f]*'
         AND typeof(policy_digest)='text' AND length(policy_digest)=64
-        AND policy_digest NOT GLOB '*[^0-9a-f]*')
+        AND policy_digest NOT GLOB '*[^0-9a-f]*'
+        AND typeof(deadline_at_ms)='integer' AND deadline_at_ms>claimed_at_ms)
         OR (kind='legacy_unknown' AND provider IS NULL AND account_fingerprint IS NULL
-        AND runtime_digest IS NULL AND policy_digest IS NULL)),
+        AND runtime_digest IS NULL AND policy_digest IS NULL AND deadline_at_ms IS NULL)),
     CHECK((released_at_ms IS NULL AND release_digest IS NULL)
         OR (typeof(released_at_ms)='integer' AND released_at_ms>=claimed_at_ms
         AND typeof(release_digest)='text' AND length(release_digest)=64
@@ -85,6 +87,45 @@ CREATE INDEX IF NOT EXISTS active_capacity_project
 ON active_run_capacity(project_id) WHERE released_at_ms IS NULL
 """
 
+CAPACITY_COMPLETIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS capacity_completions (
+    project_id TEXT NOT NULL,
+    handle_digest TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    bridge_run_id TEXT NOT NULL,
+    terminal_record_id TEXT NOT NULL CHECK(typeof(terminal_record_id)='text'
+        AND length(terminal_record_id) BETWEEN 1 AND 160),
+    terminal_content_digest TEXT NOT NULL CHECK(typeof(terminal_content_digest)='text'
+        AND length(terminal_content_digest)=64 AND terminal_content_digest NOT GLOB '*[^0-9a-f]*'),
+    released_at_ms INTEGER,
+    receipt_digest TEXT,
+    PRIMARY KEY(project_id,handle_digest),
+    UNIQUE(project_id,terminal_record_id),
+    CHECK((released_at_ms IS NULL AND receipt_digest IS NULL)
+        OR (typeof(released_at_ms)='integer' AND released_at_ms>=0
+        AND typeof(receipt_digest)='text' AND length(receipt_digest)=64
+        AND receipt_digest NOT GLOB '*[^0-9a-f]*')),
+    FOREIGN KEY(project_id,handle_digest) REFERENCES active_run_capacity(project_id,handle_digest) ON DELETE CASCADE,
+    FOREIGN KEY(project_id,handle_digest,run_id,bridge_run_id)
+        REFERENCES launch_claims(project_id,handle_digest,run_id,bridge_run_id)
+)
+"""
+
+CAPACITY_EXECUTIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS capacity_executions (
+    project_id TEXT NOT NULL,
+    handle_digest TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    bridge_run_id TEXT NOT NULL,
+    owner_digest TEXT NOT NULL CHECK(typeof(owner_digest)='text' AND length(owner_digest)=64
+        AND owner_digest NOT GLOB '*[^0-9a-f]*'),
+    PRIMARY KEY(project_id,handle_digest),
+    FOREIGN KEY(project_id,handle_digest) REFERENCES active_run_capacity(project_id,handle_digest) ON DELETE CASCADE,
+    FOREIGN KEY(project_id,handle_digest,run_id,bridge_run_id)
+        REFERENCES launch_claims(project_id,handle_digest,run_id,bridge_run_id)
+)
+"""
+
 CAPACITY_DELETE_GUARD_SCHEMA = """
 CREATE TRIGGER IF NOT EXISTS preserve_active_capacity_on_project_deletion
 BEFORE UPDATE OF status ON projects
@@ -103,5 +144,7 @@ CAPACITY_OBJECTS = (
     ("index", "active_capacity_machine", CAPACITY_MACHINE_SCHEMA),
     ("index", "active_capacity_account", CAPACITY_ACCOUNT_SCHEMA),
     ("index", "active_capacity_project", CAPACITY_PROJECT_SCHEMA),
+    ("table", "capacity_completions", CAPACITY_COMPLETIONS_SCHEMA),
+    ("table", "capacity_executions", CAPACITY_EXECUTIONS_SCHEMA),
     ("trigger", "preserve_active_capacity_on_project_deletion", CAPACITY_DELETE_GUARD_SCHEMA),
 )

@@ -18,6 +18,8 @@ from codex_agents.learning_store import DEFAULT_RETENTION_MS, LearningLedger, Le
 
 def drop_active_capacity_for_legacy_fixture(ledger):
     ledger._connection.execute("DROP TRIGGER preserve_active_capacity_on_project_deletion")
+    ledger._connection.execute("DROP TABLE capacity_completions")
+    ledger._connection.execute("DROP TABLE capacity_executions")
     ledger._connection.execute("DROP TABLE active_run_capacity")
     ledger._connection.execute("DROP INDEX active_capacity_parent")
 

@@ -1391,10 +1391,39 @@ Reservations retain their project/run/handle/bridge, account, runtime and policy
 bindings across history expiry, wall-clock changes and restart. Project deletion
 cannot erase unreconciled active capacity. A dropped socket, elapsed deadline,
 missing local history or reported terminal result does not establish cleanup.
-No automatic release endpoint is enabled in this candidate: confirmed native
-cleanup and conservative cross-store reconciliation must be integrated before
-activation. The reservation implementation alone does not establish completed
-capacity/recovery or actual concurrent-client acceptance.
+No public release endpoint is enabled. The internal fixed bridge now registers
+one execution durably before creating its process. Registration cannot be repeated
+after restart. Its immutable ticket preserves the original claimed deadline:
+registration/commit delays consume that budget, and process creation cannot restart
+it. Expired or regressed clock observations refuse launch and retain uncertainty.
+Its owner-local registry creates and retains the actual Popen/tree
+pair; caller-constructed tickets, process objects, trees and success flags cannot
+substitute for that association.
+
+The fixed factory requires a new process session. If registry handoff fails after
+process creation, it retains the actual child, kills its still-owned group before
+waiting and closes its pipes. The bridge also enters cleanup before retrieving
+the registered tree. Tracking errors cannot skip that group kill or owned wait,
+and cleanup errors cannot replace the original nonlocal interruption. Failed
+handoff or incomplete tracking retains uncertain custody and held capacity;
+these paths do not create a completion receipt or authorize another launch.
+
+The tracker retains bounded positive exit/generation evidence separately from its
+signalling set. Missing/unreadable process records, snapshot loss and identity
+overflow leave cleanup unknown. Release requires the registered original pair,
+its owned root wait, positive evidence for tracked descendants and a durable
+matching result binding. A short transaction commits both the released reservation
+and a keyed completion receipt; registry acknowledgement follows that commit.
+Lost acknowledgements retrieve the same receipt without another launch, including
+after clock rollback. A new release refuses clock rollback and retains ready
+custody. Result persistence does not by itself release capacity.
+
+Completion metadata survives record retention and restart; backups validate the
+matching execution/completion parents. A restarted owner can retrieve an already
+committed release, but cannot recreate lost process custody or release an unknown
+or historical reservation from result flags. Strong native caller/profile/root
+custody, cross-store delivery/reconciliation, actual client containment and all
+concurrent-client release criteria remain separate mandatory activation gates.
 
 Schema 9 requires verified schema-8 backups before migration. Existing consumed
 or fenced launch markers become `legacy_unknown` reservations; migration does

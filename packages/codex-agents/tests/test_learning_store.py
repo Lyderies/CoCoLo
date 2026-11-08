@@ -316,6 +316,8 @@ class LearningStoreTests(unittest.TestCase):
     def _downgrade_fixture_to_schema_five(self) -> None:
         with self.ledger._connection:
             self.ledger._connection.execute("DROP TRIGGER preserve_active_capacity_on_project_deletion")
+            self.ledger._connection.execute("DROP TABLE capacity_completions")
+            self.ledger._connection.execute("DROP TABLE capacity_executions")
             self.ledger._connection.execute("DROP TABLE active_run_capacity")
             self.ledger._connection.execute("DROP INDEX active_capacity_parent")
             self.ledger._connection.execute("DROP TRIGGER cleanup_launch_operation_state")
@@ -2607,6 +2609,8 @@ class LearningStoreTests(unittest.TestCase):
             "owner_attestations", "repair_receipts", "host_run_bindings", "launch_claims",
             "launch_inputs", "launch_observations", "launch_receipts",
             "active_run_capacity",
+            "capacity_completions",
+            "capacity_executions",
             "hook_ingestion", "orchestrations", "orchestration_checkpoints",
             "operational_qa", "operational_check_receipts", "tombstones",
         })

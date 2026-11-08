@@ -30,8 +30,9 @@ from .collector_client import (
     PACKAGE_VERSION as PACKAGE_VERSION,
     CollectorClient as CollectorClient,
 )
-from .active_run_capacity import CAPACITY_OBJECTS, CAPACITY_SCHEMA, CAPACITY_PARENT_SCHEMA
+from .active_run_capacity import CAPACITY_OBJECTS, CAPACITY_SCHEMA, CAPACITY_PARENT_SCHEMA, CAPACITY_COMPLETIONS_SCHEMA, CAPACITY_EXECUTIONS_SCHEMA
 from .active_run_capacity import INSTALLED_ACTIVE_RUN_LIMITS
+from .owned_execution import ExecutionCustodyError, OwnedExecutionKey, OwnedExecutionRegistry
 from .collector_contracts import (
     COLLECTOR_PROTOCOL_VERSION as COLLECTOR_PROTOCOL_VERSION,
     LEDGER_SCHEMA_VERSION as LEDGER_SCHEMA_VERSION,
@@ -279,7 +280,10 @@ _BACKUP_TABLE_COLUMNS = {
     "launch_receipts": ("scope_digest", "request_digest", "parameters_digest", "handle_digest", "receipt_digest",
                         "run_id", "state", "reason_code", "bridge_run_id", "deadline_at_ms", "recorded_at_ms"),
     "active_run_capacity": ("handle_digest", "run_id", "bridge_run_id", "kind", "provider", "account_fingerprint",
-                            "runtime_digest", "policy_digest", "claimed_at_ms", "released_at_ms", "release_digest"),
+                            "runtime_digest", "policy_digest", "claimed_at_ms", "deadline_at_ms", "released_at_ms", "release_digest"),
+    "capacity_completions": ("handle_digest", "run_id", "bridge_run_id", "terminal_record_id", "terminal_content_digest",
+                             "released_at_ms", "receipt_digest"),
+    "capacity_executions": ("handle_digest", "run_id", "bridge_run_id", "owner_digest"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -332,6 +336,8 @@ _BACKUP_ORDER_COLUMNS = {
     "launch_observations": ("handle_digest",),
     "launch_receipts": ("scope_digest", "request_digest"),
     "active_run_capacity": ("handle_digest",),
+    "capacity_completions": ("handle_digest",),
+    "capacity_executions": ("handle_digest",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -365,7 +371,7 @@ def _backup_decode_value(value: Any) -> Any:
 
 
 def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
-    if schema_version < 9 and table == "active_run_capacity":
+    if schema_version < 9 and table in {"active_run_capacity", "capacity_completions", "capacity_executions"}:
         return ()
     if schema_version < 8 and table in {"launch_inputs", "launch_observations", "launch_receipts"}:
         return ()
@@ -385,7 +391,7 @@ def _backup_tables(schema_version: int) -> tuple[str, ...]:
     return tuple(table for table in _BACKUP_TABLE_COLUMNS
                  if (schema_version >= 7 or table != "launch_claims")
                  and (schema_version >= 8 or table not in {"launch_inputs", "launch_observations", "launch_receipts"})
-                 and (schema_version >= 9 or table != "active_run_capacity"))
+                 and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"}))
 
 
 def _snapshot_project_partition(
@@ -548,7 +554,7 @@ _BACKUP_RESTORE_SCHEMA = """
 CREATE TABLE projects(project_id TEXT PRIMARY KEY,canonical_root TEXT,root_digest TEXT,
  status TEXT NOT NULL CHECK(status IN ('active','deleted')),created_at_ms INTEGER NOT NULL,
  deleted_at_ms INTEGER);
-""" + _LAUNCH_CLAIMS_SCHEMA + ";\n" + _LAUNCH_RECEIPT_PARENT_SCHEMA + ";\n" + _LAUNCH_INPUTS_SCHEMA + ";\n" + _LAUNCH_OBSERVATIONS_SCHEMA + ";\n" + _LAUNCH_RECEIPTS_SCHEMA + ";\n" + CAPACITY_PARENT_SCHEMA + ";\n" + CAPACITY_SCHEMA + ";\n" + """
+""" + _LAUNCH_CLAIMS_SCHEMA + ";\n" + _LAUNCH_RECEIPT_PARENT_SCHEMA + ";\n" + _LAUNCH_INPUTS_SCHEMA + ";\n" + _LAUNCH_OBSERVATIONS_SCHEMA + ";\n" + _LAUNCH_RECEIPTS_SCHEMA + ";\n" + CAPACITY_PARENT_SCHEMA + ";\n" + CAPACITY_SCHEMA + ";\n" + CAPACITY_COMPLETIONS_SCHEMA + ";\n" + CAPACITY_EXECUTIONS_SCHEMA + ";\n" + """
 CREATE TABLE sessions(project_id TEXT NOT NULL,session_digest TEXT NOT NULL,producer TEXT NOT NULL,
  created_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,session_digest,producer),
  FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE);
@@ -711,6 +717,16 @@ def _verify_project_backup_body(
             "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
         ).fetchone() is not None:
             raise LedgerError("project backup capacity coverage is incomplete")
+        if schema_version >= 9 and restored.execute(
+            "SELECT 1 FROM active_run_capacity a LEFT JOIN capacity_completions c "
+            "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
+            "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
+            "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
+            "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
+            "WHERE a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
+            "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
+        ).fetchone() is not None:
+            raise LedgerError("project backup completion coverage is incomplete")
         integrity = restored.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise LedgerError("isolated project backup integrity check failed")
@@ -1997,6 +2013,8 @@ class LearningLedger:
         self._admission_policy = admission_policy
         self._lock = threading.RLock()
         self._attestation_origin = object()
+        self._capacity_executions = OwnedExecutionRegistry()
+        self._capacity_execution_origin = secrets.token_hex(32)
         self._active_readers = 0
         self._client_capabilities = (
             client_capabilities
@@ -2536,6 +2554,16 @@ class LearningLedger:
                 "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
             ).fetchone() is not None:
                 raise LedgerError("active capacity coverage is unavailable")
+            if self._connection.execute(
+                "SELECT 1 FROM active_run_capacity a LEFT JOIN capacity_completions c "
+                "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
+                "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
+                "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
+            "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
+            "WHERE a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
+            "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
+            ).fetchone() is not None:
+                raise LedgerError("capacity completion coverage is unavailable")
         with self._account_transaction():
             self._migrate_layout_locked(current)
 
@@ -6004,14 +6032,138 @@ class LearningLedger:
             raise ClaimError("claim_busy")
         return policy
 
-    def _reserve_active_capacity_locked(self, project, handle, run, bridge, provider, account, policy, timestamp):
+    def _reserve_active_capacity_locked(self, project, handle, run, bridge, provider, account, policy, timestamp, deadline):
         if not self._connection.in_transaction:
             raise ClaimError("claim_unavailable")
         self._connection.execute(
             "INSERT INTO active_run_capacity(project_id,handle_digest,run_id,bridge_run_id,kind,provider,"
-            "account_fingerprint,runtime_digest,policy_digest,claimed_at_ms) VALUES(?,?,?,?,'claimed',?,?,?,?,?)",
-            (project, handle, run, bridge, provider, account, COLLECTOR_RUNTIME_DIGEST, policy.digest, timestamp),
+            "account_fingerprint,runtime_digest,policy_digest,claimed_at_ms,deadline_at_ms) VALUES(?,?,?,?,'claimed',?,?,?,?,?,?)",
+            (project, handle, run, bridge, provider, account, COLLECTOR_RUNTIME_DIGEST, policy.digest, timestamp, deadline),
         )
+
+    def _new_owned_execution(self, project_id, run_handle, bridge_run_id):
+        """Internal fixed-bridge registration, not a caller-selected PID API."""
+        handle = keyed_digest(self.state.digest_key(), run_handle)
+        with self._account_transaction():
+            row = self._connection.execute(
+                "SELECT a.run_id,a.bridge_run_id,a.kind,a.runtime_digest,a.released_at_ms,a.claimed_at_ms,a.deadline_at_ms "
+                "FROM active_run_capacity a "
+                "JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id "
+                "WHERE a.project_id=? AND a.handle_digest=? AND h.binding_state='pending' AND h.consumed_at_ms IS NULL "
+                "AND h.client_version='bridge-v1' AND h.native_assignment_id=? "
+                "AND NOT EXISTS(SELECT 1 FROM capacity_completions c "
+                "WHERE c.project_id=a.project_id AND c.handle_digest=a.handle_digest)",
+                (project_id, handle, external_id(self.state.digest_key(), "asg", bridge_run_id)),
+            ).fetchone()
+            if (row is None or row["kind"] != "claimed" or row["released_at_ms"] is not None
+                    or row["bridge_run_id"] != bridge_run_id or row["runtime_digest"] != COLLECTOR_RUNTIME_DIGEST):
+                raise LedgerError("owned execution is unavailable")
+            monotonic_reference = time.monotonic_ns()
+            now = self._clock_ms()
+            if type(now) is not int or not row["claimed_at_ms"] <= now < row["deadline_at_ms"]:
+                raise LedgerError("owned execution deadline is unavailable")
+            deadline_ns = monotonic_reference + (row["deadline_at_ms"] - now) * 1_000_000
+            key = OwnedExecutionKey(project_id, handle, row["run_id"], bridge_run_id)
+            owner = self._capacity_execution_owner(key)
+            try:
+                self._connection.execute("INSERT INTO capacity_executions VALUES(?,?,?,?,?)",
+                                         (project_id, handle, row["run_id"], bridge_run_id, owner))
+            except sqlite3.IntegrityError:
+                raise LedgerError("owned execution was already registered") from None
+            return self._capacity_executions.issue(key, deadline_ns=deadline_ns)
+
+    def _capacity_execution_owner(self, key):
+        return keyed_digest(self.state.digest_key(), canonical_json({
+            "domain": "capacity-execution-owner-v1", "project_id": key.project_id, "handle_digest": key.handle_digest,
+            "run_id": key.run_id, "bridge_run_id": key.bridge_run_id, "owner": self._capacity_execution_origin,
+        }))
+
+    def _capacity_completion_locked(self, key):
+        row = self._connection.execute(
+            "SELECT a.*,c.terminal_record_id,c.terminal_content_digest,c.released_at_ms AS completion_released_at_ms,"
+            "c.receipt_digest,e.owner_digest AS execution_owner_digest FROM active_run_capacity a JOIN capacity_completions c "
+            "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
+            "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
+            "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
+            "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
+            "WHERE a.project_id=? AND a.handle_digest=? AND a.run_id=? AND a.bridge_run_id=?",
+            (key.project_id, key.handle_digest, key.run_id, key.bridge_run_id),
+        ).fetchone()
+        if row is None or row["kind"] != "claimed":
+            raise LedgerError("capacity completion is unavailable")
+        if (row["released_at_ms"] != row["completion_released_at_ms"]
+                or row["release_digest"] != row["receipt_digest"]):
+            raise LedgerError("capacity completion is unavailable")
+        return row
+
+    def _capacity_completion_digest(self, row, timestamp):
+        material = {"domain": "active-capacity-release-v1", **{name: row[name] for name in (
+            "project_id", "handle_digest", "run_id", "bridge_run_id", "provider", "account_fingerprint",
+            "runtime_digest", "policy_digest", "claimed_at_ms", "deadline_at_ms", "terminal_record_id", "terminal_content_digest",
+            "execution_owner_digest",
+        )}, "released_at_ms": timestamp}
+        return keyed_digest(self.state.digest_key(), canonical_json(material))
+
+    def _release_active_capacity(self, ticket):
+        key = self._capacity_executions.key(ticket)
+        with self._account_transaction():
+            row = self._capacity_completion_locked(key)
+            known = row["released_at_ms"] is not None
+            if known:
+                timestamp = row["released_at_ms"]
+                digest = self._capacity_completion_digest(row, timestamp)
+                if not secrets.compare_digest(digest, row["receipt_digest"]):
+                    raise LedgerError("capacity completion is unavailable")
+            else:
+                # Actual retained fixed-runner custody must establish cleanup.
+                # A constructed ticket or a durable terminal row is insufficient.
+                self._capacity_executions.key(ticket, cleaned=True)
+                registered = self._connection.execute(
+                    "SELECT owner_digest FROM capacity_executions WHERE project_id=? AND handle_digest=? "
+                    "AND run_id=? AND bridge_run_id=?", (key.project_id, key.handle_digest, key.run_id, key.bridge_run_id),
+                ).fetchone()
+                if registered is None or not secrets.compare_digest(registered[0], self._capacity_execution_owner(key)):
+                    raise LedgerError("owned execution is unavailable")
+                timestamp = self._clock_ms()
+                if type(timestamp) is not int or not row["claimed_at_ms"] <= timestamp <= MAX_CLAIM_INTEGER:
+                    raise LedgerError("capacity completion is unavailable")
+                digest = self._capacity_completion_digest(row, timestamp)
+                self._connection.execute(
+                    "UPDATE capacity_completions SET released_at_ms=?,receipt_digest=? "
+                    "WHERE project_id=? AND handle_digest=?", (timestamp, digest, key.project_id, key.handle_digest),
+                )
+                self._connection.execute(
+                    "UPDATE active_run_capacity SET released_at_ms=?,release_digest=? "
+                    "WHERE project_id=? AND handle_digest=?", (timestamp, digest, key.project_id, key.handle_digest),
+                )
+        # Commit precedes registry acknowledgement. A lost acknowledgement
+        # retrieves the exact existing receipt, including after clock rollback.
+        self._capacity_executions.acknowledge_release(ticket)
+        return {"state": "released", "receipt_digest": digest, "released_at_ms": timestamp, "known": known}
+
+    def _finish_owned_execution(self, ticket):
+        try:
+            return self._release_active_capacity(ticket)
+        except (ExecutionCustodyError, LedgerError, StateError, sqlite3.Error):
+            # A completed result remains its own fact. Missing cleanup or failed
+            # completion delivery retains capacity and never replays model work.
+            return {"state": "held", "receipt_digest": None, "released_at_ms": None, "known": False}
+
+    def _known_capacity_release(self, project_id, run_handle, bridge_run_id):
+        """Owner metadata reconciliation; never launches or releases anything."""
+        handle = keyed_digest(self.state.digest_key(), run_handle)
+        with self._lock:
+            cap = self._connection.execute(
+                "SELECT run_id,released_at_ms FROM active_run_capacity "
+                "WHERE project_id=? AND handle_digest=? AND bridge_run_id=?", (project_id, handle, bridge_run_id),
+            ).fetchone()
+            if cap is None or cap["released_at_ms"] is None:
+                return None
+            row = self._capacity_completion_locked(OwnedExecutionKey(project_id, handle, cap["run_id"], bridge_run_id))
+            digest = self._capacity_completion_digest(row, row["released_at_ms"])
+            if not secrets.compare_digest(digest, row["receipt_digest"]):
+                raise LedgerError("capacity completion is unavailable")
+            return {"state": "released", "receipt_digest": digest, "released_at_ms": row["released_at_ms"], "known": True}
 
     def claim_launch(
         self, project_id: str, *, runtime_digest: str, caller_scope: str,
@@ -6258,7 +6410,7 @@ class LearningLedger:
                 self._connection.execute("INSERT INTO launch_claims VALUES(?,?,?,'claimed',?,?)",
                                          (project_id, handle, run_id, timestamp, bridge))
                 self._reserve_active_capacity_locked(project_id, handle, run_id, bridge, inputs["provider"],
-                                                     admitted["account_fingerprint"], policy, timestamp)
+                                                     admitted["account_fingerprint"], policy, timestamp, deadline)
                 self._append_checked_locked(project_id, record, producer="lifecycle", timestamp=timestamp)
             return self._store_claim_receipt_locked(project_id, scope, request, parameters, handle, {
                 "state": "claimed" if reason is None else "denied", "run_id": run_id, "reason_code": reason,
@@ -6362,7 +6514,8 @@ class LearningLedger:
                 (project_id, handle_digest, run_id, timestamp, bridge_run_id),
             )
             self._reserve_active_capacity_locked(project_id, handle_digest, run_id, bridge_run_id,
-                                                 route["provider"], admission["account_fingerprint"], policy, timestamp)
+                                                 route["provider"], admission["account_fingerprint"], policy, timestamp,
+                                                 record["deadline_at_ms"])
             self._append_checked_locked(
                 project_id, record, producer="lifecycle", timestamp=timestamp
             )
@@ -6449,6 +6602,11 @@ class LearningLedger:
                 raise LedgerError("dispatch result is invalid") from exc
             self._append_checked_locked(
                 project_id, record, producer="lifecycle", timestamp=timestamp
+            )
+            self._connection.execute(
+                "INSERT INTO capacity_completions(project_id,handle_digest,run_id,bridge_run_id,"
+                "terminal_record_id,terminal_content_digest) VALUES(?,?,?,?,?,?)",
+                (project_id, handle_digest, run_id, bridge_run_id, record["record_id"], content_digest(record)),
             )
         return {"run_id": run_id, "bridge_run_id": bridge_run_id}
 

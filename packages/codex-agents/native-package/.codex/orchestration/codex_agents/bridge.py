@@ -23,6 +23,7 @@ import unicodedata
 from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
+from .owned_execution import ExecutionCustodyError, ExecutionTicket
 
 from .catalog import CatalogError, parse_claude_agent
 from .contracts import (
@@ -73,6 +74,8 @@ from .providers import (
     resolve_client,
 )
 from .result_contracts import MAX_RESULT_BODY_BYTES
+
+_OWNED_POPEN = subprocess.Popen
 
 MAX_EXPORT_BYTES = 16 * 1024 * 1024
 MAX_EXPORT_FILES = 2_000
@@ -658,27 +661,36 @@ def signal_guard():
             signal.signal(signum, value)
 
 
-def _kill_child(process: Any, tree: ProcessTree) -> None:
+def _kill_child(process: Any, tree: ProcessTree | None) -> None:
     """Kill the child's tracked tree, then its own process group.
 
     The child is reaped only after this, so its pid, and with it its group's
     id, still cannot belong to anything else when the group is signalled.
     """
 
-    tree.terminate()
-    if process.returncode is None:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
-
-
-def _stop_child(process: Any, tree: ProcessTree) -> None:
-    _kill_child(process, tree)
     try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        pass
+        if tree is not None:
+            tree.terminate()
+    except BaseException:
+        if tree is not None:
+            tree._cleanup_incomplete = True
+        raise
+    finally:
+        if process.returncode is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+def _stop_child(process: Any, tree: ProcessTree | None) -> None:
+    try:
+        _kill_child(process, tree)
+    finally:
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def run_child(
@@ -689,6 +701,7 @@ def run_child(
     deadline_seconds: float,
     on_frame: Callable[[dict[str, Any]], None],
     popen: Callable[..., Any] = subprocess.Popen,
+    _execution: ExecutionTicket | None = None,
 ) -> dict[str, Any]:
     """Run one child in its own session, feeding each JSON line to `on_frame`.
 
@@ -701,9 +714,19 @@ def run_child(
     outcome: dict[str, Any] = {"returncode": None, "abort": None}
     if not tracking_available():
         return {"returncode": None, "abort": "process_tracking_unavailable"}
+    if _execution is not None:
+        if type(_execution) is not ExecutionTicket or popen is not _OWNED_POPEN:
+            return {"returncode": None, "abort": "launch_failed"}
+    deadline = time.monotonic() + deadline_seconds
+    if _execution is not None:
+        try:
+            deadline = min(deadline, _execution.deadline_ns() / 1_000_000_000)
+        except ExecutionCustodyError:
+            return {"returncode": None, "abort": "launch_failed"}
     watchdog = _WatchdogOwner()
     try:
-        process = popen(
+        factory = popen if _execution is None else _execution.spawn
+        process = factory(
             arguments,
             cwd=cwd,
             env=environment,
@@ -712,16 +735,24 @@ def run_child(
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-    except OSError:
-        return {"returncode": None, "abort": "launch_failed"}
-    tree = ProcessTree(process.pid)
-    _ACTIVE_CHILDREN[process.pid] = (process, tree)
-    deadline = time.monotonic() + deadline_seconds
+    except (OSError, ExecutionCustodyError) as error:
+        expired = isinstance(error, ExecutionCustodyError) and error.reason_code == "execution_deadline_expired"
+        return {"returncode": None, "abort": "timed_out" if expired else "launch_failed"}
+    tree = None
     buffer = b""
     received = 0
+    execution_bound = False
     try:
+        tree = ProcessTree(process.pid) if _execution is None else _execution.tree(process)
+        _ACTIVE_CHILDREN[process.pid] = (process, tree)
         if not tree.identify(process_table()):
             raise _Abort("process_tracking_unavailable")
+        if _execution is not None:
+            try:
+                _execution.bind(process, tree)
+                execution_bound = True
+            except ExecutionCustodyError:
+                raise _Abort("process_tracking_unavailable") from None
         watchdog.start(
             process.pid, tree.root_birth,
             deadline + WATCHDOG_GRACE_SECONDS,
@@ -771,15 +802,27 @@ def run_child(
     except _Abort as abort:
         outcome["abort"] = abort.reason
     finally:
+        original_error = sys.exc_info()[1]
         try:
-            _stop_child(process, tree)
-        finally:
-            _ACTIVE_CHILDREN.pop(process.pid, None)
             try:
-                process.stdout.close()
+                _stop_child(process, tree)
             finally:
-                if not watchdog.reap() and outcome["abort"] is None:
-                    outcome["abort"] = "watchdog_unavailable"
+                _ACTIVE_CHILDREN.pop(process.pid, None)
+                try:
+                    process.stdout.close()
+                finally:
+                    watchdog_reaped = watchdog.reap()
+                    if not watchdog_reaped and outcome["abort"] is None:
+                        outcome["abort"] = "watchdog_unavailable"
+                    if watchdog_reaped and execution_bound:
+                        try:
+                            _execution.finish(process, tree)
+                        except ExecutionCustodyError:
+                            pass  # Unconfirmed custody retains its capacity reservation.
+        except BaseException:
+            if original_error is not None and not isinstance(original_error, Exception):
+                raise original_error
+            raise
     if outcome["abort"] is None:
         outcome["returncode"] = process.returncode
     return outcome
@@ -791,6 +834,8 @@ def _track(tree: ProcessTree) -> Table | None:
     table = process_table()
     if table is not None:
         tree.update(table)
+    else:
+        tree._cleanup_incomplete = True
     return table
 
 
@@ -1095,6 +1140,7 @@ def run_claude(
     max_turns: int,
     executable: str,
     worker_result_path: str | None = None,
+    _execution: ExecutionTicket | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     from .learning_store import LedgerError
 
@@ -1209,6 +1255,7 @@ def run_claude(
         cwd=export,
         deadline_seconds=deadline_seconds,
         on_frame=on_frame,
+        **({"_execution": _execution} if _execution is not None else {}),
     )
     report: dict[str, Any] = {
         "provider": "claude",
@@ -1284,6 +1331,7 @@ def run_codex(
     executable: str,
     worker_result_path: str | None = None,
     role_prompt: str,
+    _execution: ExecutionTicket | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     model = route["model"]
     try:
@@ -1362,6 +1410,7 @@ def run_codex(
         cwd=export,
         deadline_seconds=deadline_seconds,
         on_frame=on_frame,
+        **({"_execution": _execution} if _execution is not None else {}),
     )
     report = {
         "provider": "codex",
@@ -1725,6 +1774,7 @@ def dispatch(
         ledger.bind_host_agent(
             project_id, run_handle=run_handle, agent_id=intent["bridge_run_id"]
         )
+        execution = ledger._new_owned_execution(project_id, run_handle, intent["bridge_run_id"])
         if provider == "claude":
             result, report = run_claude(
                 ledger=ledger, project_id=project_id, run_handle=run_handle,
@@ -1732,6 +1782,7 @@ def dispatch(
                 export=export, control=control, environ=environ,
                 deadline_seconds=deadline_seconds, max_turns=max_turns,
                 executable=executable, worker_result_path=worker_result_path,
+                _execution=execution,
             )
             if report["rate_limit_record_failed"]:
                 report.setdefault("observations_unavailable", []).append(
@@ -1750,6 +1801,7 @@ def dispatch(
                 schema=result_schema, environ=environ,
                 deadline_seconds=deadline_seconds, executable=executable,
                 worker_result_path=worker_result_path, role_prompt=role_prompt,
+                _execution=execution,
             )
             try:
                 ledger.observe_provider(
@@ -1810,6 +1862,7 @@ def dispatch(
         result_validation_reason_code=result_validation_reason_code,
         client_diagnostics=report.get("client_diagnostics"),
     )
+    report["capacity_state"] = ledger._finish_owned_execution(execution)["state"]
     report.update(
         effective_bounds=effective_dispatch_bounds(route, assignment),
         bridge_run_id=intent["bridge_run_id"],
