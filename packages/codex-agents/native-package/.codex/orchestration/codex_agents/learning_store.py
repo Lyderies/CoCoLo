@@ -5905,6 +5905,9 @@ class LearningLedger:
             (project_id, handle_digest, binding["run_id"]),
         ).fetchone() is not None:
             return "claim_already_consumed", binding, None, None
+        started, until = self._claim_observation_window(binding)
+        if not started <= timestamp < until:
+            return 'claim_not_open', binding, None, None
         inputs = self._connection.execute(
             "SELECT * FROM launch_inputs WHERE project_id=? AND handle_digest=?", (project_id, handle_digest),
         ).fetchone()
@@ -6669,7 +6672,8 @@ class LearningLedger:
     def _claim_run_rows_locked(self, project_id, handle):
         """Read all fixed scalar inputs before any eligibility short circuit."""
         binding = self._connection.execute(
-            "SELECT run_id,binding_state,consumed_at_ms,client_version,expires_at_ms,created_at_ms,assignment_digest,orchestration_id "
+            "SELECT run_id,binding_state,consumed_at_ms,client_version,expires_at_ms,created_at_ms,assignment_digest,orchestration_id,"
+            "observation_started_at_ms,observation_deadline_at_ms "
             "FROM host_run_bindings WHERE project_id=? AND handle_digest=?", (project_id, handle),
         ).fetchone()
         inputs = self._connection.execute(
@@ -6699,6 +6703,9 @@ class LearningLedger:
             (project_id, handle, binding["run_id"]),
         ).fetchone() is not None:
             return "claim_already_consumed", binding, None, None
+        started, until = self._claim_observation_window(binding)
+        if not started <= timestamp < until:
+            return 'claim_not_open', binding, None, None
         if inputs is None or inputs["run_id"] != binding["run_id"] or inputs["provider"] not in {"codex", "claude"}:
             return "claim_context_missing", binding, None, None
         if inputs["runtime_digest"] != COLLECTOR_RUNTIME_DIGEST:
@@ -6708,6 +6715,14 @@ class LearningLedger:
                 or timestamp - observed["observed_at_ms"] > BILLING_MAX_AGE_MS):
             return "claim_observation_missing", binding, inputs, None
         return None, binding, inputs, observed
+
+    @staticmethod
+    def _claim_observation_window(binding):
+        started, until = binding['observation_started_at_ms'], binding['observation_deadline_at_ms']
+        if (type(started) is not int or type(until) is not int or type(binding['created_at_ms']) is not int
+                or not 0 <= binding['created_at_ms'] <= started < until <= MAX_CLAIM_INTEGER):
+            raise ClaimError('claim_unavailable')
+        return started, until
 
     @staticmethod
     def _claim_run_columns(binding, inputs, observed):
@@ -6841,7 +6856,11 @@ class LearningLedger:
                     }, run_id=None, timestamp=timestamp)
             bridge = deadline = None
             if reason is None:
-                deadline = timestamp + inputs["hard_timeout_seconds"] * 1000
+                # Waiting for signatures/export cannot restart the original
+                # host-open budget. Both wall and monotonic capacity deadlines
+                # are derived below from this same remaining window.
+                deadline = min(timestamp + inputs["hard_timeout_seconds"] * 1000,
+                               self._claim_observation_window(binding)[1])
                 if not timestamp < deadline <= MAX_CLAIM_INTEGER:
                     raise ClaimError("claim_unavailable")
                 if context.storage_required:

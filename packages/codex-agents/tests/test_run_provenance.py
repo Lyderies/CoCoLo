@@ -15,6 +15,7 @@ from codex_agents.account_api import AccountClient, AccountError, AccountRequest
 from codex_agents.account_service import AccountAuthorization, AccountOwnerViews, AccountService
 from codex_agents.history_contracts import HistoryError
 from codex_agents.host_result_contracts import HostResultReference
+from codex_agents.host_open_contracts import OpenProvenanceInput
 from codex_agents.learning_contracts import canonical_json, content_digest, external_id, parse_bounded_json
 from codex_agents.orchestration_api import OrchestrationLimits, OrchestrationRequest, OrchestrationScope, SCOPE_FIELDS
 from codex_agents.orchestration_store import OrchestrationOwner
@@ -80,7 +81,7 @@ class RunProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ClaimError, 'claim_execution_unavailable'):
             self.proof()
 
-    def managed_project(self):
+    def managed_project(self, *, record_host_open=True):
         # Synthetic enrollment links the existing isolated account fixture to
         # this project owner; no actual provider/native caller is admitted.
         store = self.fixture.store
@@ -90,6 +91,14 @@ class RunProvenanceTests(unittest.TestCase):
         with mock.patch('codex_agents.orchestration_store.secrets.token_hex', return_value=self.base.binding.orchestration_handle[4:]):
             OrchestrationOwner(store).apply(request, client_version='codex-host-v1', before_commit=lambda: None)
         store._allow_legacy_orchestration_reference = False
+        if record_host_open:
+            opened = OpenProvenanceInput(self.fixture.scope.run_handle, self.fixture.assigned['assignment_id'])
+            proof = self.base.ledger._attest_open_provenance(self.fixture.project,
+                runtime_digest=self.fixture.scope.runtime_digest, caller_scope='a'*64, request=opened,
+                storage_binding=self.fixture.scope, storage_evidence=self.fixture.evidence, work_limits=self.limits)
+            store.record_host_open(self.fixture.scope, opened, proof, assignment=self.fixture.assigned,
+                task=self.fixture.base.fixture.fixture.task(), route=self.fixture.base.fixture.route,
+                before_commit=lambda: None)
         return store
 
     def test_managed_consumption_requires_original_provenance_and_commits_both_once(self):

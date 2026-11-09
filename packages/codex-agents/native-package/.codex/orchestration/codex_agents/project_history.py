@@ -1009,6 +1009,12 @@ class ProjectHistory:
             if type(clock) is not int or not grant.clock_reference_ns <= clock < grant.deadline_ns:
                 raise HistoryError("history_execution_not_ready")
             record = self._new_execution_provenance(grant, task, route, provenance, now)
+            if record is None and self._connection.execute('SELECT 1 FROM project_orchestrations '
+                    'WHERE project_id=? AND orchestration_handle=?',
+                    (binding.project_id, binding.orchestration_handle)).fetchone() is not None:
+                # The explicit pre-journal fixture mode cannot bypass fresh
+                # provenance once an actual managed project lifecycle exists.
+                raise _ExecutionProvenanceRejected()
             if record is not None:
                 self._append_locked(record, canonical_json(record), 'host', now)
             self._connection.execute("INSERT INTO project_execution_consumptions VALUES(?,?,?,?,?)",
@@ -1026,6 +1032,9 @@ class ProjectHistory:
             checked = verify_run_provenance(self._result_key, request, grant, provenance)
             facts = checked['provenance']
             invalid = facts['task_family'] != task['family'] or facts['provider'] != route.get('provider', 'codex')
+            if not invalid:
+                from .project_host_open import verify_execution_open
+                verify_execution_open(self, grant, checked, task=task, now=now)
         except Exception:
             invalid = True
         if invalid:
@@ -1061,7 +1070,10 @@ class ProjectHistory:
                 raise HistoryError('history_incompatible')
             facts = record['provenance']['provenance']
             request = decode_run_provenance_input({name: facts[name] for name in ('registration', 'registration_digest', 'assignment_id')})
-            return verify_run_provenance(self._result_key, request, grant, record['provenance'])
+            checked = verify_run_provenance(self._result_key, request, grant, record['provenance'])
+            from .project_host_open import verify_execution_open
+            verify_execution_open(self, grant, checked)
+            return checked
         except Exception:
             raise HistoryError('history_incompatible') from None
 

@@ -372,8 +372,10 @@ class OriginalProjectVerifierJournalTests(unittest.TestCase):
         source = RunProvenanceTests(methodName='runTest')
         source.setUp()
         self.addCleanup(source.doCleanups)
-        store = source.managed_project()
-        source.base.consume(source.grant, provenance=source.proof())
+        # Explicit old reference consumption predates managed enrollment. Fresh
+        # managed consumption now requires this journal and cannot create it late.
+        source.base.consume(source.grant)
+        store = source.managed_project(record_host_open=False)
         request = OpenProvenanceInput(source.fixture.scope.run_handle, source.fixture.assigned['assignment_id'])
         proof = source.base.ledger._attest_open_provenance(source.fixture.project,
             runtime_digest=source.fixture.scope.runtime_digest, caller_scope='a'*64, request=request,

@@ -7,7 +7,7 @@ Native enrollment/input custody/current permission remain separate obligations.
 import hashlib
 import secrets
 
-from .history_contracts import HistoryError, _DIGEST, matches
+from .history_contracts import HistoryError, _DIGEST, matches, valid_integer
 from .host_open_contracts import (HostOpenContext, OpenProvenanceInput, checked_open_provenance,
                                   decode_open_provenance_input, seal_open_provenance, verify_open_provenance)
 from .learning_contracts import canonical_json, external_id, keyed_digest, parse_bounded_json, validate_learning_record
@@ -56,6 +56,40 @@ def read_host_open(history, binding):
     if invalid:
         raise HistoryError('history_conflict')
     return entry, proof
+
+
+def verify_execution_open(history, grant, provenance, *, task=None, now=None):
+    """Bind actual consumption/read provenance to its original pre-execution open.
+
+    Fresh work also checks the original window and verifier dependency. Known
+    historical metadata checks the same original companions without consulting
+    a clock or granting a new window. No account row or journal is reconstructed.
+    """
+    binding = grant.binding
+    row = history._connection.execute('SELECT * FROM result_leases WHERE project_id=? AND claim_id=?',
+        (binding.project_id, binding.claim_id)).fetchone()
+    if row is None:
+        raise HistoryError('history_execution_not_ready')
+    lease = history._lease(row)
+    if lease.state != 'bound' or not lease.binding.matches_attempt(binding) or lease.claim_digest != binding.claim_digest:
+        raise HistoryError('history_conflict')
+    entry, opened = read_host_open(history, lease.binding)
+    facts, registered = opened['provenance'], provenance['provenance']
+    if (any(facts[n] != getattr(grant, n) for n in
+            ('assignment_digest', 'task_digest', 'route_digest', 'configuration_digest', 'lease_digest'))
+            or any(facts[n] != registered[n] for n in ('assignment_id', 'provider', 'task_family', 'client_version',
+                'admission_record_id', 'admission_content_digest', 'admission_observed_at_ms',
+                'start_record_id', 'start_content_digest', 'observation_deadline_at_ms'))
+            or facts['opened_at_ms'] != registered['started_at_ms']
+            or grant.deadline_at_ms > facts['observation_deadline_at_ms']):
+        raise HistoryError('history_conflict')
+    if task is not None and (facts['task_family'] != task['family']
+            or facts['worker_outcome_digest'] != task.get('verification_for_outcome')):
+        raise HistoryError('history_conflict')
+    if now is not None and (not valid_integer(now, minimum=max(lease.created_at_ms, entry.ingested_at_ms,
+            facts['opened_at_ms']), maximum=min(grant.deadline_at_ms, facts['observation_deadline_at_ms']) - 1)):
+        raise HistoryError('history_execution_not_ready')
+    return entry, opened
 
 
 def record_host_open(history, binding, request, provenance, *, assignment, task, route, before_commit):
