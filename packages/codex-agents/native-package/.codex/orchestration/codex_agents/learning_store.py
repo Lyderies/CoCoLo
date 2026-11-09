@@ -6204,6 +6204,13 @@ class LearningLedger:
                                      request=request, storage_binding=storage_binding,
                                      storage_evidence=storage_evidence, work_limits=work_limits)
 
+    def _attest_open_provenance(self, project_id, *, runtime_digest, caller_scope, request,
+                               storage_binding, storage_evidence, work_limits):
+        from .account_host_open import attest_open_provenance
+        return attest_open_provenance(self, project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                      request=request, storage_binding=storage_binding,
+                                      storage_evidence=storage_evidence, work_limits=work_limits)
+
     def _register_project_execution(self, project_id, *, runtime_digest, caller_scope, registration,
                                     storage_binding, storage_evidence):
         """Durable one-use registration for an independently enrolled project.
