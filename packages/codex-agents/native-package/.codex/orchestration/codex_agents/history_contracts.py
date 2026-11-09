@@ -24,6 +24,7 @@ HISTORY_REASON_CODES = frozenset({
     "history_not_authorized", "history_service_unavailable",
     "history_result_capacity", "history_result_expired", "history_result_unavailable",
     "history_result_not_reserved", "history_result_not_ready",
+    "history_execution_consumed", "history_execution_not_ready",
 })
 
 

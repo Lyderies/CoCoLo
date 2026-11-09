@@ -16,6 +16,8 @@ import weakref
 
 from .bridge_liveness import BridgeLivenessOwner, CodexOwnerResult
 from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES
+from .execution_grant import MAX_EXECUTION_GRANT_BYTES
+from .owned_execution import OwnedExecutionKey
 from .codex_worker import CodexWorkerError, CodexWorkerHandle, CodexWorkerPacket, CodexWorkerPool, MAX_INPUT_BYTES, MAX_PACKET_BYTES, _decode_input
 from .contracts import ContractError
 from .history_contracts import AttemptBinding, HistoryError, TerminalDelivery, valid_integer
@@ -27,7 +29,7 @@ from .result_contracts import (
 )
 
 _TIME_NS = time.time_ns
-MAX_PERSISTENCE_ENTRY_BYTES = MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES + MAX_PACKET_BYTES + MAX_STORAGE_EVIDENCE_BYTES
+MAX_PERSISTENCE_ENTRY_BYTES = MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES + MAX_PACKET_BYTES + MAX_STORAGE_EVIDENCE_BYTES + 2 * MAX_EXECUTION_GRANT_BYTES
 
 
 class ResultPersistenceHandle:
@@ -53,6 +55,11 @@ class _Pending:
     lease: object = None
     claim_binding: AttemptBinding | None = None
     storage_evidence: bytes | None = None
+    bound_evidence: bytes | None = None
+    grant_raw: bytes | None = None
+    grant: object = None
+    execution_issued: bool = False
+    execution_ticket: object = None
 
 
 class ResultPersistenceLane:
@@ -61,17 +68,20 @@ class ResultPersistenceLane:
     prepare_lease()/arm() durably reserve before the trusted frontend consumes
     account launch authority; bind_claim() associates its actual issued receipt.
     prepare() retains the earlier known-claim internal reference only. This lane
-    does not admit, register or launch anything. bind() then associates the actual
-    registered execution. submit() accepts no caller result, flags,
+    does not admit or obtain account registration. consume_execution() commits
+    that original registration on the writer before issue_execution() creates
+    one project-local ticket; bind() associates its actual registered execution.
+    submit() accepts no caller result, flags,
     assignment, record, key, timestamp or cleanup claim. Explicit persistence
     retries retain the first selected bytes and observation time, never execution.
     """
 
-    def __init__(self, owner, pool, open_history, *, max_entries, retained_bytes):
+    def __init__(self, owner, pool, open_history, *, max_entries, retained_bytes, allow_local_execution_reference=False):
         if (type(owner) is not BridgeLivenessOwner or type(pool) is not CodexWorkerPool
                 or not callable(open_history) or type(max_entries) is not int or not 1 <= max_entries <= 64
                 or type(retained_bytes) is not int
-                or not max_entries * MAX_PERSISTENCE_ENTRY_BYTES <= retained_bytes <= 512 * 1_048_576):
+                or not max_entries * MAX_PERSISTENCE_ENTRY_BYTES <= retained_bytes <= 512 * 1_048_576
+                or type(allow_local_execution_reference) is not bool):
             raise HistoryError("history_invalid_input")
         owner._owner()
         pool._owner()
@@ -79,6 +89,7 @@ class ResultPersistenceLane:
         self._project = owner._monitor.scope().project_id
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._maximum = max_entries
+        self._allow_local_reference = allow_local_execution_reference
         self._lock = threading.Lock()
         self._jobs = weakref.WeakKeyDictionary()
         self._by_worker = weakref.WeakKeyDictionary()
@@ -184,6 +195,13 @@ class ResultPersistenceLane:
                 raise HistoryError("history_result_not_ready")
             return pending.storage_evidence
 
+    def bound_storage_evidence(self, handle):
+        pending = self._job(handle)
+        with self._lock:
+            if pending.bound_evidence is None or pending.lease is None or pending.lease.state != "bound":
+                raise HistoryError("history_result_not_ready")
+            return pending.bound_evidence
+
     def bind_claim(self, handle, binding, *, hard_deadline_at_ms):
         """After trusted account checks, queue the exact actual claim bind.
 
@@ -192,7 +210,8 @@ class ResultPersistenceLane:
         """
         pending = self._job(handle)
         binding = _capture_binding(binding)
-        self._owner._monitor._entry(binding)
+        # This is persistence binding, before an execution registration exposes
+        # the original monotonic deadline. No placeholder monitor claim is needed.
         if not valid_integer(hard_deadline_at_ms, minimum=1):
             raise HistoryError("history_invalid_input")
         with self._lock:
@@ -214,7 +233,7 @@ class ResultPersistenceLane:
     def bind(self, handle):
         pending = self._job(handle)
         with self._lock:
-            if (self._closed or self._fault or pending.state != "reserved"
+            if (self._closed or self._fault or pending.state not in {"reserved", "execution_issued"}
                     or type(pending.binding) is not AttemptBinding):
                 raise HistoryError("history_result_not_ready")
         binding = self._owner._worker(pending.binding, self._pool, pending.worker_handle)
@@ -223,6 +242,9 @@ class ResultPersistenceLane:
             if (original is not pending.original_job or original.state != "reserved"
                     or (pending.supervisor is None and original.payload is not pending.payload)):
                 raise HistoryError("history_not_authorized")
+            if (pending.lease_binding is not None and not self._allow_local_reference
+                    and (pending.execution_ticket is None or original.ticket is not pending.execution_ticket)):
+                raise HistoryError("history_not_authorized")
             supervisor = original.supervisor
         with self._lock:
             # No caller may replace the registered execution on a retry.
@@ -230,6 +252,60 @@ class ResultPersistenceLane:
                 raise HistoryError("history_conflict")
             pending.supervisor = supervisor
             pending.payload = None
+            pending.state = "reserved"
+
+    def consume_execution(self, handle, raw):
+        """Queue a server-authenticated account registration for durable use.
+
+        No ticket is accepted or returned here. Native peer identity and the
+        enrolled supervisor epoch must be established before this internal call.
+        """
+        pending = self._job(handle)
+        self._owner._monitor._entry(pending.binding)
+        if type(raw) is not bytes or not 0 < len(raw) <= MAX_EXECUTION_GRANT_BYTES:
+            raise HistoryError("history_invalid_input")
+        with self._lock:
+            if self._closed or self._fault:
+                raise HistoryError("history_service_unavailable")
+            if pending.grant_raw is not None and pending.grant_raw != raw:
+                raise HistoryError("history_conflict")
+            if pending.state in {"consuming_execution", "execution_consumed", "execution_issued"}:
+                return
+            if (pending.state not in {"reserved", "failed"} or pending.supervisor is not None
+                    or pending.lease is None or pending.lease.state != "bound"):
+                raise HistoryError("history_execution_not_ready")
+            pending.grant_raw, pending.state, pending.reason = raw, "consuming_execution", None
+            self._incoming.put_nowait(("consume_execution", handle))
+
+    def issue_execution(self, handle):
+        """Only the actual original writer's first committed return issues custody.
+
+        The ticket/registry belongs to this project process and owner. Metadata
+        reads, copied handles, retries and lost writer replies cannot issue one.
+        """
+        pending = self._job(handle)
+        status = self._owner._monitor.status(pending.binding)
+        with self._lock:
+            if self._closed or self._fault or pending.state != "execution_consumed" or pending.execution_issued:
+                raise HistoryError("history_execution_not_ready")
+            grant = pending.grant
+            entry = self._owner._monitor._entry(pending.binding)
+            if grant is None or entry.deadline != grant.deadline_ns or status.stop_requested:
+                raise HistoryError("history_execution_not_ready")
+        with self._pool._registry._lock:
+            original = self._pool._job(pending.worker_handle)
+            if original is not pending.original_job or original.state != "prepared" or original.payload is not pending.payload:
+                raise HistoryError("history_not_authorized")
+            with self._lock:
+                pending.execution_issued = True
+                pending.state = "execution_unknown"  # An interruption cannot restore launch eligibility.
+            ticket = self._pool._registry.issue(OwnedExecutionKey(
+                pending.binding.project_id, grant.handle_digest, pending.binding.run_id, pending.binding.claim_id),
+                deadline_ns=grant.deadline_ns, run_handle=pending.binding.run_handle)
+            with self._lock:
+                pending.execution_ticket, pending.state = ticket, "execution_issued"
+                pending.bound_evidence = None
+            return ticket
 
     def submit(self, handle):
         pending = self._job(handle)
@@ -348,10 +424,19 @@ class ResultPersistenceLane:
         self._history().bind_result_lease(pending.lease_binding, pending.claim_binding, assignment,
                                          hard_deadline_at_ms=pending.deadline_ms)
         lease = self._history().result_lease(pending.lease_binding)
+        evidence = self._history().attest_bound_result_lease(pending.lease_binding)
         with self._lock:
             pending.binding = pending.claim_binding
             pending.storage_evidence = None
+            pending.bound_evidence = evidence
             pending.lease, pending.state, pending.reason = lease, "reserved", None
+
+    def _consume_execution(self, pending):
+        data, _ = _decode_input(pending.payload)
+        grant = self._history().consume_execution_grant(pending.binding, pending.grant_raw,
+                                                       task=data["task"], route=data["route"])
+        with self._lock:
+            pending.grant, pending.state, pending.reason = grant, "execution_consumed", None
 
     def _publish(self, pending):
         selected = pending.selected.packet
@@ -369,7 +454,8 @@ class ResultPersistenceLane:
 
     def _run(self):
         operations = {"prepare": self._prepare, "publish": self._publish,
-                      "arm": self._arm, "bind_claim": self._bind_claim}
+                      "arm": self._arm, "bind_claim": self._bind_claim,
+                      "consume_execution": self._consume_execution}
         self._ready.set()
         pending = None
         try:

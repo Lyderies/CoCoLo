@@ -6085,6 +6085,100 @@ class LearningLedger:
              reference, deadline_ns, clock_owner),
         )
 
+    def _register_project_execution(self, project_id, *, runtime_digest, caller_scope, registration,
+                                    storage_binding, storage_evidence):
+        """Durable one-use registration for an independently enrolled project.
+
+        This creates no account-local process ticket. Native service identity,
+        supervisor epoch and account/project transport are separate activation
+        gates; JSON/source labels and these data do not establish them.
+        """
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+        from .claim_storage import capture_storage_evidence, verify_bound_storage_evidence
+        from .execution_grant import ExecutionRegistrationInput, sign_execution_grant
+        from .history_contracts import AttemptBinding
+        from .result_contracts import LEASE_SCOPE_FIELDS
+
+        if type(registration) is not ExecutionRegistrationInput:
+            raise ClaimError("claim_execution_invalid")
+        registration = ExecutionRegistrationInput(**registration.payload())
+        expected, evidence = capture_storage_evidence(storage_binding, storage_evidence)
+        key = self.state.digest_key()
+        lease = verify_bound_storage_evidence(key, expected, evidence)
+        if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                or expected.run_handle != registration.run_handle or expected.claim_request_id != registration.claim_request_id
+                or lease.claim_id != registration.bridge_run_id or lease.claim_digest != registration.claim_digest):
+            raise ClaimError("claim_execution_invalid")
+        launch = LaunchClaimInput(registration.run_handle, registration.identity_digest)
+        original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, "account.claim_launch", registration.claim_request_id,
+                                  project_id, runtime_digest, launch.payload())
+        if expected.claim_request_digest != account_request_digest(original):
+            raise ClaimError("claim_execution_invalid")
+        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                                    request_id=registration.claim_request_id, launch=launch)
+        if (known is None or known["state"] != "claimed" or known["bridge_run_id"] != registration.bridge_run_id
+                or known["receipt_digest"] != registration.claim_digest):
+            raise ClaimError("claim_execution_unavailable")
+        binding = AttemptBinding(**{name: getattr(expected, name) for name in LEASE_SCOPE_FIELDS},
+                                 claim_id=registration.bridge_run_id, claim_digest=registration.claim_digest)
+        claim_binding = keyed_digest(key, canonical_json({
+            "domain": "project-result-claim-binding-v1", "lease_digest": lease.lease_digest,
+            "binding": binding.as_data(), "hard_deadline_at_ms": lease.hard_deadline_at_ms,
+        }))
+        if not secrets.compare_digest(claim_binding, lease.claim_binding_digest):
+            raise ClaimError("claim_execution_invalid")
+        with self._account_transaction():
+            current = self._known_claim_receipt_locked(project_id, context.scope, context.request, context.parameters)
+            if current is None or current["receipt_digest"] != known["receipt_digest"]:
+                raise ClaimError("claim_execution_unavailable")
+            row = self._connection.execute(
+                "SELECT a.*,h.assignment_digest,h.task_digest,h.route_digest,h.configuration_digest,"
+                "h.native_assignment_id,h.binding_state,h.consumed_at_ms,h.client_version,"
+                "o.handle_digest AS orchestration_digest,e.owner_digest AS registered_digest "
+                "FROM active_run_capacity a JOIN host_run_bindings h "
+                "ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id "
+                "JOIN orchestrations o ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id "
+                "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
+                "WHERE a.project_id=? AND a.handle_digest=? AND a.bridge_run_id=?",
+                (project_id, context.handle, registration.bridge_run_id),
+            ).fetchone()
+            if (row is None or row["kind"] != "claimed" or row["runtime_digest"] != runtime_digest
+                    or row["provider"] != "codex" or row["run_id"] != expected.run_id
+                    or row["assignment_digest"] != lease.assignment_digest
+                    or row["orchestration_digest"] != keyed_digest(key, expected.orchestration_handle)
+                    or row["deadline_at_ms"] != lease.hard_deadline_at_ms):
+                raise ClaimError("claim_execution_invalid")
+            grant = sign_execution_grant(
+                key, binding=binding, handle_digest=context.handle, assignment_digest=row["assignment_digest"],
+                task_digest=row["task_digest"], route_digest=row["route_digest"], configuration_digest=row["configuration_digest"],
+                lease_digest=lease.lease_digest, clock_owner_digest=row["clock_owner_digest"],
+                clock_reference_ns=row["clock_reference_ns"], deadline_ns=row["execution_deadline_ns"],
+                claimed_at_ms=row["claimed_at_ms"], deadline_at_ms=row["deadline_at_ms"],
+            )
+            if row["registered_digest"] is not None:
+                if not secrets.compare_digest(row["registered_digest"], grant.registration_digest):
+                    raise ClaimError("claim_execution_conflict")
+                return {"grant": grant.as_data(), "known": True}
+            clock = self._capacity_clock_reference()
+            now = self._clock_ms()
+            owned_key = OwnedExecutionKey(project_id, context.handle, expected.run_id, registration.bridge_run_id)
+            native_id = external_id(key, "asg", registration.bridge_run_id)
+            if (row["released_at_ms"] is not None or row["binding_state"] != "pending"
+                    or row["consumed_at_ms"] is not None or row["client_version"] != "bridge-v1"
+                    or row["native_assignment_id"] not in {None, native_id}
+                    or type(now) is not int or not row["claimed_at_ms"] <= now < row["deadline_at_ms"]
+                    or not row["clock_reference_ns"] <= clock < row["execution_deadline_ns"]
+                    or not secrets.compare_digest(row["clock_owner_digest"], self._capacity_clock_owner(
+                        owned_key, row["clock_reference_ns"], row["execution_deadline_ns"],
+                        row["claimed_at_ms"], row["deadline_at_ms"]))):
+                raise ClaimError("claim_execution_unavailable")
+            self._connection.execute("INSERT INTO capacity_executions VALUES(?,?,?,?,?)",
+                                     (project_id, context.handle, expected.run_id, registration.bridge_run_id,
+                                      grant.registration_digest))
+            self._connection.execute("UPDATE host_run_bindings SET native_assignment_id=? WHERE project_id=? AND handle_digest=?",
+                                     (native_id, project_id, context.handle))
+        return {"grant": grant.as_data(), "known": False}
+
     def _new_owned_execution(self, project_id, run_handle, bridge_run_id):
         """Internal fixed-bridge registration, not a caller-selected PID API."""
         handle = keyed_digest(self.state.digest_key(), run_handle)

@@ -45,7 +45,10 @@ class ResultPersistenceTests(unittest.TestCase):
         return ProjectHistory(self.directory, self.project, result_key=KEY, result_capacity=self.capacity)
 
     def new_lane(self, **changes):
-        options = dict(max_entries=4, retained_bytes=4 * MAX_PERSISTENCE_ENTRY_BYTES)
+        # Explicit local reference fixture; normal lease execution requires the
+        # account registration and original project writer consumption return.
+        options = dict(max_entries=4, retained_bytes=4 * MAX_PERSISTENCE_ENTRY_BYTES,
+                       allow_local_execution_reference=True)
         options.update(changes)
         lane = ResultPersistenceLane(self.fixture.owner, self.fixture.pool, self.factory, **options)
         self.addCleanup(self.stop_lane, lane)

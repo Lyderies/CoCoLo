@@ -74,7 +74,7 @@ class AccountAuthorization:
         if (
             not matches(self.project_id, _PROJECT) or not matches(self.runtime_digest, _DIGEST)
             or not matches(self.request_digest, _DIGEST) or type(self.source) is not str
-            or self.source not in {"host", "owner", "hook", "app_server"}
+            or self.source not in {"host", "owner", "hook", "app_server", "project"}
             or type(self.allowed_operations) is not frozenset or not self.allowed_operations
             or any(type(operation) is not str for operation in self.allowed_operations)
             or not self.allowed_operations <= ACCOUNT_OPERATIONS
@@ -160,6 +160,12 @@ class AccountOwnerViews:
                 raise AccountError("account_unavailable")
             self._project_locked(project_id)
             return self._ledger._capacity_status(project_id, status)
+
+    def register_execution(self, project_id, *, runtime_digest, caller_scope, registration, storage_binding, storage_evidence):
+        self._guard()
+        return self._ledger._register_project_execution(project_id, runtime_digest=runtime_digest,
+                                                       caller_scope=caller_scope, registration=registration,
+                                                       storage_binding=storage_binding, storage_evidence=storage_evidence)
 
     def _claim_preflight(self, project_id, *, runtime_digest, caller_scope, request_id, launch, work_limits=None,
                          storage_required=False, storage_binding=None, storage_evidence=None):
@@ -673,6 +679,8 @@ class AccountService:
             # original envelope; no JSON field supplies caller/role authority.
             launch = decode_claim_input(request.payload) if operation == "account.claim_launch" else None
             status = decode_capacity_status_input(request.payload) if operation == "account.capacity_status" else None
+            from .execution_grant import decode_execution_registration
+            registration = decode_execution_registration(request.payload) if operation == "account.register_execution" else None
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -697,6 +705,9 @@ class AccountService:
                 or request.operation not in authorization.allowed_operations
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
+                or (authorization.source == "project" and operation not in {"account.health", "account.register_execution"})
+                or (operation == "account.register_execution" and
+                    (authorization.source != "project" or authorization.caller_scope is None))
                 or (operation in {"account.claim_launch", "account.capacity_status"} and
                     (authorization.source != "host" or authorization.caller_scope is None))
             ):
@@ -720,6 +731,13 @@ class AccountService:
                                                   request_id=identity, launch=launch,
                                                   storage_required=not self._allow_unleased_reference,
                                                   storage_binding=storage_binding, storage_evidence=storage_evidence)
+            elif operation == "account.register_execution":
+                from .claim_storage import capture_storage_evidence
+                storage_binding, storage_evidence = capture_storage_evidence(
+                    authorization.storage_binding, authorization.storage_evidence)
+                result = self._views.register_execution(project, runtime_digest=runtime,
+                                                        caller_scope=authorization.caller_scope, registration=registration,
+                                                        storage_binding=storage_binding, storage_evidence=storage_evidence)
             elif request.operation == "account.health":
                 result = {"transport_alive": True, "database_checked": False}
             elif request.operation == "account.project":

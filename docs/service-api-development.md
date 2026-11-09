@@ -6,6 +6,62 @@ still use the installed 0.8.12 implementation; the source codec does not enable 
 
 ## Worker result persistence lane
 
+### Project-local execution registration
+
+The account owner can now durably register an original Codex launch claim for
+execution by an independent project supervisor. `account.register_execution`
+accepts only the original run handle, bridge claim ID/digest, claim request ID and
+provider identity digest. Its independently authorized server context must be a
+project service, bound to the original primary scope, with the exact expected
+supervisor generation and protected bound-storage evidence. Other caller sources
+are refused. Neither request JSON nor a sealed proof establishes native identity.
+
+The account checks the actual claimed receipt, keyed task/route/assignment,
+execution configuration, orchestration, lease and unchanged deadline against its
+own rows. A short transaction records one registration without issuing an account
+process ticket or opening project SQLite. The returned bounded registration
+contains the original monotonic reference/deadline and wall-time window; it never
+reconstructs a fresh timeout. An account restart can retrieve an existing exact
+registration as metadata, but cannot mint a new one after losing the original
+clock-owner association. Known metadata is not a new launch opportunity.
+
+The project writer exports historical bound evidence through
+`attest_bound_result_lease`; this asserts no current execution readiness. Claim
+binding requires no placeholder monitor or invented monotonic deadline. Once the
+actual registration supplies that deadline, the project monitor binds it and the
+fixed writer checks the original immutable task/route/configuration before
+`consume_execution_grant` commits one-use consumption. Exact retries after commit
+return `history_execution_consumed`, including when the first reply was lost.
+Missing or corrupt state cannot be repaired into fresh launch permission.
+
+Only the actual writer's first successful return lets `ResultPersistenceLane`
+issue one ticket from its own process-local registry. Issuing rechecks the original
+prepared input and monitor deadline/cancellation; issuance uncertainty is latched
+before entering the registry. Copied handles, decoded metadata and repeated calls
+cannot issue custody. The default lane requires that same ticket at binding; the
+explicit local reference option exists only for earlier inert-worker fixtures.
+PID, owner-thread, Popen and ticket checks in the execution registry are unchanged.
+
+Project-history schema 4 adds the fixed consumption table. Normal opens refuse
+older schemas unchanged. The explicit drained-owner migration accepts only exact
+recognized schemas 1, 2 or 3 and preserves their existing records, leases, counters,
+artifacts and outbox. A table or MAC is not proof of native enrollment or a drain.
+
+An inert integration test uses two actual project supervisor processes and one
+account owner. It confirms OS suspension of A while B handles bounded socket
+status/cancellation, confirms cleanup and commits its cancelled result locally.
+Both projects issue custody in their own process, once, after actual account
+claims/registrations and writer consumption. Central capacity stays held: local
+terminal persistence does not invent authenticated account completion or release.
+
+This remains uninstalled integration source. Native peer enrollment and current
+revocation, pinned clock/boot/supervisor epochs, protected evidence publication,
+completion/release transport, uncertain/orphan recovery, normal-client migration,
+actual admitted Codex/Claude paths, containment and every independent/installed
+release gate remain mandatory before activation. The two-process fixture proves
+the tested isolation boundary with synthetic enrollment, not real-client cadence
+or the complete concurrency acceptance criteria.
+
 ### Account enforcement of armed storage
 
 `AccountService` and its deferred `AccountClaimJobs` now require protected armed
@@ -115,8 +171,9 @@ preparation stops the frontend before execution registration; existing monitor
 refusal after a stop remains intact. The old `prepare` is a known-claim internal
 reference and cannot provide the pre-claim ordering guarantee.
 
-Project-history schema 3 adds the fixed lease table/index. Ordinary opens refuse
-schemas 1 and 2 without migration writes. Only the explicit trusted drained-owner
+Project-history schema 3 added the fixed lease table/index; schema 4 also records
+execution consumption as described above. Ordinary opens refuse older schemas
+without migration writes. Only the explicit trusted drained-owner
 upgrade option can migrate the exact recognized old schema, preserving signed
 record bytes, counters, outbox and result artifacts in one transaction. Unknown
 schema/trigger changes are refused. The option itself proves neither a drain nor

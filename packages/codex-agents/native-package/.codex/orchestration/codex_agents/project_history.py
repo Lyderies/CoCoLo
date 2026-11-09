@@ -18,20 +18,21 @@ import sqlite3
 import stat
 import threading
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
-from .contracts import ContractError
-from .claim_storage import encode_storage_evidence, lease_receipt_digest, lease_state_seal
+from .contracts import ContractError, validate_task
+from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES, encode_storage_evidence, lease_receipt_digest, lease_state_seal
+from .execution_grant import MAX_EXECUTION_GRANT_BYTES, verify_execution_grant
 from .history_contracts import (
     MAX_SEQUENCE, AttemptBinding, HistoryEntry, HistoryError, TerminalDelivery,
     _DIGEST, _ID, _PROJECT, matches, valid_integer,
 )
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
-    keyed_digest, parse_bounded_json, validate_learning_record,
+    keyed_digest, parse_bounded_json, validate_execution_configuration, validate_learning_record,
 )
 from .result_contracts import (
     MAX_ASSIGNMENT_CANONICAL_BYTES, MAX_RESULT_BODY_BYTES, MAX_RESULT_RETENTION_MS,
@@ -40,7 +41,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding"})
 MAX_DELIVERY_PAGE_BYTES = 16_384
 MAX_BINDING_BYTES = 4096
@@ -100,7 +101,15 @@ CREATE TABLE result_leases(
  FOREIGN KEY(project_id,claim_id) REFERENCES result_reservations(project_id,claim_id));
 CREATE INDEX lease_expiry ON result_leases(project_id,state,reserved_until_ms);
 """
-_SCHEMA = _SCHEMA_V2 + _LEASE_SCHEMA
+_SCHEMA_V3 = _SCHEMA_V2 + _LEASE_SCHEMA
+_EXECUTION_SCHEMA = """
+CREATE TABLE project_execution_consumptions(
+ project_id TEXT NOT NULL, claim_id TEXT NOT NULL, registration_digest TEXT NOT NULL,
+ grant BLOB NOT NULL, consumed_at_ms INTEGER NOT NULL,
+ PRIMARY KEY(project_id,claim_id), UNIQUE(project_id,registration_digest),
+ FOREIGN KEY(project_id,claim_id) REFERENCES result_reservations(project_id,claim_id));
+"""
+_SCHEMA = _SCHEMA_V3 + _EXECUTION_SCHEMA
 _COLUMNS = {
     "history_identity": ("project_id", "next_source_sequence", "next_delivery_sequence"),
     "records": ("project_id", "record_id", "record_type", "source", "source_sequence",
@@ -116,6 +125,7 @@ _COLUMNS = {
     "result_leases": ("project_id", "run_handle", "attempt", "claim_request_id", "binding", "assignment_digest",
                       "created_at_ms", "reserved_until_ms", "state", "lease_digest", "claim_id", "claim_digest",
                       "hard_deadline_at_ms", "claim_binding_digest", "state_digest"),
+    "project_execution_consumptions": ("project_id", "claim_id", "registration_digest", "grant", "consumed_at_ms"),
 }
 
 
@@ -307,18 +317,19 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2} and application == _APPLICATION_ID
-              and actual_schema == schema_set(_SCHEMA_V1 if version == 1 else _SCHEMA_V2)):
+        elif (version in {1, 2, 3} and application == _APPLICATION_ID
+              and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {"result_leases", *({"result_identity", "result_reservations"} if version == 1 else set())}
+            omitted = {"project_execution_consumptions", *({"result_leases"} if version < 3 else set()),
+                       *({"result_identity", "result_reservations"} if version == 1 else set())}
             self._check_schema_identity({name: columns for name, columns in _COLUMNS.items() if name not in omitted})
             with self._transaction():
-                additions = (_RESULT_SCHEMA if version == 1 else "") + _LEASE_SCHEMA
+                additions = (_RESULT_SCHEMA if version == 1 else "") + (_LEASE_SCHEMA if version < 3 else "") + _EXECUTION_SCHEMA
                 for statement in additions.split(";"):
                     if statement.strip():
                         connection.execute(statement)
@@ -829,6 +840,80 @@ class ProjectHistory:
         if now >= value.reserved_until_ms:
             raise HistoryError("history_result_expired")
         return encode_storage_evidence(self._result_key, value)
+
+    @_operation
+    def attest_bound_result_lease(self, binding: ResultLeaseBinding) -> bytes:
+        """Historical bound metadata only; it asserts no current launch readiness.
+
+        Current account timing and local one-use consumption are checked
+        separately. Authentication/enrollment of both service peers is mandatory.
+        """
+        binding = self._lease_binding(binding)
+        if self._result_key is None:
+            raise HistoryError("history_result_unavailable")
+        value = self._lease_row(binding)
+        if value.state != "bound":
+            raise HistoryError("history_result_not_ready")
+        raw = canonical_json({"protocol_version": 1, "lease": asdict(value), "seal": self._lease_seal(value)})
+        if len(raw) > MAX_STORAGE_EVIDENCE_BYTES:
+            raise HistoryError("history_invalid_input")
+        return raw
+
+    @_operation
+    def consume_execution_grant(self, binding: AttemptBinding, raw: bytes, *, task: dict, route: dict):
+        """Persist one original registration BEFORE local process custody.
+
+        This internal operation requires an independently authenticated account
+        peer and project supervisor. A returned dataclass/MAC is not an execution
+        ticket. Only the actual fixed writer return may authorize its local
+        handoff. Lost replies/crashes retain consumption and never reissue it.
+        """
+        binding = self._result_binding(binding)
+        now = self._result_now()
+        try:
+            grant = verify_execution_grant(self._result_key, binding, raw)
+        except Exception:
+            grant = None
+        if grant is None:
+            raise HistoryError("history_invalid_input")
+        invalid = False
+        try:
+            invalid = (type(route) is not dict or grant.task_digest != keyed_digest(self._result_key, canonical_json(validate_task(task)))
+                       or grant.route_digest != keyed_digest(self._result_key, canonical_json(route))
+                       or grant.configuration_digest != content_digest(validate_execution_configuration(route["execution_configuration"])))
+        except Exception:
+            invalid = True
+        if invalid:
+            raise HistoryError("history_conflict")
+        with self._transaction():
+            existing = self._connection.execute("SELECT * FROM project_execution_consumptions WHERE project_id=? "
+                                                "AND (claim_id=? OR registration_digest=?) LIMIT 2",
+                                                (self.project_id, binding.claim_id, grant.registration_digest)).fetchall()
+            if existing:
+                if len(existing) != 1 or existing[0]["claim_id"] != binding.claim_id or existing[0]["registration_digest"] != grant.registration_digest:
+                    raise HistoryError("history_conflict")
+                prior = self._stored_blob(existing[0]["grant"], maximum=MAX_EXECUTION_GRANT_BYTES)
+                if prior != raw or not valid_integer(existing[0]["consumed_at_ms"]):
+                    raise HistoryError("history_incompatible")
+                raise HistoryError("history_execution_consumed")
+            # No implicit retirement/file I/O or transaction nesting here. An
+            # expired/body-prepared/retired result cannot admit a new process.
+            _, reservation = self._result_row(binding)
+            row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND claim_id=?",
+                                           (self.project_id, binding.claim_id)).fetchone()
+            lease = None if row is None else self._lease(row)
+            if (lease is None or lease.state != "bound" or reservation.state != "reserved"
+                    or reservation.prepared_at_ms is not None or now >= reservation.expires_at_ms
+                    or grant.assignment_digest != reservation.assignment_digest or grant.lease_digest != lease.lease_digest
+                    or grant.deadline_at_ms != reservation.hard_deadline_at_ms
+                    or not lease.created_at_ms <= grant.claimed_at_ms <= now < grant.deadline_at_ms):
+                raise HistoryError("history_execution_not_ready")
+            clock = time.monotonic_ns()
+            if type(clock) is not int or not grant.clock_reference_ns <= clock < grant.deadline_ns:
+                raise HistoryError("history_execution_not_ready")
+            self._connection.execute("INSERT INTO project_execution_consumptions VALUES(?,?,?,?,?)",
+                                     (self.project_id, binding.claim_id, grant.registration_digest, raw, now))
+        return grant
 
     @_operation
     def arm_result_lease(self, binding: ResultLeaseBinding) -> ResultLease:

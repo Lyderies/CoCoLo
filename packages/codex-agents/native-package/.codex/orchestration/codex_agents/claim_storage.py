@@ -55,6 +55,34 @@ def encode_storage_evidence(key, value):
     return raw
 
 
+def verify_bound_storage_evidence(key, expected, raw):
+    """Historical bound storage metadata; current launch timing is separate."""
+    if expected is None or raw is None:
+        raise ClaimError("claim_storage_required")
+    invalid = False
+    try:
+        if type(expected) is not ResultLeaseBinding or type(raw) is not bytes or not 0 < len(raw) <= MAX_STORAGE_EVIDENCE_BYTES:
+            raise ValueError()
+        expected.as_data()
+        body = parse_bounded_json(raw, max_bytes=MAX_STORAGE_EVIDENCE_BYTES)
+        if (type(body) is not dict or set(body) != {"protocol_version", "lease", "seal"}
+                or type(body["protocol_version"]) is not int or body["protocol_version"] != 1
+                or not matches(body["seal"], _DIGEST)):
+            raise ValueError()
+        fields = dict(body["lease"])
+        fields["binding"] = ResultLeaseBinding(**fields["binding"])
+        value = ResultLease(**fields)
+        invalid = (canonical_json(body) != raw or value.state != "bound" or value.binding != expected
+                   or not secrets.compare_digest(body["seal"], lease_state_seal(key, value))
+                   or not secrets.compare_digest(value.lease_digest, lease_receipt_digest(
+                       key, value.binding, value.assignment_digest, value.created_at_ms, value.reserved_until_ms)))
+    except Exception:
+        invalid = True
+    if invalid:
+        raise ClaimError("claim_storage_invalid")
+    return value
+
+
 def verify_storage_evidence(key, expected, raw, *, project_id, runtime_digest, run_handle,
                             run_id, request_id, request_digest, assignment_digest,
                             orchestration_digest, now_ms, deadline_ms):

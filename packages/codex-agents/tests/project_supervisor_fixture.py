@@ -1,0 +1,156 @@
+"""Inert process fixture, not a native enrollment or production supervisor.
+
+The parent supplies disposable test metadata through stdin and two inherited
+socketpairs. No provider, account SQLite, listener or native credentials here.
+"""
+from copy import copy
+from dataclasses import asdict
+import json
+import os
+from pathlib import Path
+import socket
+import sys
+import time
+
+import tests.support  # noqa: F401
+from tests.test_bridge import PARENT_GRANT, RESULT_SCHEMA
+
+from codex_agents.bridge_liveness import BridgeLivenessOwner
+from codex_agents.codex_worker import CodexWorkerLimits, CodexWorkerPool
+from codex_agents.control_api import ControlScope
+from codex_agents.control_loop import ControlLoop, ControlLoopLimits
+from codex_agents.control_service import ControlAuthorization, ControlService
+from codex_agents.execution_grant import checked_execution_grant
+from codex_agents.history_contracts import AttemptBinding, HistoryError
+from codex_agents.liveness_clock import LivenessLimits
+from codex_agents.owned_execution import OwnedExecutionRegistry
+from codex_agents.project_history import ProjectHistory
+from codex_agents.project_monitor import ProjectMonitor, SupervisorScope
+from codex_agents.result_contracts import LEASE_SCOPE_FIELDS, MAX_RESULT_BODY_BYTES, ResultCapacity, ResultLeaseBinding
+from codex_agents.result_persistence import MAX_PERSISTENCE_ENTRY_BYTES, ResultPersistenceLane
+from codex_agents.service_protocol import service_request_digest
+
+SECOND = 1_000_000_000
+CONTEXT = object()  # Synthetic native frontend; never authentication evidence.
+
+
+def receive():
+    raw = sys.stdin.buffer.readline(131_073)
+    if not raw.endswith(b"\n") or len(raw) > 131_072:
+        raise RuntimeError("fixture_input")
+    return json.loads(raw)
+
+
+def emit(**value):
+    print(json.dumps(value, separators=(",", ":")), flush=True)
+
+
+def main():
+    data = receive()
+    lease_scope = ResultLeaseBinding(**data["scope"])
+    scope = SupervisorScope(**{name: getattr(lease_scope, name) for name in (
+        "project_id", "primary_session_id", "runtime_digest", "supervisor_instance_id", "supervisor_generation")})
+    monitor = ProjectMonitor(scope, LivenessLimits(30 * SECOND, 2 * SECOND, 5 * SECOND, 20 * SECOND),
+                             max_tracked_attempts=2, clock_ns=time.monotonic_ns)
+    control_scope = ControlScope(**asdict(scope))
+
+    def authorize(request, context):
+        if context is CONTEXT:
+            return ControlAuthorization(control_scope, request.target, service_request_digest(request),
+                                        frozenset({"project.status", "project.cancel"}))
+
+    service = ControlService(monitor, authorizer=authorize, clock_ns=time.monotonic_ns)
+    loop = ControlLoop(monitor, service, ControlLoopLimits(4, 4, 30 * SECOND, 1_000_000))
+    owner = BridgeLivenessOwner(loop)
+    registry = OwnedExecutionRegistry()
+    pool = CodexWorkerPool(registry, CodexWorkerLimits(1, 16 * 1_048_576))
+    root = Path(data["root"])
+    key = bytes.fromhex(data["fixture_key"])
+
+    def open_history():
+        return ProjectHistory(Path(data["history"]), scope.project_id, result_key=key,
+                              result_capacity=ResultCapacity(8, 2 * MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
+
+    lane = None
+    try:
+        lane = ResultPersistenceLane(owner, pool, open_history, max_entries=1,
+                                     retained_bytes=MAX_PERSISTENCE_ENTRY_BYTES)
+
+        def until(predicate):
+            end = time.monotonic() + 12
+            while not predicate():
+                if time.monotonic() >= end:
+                    raise RuntimeError("fixture_progress_timeout")
+                owner.run_once()
+                time.sleep(.002)
+
+        payload = json.dumps({"task": data["task"], "route": data["route"], "assignment": data["assignment"],
+                              "parent_grant": PARENT_GRANT, "schema": RESULT_SCHEMA.decode(),
+                              "export": str(root / "export"), "control": str(root / "control"),
+                              "executable": str(root / "inert-exec"), "environ": {"PATH": os.defpath},
+                              "role_prompt": "Read the inert fixture only.", "worker_result_path": None}).encode()
+        worker = pool.prepare(payload)
+        handle = lane.prepare_lease(lease_scope, worker)
+        until(lambda: lane.snapshot(handle)["state"] != "preparing")
+        lane.arm(handle)
+        until(lambda: lane.snapshot(handle)["state"] != "arming")
+        emit(stage="armed", evidence=lane.storage_evidence(handle).hex())
+        receipt = receive()
+        binding = AttemptBinding(**{name: getattr(lease_scope, name) for name in LEASE_SCOPE_FIELDS},
+                                 claim_id=receipt["bridge_run_id"], claim_digest=receipt["receipt_digest"])
+        lane.bind_claim(handle, binding, hard_deadline_at_ms=receipt["deadline_at_ms"])
+        until(lambda: lane.snapshot(handle)["state"] != "binding_claim")
+        emit(stage="bound", evidence=lane.bound_storage_evidence(handle).hex())
+        grant = checked_execution_grant(receive()["grant"])
+        monitor.register(binding, hard_deadline_ns=grant.deadline_ns)
+
+        def refuses_issue(value):
+            try:
+                lane.issue_execution(value)
+            except HistoryError:
+                return
+            raise RuntimeError("fixture_duplicate_execution")
+
+        refuses_issue(handle)  # Bound storage alone cannot issue local custody.
+        lane.consume_execution(handle, grant.encode())
+        until(lambda: lane.snapshot(handle)["state"] != "consuming_execution")
+        refuses_issue(copy(handle))
+        ticket = lane.issue_execution(handle)
+        refuses_issue(handle)
+        pool.bind(worker, ticket)
+        supervisor = pool.supervisor(worker)
+        owner.bind(binding, supervisor)
+        lane.bind(handle)
+        for descriptor in sys.argv[1:]:
+            loop.attach(socket.socket(fileno=int(descriptor)), CONTEXT)
+        pool.submit(worker)
+        until(lambda: (root / "launches").exists())
+        emit(stage="started", pid=os.getpid(), registry_pid=registry._pid, deadline_ns=grant.deadline_ns)
+        until(lambda: pool.snapshot(worker)["returned"])
+        selected = owner.result(binding, pool, worker)
+        lane.submit(handle)
+        until(lambda: lane.snapshot(handle)["state"] in {"committed", "failed", "unknown"})
+        if lane.snapshot(handle)["state"] != "committed":
+            raise RuntimeError("fixture_persistence_failed")
+        emit(stage="done", cleanup_confirmed=supervisor.snapshot()["cleanup_confirmed"],
+             fenced=selected.packet.fenced, terminal_state=selected.packet.terminal_state,
+             stop_reason=selected.stop_reason, ticket_count=len(registry._issued),
+             launches=(root / "launches").read_text().splitlines(),
+             persisted_claim=lane.delivery(handle).binding.claim_id)
+    finally:
+        pool.close()
+        if lane is not None:
+            lane.close()
+            lane._writer.join(6)
+            if lane._writer.is_alive():
+                raise RuntimeError("fixture_writer_cleanup")
+        for slot in pool._slots:
+            slot.thread.join(6)
+            if slot.thread.is_alive():
+                raise RuntimeError("fixture_worker_cleanup")
+        loop.close()
+        service.close()
+
+
+if __name__ == "__main__":
+    main()
