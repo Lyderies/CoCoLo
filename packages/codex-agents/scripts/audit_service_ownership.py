@@ -531,10 +531,11 @@ def main(argv=None) -> int:
     parser.add_argument("--source-root", type=Path, default=SOURCE_ROOT)
     parser.add_argument("--client-root", action="append", dest="client_roots")
     parser.add_argument("--full", action="store_true")
+    parser.add_argument("--compact", action="store_true", help="Emit the selected report as compact JSON with the same metadata and size limit.")
     args = parser.parse_args(argv)
     try:
         report = audit_sources(load_sources(args.source_root), args.client_roots or DEFAULT_CLIENT_ROOTS)
-        rendered = _render_bounded(report if args.full else summary(report), indent=2)
+        rendered = _render_bounded(report if args.full else summary(report), indent=None if args.compact else 2)
     except MemoryError:
         print('{"ready": false, "reason_code": "audit_source_limit"}')
         return 2

@@ -277,6 +277,33 @@ class OwnershipMemoryTests(unittest.TestCase):
         self.assertEqual(2, status)
         self.assertEqual({"ready": False, "reason_code": "audit_source_limit"}, json.loads(stdout.getvalue()))
 
+    def test_explicit_compact_full_output_keeps_all_metadata_and_check_failure(self):
+        sources = {"client.py": "import sqlite3\n"}
+        report = self.check(sources)
+        compact = len(json.dumps(report, sort_keys=True).encode()) + 1
+        readable = len(json.dumps(report, sort_keys=True, indent=2).encode()) + 1
+        with mock.patch.object(audit, "load_sources", return_value=sources), \
+                mock.patch.object(audit, "MAX_REPORT_BYTES", (compact + readable) // 2), \
+                contextlib.redirect_stdout(io.StringIO()) as stdout:
+            status = audit.main(["check", "--client-root", "client.py", "--full", "--compact"])
+        self.assertEqual(1, status)
+        # The wire representation converts internal tuple metadata to JSON lists.
+        self.assertEqual(json.loads(json.dumps(report)), json.loads(stdout.getvalue()))
+        self.assertEqual(1, stdout.getvalue().count("\n"))
+        self.assertLessEqual(len(stdout.getvalue().encode()), (compact + readable) // 2)
+
+    def test_compact_output_still_charges_final_newline_and_has_no_partial_report(self):
+        sources = {"client.py": "import sqlite3\n"}
+        report = self.check(sources)
+        compact_without_newline = len(json.dumps(report, sort_keys=True).encode())
+        with mock.patch.object(audit, "load_sources", return_value=sources), \
+                mock.patch.object(audit, "MAX_REPORT_BYTES", compact_without_newline), \
+                contextlib.redirect_stdout(io.StringIO()) as stdout:
+            status = audit.main(["inventory", "--client-root", "client.py", "--full", "--compact"])
+        self.assertEqual(2, status)
+        self.assertEqual({"ready": False, "reason_code": "audit_source_limit"}, json.loads(stdout.getvalue()))
+        self.assertNotIn("modules", stdout.getvalue())
+
 
 class OwnershipFileTests(unittest.TestCase):
     def setUp(self):
@@ -292,6 +319,17 @@ class OwnershipFileTests(unittest.TestCase):
         cache.mkdir()
         (cache / "ignored.py").write_text("CANARY\n")
         self.assertEqual({"client.py": "VERSION = 1\n"}, audit.load_sources(self.root))
+
+    def test_actual_package_full_report_is_available_through_compact_cli(self):
+        result = subprocess.run([sys.executable, "-B", str(SCRIPT), "check", "--full", "--compact"],
+                                capture_output=True, timeout=15, check=False)
+        report = json.loads(result.stdout)
+        self.assertEqual(0 if report["boundary_conformant"] else 1, result.returncode, result.stderr.decode(errors="replace"))
+        self.assertIn("modules", report)
+        self.assertIn("cli", report["modules"])
+        self.assertGreater(report["counts"]["all_ast_calls"], 0)
+        self.assertLessEqual(len(result.stdout), audit.MAX_REPORT_BYTES)
+        self.assertEqual(1, result.stdout.count(b"\n"))
 
     def test_symlink_and_fifo_refuse_without_following_or_blocking(self):
         outside = self.base / "outside"

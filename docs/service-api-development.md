@@ -935,9 +935,13 @@ unresolved static evidence; input/read/size errors exit 2. Current CLI, bridge a
 persistence dependencies remain findings that must be removed during migration. There is
 no baseline exception that makes those paths pass.
 
-The default JSON is compact. `--full` adds per-module hashes and bounded import/call-site metadata;
-it includes no source text or call arguments and fails rather than truncating oversized
-output. Call counts are AST sites, not regex line counts or execution counts. The report
+The default JSON summarizes the findings. `--full` adds per-module hashes and bounded
+import/call-site metadata. Add `--compact` to render either report without indentation;
+`check --full --compact` preserves every full-report field within the same 4 MiB limit,
+including its final newline. This changes formatting only: conformance failures still
+exit 1, and oversized output still fails with exit 2 before printing any partial report.
+The report includes no source text or call arguments. Call counts are AST sites,
+not regex line counts or execution counts. The report
 labels module-wide alias attribution and unknown object/external-package flows explicitly.
 Traversal opens the selected root and its children through directory descriptors without
 following symlinks; replacing an ancestor path cannot redirect subsequent file reads.
