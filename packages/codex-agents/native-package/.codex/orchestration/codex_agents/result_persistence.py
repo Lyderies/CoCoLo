@@ -20,14 +20,14 @@ from .execution_grant import MAX_EXECUTION_GRANT_BYTES
 from .terminal_delivery import MAX_TERMINAL_EVIDENCE_BYTES
 from .claim_denial import MAX_DENIAL_RECEIPT_BYTES
 from .owned_execution import OwnedExecutionKey
-from .codex_worker import CodexWorkerError, CodexWorkerHandle, CodexWorkerPacket, CodexWorkerPool, MAX_INPUT_BYTES, MAX_PACKET_BYTES, _decode_input
+from .codex_worker import CodexWorkerError, CodexWorkerHandle, CodexWorkerPacket, CodexWorkerPool, MAX_INPUT_BYTES, MAX_PACKET_BYTES, MAX_REPORT_BYTES, _decode_input
 from .contracts import ContractError
 from .history_contracts import AttemptBinding, HistoryError, TerminalDelivery, valid_integer
 from .learning_contracts import parse_bounded_json
 from .project_history import ProjectHistory
 from .project_monitor import _capture_binding
 from .result_contracts import (
-    MAX_ASSIGNMENT_CANONICAL_BYTES, ResultLeaseBinding, ResultObservation, assignment_bytes,
+    MAX_ASSIGNMENT_CANONICAL_BYTES, CodexUsageObservation, ResultLeaseBinding, ResultObservation, assignment_bytes,
 )
 
 _TIME_NS = time.time_ns
@@ -532,7 +532,12 @@ class ResultPersistenceLane:
                                         selected.fenced, selected.reviewed, selected.terminal_state,
                                         selected.validation_reason)
         assignment = parse_bounded_json(pending.assignment, max_bytes=MAX_ASSIGNMENT_CANONICAL_BYTES)
-        delivery = self._history().publish_result(pending.binding, assignment, selected.body, observation)
+        report = (None if selected.report is None else parse_bounded_json(selected.report, max_bytes=MAX_REPORT_BYTES))
+        if report is not None and (type(report) is not dict or report.get("provider") != "codex"
+                                   or report.get("requested_model") != assignment["model"]):
+            raise HistoryError("history_invalid_input")
+        usage = CodexUsageObservation(assignment["model"], None if report is None else report.get("usage"))
+        delivery = self._history().publish_result(pending.binding, assignment, selected.body, observation, client_usage=usage)
         if type(delivery) is not TerminalDelivery or delivery.binding != pending.binding:
             raise HistoryError("history_service_unavailable")
         delivery.__post_init__()

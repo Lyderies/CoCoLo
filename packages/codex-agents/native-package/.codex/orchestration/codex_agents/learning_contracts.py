@@ -2170,15 +2170,22 @@ def validate_verification_binding(data: Any) -> dict[str, Any]:
 
 def validate_host_result_admission(data: Any) -> dict[str, Any]:
     """Safe immutable project-local links, not QA or execution authority."""
-    data = _closed(data, {
+    version = data.get("schema_version") if type(data) is dict else None
+    fields = {
         "schema_version", "record_type", "record_id", "run_id", "binding_digest",
         "registration_digest", "dispatch_result", "terminal_content_digest",
         "event_record_id", "event_content_digest", "outcome_record_id",
         "host_outcome_digest", "observed_at_ms",
-    }, "host_result_admission")
-    _base(data, "host_result_admission")
+    }
+    if version == 2:
+        fields |= {"usage_record_id", "usage_content_digest"}
+    data = _closed(data, fields, "host_result_admission")
+    _base(data, "host_result_admission", schema_version=2 if version == 2 else 1)
     if type(data["schema_version"]) is not int:
         raise ContractError("unsupported learning schema version")
+    if version == 2:
+        _identifier(data["usage_record_id"], "usage_record_id")
+        _digest(data["usage_content_digest"], "usage_content_digest")
     for name in ("run_id", "event_record_id", "outcome_record_id"):
         _identifier(data[name], name)
     for name in ("binding_digest", "registration_digest", "terminal_content_digest",

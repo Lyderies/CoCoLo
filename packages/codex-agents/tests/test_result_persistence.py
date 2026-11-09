@@ -113,6 +113,36 @@ class ResultPersistenceTests(unittest.TestCase):
             self.assertEqual(assignment["attempt"], target.attempt)
         self.assertEqual(["launch"], (root / "launches").read_text().splitlines())
 
+    def test_actual_client_usage_reaches_writer_without_model_usage_or_content(self):
+        value = workers.fixtures.result()
+        value["usage"] = {"input_tokens": 9999}
+        counts = {"input_tokens": 17, "cached_input_tokens": 5, "output_tokens": 9, "reasoning_output_tokens": 3}
+        prepared = self.execution(rows=[{"result": workers.fixtures.null_filled(value)},
+                                        {"frame": {"type": "turn.completed", "usage": counts}}])
+        handle = self.submit(prepared)
+        delivery = self.committed(handle)
+        self.stop_lane(self.lane)
+        with closing(self.open_history()) as store:
+            terminal = json.loads(store.record(delivery.record_id).content)
+            entry = store._client_usage_entry(prepared[1], terminal, prepared[-1]["model"])
+            record = json.loads(entry.content)
+            self.assertEqual("provider_usage", record["record_type"])
+            self.assertEqual(counts, {name: record[name] for name in counts})
+            self.assertEqual(9999, json.loads(store.read_result(prepared[1]))["usage"]["input_tokens"])
+            self.assertNotIn(b"PRIVATE", entry.content)
+
+    def test_actual_missing_client_usage_records_unavailable_alongside_terminal(self):
+        prepared = self.execution(rows=[{"result": workers.fixtures.null_filled(workers.fixtures.result())}])
+        delivery = self.committed(self.submit(prepared))
+        self.stop_lane(self.lane)
+        with closing(self.open_history()) as store:
+            terminal = json.loads(store.record(delivery.record_id).content)
+            entry = store._client_usage_entry(prepared[1], terminal, prepared[-1]["model"])
+            record = json.loads(entry.content)
+            self.assertEqual(("observation_unavailable", "usage_unavailable"),
+                             (record["record_type"], record["reason_code"]))
+            self.assertEqual((delivery,), store.pending_terminals())
+
     def test_slow_database_does_not_block_control_cancellation_or_second_result_intake(self):
         first = self.execution()
         second = self.execution(2, rows=[{"pause": "release"}])
@@ -122,12 +152,12 @@ class ResultPersistenceTests(unittest.TestCase):
         original = ProjectHistory.publish_result
         calls = []
 
-        def blocked(store, *args):
+        def blocked(store, *args, **kwargs):
             calls.append(threading.current_thread())
             entered.set()
             if not resume.wait(6):
                 raise RuntimeError("fixture database gate timed out")
-            return original(store, *args)
+            return original(store, *args, **kwargs)
 
         with mock.patch.object(ProjectHistory, "publish_result", new=blocked):
             first_handle = self.submit(first)
@@ -164,9 +194,9 @@ class ResultPersistenceTests(unittest.TestCase):
         original = ProjectHistory.publish_result
         observations, deliveries = [], []
 
-        def lose_first_reply(store, binding, assignment, body, captured):
+        def lose_first_reply(store, binding, assignment, body, captured, **kwargs):
             observations.append(captured.as_data())
-            delivery = original(store, binding, assignment, body, captured)
+            delivery = original(store, binding, assignment, body, captured, **kwargs)
             deliveries.append(delivery)
             if len(deliveries) == 1:
                 raise OSError("PRIVATE-LOST-REPLY-CANARY")
@@ -214,11 +244,11 @@ class ResultPersistenceTests(unittest.TestCase):
         self.addCleanup(resume.set)
         publish = ProjectHistory.publish_result
 
-        def blocked(store, *args):
+        def blocked(store, *args, **kwargs):
             entered.set()
             if not resume.wait(6):
                 raise RuntimeError("fixture result gate timed out")
-            return publish(store, *args)
+            return publish(store, *args, **kwargs)
 
         with mock.patch.object(result_persistence, "parse_bounded_json", new=off_owner), \
                 mock.patch.object(ProjectHistory, "publish_result", new=blocked):
@@ -385,7 +415,7 @@ class ResultPersistenceTests(unittest.TestCase):
         entered, resume = threading.Event(), threading.Event()
         self.addCleanup(resume.set)
 
-        def interrupt(*args):
+        def interrupt(*args, **kwargs):
             entered.set()
             if not resume.wait(6):
                 raise RuntimeError("fixture interrupt gate timed out")
@@ -422,11 +452,11 @@ class ResultPersistenceTests(unittest.TestCase):
         self.addCleanup(resume.set)
         original = ProjectHistory.publish_result
 
-        def blocked(store, *args):
+        def blocked(store, *args, **kwargs):
             entered.set()
             if not resume.wait(6):
                 raise RuntimeError("fixture close gate timed out")
-            return original(store, *args)
+            return original(store, *args, **kwargs)
 
         with mock.patch.object(ProjectHistory, "publish_result", new=blocked):
             handle = self.submit(prepared)

@@ -37,14 +37,14 @@ from .learning_contracts import (
 )
 from .result_contracts import (
     MAX_ASSIGNMENT_CANONICAL_BYTES, MAX_RESULT_BODY_BYTES, MAX_RESULT_RETENTION_MS,
-    ResultCapacity, ResultLease, ResultLeaseBinding, ResultObservation, ResultReservation,
+    CodexUsageObservation, ResultCapacity, ResultLease, ResultLeaseBinding, ResultObservation, ResultReservation,
     assignment_bytes, checked_result_body,
 )
 
 _APPLICATION_ID = 0x43444831
 _SCHEMA_VERSION = 4
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
-                           "host_result_admission"})
+                           "host_result_admission", "provider_usage", "observation_unavailable"})
 MAX_DELIVERY_PAGE_BYTES = 16_384
 MAX_BINDING_BYTES = 4096
 MAX_HISTORY_ROW_BYTES = 2 * MAX_RECORD_BYTES
@@ -462,8 +462,8 @@ class ProjectHistory:
     @_operation
     def append_record(self, content: bytes, *, source: str, ingested_at_ms: int) -> HistoryEntry:
         checked = self._checked_record(content, source, ingested_at_ms)
-        if checked["record_type"] in {"dispatch_result", "host_result_admission"}:
-            # A terminal record must never bypass its atomic delivery outbox.
+        if checked["record_type"] in {"dispatch_result", "host_result_admission", "provider_usage", "observation_unavailable"}:
+            # Closed business writers own terminal, usage and admission records.
             raise HistoryError("history_invalid_input")
         with self._transaction():
             return self._append_locked(checked, content, source, ingested_at_ms)
@@ -1180,6 +1180,7 @@ class ProjectHistory:
     @_operation
     def publish_result(
         self, binding: AttemptBinding, assignment: dict, body: bytes, observation: ResultObservation,
+        *, client_usage: CodexUsageObservation | None = None,
     ) -> TerminalDelivery:
         """Construct exact terminal metadata inside the trusted digest-key owner.
 
@@ -1190,6 +1191,9 @@ class ProjectHistory:
         record ID is supplied by the caller. The fixed captured observation time
         and all terminal facts participate in the existing immutable prepared
         commit, so retry/restart cannot silently replace them or refresh privacy.
+        Omitted client_usage retains the old internal reference request. Actual
+        fixed-worker publication always supplies a captured observation, even
+        when its measurement is unavailable; model result usage is never used.
         """
         binding = self._result_binding(binding)
         if type(observation) is not ResultObservation:
@@ -1213,11 +1217,12 @@ class ProjectHistory:
         # terminal metadata, including the owner's keyed private-body digest.
         record = {**material, "record_id": f"dispatch_result:{content_digest(material)}"}
         content = canonical_json(validate_learning_record(record))
-        return self.commit_result(content, binding, snapshot, body)
+        return self.commit_result(content, binding, snapshot, body, client_usage=client_usage)
 
     @_operation
     def commit_result(
         self, content: bytes, binding: AttemptBinding, assignment: dict, body: bytes,
+        *, client_usage: CodexUsageObservation | None = None,
     ) -> TerminalDelivery:
         """Keep validated bytes before returning terminal metadata; never relaunch.
 
@@ -1239,10 +1244,18 @@ class ProjectHistory:
         row, value = self._live_result(binding, now)
         if value.assignment_digest != keyed_digest(self._result_key, encoded_assignment):
             raise HistoryError("history_conflict")
-        prepared = keyed_digest(self._result_key, canonical_json({
+        usage_record = None
+        if client_usage is not None:
+            if type(client_usage) is not CodexUsageObservation:
+                raise HistoryError("history_invalid_input")
+            usage_record = self._client_usage_record(binding, snapshot, checked, client_usage)
+        material = {
             "binding": binding.as_data(), "record": checked, "result_digest": digest,
             "assignment_digest": value.assignment_digest,
-        }))
+        }
+        if usage_record is not None:
+            material["client_usage_record"] = usage_record
+        prepared = keyed_digest(self._result_key, canonical_json(material))
         if row["prepared_digest"] is not None and not secrets.compare_digest(row["prepared_digest"], prepared):
             raise HistoryError("history_conflict")
         if value.state == "committed":
@@ -1250,6 +1263,10 @@ class ProjectHistory:
                 raise HistoryError("history_conflict")
             terminal = self._connection.execute("SELECT * FROM terminal_outbox WHERE project_id=? AND claim_id=?",
                                                 (self.project_id, binding.claim_id)).fetchone()
+            if usage_record is not None:
+                actual = self._client_usage_entry(binding, checked, snapshot["model"])
+                if actual is None or actual.content != canonical_json(usage_record):
+                    raise HistoryError("history_conflict")
             return self._delivery(terminal)
         if row["prepared_digest"] is None:
             with self._transaction():
@@ -1270,6 +1287,8 @@ class ProjectHistory:
         with self._transaction():
             delivery = self._commit_terminal_locked(content, checked, binding, canonical_json(binding.as_data()),
                                                     hashlib.sha256(content).hexdigest(), now)
+            if usage_record is not None:
+                self._append_locked(usage_record, canonical_json(usage_record), "provider", now)
             self._connection.execute(
                 "UPDATE result_reservations SET state='committed',committed_at_ms=?,expires_at_ms=?,"
                 "body_size=?,result_digest=?,terminal_record_id=? WHERE project_id=? AND claim_id=?",
@@ -1277,6 +1296,56 @@ class ProjectHistory:
                  self.project_id, binding.claim_id),
             )
         return delivery
+
+    def _client_usage_id(self, binding):
+        return "client_usage:" + keyed_digest(self._result_key, b"project-client-usage-v1\0" + canonical_json(binding.as_data()))
+
+    def _client_usage_record(self, binding, assignment, terminal, observation):
+        data = observation.as_data()
+        if data["requested_model"] != assignment["model"] or terminal["bridge_run_id"] != binding.claim_id:
+            raise HistoryError("history_conflict")
+        record = {"schema_version": 1, "record_id": self._client_usage_id(binding), "provider": "codex",
+                  "run_id": binding.run_id, "phase": "after", "observed_at_ms": terminal["observed_at_ms"]}
+        if data["usage"] is None:
+            record.update(record_type="observation_unavailable", reason_code="usage_unavailable")
+        else:
+            record.update(record_type="provider_usage", requested_model=data["requested_model"], models=[], helper_models=[],
+                          cache_creation_input_tokens=None, **data["usage"])
+        return self._checked_record(canonical_json(record), "provider", terminal["observed_at_ms"])
+
+    def _client_usage_entry(self, binding, terminal, model):
+        row = self._connection.execute("SELECT * FROM records WHERE project_id=? AND record_id=?",
+                                        (self.project_id, self._client_usage_id(binding))).fetchone()
+        if row is None:
+            return None
+        entry = self._entry(row)
+        record = parse_bounded_json(entry.content)
+        if (entry.source != "provider" or record["record_type"] not in {"provider_usage", "observation_unavailable"}
+                or record["run_id"] != binding.run_id or record["provider"] != "codex" or record["phase"] != "after"
+                or record["observed_at_ms"] != terminal["observed_at_ms"]
+                or (record["record_type"] == "provider_usage" and record["requested_model"] != model)
+                or (record["record_type"] == "observation_unavailable" and record["reason_code"] != "usage_unavailable")):
+            raise HistoryError("history_conflict")
+        return entry
+
+    @staticmethod
+    def _workflow_client_usage(entry):
+        from .learning_adapters import empty_usage
+
+        usage = empty_usage()
+        if entry is None:
+            return usage
+        record = parse_bounded_json(entry.content)
+        if record["record_type"] == "observation_unavailable":
+            return usage
+        inputs, cached = record["input_tokens"], record["cached_input_tokens"]
+        outputs, reasoning = record["output_tokens"], record["reasoning_output_tokens"]
+        if cached is not None and inputs is not None and cached > inputs:
+            cached = None
+        if reasoning is not None and outputs is not None and reasoning > outputs:
+            reasoning = None
+        return {**usage, "input_tokens": inputs, "cached_tokens": cached,
+                "output_tokens": outputs, "reasoning_tokens": reasoning}
 
     @_operation
     def read_result(self, binding: AttemptBinding) -> bytes:
@@ -1397,7 +1466,6 @@ class ProjectHistory:
         acceptance, repair, QA decision or cleanup release is created here.
         """
         from .host_result_contracts import HostResultContext
-        from .learning_adapters import empty_usage
         from .learning_engine import build_host_result_records
 
         if type(reference) is not HostResultReference or not callable(before_commit):
@@ -1432,7 +1500,7 @@ class ProjectHistory:
             invalid = True
         if invalid:
             raise HistoryError("history_conflict")
-        _, reservation = self._result_row(binding)
+        reservation_row, reservation = self._result_row(binding)
         outbox = self._connection.execute("SELECT * FROM terminal_outbox WHERE project_id=? AND claim_id=?",
                                           (self.project_id, binding.claim_id)).fetchone()
         if outbox is None or reservation.state not in {"committed", "expired"}:
@@ -1461,6 +1529,21 @@ class ProjectHistory:
             "terminal_content_digest": terminal_entry.content_digest,
             "observed_at_ms": terminal["observed_at_ms"],
         }
+        usage_entry = self._client_usage_entry(binding, terminal, assignment["model"])
+        prepared_material = {"binding": binding.as_data(), "record": terminal, "result_digest": delivery.result_digest,
+                             "assignment_digest": grant.assignment_digest}
+        if usage_entry is not None:
+            prepared_material["client_usage_record"] = parse_bounded_json(usage_entry.content)
+        prepared = keyed_digest(self._result_key, canonical_json(prepared_material))
+        if (not matches(reservation_row["prepared_digest"], _DIGEST)
+                or not secrets.compare_digest(reservation_row["prepared_digest"], prepared)):
+            # Absence is unknown only for an original legacy request with no
+            # client companion. A lost or changed expected record is corruption,
+            # never permission to downgrade measured usage to unavailable.
+            raise HistoryError("history_conflict")
+        if usage_entry is not None:
+            expected.update(schema_version=2, usage_record_id=usage_entry.record_id,
+                            usage_content_digest=usage_entry.content_digest)
         prior = self._connection.execute("SELECT * FROM records WHERE project_id=? AND record_id=?",
                                          (self.project_id, identity)).fetchone()
         if prior is not None:
@@ -1483,9 +1566,10 @@ class ProjectHistory:
         # smuggle a legacy repair or substitute its own body/observations here.
         event, outcome, _ = build_host_result_records(
             assignment=assignment, task=task, result=checked_result, observation=observation,
-            host_evidence={"run_id": binding.run_id, "coverage": "lifecycle_partial", "usage": empty_usage(),
+            host_evidence={"run_id": binding.run_id, "coverage": "lifecycle_partial",
+                           "usage": self._workflow_client_usage(usage_entry),
                            "observed_at_ms": terminal["observed_at_ms"], "no_progress_events": 0,
-                           "usage_source": "host_observed"},
+                           "usage_source": "client_observed" if usage_entry is not None else "host_observed"},
             execution_configuration=configuration, digest_key=self._result_key, client_capability=client_capability,
         )
         receipt = {**expected, "event_record_id": event["record_id"], "event_content_digest": content_digest(event),
@@ -1504,6 +1588,15 @@ class ProjectHistory:
 
     def _host_result_receipt(self, entry: HistoryEntry) -> dict:
         receipt = parse_bounded_json(entry.content)
+        usage_entry = None
+        if receipt["schema_version"] == 2:
+            usage_entry = self.record(receipt["usage_record_id"])
+            usage = parse_bounded_json(usage_entry.content)
+            if (usage_entry.source != "provider" or usage_entry.content_digest != receipt["usage_content_digest"]
+                    or usage["record_type"] not in {"provider_usage", "observation_unavailable"}
+                    or usage["run_id"] != receipt["run_id"] or usage["provider"] != "codex"
+                    or usage["observed_at_ms"] != receipt["observed_at_ms"]):
+                raise HistoryError("history_conflict")
         commits = {}
         for label, record_type, identity, digest in (
             ("event_commit", "event", receipt["event_record_id"], receipt["event_content_digest"]),
@@ -1514,6 +1607,11 @@ class ProjectHistory:
             if (linked.source != "host" or value["record_type"] != record_type
                     or value["run_id"] != receipt["run_id"] or linked.content_digest != digest):
                 raise HistoryError("history_conflict")
+            if record_type == "outcome" and usage_entry is not None:
+                usage = parse_bounded_json(usage_entry.content)
+                if (value["usage"] != self._workflow_client_usage(usage_entry)
+                        or (usage["record_type"] == "provider_usage" and usage["requested_model"] != value["model"])):
+                    raise HistoryError("history_conflict")
             commits[label] = self._host_result_metadata(linked)
         return {"admission": receipt, "admission_commit": self._host_result_metadata(entry), **commits}
 

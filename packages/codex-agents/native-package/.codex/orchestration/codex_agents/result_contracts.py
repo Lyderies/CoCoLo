@@ -10,7 +10,7 @@ from .history_contracts import (
     _PROJECT, _RUN, matches, valid_integer,
 )
 from .learning_contracts import (
-    DISPATCH_RESULT_SCHEMA_VERSION, MAX_OUTCOME_EVIDENCE_DIGESTS, MAX_RECORD_BYTES,
+    DISPATCH_RESULT_SCHEMA_VERSION, MAX_OUTCOME_EVIDENCE_DIGESTS, MAX_RECORD_BYTES, SUPPORTED_MODELS,
     canonical_json, parse_bounded_json, validate_learning_record,
 )
 
@@ -20,6 +20,32 @@ MAX_ASSIGNMENT_CANONICAL_BYTES = 6 * 1_048_576
 RESULT_STATES = frozenset({"reserved", "committed", "retiring", "expired"})
 LEASE_SCOPE_FIELDS = ("project_id", "primary_session_id", "runtime_digest", "supervisor_instance_id",
                       "supervisor_generation", "orchestration_handle", "run_handle", "run_id", "attempt")
+
+CODEX_USAGE_FIELDS = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")
+
+
+@dataclass(frozen=True)
+class CodexUsageObservation:
+    """Actual fixed-worker client counts, never model-reported result usage.
+
+    The writer must separately prove custody of the selected packet. None means
+    unavailable, not zero. These values establish no billing/admission authority.
+    """
+    requested_model: str
+    usage: dict | None
+
+    def __post_init__(self):
+        self.as_data()
+
+    def as_data(self):
+        if (type(self.requested_model) is not str or self.requested_model not in SUPPORTED_MODELS
+                or not self.requested_model.startswith("gpt-")):
+            raise HistoryError("history_invalid_input")
+        if self.usage is not None and (type(self.usage) is not dict or self.usage.keys() != set(CODEX_USAGE_FIELDS)
+                                      or any(v is not None and not valid_integer(v) for v in self.usage.values())):
+            raise HistoryError("history_invalid_input")
+        return {"requested_model": self.requested_model,
+                "usage": None if self.usage is None else {name: self.usage[name] for name in CODEX_USAGE_FIELDS}}
 
 
 @dataclass(frozen=True)

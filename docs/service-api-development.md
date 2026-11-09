@@ -6,6 +6,43 @@ still use the installed 0.8.12 implementation; the source codec does not enable 
 
 ## Worker result persistence lane
 
+### Client-observed usage travels with the actual return
+
+The fixed Codex writer now preserves the selected packet's bounded client counts,
+separately from the model's result-body `usage`. It takes the requested model from
+the original prepared assignment and checks it against the selected client report.
+No report/count parsing or database work runs on the control owner. Missing client
+measurement creates the fixed `usage_unavailable` observation; it never becomes
+zero or uses the model's own estimate.
+
+`publish_result` accepts an internal `CodexUsageObservation`. This type confers no
+caller, execution or billing authority. The same trusted-output custody and native
+authentication gates still apply. The owner constructs an existing closed
+`provider_usage` or `observation_unavailable` record, with a keyed full-attempt ID,
+original observation time and provider source. Generic append cannot create it.
+Its exact bytes join the prepared request digest before artifact I/O; the companion,
+terminal record, outbox and result reference commit in one transaction. Changing,
+adding or dropping usage on a retry conflicts. A lost response retries only the
+original return; it cannot start another child or extend retention.
+
+Project host admission now derives workflow totals from that durable companion,
+using the existing Codex mapping. Inconsistent cached/reasoning subcounts stay in
+the observed record but become unknown in workflow totals, as in the legacy
+consumer. Actual fields retain `client_observed` provenance. Receipt schema2
+binds the exact usage record/digest, and known receipts stay readable after body
+retirement. A missing or altered expected companion fails the original prepared
+digest check; it cannot silently downgrade to unknown. Safe companion reads use
+the existing bounded history API, with no new measurement-write operation.
+
+Existing requests without a client companion retain their original prepared
+material and schema1 receipt bytes. They cannot gain measurements afterward.
+SQL project4/account9 layouts are unchanged. Vocabulary/capability negotiation,
+legacy migration and drained activation still need release validation. Actual
+inert worker-to-writer tests and disposable account/project stores exercise
+measurement versus model estimates, unavailability, atomic rollback, lost replies,
+reopen, body retirement, corruption and retained capacity. These are synthetic
+native enrollment/provider fixtures; no billing or containment proof is added.
+
 ### Project-owned host-result admission
 
 `history.admit_host_result` now takes only an attempt binding and the exact durable
