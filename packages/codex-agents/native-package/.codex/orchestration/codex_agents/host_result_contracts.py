@@ -13,6 +13,33 @@ from .result_contracts import MAX_ASSIGNMENT_CANONICAL_BYTES
 MAX_HOST_RESULT_CONTEXT_BYTES = 3 * MAX_ASSIGNMENT_CANONICAL_BYTES
 
 
+@dataclass(frozen=True, repr=False)
+class WorkerResultContext:
+    """Independent original worker scope and protected prospective verifier task.
+
+    This exists before the verifier is opened. Native adapters must establish
+    current primary permission and original task/scope custody independently.
+    Neither a caller-selected task nor this value is that authentication.
+    """
+    binding: AttemptBinding
+    task: dict
+
+    def snapshot(self):
+        invalid = False
+        try:
+            if type(self.binding) is not AttemptBinding or type(self.task) is not dict:
+                raise ValueError()
+            raw = canonical_json({'binding': self.binding.as_data(), 'task': self.task})
+            if not 0 < len(raw) <= MAX_HOST_RESULT_CONTEXT_BYTES:
+                raise ValueError()
+            value = parse_bounded_json(raw, max_bytes=MAX_HOST_RESULT_CONTEXT_BYTES)
+        except Exception:
+            invalid = True
+        if invalid:
+            raise HistoryError('history_not_authorized')
+        return raw, value
+
+
 @dataclass(frozen=True)
 class HostResultContext:
     """Original inputs supplied by a trusted server adapter, never request JSON.

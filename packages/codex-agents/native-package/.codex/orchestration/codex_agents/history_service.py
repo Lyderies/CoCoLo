@@ -20,7 +20,7 @@ from .history_api import (
     HistoryRequest, decode_history_request, decode_history_response, history_request_digest,
 )
 from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGEST, _PROJECT, matches
-from .host_result_contracts import HostResultContext, decode_host_result_reference
+from .host_result_contracts import HostResultContext, WorkerResultContext, decode_host_result_reference
 from .host_open_contracts import HostOpenContext, decode_host_open_submission
 from .learning_contracts import canonical_json, parse_bounded_json
 from .project_history import ProjectHistory
@@ -43,6 +43,7 @@ class HistoryAuthorization:
     allowed_operations: frozenset[str]
     host_result_context: HostResultContext | None = None
     host_open_context: HostOpenContext | None = None
+    worker_result_context: WorkerResultContext | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -54,6 +55,7 @@ class HistoryAuthorization:
             or not self.allowed_operations <= HISTORY_OPERATIONS
             or (self.host_result_context is not None and type(self.host_result_context) is not HostResultContext)
             or (self.host_open_context is not None and type(self.host_open_context) is not HostOpenContext)
+            or (self.worker_result_context is not None and type(self.worker_result_context) is not WorkerResultContext)
         ):
             raise HistoryError("history_not_authorized")
 
@@ -181,7 +183,36 @@ class HistoryService:
                 or (authorization.source != "host" and request.operation != "history.record_event")
             ):
                 raise HistoryError("history_not_authorized")
-            if request.operation == 'history.record_host_open':
+            if request.operation == 'history.worker_reference':
+                if authorization.worker_result_context is None:
+                    raise HistoryError('history_not_authorized')
+                original_context, captured = authorization.worker_result_context.snapshot()
+                if captured['binding'] != request.payload['binding']:
+                    raise HistoryError('history_not_authorized')
+                expected_binding = AttemptBinding(**captured['binding'])
+                expected_context = WorkerResultContext(expected_binding, captured['task'])
+                outcome_digest = request.payload['host_outcome_digest']
+                self._history()
+
+                def authorize_worker():
+                    self._history()
+                    fresh = decode_history_request(raw)
+                    current = self._authorizer(fresh, transport_context)
+                    if type(current) is not HistoryAuthorization:
+                        raise HistoryError('history_not_authorized')
+                    current.__post_init__()
+                    if (current.project_id != self._project or current.runtime_digest != self._runtime
+                            or current.source != 'host' or current.request_digest != digest
+                            or history_request_digest(fresh) != digest
+                            or 'history.worker_reference' not in current.allowed_operations
+                            or current.worker_result_context is None
+                            or current.worker_result_context.snapshot()[0] != original_context):
+                        raise HistoryError('history_not_authorized')
+                    self._history()._require_owner()
+
+                result = self._store.verification_worker_reference(expected_context, outcome_digest,
+                    before_reply=authorize_worker)
+            elif request.operation == 'history.record_host_open':
                 if authorization.host_open_context is None:
                     raise HistoryError('history_not_authorized')
                 original_context, captured = authorization.host_open_context.snapshot()
@@ -255,6 +286,12 @@ class HistoryService:
                 # Same owner thread as close(); admit no success after an
                 # adapter/factory/encoder has closed the borrowed writer.
                 self._history()._require_owner()
+            if request.operation == 'history.worker_reference':
+                authorize_worker()
+                from .project_worker_result import current_worker_reference
+                current, _ = current_worker_reference(self._store, expected_context, outcome_digest)
+                if current != result:
+                    raise HistoryError('history_conflict')
             return reply
         except HistoryError as exc:
             reason = exc.reason_code

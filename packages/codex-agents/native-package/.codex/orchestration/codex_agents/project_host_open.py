@@ -8,9 +8,54 @@ import hashlib
 import secrets
 
 from .history_contracts import HistoryError, _DIGEST, matches
-from .host_open_contracts import HostOpenContext, OpenProvenanceInput, decode_open_provenance_input, verify_open_provenance
-from .learning_contracts import canonical_json, keyed_digest, validate_learning_record
+from .host_open_contracts import (HostOpenContext, OpenProvenanceInput, checked_open_provenance,
+                                  decode_open_provenance_input, seal_open_provenance, verify_open_provenance)
+from .learning_contracts import canonical_json, external_id, keyed_digest, parse_bounded_json, validate_learning_record
 from .result_contracts import ResultLeaseBinding
+
+
+def read_host_open(history, binding):
+    """Check the original protected journal without reauthorizing fresh work.
+
+    The first writer checked the exact original inputs. Readers recheck the
+    actual sealed lease, original account MAC and journal seal, including commit
+    metadata. Missing companions never trigger reconstruction or an account read.
+    """
+    lease = history._lease_row(binding)
+    identity = 'host_open_provenance:' + keyed_digest(history._result_key,
+        b'project-original-host-open-v1\0' + canonical_json(binding.as_data()))
+    row = history._connection.execute('SELECT * FROM project_host_opens '
+        'WHERE project_id=? AND run_handle=? AND attempt=?',
+        (binding.project_id, binding.run_handle, binding.attempt)).fetchone()
+    entry = history.record(identity)
+    record = parse_bounded_json(entry.content)
+    invalid = False
+    try:
+        facts = record['provenance']['provenance']
+        request = OpenProvenanceInput(binding.run_handle, facts['assignment_id'], facts['worker_outcome_digest'])
+        proof = checked_open_provenance(record['provenance'], request, binding.project_id, binding.runtime_digest)
+        expected = seal_open_provenance(history._result_key, request, proof['provenance'])
+        seal = keyed_digest(history._result_key, b'project-host-open-journal-v1\0' + canonical_json({
+            'binding': binding.as_data(), 'record_id': identity, 'record_content_digest': entry.content_digest,
+            'source_sequence': entry.source_sequence, 'ingested_at_ms': entry.ingested_at_ms, 'late': entry.late}))
+        invalid = (row is None or record['record_type'] != 'host_open_provenance' or entry.source != 'host'
+            or record['record_id'] != identity or record['run_id'] != binding.run_id
+            or record['observed_at_ms'] != facts['opened_at_ms']
+            or facts['binding'] != binding.as_data() or facts['lease_digest'] != lease.lease_digest
+            or facts['assignment_digest'] != lease.assignment_digest
+            or binding.run_id != external_id(history._result_key, 'run', binding.run_handle)
+            or facts['start_record_id'] != external_id(history._result_key, 'evt',
+                f"{binding.run_id}\0{facts['assignment_id']}\0started")
+            or not secrets.compare_digest(proof['seal'], expected['seal'])
+            or row['binding'] != canonical_json(binding.as_data()) or row['record_id'] != identity
+            or row['record_content_digest'] != entry.content_digest or row['source_sequence'] != entry.source_sequence
+            or row['ingested_at_ms'] != entry.ingested_at_ms or row['late'] != int(entry.late)
+            or not matches(row['journal_seal'], _DIGEST) or not secrets.compare_digest(row['journal_seal'], seal))
+    except Exception:
+        invalid = True
+    if invalid:
+        raise HistoryError('history_conflict')
+    return entry, proof
 
 
 def record_host_open(history, binding, request, provenance, *, assignment, task, route, before_commit):

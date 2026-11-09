@@ -1039,6 +1039,12 @@ class ProjectHistory:
     def _execution_provenance_id(self, grant):
         return 'execution_provenance:' + keyed_digest(self._result_key, canonical_json(grant.binding.as_data()))
 
+    @_operation
+    def verification_worker_reference(self, context, outcome_digest, *, before_reply):
+        """Resolve the original retained worker dependency before verifier open."""
+        from .project_worker_result import verification_worker_reference
+        return verification_worker_reference(self, context, outcome_digest, before_reply=before_reply)
+
     def _execution_provenance(self, grant):
         identity = self._execution_provenance_id(grant)
         try:

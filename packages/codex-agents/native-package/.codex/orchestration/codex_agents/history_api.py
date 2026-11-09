@@ -11,7 +11,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from .contracts import ContractError
+from .contracts import ContractError, TASK_FAMILIES
 from .history_contracts import (
     HISTORY_REASON_CODES, MAX_SEQUENCE, AttemptBinding, HistoryError, TerminalDelivery,
     _DIGEST, _ID, _PROJECT, matches, valid_integer,
@@ -19,6 +19,7 @@ from .history_contracts import (
 from .host_result_contracts import HostResultReference, decode_host_result_reference
 from .host_open_contracts import OpenProvenanceInput, decode_host_open_submission
 from .learning_contracts import SOURCES, canonical_json, parse_bounded_json, validate_learning_record
+from .result_contracts import MAX_RESULT_BODY_BYTES
 from .service_transport import MAX_FRAME_BYTES, MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
 
 HISTORY_PROTOCOL_VERSION = 1
@@ -30,7 +31,7 @@ _RECORD_OPERATIONS = {
 }
 HISTORY_OPERATIONS = frozenset({
     *_RECORD_OPERATIONS, "history.pending_terminals", "history.acknowledge_terminal", "history.read_record",
-    "history.admit_host_result", "history.record_host_open",
+    "history.admit_host_result", "history.record_host_open", "history.worker_reference",
 })
 HISTORY_RECORD_TYPES = frozenset({*_RECORD_OPERATIONS.values(), "host_result_admission",
                                   "provider_usage", "observation_unavailable", "execution_provenance", "host_open_provenance"})
@@ -96,6 +97,14 @@ def _validate_request(request: HistoryRequest) -> None:
             identity = binding.claim_id
         if request.request_id != identity:
             raise HistoryError("history_invalid_request")
+    elif operation == 'history.worker_reference':
+        if not _closed(payload, {'binding', 'host_outcome_digest'}) or type(payload['binding']) is not dict:
+            raise HistoryError('history_invalid_request')
+        binding = AttemptBinding(**payload['binding'])
+        if (binding.project_id != request.project_id or binding.runtime_digest != request.runtime_digest
+                or not matches(payload['host_outcome_digest'], _DIGEST)
+                or request.request_id != payload['host_outcome_digest']):
+            raise HistoryError('history_invalid_request')
     elif operation == 'history.record_host_open':
         opened, _ = decode_host_open_submission(payload, request.project_id, request.runtime_digest)
         if request.request_id != opened.run_handle:
@@ -200,7 +209,19 @@ def _decoded_delivery(value: object) -> TerminalDelivery:
 
 def _validate_result(request: HistoryRequest, result: object) -> None:
     operation = request.operation
-    if operation == 'history.record_host_open':
+    if operation == 'history.worker_reference':
+        if (not _closed(result, {'binding', 'host_outcome_digest', 'provider', 'task_family', 'host_open_record_id',
+                'host_open_content_digest', 'result_digest', 'body_size', 'terminal_record_id', 'expires_at_ms'})
+                or result['binding'] != request.payload['binding']
+                or result['host_outcome_digest'] != request.payload['host_outcome_digest']
+                or result['provider'] != 'codex' or type(result['task_family']) is not str
+                or result['task_family'] not in TASK_FAMILIES or result['task_family'] == 'verification'
+                or not all(matches(result[n], _DIGEST) for n in ('result_digest', 'host_open_content_digest'))
+                or not all(matches(result[n], _ID) for n in ('host_open_record_id', 'terminal_record_id'))
+                or not valid_integer(result['body_size'], minimum=1, maximum=MAX_RESULT_BODY_BYTES)
+                or not valid_integer(result['expires_at_ms'])):
+            raise HistoryError('history_invalid_response')
+    elif operation == 'history.record_host_open':
         if not _closed(result, {'record', 'metadata'}):
             raise HistoryError('history_invalid_response')
         _, proof = decode_host_open_submission(request.payload, request.project_id, request.runtime_digest)
@@ -375,6 +396,17 @@ class HistoryClient:
         if type(reference) is not HostResultReference:
             raise HistoryError("history_invalid_input")
         return self._call("history.admit_host_result", reference.binding.claim_id, reference.as_data())
+
+    def verification_worker_reference(self, binding: AttemptBinding, host_outcome_digest: str) -> dict:
+        """Resolve metadata before verifier open; private bytes use ResultReadClient.
+
+        The native adapter independently authorizes the protected verifier task
+        and original worker scope. Request labels alone grant no result access.
+        """
+        if type(binding) is not AttemptBinding:
+            raise HistoryError('history_invalid_input')
+        return self._call('history.worker_reference', host_outcome_digest,
+            {'binding': binding.as_data(), 'host_outcome_digest': host_outcome_digest})
 
     def bind_verifier(self, record: dict) -> dict:
         return self._record_call("history.bind_verifier", record)
