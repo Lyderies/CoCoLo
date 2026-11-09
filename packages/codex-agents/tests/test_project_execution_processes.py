@@ -21,6 +21,7 @@ from codex_agents.account_claim_contracts import LaunchClaimInput
 from codex_agents.account_service import AccountAuthorization, AccountService
 from codex_agents.control_api import ControlScope, control_request, decode_control_response, encode_control_request
 from codex_agents.execution_grant import ExecutionRegistrationInput
+from codex_agents.host_open_contracts import OpenProvenanceInput
 from codex_agents.learning_contracts import content_digest, keyed_digest
 from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST
 from codex_agents.result_contracts import ResultLeaseBinding
@@ -42,6 +43,7 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         self.children, self.contexts = [], {}
         self.addCleanup(self.stop_children)
         self.service = AccountService(COLLECTOR_RUNTIME_DIGEST, self.base.views, authorizer=self.authorize,
+                                      open_provenance_work_limits=SQLReadLimits(100_000, 1000, 2 * 1_048_576),
                                       run_provenance_work_limits=SQLReadLimits(100_000, 1000, 2 * 1_048_576))
         self.addCleanup(self.service.close)
 
@@ -50,7 +52,7 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         if entry is None or entry["scope"].project_id != request.project_id:
             return None
         return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
-                                    entry["source"], frozenset({"account.claim_launch", "account.register_execution", "account.submit_terminal", "account.run_provenance"}),
+                                    entry["source"], frozenset({"account.claim_launch", "account.register_execution", "account.submit_terminal", "account.run_provenance", "account.open_provenance"}),
                                     "a" * 64, entry["scope"], entry["evidence"], entry.get('terminal_evidence'))
 
     def account(self, request, context):
@@ -100,7 +102,7 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         self.assertEqual(expected, value["stage"])
         return value
 
-    def start(self, scope, request, history, name, *, with_provenance=False, lose_consumption_reply=False):
+    def start(self, scope, request, history, name, *, with_provenance=False, lose_consumption_reply=False, lose_open_reply=False):
         root = Path(self.bridge.temporary.name) / name
         root.mkdir(mode=0o700)
         for directory in ("control", "export", "tmp"):
@@ -136,9 +138,21 @@ time.sleep(30)
         self.send(child, {"scope": scope.as_data(), "root": str(root), "history": str(history),
                           "fixture_key": self.fixture.key.hex(), "task": self.bridge.task(),
                           "route": self.base.fixture.route, "assignment": self.base.fixture.assignment,
-                          "with_provenance": with_provenance, "lose_consumption_reply": lose_consumption_reply})
+                          "with_provenance": with_provenance, "lose_consumption_reply": lose_consumption_reply,
+                          "lose_open_reply": lose_open_reply})
         armed = self.read(child, "armed")
         self.contexts[context]["evidence"] = bytes.fromhex(armed["evidence"])
+        if with_provenance:
+            self.contexts[context]['source'] = 'project'
+            original_open = self.account(replace(request, operation='account.open_provenance',
+                request_id='original-open-' + name,
+                payload=OpenProvenanceInput(scope.run_handle, self.base.fixture.assignment['assignment_id']).payload()), context)
+            self.send(child, {'provenance': original_open})
+            child['host_open_record'] = self.read(child, 'open_recorded')
+            self.assertTrue(child['host_open_record']['record_id'].startswith('host_open_provenance:'))
+            self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM launch_claims '
+                'WHERE project_id=? AND handle_digest=?', (scope.project_id, keyed_digest(self.fixture.key, scope.run_handle))).fetchone()[0])
+            self.contexts[context]['source'] = 'host'
         receipt = self.account(request, context)
         self.assertEqual("claimed", receipt["state"])
         child["receipt"] = receipt
@@ -242,6 +256,21 @@ time.sleep(30)
             store.close()
         self.assertEqual(1, self.ledger._connection.execute('SELECT COUNT(*) FROM capacity_executions').fetchone()[0])
         self.assertEqual(1, self.ledger._connection.execute('SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL').fetchone()[0])
+
+    def test_lost_original_open_reply_retries_same_journal_before_any_account_claim(self):
+        child = self.start(self.fixture.scope, self.fixture.request, self.fixture.directory,
+            'lost-original-open', with_provenance=True, lose_open_reply=True, lose_consumption_reply=True)
+        self.assertEqual({'stage': 'consumption_fenced', 'tickets': 0, 'launched': False}, child['consumption_fenced'])
+        store = ProjectHistory(child['history'], child['scope'].project_id)
+        try:
+            self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM project_host_opens').fetchone()[0])
+            self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM project_execution_consumptions').fetchone()[0])
+            self.assertEqual(child['host_open_record']['content_digest'],
+                store.record(child['host_open_record']['record_id']).content_digest)
+        finally:
+            store.close()
+        self.assertEqual(1, self.ledger._connection.execute('SELECT COUNT(*) FROM launch_claims').fetchone()[0])
+        self.assertEqual(1, self.ledger._connection.execute('SELECT COUNT(*) FROM active_run_capacity').fetchone()[0])
 
     def test_suspended_project_a_cannot_block_project_b_control_cleanup_or_history(self):
         first = self.start(self.fixture.scope, self.fixture.request, self.fixture.directory, "supervisor-a", with_provenance=True)

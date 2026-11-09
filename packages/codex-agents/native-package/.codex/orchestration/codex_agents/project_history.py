@@ -1009,9 +1009,9 @@ class ProjectHistory:
             if type(clock) is not int or not grant.clock_reference_ns <= clock < grant.deadline_ns:
                 raise HistoryError("history_execution_not_ready")
             record = self._new_execution_provenance(grant, task, route, provenance, now)
-            if record is None and self._connection.execute('SELECT 1 FROM project_orchestrations '
-                    'WHERE project_id=? AND orchestration_handle=?',
-                    (binding.project_id, binding.orchestration_handle)).fetchone() is not None:
+            if record is None and (self._orchestration_limits is not None or self._connection.execute(
+                    'SELECT 1 FROM project_orchestrations WHERE project_id=? AND orchestration_handle=?',
+                    (binding.project_id, binding.orchestration_handle)).fetchone() is not None):
                 # The explicit pre-journal fixture mode cannot bypass fresh
                 # provenance once an actual managed project lifecycle exists.
                 raise _ExecutionProvenanceRejected()
@@ -1058,9 +1058,7 @@ class ProjectHistory:
         identity = self._execution_provenance_id(grant)
         try:
             entry = self.record(identity)
-        except HistoryError as exc:
-            if exc.reason_code == 'history_not_found' and self._allow_legacy_orchestration_reference:
-                return None
+        except HistoryError:
             raise HistoryError('history_execution_not_ready') from None
         from .run_provenance import decode_run_provenance_input, verify_run_provenance
         try:

@@ -123,6 +123,14 @@ class RequiredHostOpenTests(unittest.TestCase):
             receipt['admission']['outcome_record_id']).content_digest)
         OrchestrationOwner(self.store).active_for(self.grant.binding)
 
+    def test_legacy_flag_cannot_hide_lost_managed_consumption_provenance(self):
+        self.persist_open()
+        self.consume()
+        self.store._allow_legacy_orchestration_reference = True
+        self.store._connection.execute("DELETE FROM records WHERE record_type='execution_provenance'")
+        with self.assertRaisesRegex(HistoryError, 'history_execution_not_ready'):
+            self.store._execution_provenance(self.grant)
+
 
 class ClaimOriginalWindowTests(unittest.TestCase):
     def setUp(self):
@@ -162,6 +170,19 @@ class ClaimOriginalWindowTests(unittest.TestCase):
         self.ledger._connection.execute('UPDATE host_run_bindings SET observation_deadline_at_ms=NULL '
             'WHERE project_id=? AND handle_digest=?', (self.fixture.project, self.handle))
         with self.assertRaisesRegex(AccountError, 'claim_unavailable'):
+            self.fixture.call()
+        self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM launch_claims').fetchone()[0])
+
+    def test_synchronous_preparation_cannot_adopt_a_changed_original_window(self):
+        deadline = self.window(30_000)
+        prepare = self.ledger._prepare_attestations
+        def change_window(*args, **kwargs):
+            prepared = prepare(*args, **kwargs)
+            self.ledger._connection.execute('UPDATE host_run_bindings SET observation_deadline_at_ms=? '
+                'WHERE project_id=? AND handle_digest=?', (deadline+1000, self.fixture.project, self.handle))
+            return prepared
+        with mock.patch.object(self.ledger, '_prepare_attestations', side_effect=change_window), \
+                self.assertRaisesRegex(AccountError, 'claim_preparation_stale'):
             self.fixture.call()
         self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM launch_claims').fetchone()[0])
 

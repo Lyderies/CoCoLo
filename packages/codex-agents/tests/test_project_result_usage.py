@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 import tests.support  # noqa: F401
-from tests import test_project_execution_grant as fixtures
+from tests import test_run_provenance as fixtures
 from tests.learning_support import event_record
 from tests.test_bridge import result
 
@@ -24,11 +24,13 @@ COUNTS = {"input_tokens": 17, "cached_input_tokens": 5, "output_tokens": 9, "rea
 
 class ProjectResultUsageTests(unittest.TestCase):
     def setUp(self):
-        self.base = fixtures.ProjectExecutionGrantTests(methodName="runTest")
-        self.base.setUp()
-        self.addCleanup(self.base.doCleanups)
+        original = fixtures.RunProvenanceTests(methodName='runTest')
+        original.setUp()
+        self.addCleanup(original.doCleanups)
+        original.managed_project()
+        self.base = original.base
         self.fixture = self.base.fixture
-        self.base.consume(self.base.grant())
+        self.base.consume(original.grant, provenance=original.proof())
         self.binding = self.base.binding
         source = self.fixture.base.fixture
         self.inputs = HostResultContext(self.binding, self.fixture.assigned, source.fixture.task(), source.route,

@@ -14,7 +14,7 @@ from unittest import mock
 
 import tests.support  # noqa: F401
 from tests.support import ORCHESTRATION_ROOT
-from tests import test_project_execution_grant as fixtures
+from tests import test_run_provenance as provenance_fixtures
 from tests.test_bridge import result
 
 from codex_agents import history_api
@@ -35,12 +35,14 @@ from tests.learning_support import event_record
 
 class ProjectHostResultTests(unittest.TestCase):
     def setUp(self):
-        self.base = fixtures.ProjectExecutionGrantTests(methodName="runTest")
-        self.base.setUp()
-        self.addCleanup(self.base.doCleanups)
+        self.original = provenance_fixtures.RunProvenanceTests(methodName='runTest')
+        self.original.setUp()
+        self.addCleanup(self.original.doCleanups)
+        self.original.managed_project()
+        self.base = self.original.base
         self.fixture = self.base.fixture
-        self.grant = self.base.grant()
-        self.base.consume(self.grant)
+        self.grant = self.original.grant
+        self.base.consume(self.grant, provenance=self.original.proof())
         self.binding = self.base.binding
         source = self.fixture.base.fixture
         self.inputs = HostResultContext(self.binding, self.fixture.assigned, source.fixture.task(), source.route,
@@ -95,18 +97,12 @@ class ProjectHostResultTests(unittest.TestCase):
         self.assertEqual(0, len(self.base.ledger._capacity_executions._pending))
 
     def reference_lifecycle(self):
-        # Deterministic entropy links this isolated old result fixture to a new
-        # journal only for closure/retirement tests. It proves no migration,
-        # native enrollment or fresh managed execution authority.
+        # The actual sealed fixture lifecycle and both original companions were
+        # established before consumption. This is still fake native enrollment.
         store = self.fixture.store
         store._orchestration_limits = OrchestrationLimits(1, 3)
         scope = OrchestrationScope(**{name: getattr(self.binding, name) for name in SCOPE_FIELDS})
         owner = OrchestrationOwner(store)
-        command = OrchestrationRequest(1, 'orchestration.open', 'reference-open', scope, {})
-        with mock.patch('codex_agents.orchestration_store.secrets.token_hex', return_value=self.binding.orchestration_handle[4:]):
-            owner.apply(command, client_version='codex-host-v1', before_commit=lambda: None)
-        # This remains the explicitly configured legacy-reference fixture;
-        # fresh managed consumption requires its original provenance companion.
         closing = OrchestrationRequest(1, 'orchestration.close', 'reference-close', scope, {
             'orchestration_handle': self.binding.orchestration_handle, 'expected_sequence': 1,
             'status': 'completed', 'goal_tokens_used': None, 'goal_time_used_seconds': None,
@@ -320,10 +316,12 @@ class ProjectHostResultTests(unittest.TestCase):
             self.assertEqual(first, self.client.admit_host_result(self.reference))
 
     def test_fenced_invalid_return_keeps_exact_reason_and_cannot_become_accepted(self):
-        second = fixtures.ProjectExecutionGrantTests(methodName="runTest")
-        second.setUp()
-        self.addCleanup(second.doCleanups)
-        second.consume(second.grant())
+        original = provenance_fixtures.RunProvenanceTests(methodName='runTest')
+        original.setUp()
+        self.addCleanup(original.doCleanups)
+        original.managed_project()
+        second = original.base
+        second.consume(original.grant, provenance=original.proof())
         fixture = second.fixture
         body = _fenced_result(fixture.assigned, "failed", "invalid_result")
         delivery = fixture.store.publish_result(

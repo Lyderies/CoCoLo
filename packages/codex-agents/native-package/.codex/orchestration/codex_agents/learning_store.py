@@ -6014,8 +6014,11 @@ class LearningLedger:
                     return known, None, None, None
                 check = self._claim_context_locked if work_limits is None else self._claim_scalar_context_locked
                 early, binding, inputs, observed = check(project_id, handle, launch, timestamp)
-                columns = (self._claim_run_columns(binding, inputs, observed)
-                           if work_limits is not None and early is None else None)
+                columns = None
+                if early is None:
+                    rows = ((binding, inputs, observed) if work_limits is not None
+                            else self._claim_run_rows_locked(project_id, handle))
+                    columns = self._claim_run_columns(*rows)
                 return None, early, None if inputs is None else inputs["provider"], columns
 
             known, early_reason, provider, columns = (read() if work_limits is None else
@@ -6810,6 +6813,10 @@ class LearningLedger:
                                                      self._connection.transaction_read_call(work_limits, header))
             if known is not None:
                 return known
+            if admission is None and work_limits is None and early_reason is None:
+                rows = self._claim_run_rows_locked(project_id, handle)
+                if context.run_context != tuple(None if row is None else tuple(row) for row in rows):
+                    raise ClaimError('claim_preparation_stale')
             if admission is not None:
                 reason, binding, inputs, identity, admitted, fresh_timestamp = self._claim_admission_context(
                     context, admission, work_limits,

@@ -23,7 +23,7 @@ class ResultLeaseLaneTests(unittest.TestCase):
         self.worker, self.lane = self.composition.fixture, self.composition.lane
         self.handles, self.scopes = {}, {}
 
-    def before(self, target, worker_handle, *, waiting=None):
+    def before(self, target, worker_handle, *, waiting=None, opening=None):
         scope = ResultLeaseBinding(**{name: getattr(target, name) for name in LEASE_SCOPE_FIELDS},
                                    claim_request_id="original-claim", claim_request_digest="a" * 64)
         handle = self.lane.prepare_lease(scope, worker_handle)
@@ -44,6 +44,8 @@ class ResultLeaseLaneTests(unittest.TestCase):
         self.assertLessEqual(len(evidence), MAX_STORAGE_EVIDENCE_BYTES)
         self.assertNotIn(b"PRIVATE", evidence)
         self.assertEqual(0, len(self.worker.registry._issued))
+        if opening is not None:
+            opening(target, worker_handle, handle)
         self.lane.bind_claim(handle, target, hard_deadline_at_ms=self.composition.deadline_ms)
         if waiting is not None:
             waiting(target, worker_handle, handle)

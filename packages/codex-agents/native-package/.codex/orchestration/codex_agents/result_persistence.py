@@ -17,6 +17,7 @@ import weakref
 from .bridge_liveness import BridgeLivenessOwner, CodexOwnerResult
 from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES
 from .execution_grant import MAX_EXECUTION_GRANT_BYTES
+from .host_open_contracts import MAX_OPEN_PROVENANCE_BYTES, OpenProvenanceInput
 from .run_provenance import MAX_RUN_PROVENANCE_BYTES
 from .terminal_delivery import MAX_TERMINAL_EVIDENCE_BYTES
 from .claim_denial import MAX_DENIAL_RECEIPT_BYTES
@@ -35,6 +36,7 @@ _TIME_NS = time.time_ns
 MAX_PERSISTENCE_ENTRY_BYTES = (MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES + MAX_PACKET_BYTES
                                + MAX_STORAGE_EVIDENCE_BYTES + 2 * MAX_EXECUTION_GRANT_BYTES
                                + 2 * MAX_RUN_PROVENANCE_BYTES
+                               + 2 * MAX_OPEN_PROVENANCE_BYTES + 1024
                                + 2 * MAX_TERMINAL_EVIDENCE_BYTES + MAX_DENIAL_RECEIPT_BYTES)
 
 
@@ -65,6 +67,8 @@ class _Pending:
     grant_raw: bytes | None = None
     provenance_raw: bytes | None = None
     provenance_rejected: bool = False
+    open_provenance_raw: bytes | None = None
+    open_record: tuple[str, str] | None = None
     grant: object = None
     execution_issued: bool = False
     execution_ticket: object = None
@@ -77,7 +81,8 @@ class ResultPersistenceLane:
     """One fixed project writer, with finite retained jobs and nonblocking intake.
 
     prepare_lease()/arm() durably reserve before the trusted frontend consumes
-    account launch authority; bind_claim() associates its actual issued receipt.
+    account launch authority; record_host_open() queues the original account
+    receipt before that claim, and bind_claim() associates its actual receipt.
     prepare() retains the earlier known-claim internal reference only. This lane
     does not admit or obtain account registration. consume_execution() commits
     that original registration on the writer before issue_execution() creates
@@ -205,6 +210,55 @@ class ResultPersistenceLane:
             if pending.state != "claim_pending" or pending.storage_evidence is None:
                 raise HistoryError("history_result_not_ready")
             return pending.storage_evidence
+
+    def record_host_open(self, handle, raw=None):
+        """Queue the actual original receipt, using retained prepared inputs.
+
+        This is an internal writer handoff, never native caller authentication.
+        The trusted frontend checks the original account peer/current permission
+        before supplying it. A retry retains exactly the same bytes, including
+        after an unknown committed reply, and cannot create an account claim.
+        """
+        pending = self._job(handle)
+        with self._lock:
+            if self._closed or self._fault:
+                raise HistoryError('history_service_unavailable')
+            if raw is None:
+                raw = pending.open_provenance_raw
+            if type(raw) is not bytes or not 0 < len(raw) <= MAX_OPEN_PROVENANCE_BYTES:
+                raise HistoryError('history_invalid_input')
+            if pending.open_provenance_raw is not None and pending.open_provenance_raw != raw:
+                raise HistoryError('history_conflict')
+            if pending.state == 'recording_host_open':
+                return
+            if (pending.state not in {'claim_pending', 'failed'} or pending.lease_binding is None
+                    or pending.lease is None or pending.lease.state != 'claim_pending'
+                    or pending.claim_binding is not None or pending.denial_receipt is not None
+                    or pending.grant_raw is not None or pending.supervisor is not None):
+                raise HistoryError('history_result_not_ready')
+        with self._pool._registry._lock:
+            try:
+                original = self._pool._job(pending.worker_handle)
+            except CodexWorkerError:
+                raise HistoryError('history_not_authorized') from None
+            if (self._pool._closed or original is not pending.original_job or original.state != 'prepared'
+                    or original.payload is not pending.payload):
+                raise HistoryError('history_not_authorized')
+        with self._lock:
+            pending.open_provenance_raw, pending.open_record = raw, None
+            pending.state, pending.reason = 'recording_host_open', None
+            self._incoming.put_nowait(('record_host_open', handle))
+
+    def host_open_record(self, handle):
+        """Return only the writer's confirmed original record identity."""
+        pending = self._job(handle)
+        with self._lock:
+            if self._closed or self._fault:
+                raise HistoryError('history_service_unavailable')
+            if pending.state != 'claim_pending' or pending.open_record is None:
+                raise HistoryError('history_result_not_ready')
+            identity, digest = pending.open_record
+            return {'record_id': identity, 'content_digest': digest}
 
     def bound_storage_evidence(self, handle):
         pending = self._job(handle)
@@ -534,6 +588,30 @@ class ResultPersistenceLane:
             pending.bound_evidence = evidence
             pending.lease, pending.state, pending.reason = lease, "reserved", None
 
+    def _record_host_open(self, pending):
+        data, assignment = _decode_input(pending.payload)
+        try:
+            proof = parse_bounded_json(pending.open_provenance_raw, max_bytes=MAX_OPEN_PROVENANCE_BYTES)
+        except ContractError:
+            raise HistoryError('history_invalid_input') from None
+        request = OpenProvenanceInput(pending.lease_binding.run_handle, assignment['assignment_id'],
+            data['task'].get('verification_for_outcome'))
+
+        def still_prepared():
+            # Brief custody check only: never retain this lock through SQL or
+            # private-file work, so control/cancellation remain independent.
+            with self._pool._registry._lock:
+                original = self._pool._jobs.get(pending.worker_handle)
+                if (self._pool._closed or original is not pending.original_job or original.state != 'prepared'
+                        or original.payload is not pending.payload):
+                    raise HistoryError('history_not_authorized')
+
+        entry = self._history().record_host_open(pending.lease_binding, request, proof,
+            assignment=assignment, task=data['task'], route=data['route'], before_commit=still_prepared)
+        with self._lock:
+            pending.open_record = (entry.record_id, entry.content_digest)
+            pending.state, pending.reason = 'claim_pending', None
+
     def _consume_execution(self, pending):
         data, _ = _decode_input(pending.payload)
         options = {'task': data['task'], 'route': data['route']}
@@ -588,6 +666,7 @@ class ResultPersistenceLane:
     def _run(self):
         operations = {"prepare": self._prepare, "publish": self._publish,
                       "arm": self._arm, "bind_claim": self._bind_claim,
+                      "record_host_open": self._record_host_open,
                       "consume_execution": self._consume_execution,
                       "settle_denial": self._settle_denial,
                       "acknowledge_terminal": self._acknowledge_terminal}

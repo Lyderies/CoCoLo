@@ -4,6 +4,7 @@ The parent supplies disposable test metadata through stdin and two inherited
 socketpairs. No provider, account SQLite, listener or native credentials here.
 """
 from copy import copy
+from contextlib import nullcontext
 from dataclasses import asdict
 import json
 import os
@@ -108,6 +109,43 @@ def main():
         lane.arm(handle)
         until(lambda: lane.snapshot(handle)["state"] != "arming")
         emit(stage="armed", evidence=lane.storage_evidence(handle).hex())
+        if data.get('with_provenance', False):
+            from codex_agents.learning_contracts import canonical_json
+            original_open = canonical_json(receive()['provenance'])
+            original_record_open = ProjectHistory.record_host_open
+            opened_records = []
+            def record_then_lose_reply(store, *args, **kwargs):
+                if opened_records:
+                    with mock.patch.object(store, '_result_clock', side_effect=AssertionError('journal clock refreshed')):
+                        result = original_record_open(store, *args, **kwargs)
+                else:
+                    result = original_record_open(store, *args, **kwargs)
+                opened_records.append(result)
+                if len(opened_records) == 1:
+                    raise OSError('PRIVATE-LOST-OPEN-JOURNAL-REPLY')
+                return result
+            patcher = (mock.patch.object(ProjectHistory, 'record_host_open', new=record_then_lose_reply)
+                if data.get('lose_open_reply', False) else nullcontext())
+            with patcher:
+                lane.record_host_open(handle, original_open)
+                until(lambda: lane.snapshot(handle)['state'] != 'recording_host_open')
+                if data.get('lose_open_reply', False):
+                    if lane.snapshot(handle)['state'] != 'failed':
+                        raise RuntimeError('fixture_lost_open_reply_not_failed')
+                    try:
+                        lane.record_host_open(handle, original_open+b' ')
+                    except HistoryError as error:
+                        if error.reason_code != 'history_conflict':
+                            raise
+                    else:
+                        raise RuntimeError('fixture_lost_open_changed_proof')
+                    lane.record_host_open(handle)
+                    until(lambda: lane.snapshot(handle)['state'] != 'recording_host_open')
+                    if len(opened_records) != 2 or opened_records[0] != opened_records[1]:
+                        raise RuntimeError('fixture_lost_open_changed_original')
+            if lane.snapshot(handle)['state'] != 'claim_pending':
+                raise RuntimeError('fixture_original_open_not_recorded')
+            emit(stage='open_recorded', **lane.host_open_record(handle))
         receipt = receive()
         binding = AttemptBinding(**{name: getattr(lease_scope, name) for name in LEASE_SCOPE_FIELDS},
                                  claim_id=receipt["bridge_run_id"], claim_digest=receipt["receipt_digest"])
