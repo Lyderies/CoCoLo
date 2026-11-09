@@ -11,12 +11,11 @@ from .account_claim_contracts import (
 )
 from .learning_contracts import canonical_json, keyed_digest, parse_bounded_json
 from .result_contracts import ResultLeaseBinding
-from .sql_read_budget import SQLReadLimits
 
 MAX_DENIAL_RECEIPT_BYTES = 16_384
 DENIAL_RECORD_TYPE = 'claim_denial_settlement'
 # Trusted cooperative SQL limits; actual OS-I/O and installed cadence remain gates.
-DENIAL_LEGACY_READ_LIMITS = SQLReadLimits(2000, 50, 16_384)
+DENIAL_LEGACY_READ_LIMITS = (2000, 50, 16_384)
 
 
 @dataclass(frozen=True)

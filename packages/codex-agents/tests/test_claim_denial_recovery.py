@@ -18,7 +18,6 @@ from codex_agents.learning_contracts import canonical_json, content_digest, vali
 from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST, LearningLedger
 from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
 from codex_agents.service_transport import ServiceTransportError
-from codex_agents.sql_read_budget import SQLReadLimits
 
 
 class ClaimDenialRecoveryTests(unittest.TestCase):
@@ -106,7 +105,7 @@ class ClaimDenialRecoveryTests(unittest.TestCase):
     def test_actual_legacy_scan_budget_exhaustion_rolls_back_and_can_retry_after_scope_restoration(self):
         for number in range(100):
             self.legacy_intent(run_id='run:' + f'{number:064x}')
-        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', SQLReadLimits(1, 1000, 16_384)):
+        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', (1, 1000, 16_384)):
             with self.assertRaisesRegex(AccountError, 'claim_busy'):
                 self.call()
         self.pending()

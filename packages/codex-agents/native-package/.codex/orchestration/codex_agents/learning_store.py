@@ -6094,7 +6094,7 @@ class LearningLedger:
         from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
         from .claim_denial import DENIAL_LEGACY_READ_LIMITS, CloseDeniedInput, binding_digest, decode_close_denied, denial_closure, denial_record_id
         from .claim_storage import capture_storage_evidence, verify_pending_storage_evidence
-        from .sql_read_budget import SQLReadError
+        from .sql_read_budget import SQLReadError, SQLReadLimits
 
         if type(closure) is not CloseDeniedInput:
             raise ClaimError('claim_denial_invalid')
@@ -6145,7 +6145,7 @@ class LearningLedger:
                     "AND json_extract(CAST(content AS TEXT),'$.run_id')=? LIMIT 1", (project_id, expected.run_id)).fetchone()
             limited = False
             try:
-                legacy = self._connection.transaction_read_call(DENIAL_LEGACY_READ_LIMITS, legacy_intent)
+                legacy = self._connection.transaction_read_call(SQLReadLimits(*DENIAL_LEGACY_READ_LIMITS), legacy_intent)
             except SQLReadError:
                 limited = True
             if limited:
