@@ -3378,7 +3378,7 @@ class LearningLedger:
         if checked["record_type"] in PROVIDER_OBSERVATION_TYPES | {
             "admission_decision", "billing_attestation", "dispatch_intent",
             "dispatch_result", "host_run_profile", "probe_admission",
-            "verification_binding", "claim_denial_settlement", "host_result_admission", "execution_provenance",
+            "verification_binding", "claim_denial_settlement", "host_result_admission", "execution_provenance", "host_open_provenance",
         }:
             raise LedgerError("provider evidence requires ledger-run observation")
         if (

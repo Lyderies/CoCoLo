@@ -21,8 +21,10 @@ from .history_api import (
 )
 from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGEST, _PROJECT, matches
 from .host_result_contracts import HostResultContext, decode_host_result_reference
+from .host_open_contracts import HostOpenContext, decode_host_open_submission
 from .learning_contracts import canonical_json, parse_bounded_json
 from .project_history import ProjectHistory
+from .result_contracts import ResultLeaseBinding
 from .orchestration_api import ORCHESTRATION_OPERATIONS
 from .orchestration_service import OrchestrationService
 from .result_read_api import RESULT_READ_OPERATION, ResultReadRequest
@@ -40,6 +42,7 @@ class HistoryAuthorization:
     source: str
     allowed_operations: frozenset[str]
     host_result_context: HostResultContext | None = None
+    host_open_context: HostOpenContext | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -50,6 +53,7 @@ class HistoryAuthorization:
             or any(type(operation) is not str for operation in self.allowed_operations)
             or not self.allowed_operations <= HISTORY_OPERATIONS
             or (self.host_result_context is not None and type(self.host_result_context) is not HostResultContext)
+            or (self.host_open_context is not None and type(self.host_open_context) is not HostOpenContext)
         ):
             raise HistoryError("history_not_authorized")
 
@@ -109,6 +113,9 @@ class HistoryService:
             if not isinstance(store, ProjectHistory):
                 raise HistoryError("history_service_unavailable")
             store._require_owner()
+            if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
+                store.close()
+                raise HistoryError('history_wrong_owner')
             if store.project_id != self._project:
                 store.close()
                 raise HistoryError("history_service_unavailable")
@@ -156,6 +163,8 @@ class HistoryService:
             identity = request.request_id
             digest = history_request_digest(request)
             project, runtime = request.project_id, request.runtime_digest
+            opened = (decode_host_open_submission(request.payload, project, runtime)
+                      if request.operation == 'history.record_host_open' else None)
             if (
                 request.project_id != self._project or request.runtime_digest != self._runtime
                 or self._authorizer is None
@@ -172,7 +181,36 @@ class HistoryService:
                 or (authorization.source != "host" and request.operation != "history.record_event")
             ):
                 raise HistoryError("history_not_authorized")
-            if request.operation == "history.admit_host_result":
+            if request.operation == 'history.record_host_open':
+                if authorization.host_open_context is None:
+                    raise HistoryError('history_not_authorized')
+                original_context, captured = authorization.host_open_context.snapshot()
+                open_request, proof = opened
+                expected_data = captured.pop('binding')
+                if expected_data != proof['provenance']['binding']:
+                    raise HistoryError('history_not_authorized')
+                expected = ResultLeaseBinding(**expected_data)
+                self._history()
+
+                def authorize_open():
+                    self._history()
+                    fresh = decode_history_request(raw)
+                    current = self._authorizer(fresh, transport_context)
+                    if type(current) is not HistoryAuthorization:
+                        raise HistoryError('history_not_authorized')
+                    current.__post_init__()
+                    if (current.project_id != self._project or current.runtime_digest != self._runtime
+                            or current.source != 'host' or current.request_digest != digest
+                            or history_request_digest(fresh) != digest
+                            or 'history.record_host_open' not in current.allowed_operations
+                            or current.host_open_context is None
+                            or current.host_open_context.snapshot()[0] != original_context):
+                        raise HistoryError('history_not_authorized')
+                    self._history()._require_owner()
+
+                entry = self._store.record_host_open(expected, open_request, proof, **captured, before_commit=authorize_open)
+                result = {'record': parse_bounded_json(entry.content), 'metadata': _metadata(entry)}
+            elif request.operation == "history.admit_host_result":
                 if authorization.host_result_context is None:
                     raise HistoryError("history_not_authorized")
                 original_context, captured = authorization.host_result_context.snapshot()
@@ -213,6 +251,10 @@ class HistoryService:
             if len(reply) + 1 > limit:
                 raise HistoryError("history_service_unavailable")
             decode_history_response(reply, request)
+            if request.operation == 'history.record_host_open':
+                # Same owner thread as close(); admit no success after an
+                # adapter/factory/encoder has closed the borrowed writer.
+                self._history()._require_owner()
             return reply
         except HistoryError as exc:
             reason = exc.reason_code

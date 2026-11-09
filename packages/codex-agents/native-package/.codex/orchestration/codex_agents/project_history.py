@@ -44,9 +44,10 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
-                           "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance"})
+                           "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
+                           "host_open_provenance"})
 MAX_DELIVERY_PAGE_BYTES = 16_384
 MAX_BINDING_BYTES = 4096
 MAX_HISTORY_ROW_BYTES = 2 * MAX_RECORD_BYTES
@@ -114,7 +115,18 @@ CREATE TABLE project_execution_consumptions(
  FOREIGN KEY(project_id,claim_id) REFERENCES result_reservations(project_id,claim_id));
 """
 _SCHEMA_V4 = _SCHEMA_V3 + _EXECUTION_SCHEMA
-_SCHEMA = _SCHEMA_V4 + ORCHESTRATION_SCHEMA
+_SCHEMA_V5 = _SCHEMA_V4 + ORCHESTRATION_SCHEMA
+_HOST_OPEN_SCHEMA = """
+CREATE TABLE project_host_opens(
+ project_id TEXT NOT NULL,run_handle TEXT NOT NULL,attempt INTEGER NOT NULL,
+ binding BLOB NOT NULL,record_id TEXT NOT NULL,record_content_digest TEXT NOT NULL,
+ source_sequence INTEGER NOT NULL,ingested_at_ms INTEGER NOT NULL,
+ late INTEGER NOT NULL CHECK(late IN (0,1)),journal_seal TEXT NOT NULL,
+ PRIMARY KEY(project_id,run_handle,attempt),UNIQUE(project_id,record_id),
+ FOREIGN KEY(project_id,run_handle,attempt) REFERENCES result_leases(project_id,run_handle,attempt),
+ FOREIGN KEY(project_id,record_id) REFERENCES records(project_id,record_id));
+"""
+_SCHEMA = _SCHEMA_V5 + _HOST_OPEN_SCHEMA
 _COLUMNS = {
     **ORCHESTRATION_COLUMNS,
     "history_identity": ("project_id", "next_source_sequence", "next_delivery_sequence"),
@@ -132,6 +144,8 @@ _COLUMNS = {
                       "created_at_ms", "reserved_until_ms", "state", "lease_digest", "claim_id", "claim_digest",
                       "hard_deadline_at_ms", "claim_binding_digest", "state_digest"),
     "project_execution_consumptions": ("project_id", "claim_id", "registration_digest", "grant", "consumed_at_ms"),
+    "project_host_opens": ("project_id", "run_handle", "attempt", "binding", "record_id", "record_content_digest",
+                           "source_sequence", "ingested_at_ms", "late", "journal_seal"),
 }
 
 
@@ -346,20 +360,21 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4} and application == _APPLICATION_ID
-              and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4}[version])):
+        elif (version in {1, 2, 3, 4, 5} and application == _APPLICATION_ID
+              and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4, 5: _SCHEMA_V5}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*ORCHESTRATION_COLUMNS, *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {"project_host_opens", *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             self._check_schema_identity({name: columns for name, columns in _COLUMNS.items() if name not in omitted})
             with self._transaction():
                 additions = ((_RESULT_SCHEMA if version == 1 else "") + (_LEASE_SCHEMA if version < 3 else "")
-                             + (_EXECUTION_SCHEMA if version < 4 else "") + ORCHESTRATION_SCHEMA)
+                             + (_EXECUTION_SCHEMA if version < 4 else "")
+                             + (ORCHESTRATION_SCHEMA if version < 5 else "") + _HOST_OPEN_SCHEMA)
                 for statement in additions.split(";"):
                     if statement.strip():
                         connection.execute(statement)
@@ -490,7 +505,7 @@ class ProjectHistory:
     @_operation
     def append_record(self, content: bytes, *, source: str, ingested_at_ms: int) -> HistoryEntry:
         checked = self._checked_record(content, source, ingested_at_ms)
-        if checked["record_type"] in {"dispatch_result", "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance"}:
+        if checked["record_type"] in {"dispatch_result", "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance", "host_open_provenance"}:
             # Closed business writers own terminal, usage and admission records.
             raise HistoryError("history_invalid_input")
         with self._transaction():
@@ -855,6 +870,12 @@ class ProjectHistory:
                                       canonical_json(binding.as_data()), digest, now, until, value.state,
                                       value.lease_digest, self._lease_seal(value)))
         return value
+
+    @_operation
+    def record_host_open(self, binding, request, provenance, *, assignment, task, route, before_commit):
+        from .project_host_open import record_host_open
+        return record_host_open(self, binding, request, provenance, assignment=assignment,
+                                 task=task, route=route, before_commit=before_commit)
 
     @_operation
     def result_lease(self, binding: ResultLeaseBinding) -> ResultLease:

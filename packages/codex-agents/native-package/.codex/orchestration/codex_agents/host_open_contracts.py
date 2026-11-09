@@ -10,11 +10,12 @@ import secrets
 
 from .account_claim_contracts import ClaimError, _DIGEST, _HANDLE, matches
 from .contracts import TASK_FAMILIES, validate_task
-from .history_contracts import _ID, valid_integer
-from .learning_contracts import canonical_json, content_digest, external_id, keyed_digest, validate_execution_configuration
+from .history_contracts import HistoryError, _ID, valid_integer
+from .learning_contracts import canonical_json, content_digest, external_id, keyed_digest, parse_bounded_json, validate_execution_configuration
 from .result_contracts import MAX_ASSIGNMENT_CANONICAL_BYTES, ResultLease, ResultLeaseBinding
 
 MAX_OPEN_PROVENANCE_BYTES = 8192
+MAX_HOST_OPEN_CONTEXT_BYTES = 3 * MAX_ASSIGNMENT_CANONICAL_BYTES
 _DOMAIN = b'account-original-host-open-v1\0'
 _DIGEST_FIELDS = ('lease_digest', 'assignment_digest', 'task_digest', 'route_digest', 'configuration_digest',
                   'admission_content_digest', 'start_content_digest')
@@ -37,6 +38,36 @@ class OpenProvenanceInput:
     def payload(self):
         self.__post_init__()
         return asdict(self)
+
+
+@dataclass(frozen=True, repr=False)
+class HostOpenContext:
+    """Original inputs from an independently authenticated server adapter.
+
+    A request cannot select this context. The adapter must establish native
+    identity/current permission and custody of these actual protected inputs.
+    """
+    binding: ResultLeaseBinding
+    assignment: dict
+    task: dict
+    route: dict
+
+    def snapshot(self):
+        invalid = False
+        try:
+            names = ('assignment', 'task', 'route')
+            if (type(self.binding) is not ResultLeaseBinding
+                    or any(type(getattr(self, name)) is not dict for name in names)):
+                raise ValueError()
+            raw = canonical_json({'binding': self.binding.as_data(), **{name: getattr(self, name) for name in names}})
+            if not 0 < len(raw) <= MAX_HOST_OPEN_CONTEXT_BYTES:
+                raise ValueError()
+            value = parse_bounded_json(raw, max_bytes=MAX_HOST_OPEN_CONTEXT_BYTES)
+        except Exception:
+            invalid = True
+        if invalid:
+            raise HistoryError('history_not_authorized')
+        return raw, value
 
 
 def decode_open_provenance_input(payload):
@@ -89,6 +120,21 @@ def checked_open_provenance(value, request, project_id, runtime_digest):
     if invalid:
         raise ClaimError('claim_execution_invalid')
     return captured
+
+
+def decode_host_open_submission(payload, project_id, runtime_digest):
+    """Closed wire values only; expected scope and inputs stay server-side."""
+    invalid = False
+    try:
+        if type(payload) is not dict or payload.keys() != {'open_request', 'provenance'}:
+            raise ValueError()
+        request = decode_open_provenance_input(payload['open_request'])
+        provenance = checked_open_provenance(payload['provenance'], request, project_id, runtime_digest)
+    except Exception:
+        invalid = True
+    if invalid:
+        raise HistoryError('history_invalid_request')
+    return request, provenance
 
 
 def seal_open_provenance(key, request, facts):

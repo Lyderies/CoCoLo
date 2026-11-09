@@ -63,6 +63,7 @@ RECORD_TYPES = {
     "claim_denial_settlement",
     "host_result_admission",
     "execution_provenance",
+    "host_open_provenance",
     "host_run_profile",
     "probe_admission",
     "observation_unavailable",
@@ -2253,7 +2254,34 @@ def validate_execution_provenance(data: Any) -> dict[str, Any]:
     return data
 
 
+def validate_host_open_provenance(data: Any) -> dict[str, Any]:
+    """Protected original metadata; never current/native or launch authority."""
+    from .host_open_contracts import checked_open_provenance, decode_open_provenance_input
+    data = _closed(data, {'schema_version', 'record_type', 'record_id', 'run_id',
+                          'provenance', 'observed_at_ms'}, 'host_open_provenance')
+    _base(data, 'host_open_provenance')
+    _identifier(data['run_id'], 'run_id')
+    _integer(data['observed_at_ms'], 'observed_at_ms')
+    invalid = False
+    try:
+        if type(data['schema_version']) is not int:
+            raise ValueError()
+        facts = data['provenance']['provenance']
+        binding = facts['binding']
+        request = decode_open_provenance_input({'run_handle': binding['run_handle'],
+            'assignment_id': facts['assignment_id'], 'worker_outcome_digest': facts['worker_outcome_digest']})
+        checked_open_provenance(data['provenance'], request, binding['project_id'], binding['runtime_digest'])
+        invalid = (data['run_id'] != binding['run_id'] or type(data['observed_at_ms']) is not int
+                   or data['observed_at_ms'] != facts['opened_at_ms'])
+    except Exception:
+        invalid = True
+    if invalid:
+        raise ContractError('invalid host-open provenance')
+    return data
+
+
 VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
+    "host_open_provenance": validate_host_open_provenance,
     "execution_provenance": validate_execution_provenance,
     "host_result_admission": validate_host_result_admission,
     "claim_denial_settlement": validate_claim_denial_settlement,

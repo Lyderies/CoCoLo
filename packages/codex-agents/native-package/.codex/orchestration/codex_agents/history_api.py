@@ -17,6 +17,7 @@ from .history_contracts import (
     _DIGEST, _ID, _PROJECT, matches, valid_integer,
 )
 from .host_result_contracts import HostResultReference, decode_host_result_reference
+from .host_open_contracts import OpenProvenanceInput, decode_host_open_submission
 from .learning_contracts import SOURCES, canonical_json, parse_bounded_json, validate_learning_record
 from .service_transport import MAX_FRAME_BYTES, MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
 
@@ -29,10 +30,10 @@ _RECORD_OPERATIONS = {
 }
 HISTORY_OPERATIONS = frozenset({
     *_RECORD_OPERATIONS, "history.pending_terminals", "history.acknowledge_terminal", "history.read_record",
-    "history.admit_host_result",
+    "history.admit_host_result", "history.record_host_open",
 })
 HISTORY_RECORD_TYPES = frozenset({*_RECORD_OPERATIONS.values(), "host_result_admission",
-                                  "provider_usage", "observation_unavailable", "execution_provenance"})
+                                  "provider_usage", "observation_unavailable", "execution_provenance", "host_open_provenance"})
 _REQUEST_FIELDS = {"protocol_version", "operation", "request_id", "project_id", "runtime_digest", "payload"}
 _RESPONSE_FIELDS = {"protocol_version", "project_id", "runtime_digest", "request_id", "request_digest", "ready", "result", "reason_code"}
 _METADATA_FIELDS = {"record_id", "source", "source_sequence", "observed_at_ms", "ingested_at_ms", "content_digest", "late"}
@@ -95,6 +96,10 @@ def _validate_request(request: HistoryRequest) -> None:
             identity = binding.claim_id
         if request.request_id != identity:
             raise HistoryError("history_invalid_request")
+    elif operation == 'history.record_host_open':
+        opened, _ = decode_host_open_submission(payload, request.project_id, request.runtime_digest)
+        if request.request_id != opened.run_handle:
+            raise HistoryError('history_invalid_request')
     elif operation == "history.admit_host_result":
         reference = decode_host_result_reference(payload)
         if (reference.binding.project_id != request.project_id or reference.binding.runtime_digest != request.runtime_digest
@@ -195,7 +200,19 @@ def _decoded_delivery(value: object) -> TerminalDelivery:
 
 def _validate_result(request: HistoryRequest, result: object) -> None:
     operation = request.operation
-    if operation == "history.admit_host_result":
+    if operation == 'history.record_host_open':
+        if not _closed(result, {'record', 'metadata'}):
+            raise HistoryError('history_invalid_response')
+        _, proof = decode_host_open_submission(request.payload, request.project_id, request.runtime_digest)
+        record = _checked_history_record(result['record'], expected_type='host_open_provenance')
+        metadata = result['metadata']
+        _validate_metadata(metadata)
+        if (record['provenance'] != proof or record['run_id'] != proof['provenance']['binding']['run_id']
+                or metadata['source'] != 'host' or metadata['record_id'] != record['record_id']
+                or metadata['observed_at_ms'] != record['observed_at_ms']
+                or metadata['content_digest'] != hashlib.sha256(canonical_json(record)).hexdigest()):
+            raise HistoryError('history_invalid_response')
+    elif operation == "history.admit_host_result":
         if not _closed(result, {"admission", "admission_commit", "event_commit", "outcome_commit"}):
             raise HistoryError("history_invalid_response")
         reference = decode_host_result_reference(request.payload)
@@ -343,6 +360,16 @@ class HistoryClient:
 
     def record_outcome(self, record: dict) -> dict:
         return self._record_call("history.record_outcome", record)
+
+    def record_host_open(self, request: OpenProvenanceInput, provenance: dict) -> dict:
+        if type(request) is not OpenProvenanceInput:
+            raise HistoryError('history_invalid_input')
+        try:
+            payload = {'open_request': request.payload(), 'provenance': provenance}
+        except Exception:
+            raise HistoryError('history_invalid_input') from None
+        return self._call('history.record_host_open', request.run_handle,
+                          payload)
 
     def admit_host_result(self, reference: HostResultReference) -> dict:
         if type(reference) is not HostResultReference:
