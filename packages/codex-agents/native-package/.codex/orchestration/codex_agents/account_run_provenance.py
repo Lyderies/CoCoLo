@@ -134,11 +134,20 @@ def _snapshot(ledger, context, request, lease, expected):
         raise ClaimError('claim_execution_unavailable')
     admission = _record(decisions[0], 'admission_decision', 'lifecycle', expected.run_id)
     start_id = external_id(key, 'evt', f'{expected.run_id}\0{request.assignment_id}\0started')
-    event = _record(connection.execute('SELECT record_id,content,content_digest,source FROM records '
-                                       'WHERE project_id=? AND record_id=?', (context.project_id, start_id)).fetchone(),
-                    'event', 'host', expected.run_id)
+    # Never let the requested assignment select one of several host starts.
+    # Both the original run's start and admission must be unique in this same
+    # budgeted snapshot; ambiguous history is not reconstructed or preferred.
+    starts = connection.execute(
+        "SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type='event' "
+        "AND source='host' AND json_extract(CAST(content AS TEXT),'$.run_id')=? "
+        "AND json_extract(CAST(content AS TEXT),'$.event_code')='subagent_started' LIMIT 2",
+        (context.project_id, expected.run_id),
+    ).fetchall()
+    if len(starts) != 1:
+        raise ClaimError('claim_execution_unavailable')
+    event = _record(starts[0], 'event', 'host', expected.run_id)
     if (admission['decision'] != 'pass' or admission['provider'] != row['provider']
-            or event['event_code'] != 'subagent_started' or event['status'] != 'started'
+            or event['record_id'] != start_id or event['event_code'] != 'subagent_started' or event['status'] != 'started'
             or event['assignment_id'] != request.assignment_id or event['configuration_digest'] != row['configuration_digest']
             or event['task_slice'].split('-')[0] != event['task_family']
             or event['observed_at_ms'] != row['opened_at_ms'] or event['observed_at_ms'] != row['observation_started_at_ms']):

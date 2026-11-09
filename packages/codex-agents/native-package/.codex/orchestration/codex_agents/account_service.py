@@ -828,6 +828,17 @@ class AccountService:
             if len(reply) + 1 > MAX_ACCOUNT_FRAME_BYTES:
                 raise AccountError("account_incompatible")
             decode_account_response(reply, request)
+            if operation == 'account.run_provenance':
+                if self._pid != os.getpid():
+                    raise AccountError('account_wrong_owner')
+                # Admit the already encoded/validated immutable reply under
+                # the same lock as close(). No adapter, SQL or I/O holds it.
+                # A close before this point denies; an admitted reply is
+                # ordered before a subsequent close.
+                with self._front_lock:
+                    if self._closed:
+                        raise AccountError('account_not_authorized')
+                    return reply
             return reply
         except AccountError as exc:
             reason = exc.reason_code

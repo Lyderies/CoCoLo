@@ -139,6 +139,49 @@ def main():
                 raise RuntimeError('fixture_missing_provenance_admitted')
             if lane.snapshot(handle)['state'] != 'reserved':
                 raise RuntimeError('fixture_missing_provenance_changed_state')
+            damaged = dict(registered['provenance'], seal='0' * 64)
+            for invalid in (b'{', canonical_json(damaged)):
+                lane.consume_execution(handle, grant.encode(), provenance=invalid)
+                until(lambda: lane.snapshot(handle)['state'] != 'consuming_execution')
+                if lane.snapshot(handle)['state'] != 'failed':
+                    raise RuntimeError('fixture_invalid_provenance_admitted')
+                refuses_issue(handle)
+                if (root / 'launches').exists():
+                    raise RuntimeError('fixture_invalid_provenance_launched')
+                try:
+                    lane.consume_execution(handle, grant.encode() + b' ', **options)
+                except HistoryError as error:
+                    if error.reason_code != 'history_conflict':
+                        raise
+                else:
+                    raise RuntimeError('fixture_rejected_provenance_changed_grant')
+        if data.get('lose_consumption_reply', False):
+            original_consume = ProjectHistory.consume_execution_grant
+
+            def commit_then_lose_reply(store, *args, **kwargs):
+                original_consume(store, *args, **kwargs)
+                raise OSError('PRIVATE-LOST-CONSUMPTION-REPLY')
+
+            with mock.patch.object(ProjectHistory, 'consume_execution_grant', new=commit_then_lose_reply):
+                lane.consume_execution(handle, grant.encode(), **options)
+                until(lambda: lane.snapshot(handle)['state'] != 'consuming_execution')
+            if lane.snapshot(handle)['state'] != 'failed':
+                raise RuntimeError('fixture_lost_consumption_not_failed')
+            refuses_issue(handle)
+            try:
+                lane.consume_execution(handle, grant.encode(), provenance=canonical_json(damaged))
+            except HistoryError as error:
+                if error.reason_code != 'history_conflict':
+                    raise
+            else:
+                raise RuntimeError('fixture_uncertain_consumption_changed_proof')
+            lane.consume_execution(handle, grant.encode(), **options)
+            until(lambda: lane.snapshot(handle)['state'] != 'consuming_execution')
+            if lane.snapshot(handle)['reason_code'] != 'history_execution_consumed':
+                raise RuntimeError('fixture_consumption_reissued')
+            refuses_issue(handle)
+            emit(stage='consumption_fenced', tickets=len(registry._issued), launched=(root / 'launches').exists())
+            return
         lane.consume_execution(handle, grant.encode(), **options)
         until(lambda: lane.snapshot(handle)["state"] != "consuming_execution")
         refuses_issue(copy(handle))

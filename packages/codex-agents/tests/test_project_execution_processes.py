@@ -100,7 +100,7 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         self.assertEqual(expected, value["stage"])
         return value
 
-    def start(self, scope, request, history, name, *, with_provenance=False):
+    def start(self, scope, request, history, name, *, with_provenance=False, lose_consumption_reply=False):
         root = Path(self.bridge.temporary.name) / name
         root.mkdir(mode=0o700)
         for directory in ("control", "export", "tmp"):
@@ -136,7 +136,7 @@ time.sleep(30)
         self.send(child, {"scope": scope.as_data(), "root": str(root), "history": str(history),
                           "fixture_key": self.fixture.key.hex(), "task": self.bridge.task(),
                           "route": self.base.fixture.route, "assignment": self.base.fixture.assignment,
-                          "with_provenance": with_provenance})
+                          "with_provenance": with_provenance, "lose_consumption_reply": lose_consumption_reply})
         armed = self.read(child, "armed")
         self.contexts[context]["evidence"] = bytes.fromhex(armed["evidence"])
         receipt = self.account(request, context)
@@ -158,6 +158,10 @@ time.sleep(30)
                                           payload=provenance.payload()), context)
             registered = {**registered, 'provenance': actual}
         self.send(child, registered)
+        if lose_consumption_reply:
+            child['consumption_fenced'] = self.read(child, 'consumption_fenced')
+            self.assertEqual(0, process.wait(timeout=10))
+            return child
         started = self.read(child, "started")
         self.assertEqual(process.pid, started["pid"])
         self.assertEqual(process.pid, started["registry_pid"])
@@ -225,6 +229,19 @@ time.sleep(30)
                 connection.close()
             process.stdout.close()
             process.stderr.close()
+
+    def test_lost_committed_consumption_reply_retains_proof_and_never_issues_a_ticket(self):
+        child = self.start(self.fixture.scope, self.fixture.request, self.fixture.directory,
+                           'lost-consumption', with_provenance=True, lose_consumption_reply=True)
+        self.assertEqual({'stage': 'consumption_fenced', 'tickets': 0, 'launched': False}, child['consumption_fenced'])
+        store = ProjectHistory(child['history'], child['scope'].project_id)
+        try:
+            self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM project_execution_consumptions').fetchone()[0])
+            self.assertEqual(1, store._connection.execute("SELECT COUNT(*) FROM records WHERE record_type='execution_provenance'").fetchone()[0])
+        finally:
+            store.close()
+        self.assertEqual(1, self.ledger._connection.execute('SELECT COUNT(*) FROM capacity_executions').fetchone()[0])
+        self.assertEqual(1, self.ledger._connection.execute('SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL').fetchone()[0])
 
     def test_suspended_project_a_cannot_block_project_b_control_cleanup_or_history(self):
         first = self.start(self.fixture.scope, self.fixture.request, self.fixture.directory, "supervisor-a", with_provenance=True)

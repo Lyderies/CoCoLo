@@ -135,6 +135,17 @@ _COLUMNS = {
 }
 
 
+class _ExecutionProvenanceRejected(HistoryError):
+    """Writer-local proof rejection, before either consumption row is written.
+
+    Only this definite pre-write outcome permits replacing rejected proof in
+    the original live lane. It grants no retry after an uncertain write.
+    """
+
+    def __init__(self):
+        super().__init__('history_execution_not_ready')
+
+
 def _operation(function):
     @functools.wraps(function)
     def guarded(self, *args, **kwargs):
@@ -997,7 +1008,7 @@ class ProjectHistory:
         except Exception:
             invalid = True
         if invalid:
-            raise HistoryError('history_execution_not_ready')
+            raise _ExecutionProvenanceRejected()
         return validate_learning_record({
             'schema_version': 1, 'record_type': 'execution_provenance',
             'record_id': self._execution_provenance_id(grant), 'run_id': grant.binding.run_id,
@@ -1015,12 +1026,12 @@ class ProjectHistory:
             if exc.reason_code == 'history_not_found' and self._allow_legacy_orchestration_reference:
                 return None
             raise HistoryError('history_execution_not_ready') from None
-        record = parse_bounded_json(entry.content)
-        if (entry.source != 'host' or record['record_type'] != 'execution_provenance'
-                or record['run_id'] != grant.binding.run_id or record['registration_digest'] != grant.registration_digest):
-            raise HistoryError('history_incompatible')
         from .run_provenance import decode_run_provenance_input, verify_run_provenance
         try:
+            record = parse_bounded_json(entry.content)
+            if (entry.source != 'host' or record['record_type'] != 'execution_provenance'
+                    or record['run_id'] != grant.binding.run_id or record['registration_digest'] != grant.registration_digest):
+                raise HistoryError('history_incompatible')
             facts = record['provenance']['provenance']
             request = decode_run_provenance_input({name: facts[name] for name in ('registration', 'registration_digest', 'assignment_id')})
             return verify_run_provenance(self._result_key, request, grant, record['provenance'])

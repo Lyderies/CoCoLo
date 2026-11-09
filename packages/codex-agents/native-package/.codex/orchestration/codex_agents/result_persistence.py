@@ -25,7 +25,7 @@ from .codex_worker import CodexWorkerError, CodexWorkerHandle, CodexWorkerPacket
 from .contracts import ContractError
 from .history_contracts import AttemptBinding, HistoryError, TerminalDelivery, valid_integer
 from .learning_contracts import parse_bounded_json
-from .project_history import ProjectHistory
+from .project_history import ProjectHistory, _ExecutionProvenanceRejected
 from .project_monitor import _capture_binding
 from .result_contracts import (
     MAX_ASSIGNMENT_CANONICAL_BYTES, CodexUsageObservation, ResultLeaseBinding, ResultObservation, assignment_bytes,
@@ -64,6 +64,7 @@ class _Pending:
     bound_evidence: bytes | None = None
     grant_raw: bytes | None = None
     provenance_raw: bytes | None = None
+    provenance_rejected: bool = False
     grant: object = None
     execution_issued: bool = False
     execution_ticket: object = None
@@ -330,7 +331,10 @@ class ResultPersistenceLane:
         with self._lock:
             if self._closed or self._fault:
                 raise HistoryError("history_service_unavailable")
-            if pending.grant_raw is not None and (pending.grant_raw != raw or pending.provenance_raw != provenance):
+            if pending.grant_raw is not None and pending.grant_raw != raw:
+                raise HistoryError("history_conflict")
+            if (pending.grant_raw is not None and pending.provenance_raw != provenance
+                    and not (pending.state == 'failed' and pending.provenance_rejected)):
                 raise HistoryError("history_conflict")
             if pending.state in {"consuming_execution", "execution_consumed", "execution_issued"}:
                 return
@@ -339,6 +343,7 @@ class ResultPersistenceLane:
                 raise HistoryError("history_execution_not_ready")
             pending.grant_raw, pending.state, pending.reason = raw, "consuming_execution", None
             pending.provenance_raw = provenance
+            pending.provenance_rejected = False
             self._incoming.put_nowait(("consume_execution", handle))
 
     def issue_execution(self, handle):
@@ -533,8 +538,18 @@ class ResultPersistenceLane:
         data, _ = _decode_input(pending.payload)
         options = {'task': data['task'], 'route': data['route']}
         if pending.provenance_raw is not None:
-            options['provenance'] = parse_bounded_json(pending.provenance_raw, max_bytes=MAX_RUN_PROVENANCE_BYTES)
-        grant = self._history().consume_execution_grant(pending.binding, pending.grant_raw, **options)
+            try:
+                options['provenance'] = parse_bounded_json(pending.provenance_raw, max_bytes=MAX_RUN_PROVENANCE_BYTES)
+            except ContractError:
+                with self._lock:
+                    pending.provenance_rejected = True
+                raise HistoryError('history_execution_not_ready') from None
+        try:
+            grant = self._history().consume_execution_grant(pending.binding, pending.grant_raw, **options)
+        except _ExecutionProvenanceRejected:
+            with self._lock:
+                pending.provenance_rejected = True
+            raise HistoryError('history_execution_not_ready') from None
         with self._lock:
             pending.grant, pending.state, pending.reason = grant, "execution_consumed", None
 
