@@ -17,6 +17,7 @@ import weakref
 from .bridge_liveness import BridgeLivenessOwner, CodexOwnerResult
 from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES
 from .execution_grant import MAX_EXECUTION_GRANT_BYTES
+from .terminal_delivery import MAX_TERMINAL_EVIDENCE_BYTES
 from .owned_execution import OwnedExecutionKey
 from .codex_worker import CodexWorkerError, CodexWorkerHandle, CodexWorkerPacket, CodexWorkerPool, MAX_INPUT_BYTES, MAX_PACKET_BYTES, _decode_input
 from .contracts import ContractError
@@ -29,7 +30,9 @@ from .result_contracts import (
 )
 
 _TIME_NS = time.time_ns
-MAX_PERSISTENCE_ENTRY_BYTES = MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES + MAX_PACKET_BYTES + MAX_STORAGE_EVIDENCE_BYTES + 2 * MAX_EXECUTION_GRANT_BYTES
+MAX_PERSISTENCE_ENTRY_BYTES = (MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES + MAX_PACKET_BYTES
+                               + MAX_STORAGE_EVIDENCE_BYTES + 2 * MAX_EXECUTION_GRANT_BYTES
+                               + 2 * MAX_TERMINAL_EVIDENCE_BYTES)
 
 
 class ResultPersistenceHandle:
@@ -60,6 +63,8 @@ class _Pending:
     grant: object = None
     execution_issued: bool = False
     execution_ticket: object = None
+    terminal_evidence: bytes | None = None
+    acknowledgement: bytes | None = None
 
 
 class ResultPersistenceLane:
@@ -312,7 +317,7 @@ class ResultPersistenceLane:
         with self._lock:
             if self._closed or self._fault:
                 raise HistoryError("history_service_unavailable")
-            if pending.state in {"queued", "committing", "committed"}:
+            if pending.state in {"queued", "committing", "committed", "acknowledging", "acknowledged"}:
                 return
             if pending.state != "reserved" or pending.supervisor is None:
                 raise HistoryError("history_result_not_ready")
@@ -337,7 +342,7 @@ class ResultPersistenceLane:
         with self._lock:
             if self._closed or self._fault:
                 raise HistoryError("history_service_unavailable")
-            if pending.state in {"queued", "committing", "committed"}:
+            if pending.state in {"queued", "committing", "committed", "acknowledging", "acknowledged"}:
                 return
             if pending.state != "failed" or pending.selected is None:
                 raise HistoryError("history_result_not_ready")
@@ -348,12 +353,43 @@ class ResultPersistenceLane:
         pending = self._job(handle)
         with self._lock:
             return {"state": pending.state, "reason_code": pending.reason,
-                    "bound": pending.supervisor is not None, "committed": pending.state == "committed"}
+                    "bound": pending.supervisor is not None, "committed": pending.delivery is not None}
+
+    def terminal_evidence(self, handle):
+        pending = self._job(handle)
+        with self._lock:
+            if pending.terminal_evidence is None or pending.delivery is None:
+                raise HistoryError('history_result_not_ready')
+            return pending.terminal_evidence
+
+    def acknowledge_terminal(self, handle, raw=None):
+        """Queue original authenticated account metadata; no cleanup claim.
+
+        Parsing/MAC/storage stay on the writer. An explicit retry without raw
+        retains the first immutable reply after a lost local commit response.
+        """
+        pending = self._job(handle)
+        with self._lock:
+            if self._closed or self._fault:
+                raise HistoryError('history_service_unavailable')
+            if raw is None:
+                raw = pending.acknowledgement
+            if type(raw) is not bytes or not 0 < len(raw) <= MAX_TERMINAL_EVIDENCE_BYTES:
+                raise HistoryError('history_invalid_input')
+            if pending.acknowledgement is not None and pending.acknowledgement != raw:
+                raise HistoryError('history_conflict')
+            if pending.state in {'acknowledging', 'acknowledged'}:
+                return
+            if (pending.state not in {'committed', 'failed'} or pending.delivery is None
+                    or pending.terminal_evidence is None or pending.grant is None):
+                raise HistoryError('history_result_not_ready')
+            pending.acknowledgement, pending.state, pending.reason = raw, 'acknowledging', None
+            self._incoming.put_nowait(('acknowledge_terminal', handle))
 
     def delivery(self, handle):
         pending = self._job(handle)
         with self._lock:
-            if pending.state != "committed" or pending.delivery is None:
+            if pending.state not in {"committed", "acknowledging", "acknowledged"} or pending.delivery is None:
                 raise HistoryError("history_result_not_ready")
             value = pending.delivery
             # Return a metadata copy, never the registry's retained authority.
@@ -369,7 +405,7 @@ class ResultPersistenceLane:
             if original is not pending.original_job or entry is None or entry.state != "released":
                 raise HistoryError("history_not_authorized")
         with self._lock:
-            if pending.state != "committed":
+            if pending.state not in {"committed", "acknowledged"}:
                 raise HistoryError("history_result_not_ready")
             self._jobs.pop(handle)
             self._by_worker.pop(pending.worker_handle)
@@ -448,14 +484,22 @@ class ResultPersistenceLane:
         if type(delivery) is not TerminalDelivery or delivery.binding != pending.binding:
             raise HistoryError("history_service_unavailable")
         delivery.__post_init__()
+        evidence = (None if pending.grant is None else self._history().attest_terminal_delivery(pending.binding))
         with self._lock:
             pending.delivery, pending.state, pending.reason = delivery, "committed", None
+            pending.terminal_evidence = evidence
             pending.selected = None
+
+    def _acknowledge_terminal(self, pending):
+        self._history().acknowledge_account_terminal(pending.binding, pending.acknowledgement)
+        with self._lock:
+            pending.state, pending.reason = 'acknowledged', None
 
     def _run(self):
         operations = {"prepare": self._prepare, "publish": self._publish,
                       "arm": self._arm, "bind_claim": self._bind_claim,
-                      "consume_execution": self._consume_execution}
+                      "consume_execution": self._consume_execution,
+                      "acknowledge_terminal": self._acknowledge_terminal}
         self._ready.set()
         pending = None
         try:

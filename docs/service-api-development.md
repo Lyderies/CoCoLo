@@ -6,6 +6,65 @@ still use the installed 0.8.12 implementation; the source codec does not enable 
 
 ## Worker result persistence lane
 
+### Account acceptance of project terminal metadata
+
+After local terminal/outbox commit, the project writer exports the actual consumed
+attempt through `attest_terminal_delivery`. It rechecks the original account
+registration, protected result reservation and stored outbox/record. The bounded
+canonical sealed envelope contains only the original grant, exact delivery binding
+and safe dispatch-result metadata. Export reads no private result artifact and
+remains available after acknowledgement or body retirement.
+
+`account.submit_terminal` accepts the original registration inputs and exact
+registration/terminal/result digests. Its project-service authorization supplies
+the independently expected original actor/supervisor scope, bound-storage proof
+and protected terminal evidence. No request field supplies evidence, source,
+cleanup flag, PID, executable or a model body. Default denial, native enrollment,
+current permission/revocation and authenticated evidence publication still apply.
+
+The account verifies bounded immutable evidence outside its transaction. It checks
+the original scoped claim receipt and registered execution against authoritative
+run, task/route/configuration, orchestration, lease and original clock/deadline
+metadata. One short transaction inserts only the exact terminal ID/content digest
+into the existing central completion table. Terminal records and private bodies
+remain project-owned. An exact retry retrieves a stable keyed acceptance receipt;
+a conflicting terminal cannot replace the first completion. Lost replies and an
+account restart preserve this receipt without refreshing signatures or clocks.
+Fresh writes refuse backwards or future observation time.
+
+The receipt acknowledges terminal metadata. Central release fields remain null and
+shared capacity stays held, including after confirmed local cleanup. A distinct
+authenticated cleanup/release protocol remains required. Account acceptance does
+not acknowledge a project outbox by itself: its owning writer verifies the closed
+account reply, MAC and exact original grant/terminal binding before committing
+`acknowledge_account_terminal`. Reopened stores reconcile the same receipt without
+changing terminal bytes or retention. An invalid reply leaves the outbox pending.
+The shared-key MAC provides binding/integrity; the service must independently
+authenticate the account sender and its current epoch before that internal call.
+
+`ResultPersistenceLane` captures terminal evidence after its actual publication
+return. Its `acknowledge_terminal` queues the first immutable account reply for
+writer validation; explicit retry without replacement retains those bytes after
+an uncertain local response. Parsing, artifact reads and SQL remain off the control
+owner. The lane charges two additional 16 KiB buffers per retained entry for
+evidence and acknowledgement. Acknowledgement cannot retire an execution slot;
+the original separate account-release requirement still governs retirement.
+
+The two-process inert fixture now performs account acceptance and durable local
+acknowledgement while A is OS-stopped, then reopens each project to check the
+persisted outbox receipt. Both central claims remain held. Unit tests preserve
+account/local commit failures, lost replies, exact restart/rollback reconciliation,
+forged/changed proofs and receipts, caller/row binding, privacy and one-exchange
+client behavior. These are synthetic enrollment and primary tests only.
+
+Project schema4 and account schema9 remain unchanged. Native authentication and
+evidence publication, separate cleanup release, orphan/denial recovery and normal
+client migration remain mandatory before activation. In particular, normal-client
+terminal reads must move to the owning project while preserving existing result,
+fence, review and QA binding; the legacy central record consumer still needs that
+migration. Both real provider phases and all independent/installed release gates
+remain open.
+
 ### Project-local execution registration
 
 The account owner can now durably register an original Codex launch claim for

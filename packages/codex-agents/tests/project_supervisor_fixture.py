@@ -11,6 +11,7 @@ from pathlib import Path
 import socket
 import sys
 import time
+from unittest import mock
 
 import tests.support  # noqa: F401
 from tests.test_bridge import PARENT_GRANT, RESULT_SCHEMA
@@ -132,10 +133,34 @@ def main():
         until(lambda: lane.snapshot(handle)["state"] in {"committed", "failed", "unknown"})
         if lane.snapshot(handle)["state"] != "committed":
             raise RuntimeError("fixture_persistence_failed")
+        emit(stage='terminal', evidence=lane.terminal_evidence(handle).hex(), delivery=lane.delivery(handle).as_data())
+        from codex_agents.learning_contracts import canonical_json
+        acknowledgement = canonical_json(receive())
+        original_ack = ProjectHistory.acknowledge_account_terminal
+        acknowledgements = []
+
+        def lose_first_reply(store, binding, raw):
+            original_ack(store, binding, raw)
+            acknowledgements.append(raw)
+            if len(acknowledgements) == 1:
+                raise OSError('PRIVATE-LOST-WRITER-ACK')
+
+        with mock.patch.object(ProjectHistory, 'acknowledge_account_terminal', new=lose_first_reply):
+            lane.acknowledge_terminal(handle, acknowledgement)
+            until(lambda: lane.snapshot(handle)['state'] != 'acknowledging')
+            if lane.snapshot(handle)['state'] != 'failed' or not lane.snapshot(handle)['committed']:
+                raise RuntimeError('fixture_lost_ack_not_preserved')
+            lane.acknowledge_terminal(handle)  # Original retained reply; no account/model retry.
+            until(lambda: lane.snapshot(handle)['state'] != 'acknowledging')
+        if acknowledgements != [acknowledgement, acknowledgement]:
+            raise RuntimeError('fixture_replaced_acknowledgement')
+        if lane.snapshot(handle)['state'] != 'acknowledged':
+            raise RuntimeError('fixture_acknowledgement_failed')
         emit(stage="done", cleanup_confirmed=supervisor.snapshot()["cleanup_confirmed"],
              fenced=selected.packet.fenced, terminal_state=selected.packet.terminal_state,
              stop_reason=selected.stop_reason, ticket_count=len(registry._issued),
              launches=(root / "launches").read_text().splitlines(),
+             acknowledged=lane.snapshot(handle)['state'] == 'acknowledged',
              persisted_claim=lane.delivery(handle).binding.claim_id)
     finally:
         pool.close()

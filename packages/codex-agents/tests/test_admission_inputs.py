@@ -136,7 +136,7 @@ class AdmissionInputOwnerTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             captured.rows = ()
         self.assertEqual({"account.health", "account.project", "account.owner_key", "account.owner_public_key",
-                          "account.claim_launch", "account.capacity_status", "account.register_execution"}, ACCOUNT_OPERATIONS)
+                          "account.claim_launch", "account.capacity_status", "account.register_execution", "account.submit_terminal"}, ACCOUNT_OPERATIONS)
 
     def test_exact_field_and_row_quotas_refuse_before_raw_fetch(self):
         baseline = self.capture()

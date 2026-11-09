@@ -24,7 +24,9 @@ from codex_agents.execution_grant import ExecutionRegistrationInput
 from codex_agents.learning_contracts import content_digest, keyed_digest
 from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST
 from codex_agents.result_contracts import ResultLeaseBinding
+from codex_agents.project_history import ProjectHistory
 from codex_agents.service_protocol import ServiceTarget
+from codex_agents.terminal_delivery import TerminalSubmissionInput
 
 
 class ProjectExecutionProcessTests(unittest.TestCase):
@@ -45,8 +47,8 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         if entry is None or entry["scope"].project_id != request.project_id:
             return None
         return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
-                                    entry["source"], frozenset({"account.claim_launch", "account.register_execution"}),
-                                    "a" * 64, entry["scope"], entry["evidence"])
+                                    entry["source"], frozenset({"account.claim_launch", "account.register_execution", "account.submit_terminal"}),
+                                    "a" * 64, entry["scope"], entry["evidence"], entry.get('terminal_evidence'))
 
     def account(self, request, context):
         self.base.stamp = time.time_ns() // 1_000_000
@@ -122,9 +124,11 @@ time.sleep(30)
                                    pass_fds=tuple(pair[0].fileno() for pair in pairs))
         for server, _ in pairs:
             server.close()
-        child = {"process": process, "root": root, "scope": scope, "sockets": [pair[1] for pair in pairs], "stopped": False}
+        child = {"process": process, "root": root, "scope": scope, 'history': history,
+                 "sockets": [pair[1] for pair in pairs], "stopped": False}
         self.children.append(child)
         context = object()
+        child['context'] = context
         self.contexts[context] = {"scope": scope, "source": "host", "evidence": None}
         self.send(child, {"scope": scope.as_data(), "root": str(root), "history": str(history),
                           "fixture_key": self.fixture.key.hex(), "task": self.bridge.task(),
@@ -142,12 +146,31 @@ time.sleep(30)
         registered = self.account(replace(request, operation="account.register_execution", request_id="register-" + name,
                                           payload=registration.payload()), context)
         self.assertFalse(registered["known"])
+        child['registration'], child['registration_digest'] = registration, registered['grant']['registration_digest']
         self.send(child, registered)
         started = self.read(child, "started")
         self.assertEqual(process.pid, started["pid"])
         self.assertEqual(process.pid, started["registry_pid"])
         self.assertEqual(registered["grant"]["deadline_ns"], started["deadline_ns"])
         return child
+
+    def accept_terminal(self, child):
+        terminal = self.read(child, 'terminal')
+        delivery = terminal['delivery']
+        context = child['context']
+        self.contexts[context]['terminal_evidence'] = bytes.fromhex(terminal['evidence'])
+        submission = TerminalSubmissionInput(child['registration'], child['registration_digest'],
+                                              delivery['record_id'], delivery['record_content_digest'], delivery['result_digest'])
+        request = AccountRequest(1, 'account.submit_terminal', 'terminal', child['scope'].project_id,
+                                 COLLECTOR_RUNTIME_DIGEST, submission.payload())
+        self.contexts[context]['source'] = 'project'
+        # Grant this closed operation on the fixture boundary, never through JSON.
+        receipt = self.account(request, context)
+        self.assertEqual('recorded', receipt['state'])
+        self.assertFalse(receipt['known'])
+        self.assertEqual({**receipt, 'known': True}, self.account(request, context))
+        self.send(child, receipt)
+        return self.read(child, 'done')
 
     def control(self, child, operation):
         scope = child["scope"]
@@ -209,12 +232,12 @@ time.sleep(30)
         reply = self.control(second, "project.cancel")
         self.assertEqual("stop_requested", reply.result["cancellation_state"])
         self.assertLess(time.monotonic() - started, 2)
-        done_b = self.read(second, "done")
+        done_b = self.accept_terminal(second)
         self.assertTrue(first["stopped"])
         os.kill(first["process"].pid, signal.SIGCONT)
         first["stopped"] = False
         self.assertEqual("stop_requested", self.control(first, "project.cancel").result["cancellation_state"])
-        done_a = self.read(first, "done")
+        done_a = self.accept_terminal(first)
         for child, done in ((first, done_a), (second, done_b)):
             self.assertTrue(done["cleanup_confirmed"])
             self.assertTrue(done["fenced"])
@@ -222,9 +245,17 @@ time.sleep(30)
             self.assertEqual("cancel_requested", done["stop_reason"])
             self.assertEqual(1, done["ticket_count"])
             self.assertEqual(["launch"], done["launches"])
+            self.assertTrue(done['acknowledged'])
             self.assertEqual(child["receipt"]["bridge_run_id"], done["persisted_claim"])
             self.assertEqual(0, child["process"].wait(timeout=10))
+            store = ProjectHistory(child['history'], child['scope'].project_id)
+            try:
+                self.assertEqual((), store.pending_terminals())
+                self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM terminal_outbox WHERE receipt_digest IS NOT NULL').fetchone()[0])
+            finally:
+                store.close()
         self.assertEqual(2, self.ledger._connection.execute("SELECT COUNT(*) FROM capacity_executions").fetchone()[0])
+        self.assertEqual(2, self.ledger._connection.execute("SELECT COUNT(*) FROM capacity_completions").fetchone()[0])
         # Completion/release transport is deliberately not invented by a local
         # fixture result. Unknown central completion must remain charged.
         self.assertEqual(2, self.ledger._connection.execute("SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL").fetchone()[0])

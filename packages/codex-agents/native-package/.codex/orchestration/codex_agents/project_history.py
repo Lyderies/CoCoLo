@@ -625,6 +625,7 @@ class ProjectHistory:
 
     def _reservation(self, row) -> ResultReservation:
         invalid = False
+        reason = "history_incompatible"
         try:
             encoded = self._stored_blob(row["binding"], maximum=MAX_BINDING_BYTES)
             binding = AttemptBinding(**parse_bounded_json(encoded))
@@ -650,10 +651,14 @@ class ProjectHistory:
                     delivery = self._delivery(terminal)
                     invalid |= (delivery.binding != binding or delivery.result_digest != value.result_digest
                                 or delivery.record_id != value.terminal_record_id)
-        except (HistoryError, ContractError, KeyError, TypeError, ValueError, OverflowError, RecursionError):
+        except HistoryError as error:
+            invalid = True
+            if error.reason_code in {"history_unavailable", "history_result_unavailable"}:
+                reason = error.reason_code
+        except (ContractError, KeyError, TypeError, ValueError, OverflowError, RecursionError):
             invalid = True
         if invalid:
-            raise HistoryError("history_incompatible")
+            raise HistoryError(reason)
         return value
 
     def _result_row(self, binding: AttemptBinding):
@@ -1340,6 +1345,74 @@ class ProjectHistory:
             # details, after other selected rows have had their cleanup turn.
             raise HistoryError(failure)
         return retired
+
+    @_operation
+    def attest_terminal_delivery(self, binding: AttemptBinding) -> bytes:
+        """Export the actual consumed attempt's durable safe outbox metadata.
+
+        No private result artifact is opened. Historical metadata survives body
+        retirement and an acknowledgement; native peer/actor authentication is
+        still required before the account accepts this bounded evidence.
+        """
+        from .terminal_delivery import encode_terminal_evidence
+
+        binding = self._result_binding(binding)
+        _, reservation = self._result_row(binding)
+        consumed = self._connection.execute("SELECT grant FROM project_execution_consumptions WHERE project_id=? AND claim_id=?",
+                                            (self.project_id, binding.claim_id)).fetchone()
+        row = self._connection.execute("SELECT * FROM terminal_outbox WHERE project_id=? AND claim_id=?",
+                                       (self.project_id, binding.claim_id)).fetchone()
+        if consumed is None or row is None or reservation.state not in {'committed', 'expired'}:
+            raise HistoryError('history_result_not_ready')
+        invalid = False
+        reason = 'history_incompatible'
+        try:
+            grant = verify_execution_grant(self._result_key, binding,
+                                           self._stored_blob(consumed['grant'], maximum=MAX_EXECUTION_GRANT_BYTES))
+            delivery = self._delivery(row)
+            invalid = (delivery.binding != binding or reservation.terminal_record_id != delivery.record_id
+                       or reservation.assignment_digest != grant.assignment_digest
+                       or reservation.hard_deadline_at_ms != grant.deadline_at_ms)
+            if not invalid:
+                evidence = encode_terminal_evidence(self._result_key, grant, delivery, self.record(delivery.record_id).content)
+        except HistoryError as error:
+            invalid = True
+            if error.reason_code in {'history_unavailable', 'history_result_unavailable'}:
+                reason = error.reason_code
+        except Exception:
+            invalid = True
+        if invalid:
+            raise HistoryError(reason)
+        return evidence
+
+    @_operation
+    def acknowledge_account_terminal(self, binding: AttemptBinding, raw: bytes) -> None:
+        """Verify the original account acceptance before acknowledging its outbox.
+
+        This acknowledges terminal metadata only. It does not retire body storage,
+        release execution custody or establish confirmed tree cleanup.
+        The service must independently authenticate the original account peer;
+        the shared-key MAC is a binding check, not native sender authority.
+        """
+        from .terminal_delivery import verify_terminal_evidence, verify_terminal_receipt
+
+        binding = self._result_binding(binding)
+        evidence_raw = self.attest_terminal_delivery(binding)
+        lease = self._connection.execute('SELECT binding FROM result_leases WHERE project_id=? AND claim_id=?',
+                                         (self.project_id, binding.claim_id)).fetchone()
+        if lease is None:
+            raise HistoryError('history_result_not_ready')
+        invalid = False
+        try:
+            expected = ResultLeaseBinding(**parse_bounded_json(self._stored_blob(lease['binding'], maximum=MAX_BINDING_BYTES)))
+            evidence = verify_terminal_evidence(self._result_key, expected, evidence_raw)
+            receipt = verify_terminal_receipt(self._result_key, evidence.grant, evidence.delivery, raw)
+        except Exception:
+            invalid = True
+        if invalid:
+            raise HistoryError('history_invalid_input')
+        self.acknowledge_terminal(binding.claim_id, evidence.delivery.record_content_digest, receipt['receipt_digest'],
+                                  runtime_digest=binding.runtime_digest)
 
     @_operation
     def pending_terminals(self, *, after_sequence: int = 0, limit: int = 10) -> tuple[TerminalDelivery, ...]:

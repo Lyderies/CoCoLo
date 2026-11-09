@@ -6179,6 +6179,109 @@ class LearningLedger:
                                      (native_id, project_id, context.handle))
         return {"grant": grant.as_data(), "known": False}
 
+    def _accept_project_terminal(self, project_id, *, runtime_digest, caller_scope, submission,
+                                 storage_binding, storage_evidence, terminal_evidence):
+        """Accept exact safe terminal metadata; never infer cleanup or release.
+
+        Native project enrollment/current authority and protected evidence
+        publication remain activation gates. Account SQL records the original
+        registered claim's completion digest without opening a project store,
+        receiving a result body or reconstructing process custody.
+        """
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+        from .claim_storage import capture_storage_evidence, verify_bound_storage_evidence
+        from .terminal_delivery import TerminalSubmissionInput, decode_terminal_submission, terminal_receipt, verify_terminal_evidence
+
+        if type(submission) is not TerminalSubmissionInput:
+            raise ClaimError('claim_terminal_invalid')
+        submission = decode_terminal_submission(submission.payload())
+        expected, bound_raw = capture_storage_evidence(storage_binding, storage_evidence)
+        key = self.state.digest_key()
+        lease = verify_bound_storage_evidence(key, expected, bound_raw)
+        evidence = verify_terminal_evidence(key, expected, terminal_evidence)
+        grant, delivery = evidence.grant, evidence.delivery
+        terminal_record = parse_bounded_json(evidence.record)
+        observed = terminal_record['observed_at_ms']
+        registration = submission.registration
+        launch = LaunchClaimInput(registration.run_handle, registration.identity_digest)
+        original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', registration.claim_request_id,
+                                  project_id, runtime_digest, launch.payload())
+        if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                or expected.claim_request_id != registration.claim_request_id
+                or expected.claim_request_digest != account_request_digest(original)
+                or grant.binding.run_handle != registration.run_handle or grant.binding.claim_id != registration.bridge_run_id
+                or grant.binding.claim_digest != registration.claim_digest
+                or lease.claim_id != grant.binding.claim_id or lease.claim_digest != grant.binding.claim_digest
+                or lease.lease_digest != grant.lease_digest or lease.assignment_digest != grant.assignment_digest
+                or lease.hard_deadline_at_ms != grant.deadline_at_ms
+                or grant.registration_digest != submission.registration_digest
+                or delivery.record_id != submission.terminal_record_id
+                or delivery.record_content_digest != submission.terminal_content_digest
+                or delivery.result_digest != submission.result_digest):
+            raise ClaimError('claim_terminal_invalid')
+        claim_binding = keyed_digest(key, canonical_json({
+            'domain': 'project-result-claim-binding-v1', 'lease_digest': lease.lease_digest,
+            'binding': grant.binding.as_data(), 'hard_deadline_at_ms': grant.deadline_at_ms,
+        }))
+        if not secrets.compare_digest(claim_binding, lease.claim_binding_digest):
+            raise ClaimError('claim_terminal_invalid')
+        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                                    request_id=registration.claim_request_id, launch=launch)
+        if (known is None or known['state'] != 'claimed' or known['bridge_run_id'] != registration.bridge_run_id
+                or known['receipt_digest'] != registration.claim_digest):
+            raise ClaimError('claim_terminal_unavailable')
+        with self._account_transaction():
+            current = self._known_claim_receipt_locked(project_id, context.scope, context.request, context.parameters)
+            if current is None or current['receipt_digest'] != registration.claim_digest:
+                raise ClaimError('claim_terminal_unavailable')
+            row = self._connection.execute(
+                'SELECT a.*,h.assignment_digest,h.task_digest,h.route_digest,h.configuration_digest,'
+                'h.native_assignment_id,h.binding_state,h.consumed_at_ms,h.client_version,'
+                'o.handle_digest AS orchestration_digest,e.owner_digest FROM active_run_capacity a '
+                'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id '
+                'JOIN orchestrations o ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id '
+                'JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest '
+                'AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id '
+                'WHERE a.project_id=? AND a.handle_digest=? AND a.bridge_run_id=?',
+                (project_id, context.handle, registration.bridge_run_id),
+            ).fetchone()
+            if (row is None or row['kind'] != 'claimed' or row['provider'] != 'codex'
+                    or terminal_record['client_diagnostics'] is not None
+                    or row['runtime_digest'] != runtime_digest or row['run_id'] != grant.binding.run_id
+                    or row['client_version'] != 'bridge-v1' or row['owner_digest'] != grant.registration_digest
+                    or row['orchestration_digest'] != keyed_digest(key, grant.binding.orchestration_handle)
+                    or row['native_assignment_id'] != external_id(key, 'asg', registration.bridge_run_id)
+                    or row['execution_deadline_ns'] != grant.deadline_ns
+                    or any(row[n] != getattr(grant, n) for n in (
+                        'handle_digest', 'assignment_digest', 'task_digest', 'route_digest', 'configuration_digest',
+                        'clock_owner_digest', 'clock_reference_ns', 'claimed_at_ms', 'deadline_at_ms'))):
+                raise ClaimError('claim_terminal_unavailable')
+            prior = self._connection.execute('SELECT * FROM capacity_completions WHERE project_id=? AND handle_digest=?',
+                                             (project_id, context.handle)).fetchone()
+            if prior is not None:
+                if (prior['run_id'] != grant.binding.run_id or prior['bridge_run_id'] != grant.binding.claim_id
+                        or prior['terminal_record_id'] != delivery.record_id
+                        or prior['terminal_content_digest'] != delivery.record_content_digest):
+                    raise ClaimError('claim_terminal_conflict')
+                # A terminal ACK must not hide corrupt release metadata.
+                completed = self._capacity_completion_locked(OwnedExecutionKey(
+                    project_id, context.handle, grant.binding.run_id, grant.binding.claim_id))
+                if completed['released_at_ms'] is not None and not secrets.compare_digest(
+                        self._capacity_completion_digest(completed, completed['released_at_ms']), completed['receipt_digest']):
+                    raise ClaimError('claim_terminal_unavailable')
+                return terminal_receipt(key, grant, delivery, known=True)
+            now = self._clock_ms()
+            if (row['released_at_ms'] is not None or row['binding_state'] != 'pending' or row['consumed_at_ms'] is not None
+                    or type(now) is not int or not grant.claimed_at_ms <= observed <= now <= MAX_CLAIM_INTEGER):
+                raise ClaimError('claim_terminal_unavailable')
+            self._connection.execute(
+                'INSERT INTO capacity_completions(project_id,handle_digest,run_id,bridge_run_id,'
+                'terminal_record_id,terminal_content_digest) VALUES(?,?,?,?,?,?)',
+                (project_id, context.handle, grant.binding.run_id, grant.binding.claim_id,
+                 delivery.record_id, delivery.record_content_digest),
+            )
+        return terminal_receipt(key, grant, delivery, known=False)
+
     def _new_owned_execution(self, project_id, run_handle, bridge_run_id):
         """Internal fixed-bridge registration, not a caller-selected PID API."""
         handle = keyed_digest(self.state.digest_key(), run_handle)

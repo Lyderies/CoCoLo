@@ -69,6 +69,7 @@ class AccountAuthorization:
     caller_scope: str | None = None
     storage_binding: object = None
     storage_evidence: bytes | None = None
+    terminal_evidence: bytes | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -86,6 +87,8 @@ class AccountAuthorization:
         invalid = False
         try:
             capture_storage_evidence(self.storage_binding, self.storage_evidence)
+            from .terminal_delivery import capture_terminal_evidence
+            capture_terminal_evidence(self.terminal_evidence)
         except ClaimError:
             invalid = True
         if invalid:
@@ -166,6 +169,13 @@ class AccountOwnerViews:
         return self._ledger._register_project_execution(project_id, runtime_digest=runtime_digest,
                                                        caller_scope=caller_scope, registration=registration,
                                                        storage_binding=storage_binding, storage_evidence=storage_evidence)
+
+    def submit_terminal(self, project_id, *, runtime_digest, caller_scope, submission,
+                        storage_binding, storage_evidence, terminal_evidence):
+        self._guard()
+        return self._ledger._accept_project_terminal(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                                     submission=submission, storage_binding=storage_binding,
+                                                     storage_evidence=storage_evidence, terminal_evidence=terminal_evidence)
 
     def _claim_preflight(self, project_id, *, runtime_digest, caller_scope, request_id, launch, work_limits=None,
                          storage_required=False, storage_binding=None, storage_evidence=None):
@@ -681,6 +691,8 @@ class AccountService:
             status = decode_capacity_status_input(request.payload) if operation == "account.capacity_status" else None
             from .execution_grant import decode_execution_registration
             registration = decode_execution_registration(request.payload) if operation == "account.register_execution" else None
+            from .terminal_delivery import decode_terminal_submission
+            submission = decode_terminal_submission(request.payload) if operation == 'account.submit_terminal' else None
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -705,8 +717,8 @@ class AccountService:
                 or request.operation not in authorization.allowed_operations
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
-                or (authorization.source == "project" and operation not in {"account.health", "account.register_execution"})
-                or (operation == "account.register_execution" and
+                or (authorization.source == "project" and operation not in {"account.health", "account.register_execution", "account.submit_terminal"})
+                or (operation in {"account.register_execution", "account.submit_terminal"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
                 or (operation in {"account.claim_launch", "account.capacity_status"} and
                     (authorization.source != "host" or authorization.caller_scope is None))
@@ -738,6 +750,15 @@ class AccountService:
                 result = self._views.register_execution(project, runtime_digest=runtime,
                                                         caller_scope=authorization.caller_scope, registration=registration,
                                                         storage_binding=storage_binding, storage_evidence=storage_evidence)
+            elif operation == 'account.submit_terminal':
+                from .claim_storage import capture_storage_evidence
+                from .terminal_delivery import capture_terminal_evidence
+                storage_binding, storage_evidence = capture_storage_evidence(
+                    authorization.storage_binding, authorization.storage_evidence)
+                result = self._views.submit_terminal(project, runtime_digest=runtime,
+                                                     caller_scope=authorization.caller_scope, submission=submission,
+                                                     storage_binding=storage_binding, storage_evidence=storage_evidence,
+                                                     terminal_evidence=capture_terminal_evidence(authorization.terminal_evidence))
             elif request.operation == "account.health":
                 result = {"transport_alive": True, "database_checked": False}
             elif request.operation == "account.project":

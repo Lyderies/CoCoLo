@@ -97,6 +97,7 @@ RUNTIME_FILES = (
     "codex_agents/signature_worker_pool.py",
     "codex_agents/sql_read_budget.py",
     "codex_agents/supervision.py",
+    "codex_agents/terminal_delivery.py",
     "codex_agents/validation.py",
     "config/discovery-policy.json",
     "config/evaluation-summary.json",
