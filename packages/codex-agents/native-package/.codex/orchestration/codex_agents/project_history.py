@@ -31,6 +31,8 @@ from .history_contracts import (
     _DIGEST, _ID, _PROJECT, matches, valid_integer,
 )
 from .host_result_contracts import HostResultReference, decode_host_result_reference
+from .orchestration_api import OrchestrationLimits
+from .orchestration_schema import ORCHESTRATION_SCHEMA, ORCHESTRATION_COLUMNS
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
     keyed_digest, parse_bounded_json, validate_execution_configuration, validate_learning_record,
@@ -42,7 +44,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable"})
 MAX_DELIVERY_PAGE_BYTES = 16_384
@@ -111,8 +113,10 @@ CREATE TABLE project_execution_consumptions(
  PRIMARY KEY(project_id,claim_id), UNIQUE(project_id,registration_digest),
  FOREIGN KEY(project_id,claim_id) REFERENCES result_reservations(project_id,claim_id));
 """
-_SCHEMA = _SCHEMA_V3 + _EXECUTION_SCHEMA
+_SCHEMA_V4 = _SCHEMA_V3 + _EXECUTION_SCHEMA
+_SCHEMA = _SCHEMA_V4 + ORCHESTRATION_SCHEMA
 _COLUMNS = {
+    **ORCHESTRATION_COLUMNS,
     "history_identity": ("project_id", "next_source_sequence", "next_delivery_sequence"),
     "records": ("project_id", "record_id", "record_type", "source", "source_sequence",
                 "observed_at_ms", "ingested_at_ms", "content", "content_digest", "late"),
@@ -162,6 +166,8 @@ class ProjectHistory:
         self, directory: Path, project_id: str, *, result_key: bytes | None = None,
         result_capacity: ResultCapacity | None = None, result_clock_ms: Callable[[], int] | None = None,
         allow_schema_upgrade: bool = False,
+        orchestration_limits: OrchestrationLimits | None = None,
+        allow_legacy_orchestration_reference: bool = False,
     ) -> None:
         self._pid = os.getpid()
         self._thread = threading.current_thread()
@@ -175,6 +181,8 @@ class ProjectHistory:
         self._result_clock = result_clock_ms if result_clock_ms is not None else (lambda: time.time_ns() // 1_000_000)
         if (
             type(allow_schema_upgrade) is not bool
+            or type(allow_legacy_orchestration_reference) is not bool
+            or (orchestration_limits is not None and type(orchestration_limits) is not OrchestrationLimits)
             or (result_key is None) != (result_capacity is None)
             or (result_key is not None and (type(result_key) is not bytes or len(result_key) != 32))
             or (result_capacity is not None and type(result_capacity) is not ResultCapacity)
@@ -182,6 +190,9 @@ class ProjectHistory:
         ):
             raise HistoryError("history_invalid_input")
         self._allow_schema_upgrade = allow_schema_upgrade
+        self._allow_legacy_orchestration_reference = allow_legacy_orchestration_reference
+        self._orchestration_limits = (None if orchestration_limits is None else
+                                      OrchestrationLimits(orchestration_limits.max_orchestrations, orchestration_limits.max_events))
         if result_capacity is not None:
             invalid_capacity = False
             try:
@@ -289,6 +300,11 @@ class ProjectHistory:
         if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise HistoryError("history_wrong_owner")
 
+    def _orchestration_owner(self):
+        # Lazy import keeps the protocol/client free of persistence imports.
+        from .orchestration_store import OrchestrationOwner
+        return OrchestrationOwner(self)
+
     @contextmanager
     def _transaction(self):
         self._connection.execute("BEGIN IMMEDIATE")
@@ -319,19 +335,20 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3} and application == _APPLICATION_ID
-              and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3}[version])):
+        elif (version in {1, 2, 3, 4} and application == _APPLICATION_ID
+              and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {"project_execution_consumptions", *({"result_leases"} if version < 3 else set()),
+            omitted = {*ORCHESTRATION_COLUMNS, *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             self._check_schema_identity({name: columns for name, columns in _COLUMNS.items() if name not in omitted})
             with self._transaction():
-                additions = (_RESULT_SCHEMA if version == 1 else "") + (_LEASE_SCHEMA if version < 3 else "") + _EXECUTION_SCHEMA
+                additions = ((_RESULT_SCHEMA if version == 1 else "") + (_LEASE_SCHEMA if version < 3 else "")
+                             + (_EXECUTION_SCHEMA if version < 4 else "") + ORCHESTRATION_SCHEMA)
                 for statement in additions.split(";"):
                     if statement.strip():
                         connection.execute(statement)
@@ -813,6 +830,7 @@ class ProjectHistory:
                 if value.binding != binding or value.assignment_digest != digest:
                     raise HistoryError("history_conflict")
                 return value  # Never refresh, reuse or revive a known lease.
+            self._orchestration_owner().active_for(binding)
             if (self._connection.execute("SELECT 1 FROM result_reservations WHERE project_id=? AND run_handle=? AND attempt=?",
                                          (self.project_id, binding.run_handle, binding.attempt)).fetchone() is not None
                     or self._connection.execute("SELECT 1 FROM terminal_outbox WHERE project_id=? AND run_handle=? AND attempt=?",
@@ -842,6 +860,7 @@ class ProjectHistory:
         No body, key, assignment text, path or caller-selected seal is returned.
         """
         binding = self._lease_binding(binding)
+        self._orchestration_owner().active_for(binding)
         now = self._result_now()
         value = self._lease_row(binding)
         if now >= value.reserved_until_ms:
@@ -941,6 +960,7 @@ class ProjectHistory:
                 if prior != raw or not valid_integer(existing[0]["consumed_at_ms"]):
                     raise HistoryError("history_incompatible")
                 raise HistoryError("history_execution_consumed")
+            self._orchestration_owner().active_for(binding)
             # No implicit retirement/file I/O or transaction nesting here. An
             # expired/body-prepared/retired result cannot admit a new process.
             _, reservation = self._result_row(binding)
@@ -974,6 +994,7 @@ class ProjectHistory:
             value = self._lease_row(binding)
             if value.state in {"claim_pending", "bound"}:
                 return value
+            self._orchestration_owner().active_for(binding)
             if value.state != "reserved" or now >= value.reserved_until_ms:
                 raise HistoryError("history_result_expired")
             value = replace(value, state="claim_pending")
@@ -1084,6 +1105,7 @@ class ProjectHistory:
                                   now + self._result_capacity.reservation_ms,
                                   now + self._result_capacity.reservation_ms, "reserved")
         with self._transaction():
+            self._orchestration_owner().active_for(binding)
             if self._connection.execute("SELECT 1 FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
                                         (self.project_id, binding.run_handle, binding.attempt)).fetchone() is not None:
                 raise HistoryError("history_conflict")
@@ -1354,6 +1376,8 @@ class ProjectHistory:
     @_operation
     def read_result(self, binding: AttemptBinding) -> bytes:
         binding = self._result_binding(binding)
+        if self._orchestration_owner().closed_for(binding):
+            raise HistoryError("history_orchestration_state")
         _, value = self._live_result(binding, self._result_now())
         if value.state != "committed":
             raise HistoryError("history_result_not_ready")
@@ -1418,7 +1442,9 @@ class ProjectHistory:
         def candidates(after):
             statement = (
                 "SELECT rowid FROM result_reservations WHERE project_id=? AND state!='expired' "
-                "AND (expires_at_ms<=? OR state='retiring')"
+                "AND (expires_at_ms<=? OR state='retiring' OR EXISTS(SELECT 1 FROM project_orchestrations AS owned "
+                "WHERE owned.project_id=result_reservations.project_id "
+                "AND owned.orchestration_handle=result_reservations.orchestration_handle))"
             )
             arguments = [self.project_id, now]
             if after is not None:
@@ -1445,7 +1471,13 @@ class ProjectHistory:
                 ).fetchone()
                 if row is None:
                     raise HistoryError("history_incompatible")
-                self._retire_result(self._reservation(row).binding)
+                value = self._reservation(row)
+                # SQL membership selects candidates only. The sealed current
+                # lifecycle must prove closure before early body retirement.
+                if (value.state != 'retiring' and now < value.expires_at_ms
+                        and not self._orchestration_owner().closed_for(value.binding)):
+                    continue
+                self._retire_result(value.binding)
                 retired += 1
             except HistoryError as exc:
                 if failure is None:

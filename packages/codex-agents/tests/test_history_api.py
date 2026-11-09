@@ -218,6 +218,7 @@ class HistoryApiTests(unittest.TestCase):
     def test_malformed_or_open_fields_have_fixed_errors_without_echo(self):
         valid = json.loads(encode_history_request(request()))
         variants = [b"CANARY-private-input", b"\xff", b'{"x":1,"x":2}', b"{\"x\":NaN}", b"x" * 81_920]
+        variants.extend(canonical_json({**valid, "operation": value}) for value in ([], {}, None, True))
         for field in ("producer", "role", "sql", "method", "path", "pid", "authorized"):
             variants.append(canonical_json({**valid, field: "CANARY-private-input"}))
         for raw in variants:
@@ -227,6 +228,7 @@ class HistoryApiTests(unittest.TestCase):
             self.assertNotIn("CANARY", str(caught.exception))
             result = self.service.handle(raw, FIXTURE_CONTEXT)
             self.assertFalse(json.loads(result)["ready"])
+            self.assertEqual(caught.exception.reason_code, json.loads(result)["reason_code"])
             self.assertNotIn(b"CANARY", result)
             self.assertIsNone(json.loads(result)["project_id"])
             self.assertIsNone(json.loads(result)["runtime_digest"])

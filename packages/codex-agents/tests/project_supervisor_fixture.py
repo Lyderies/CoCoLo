@@ -70,6 +70,7 @@ def main():
 
     def open_history():
         return ProjectHistory(Path(data["history"]), scope.project_id, result_key=key,
+                              allow_legacy_orchestration_reference=True,
                               result_capacity=ResultCapacity(8, 2 * MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
 
     lane = None

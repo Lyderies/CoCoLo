@@ -23,6 +23,8 @@ from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGE
 from .host_result_contracts import HostResultContext, decode_host_result_reference
 from .learning_contracts import canonical_json, parse_bounded_json
 from .project_history import ProjectHistory
+from .orchestration_api import ORCHESTRATION_OPERATIONS
+from .orchestration_service import OrchestrationService
 from .result_read_api import RESULT_READ_OPERATION, ResultReadRequest
 from .result_read_service import ResultReadAuthorization, ResultReadService
 from .service_transport import MAX_FRAME_BYTES
@@ -72,12 +74,14 @@ class HistoryService:
         self, project_id: str, runtime_digest: str, open_history: Callable[[], ProjectHistory], *,
         authorizer: Callable[[HistoryRequest, object], HistoryAuthorization | None] | None = None,
         result_authorizer: Callable[[ResultReadRequest, object], ResultReadAuthorization | None] | None = None,
+        orchestration_authorizer: Callable | None = None,
         clock_ms: Callable[[], int] | None = None,
     ) -> None:
         if (
             not matches(project_id, _PROJECT) or not matches(runtime_digest, _DIGEST)
             or not callable(open_history) or (authorizer is not None and not callable(authorizer))
             or (result_authorizer is not None and not callable(result_authorizer))
+            or (orchestration_authorizer is not None and not callable(orchestration_authorizer))
             or (clock_ms is not None and not callable(clock_ms))
         ):
             raise HistoryError("history_invalid_input")
@@ -89,6 +93,8 @@ class HistoryService:
         self._closed = False
         self._reader = ResultReadService(project_id, runtime_digest, self._history,
                                          authorizer=result_authorizer, close_history=False)
+        self._orchestrations = OrchestrationService(project_id, runtime_digest, self._history,
+                                                   authorizer=orchestration_authorizer, close_history=False)
 
     def _history(self) -> ProjectHistory:
         """Lend the same connection after each handler's own authorization.
@@ -110,16 +116,17 @@ class HistoryService:
         return self._store
 
     @staticmethod
-    def _result_read(raw: bytes) -> bool:
+    def _wire_operation(raw: bytes) -> str | None:
         # This bounded peek selects a codec only. Each handler still validates
         # its entire closed frame and independently authorizes the operation.
         if type(raw) is not bytes or len(raw) + 1 > MAX_FRAME_BYTES:
-            return False
+            return None
         try:
             value = parse_bounded_json(raw, max_bytes=MAX_FRAME_BYTES - 1)
-            return type(value) is dict and value.get("operation") == RESULT_READ_OPERATION
+            operation = value.get("operation") if type(value) is dict else None
+            return operation if type(operation) is str else None
         except Exception:
-            return False
+            return None
 
     def _reply(self, identity: str | None, *, request_digest: str | None = None,
                project_id: str | None = None, runtime_digest: str | None = None,
@@ -140,8 +147,11 @@ class HistoryService:
         try:
             if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
                 raise HistoryError("history_wrong_owner")
-            if self._result_read(raw):
+            operation = self._wire_operation(raw)
+            if operation == RESULT_READ_OPERATION:
                 return self._reader.handle(raw, transport_context)
+            if operation in ORCHESTRATION_OPERATIONS:
+                return self._orchestrations.handle(raw, transport_context)
             request = decode_history_request(raw)
             identity = request.request_id
             digest = history_request_digest(request)
@@ -248,6 +258,7 @@ class HistoryService:
         self._closed = True
         try:
             self._reader.close()
+            self._orchestrations.close()
         finally:
             if self._store is not None:
                 self._store.close()

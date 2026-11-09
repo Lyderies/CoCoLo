@@ -119,7 +119,7 @@ from codex_agents.project_history import ProjectHistory
 from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES,ResultCapacity,ResultObservation
 directory,data_json=sys.argv[1:];data=json.loads(data_json);binding=AttemptBinding(**data['binding'])
 directory=Path(directory);directory.mkdir(mode=0o700)
-store=ProjectHistory(directory,binding.project_id,result_key=b'r'*32,
+store=ProjectHistory(directory,binding.project_id,result_key=b'r'*32,allow_legacy_orchestration_reference=True,
  result_capacity=ResultCapacity(4,MAX_RESULT_BODY_BYTES,60000,120000),result_clock_ms=lambda:1000)
 try:
  store.reserve_result(binding,data['assignment'],hard_deadline_at_ms=2000)

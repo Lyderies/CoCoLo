@@ -41,7 +41,9 @@ class ProjectResultTests(unittest.TestCase):
         self.addCleanup(lambda: self.store.close())
 
     def open(self, **changes):
-        options = {"result_key": KEY, "result_capacity": self.capacity, "result_clock_ms": lambda: self.now}
+        # Isolated legacy result fixture; managed execution is tested separately.
+        options = {"result_key": KEY, "result_capacity": self.capacity, "result_clock_ms": lambda: self.now,
+                   "allow_legacy_orchestration_reference": True}
         options.update(changes)
         return ProjectHistory(self.directory, PROJECT_A, **options)
 
@@ -641,7 +643,7 @@ def unlink(name,*args,**kwargs):
 project_history.os.unlink=unlink
 request=json.loads(sys.stdin.read())
 target=AttemptBinding(**request['binding'])
-store=Cut(Path(sys.argv[1]),target.project_id,result_key=b'r'*32,
+store=Cut(Path(sys.argv[1]),target.project_id,result_key=b'r'*32,allow_legacy_orchestration_reference=True,
  result_capacity=ResultCapacity(16,2*MAX_RESULT_BODY_BYTES,60000,120000),result_clock_ms=lambda:1000)
 store.reserve_result(target,request['assignment'],hard_deadline_at_ms=2000)
 store.commit_result(request['content'].encode('ascii'),target,request['assignment'],request['body'].encode('ascii'))
@@ -666,6 +668,7 @@ os._exit(74)
                 )
                 self.assertEqual(exit_code, completed.returncode, completed.stderr)
                 store = ProjectHistory(directory, PROJECT_A, result_key=KEY, result_capacity=self.capacity,
+                                       allow_legacy_orchestration_reference=True,
                                        result_clock_ms=lambda: 1001)
                 try:
                     if cut == "retiring":
@@ -723,7 +726,7 @@ class ResultSchemaMigrationTests(unittest.TestCase):
                 self.assertEqual(content, store.record(record["record_id"]).content)
                 self.assertEqual((7, 3), tuple(store._connection.execute(
                     "SELECT next_source_sequence,next_delivery_sequence FROM history_identity").fetchone()))
-                self.assertEqual(4, store._connection.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual(5, store._connection.execute("PRAGMA user_version").fetchone()[0])
                 self.assertEqual(0, store._connection.execute("SELECT COUNT(*) FROM result_reservations").fetchone()[0])
                 delivery, = store.pending_terminals()
                 self.assertEqual((target, 2, record["record_id"], record["result_digest"]),
@@ -796,7 +799,7 @@ Cut(Path(sys.argv[1]),sys.argv[2],allow_schema_upgrade=True)
                 connection.close()
             store = ProjectHistory(directory, PROJECT_A, allow_schema_upgrade=True)
             try:
-                self.assertEqual(4, store._connection.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual(5, store._connection.execute("PRAGMA user_version").fetchone()[0])
                 self.assertEqual((7, 3), tuple(store._connection.execute(
                     "SELECT next_source_sequence,next_delivery_sequence FROM history_identity").fetchone()))
             finally:

@@ -44,7 +44,8 @@ class ResultPublicationTests(unittest.TestCase):
         self.body = canonical_json({**result(), "summary": "PRIVATE-PUBLICATION-CANARY"})
 
     def open(self, **changes):
-        options = dict(result_key=KEY, result_capacity=self.capacity, result_clock_ms=lambda: self.now)
+        options = dict(result_key=KEY, result_capacity=self.capacity, result_clock_ms=lambda: self.now,
+                       allow_legacy_orchestration_reference=True)
         options.update(changes)
         return ProjectHistory(self.directory, PROJECT_A, **options)
 
@@ -282,6 +283,7 @@ from codex_agents.project_history import ProjectHistory
 from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES,ResultCapacity,ResultObservation
 data=json.loads(sys.stdin.read());phase=sys.argv[2]
 store=ProjectHistory(Path(sys.argv[1]),data['binding']['project_id'],result_key=b'r'*32,
+ allow_legacy_orchestration_reference=True,
  result_capacity=ResultCapacity(8,2*MAX_RESULT_BODY_BYTES,60000,120000),result_clock_ms=lambda:1000)
 original_write=store._write_result_file
 def write(*args):

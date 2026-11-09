@@ -261,6 +261,8 @@ class ProjectExecutionGrantTests(unittest.TestCase):
         before_lease = self.fixture.store.result_lease(self.fixture.scope)
         before_result = self.fixture.store.result_reservation(self.binding)
         self.fixture.store._connection.execute("DROP TABLE project_execution_consumptions")
+        for table in ('project_orchestration_requests', 'project_orchestration_checkpoints', 'project_orchestrations'):
+            self.fixture.store._connection.execute('DROP TABLE ' + table)
         self.fixture.store._connection.execute("PRAGMA user_version=3")
         self.fixture.store.close()
         path = self.fixture.directory / "history.sqlite3"
@@ -272,8 +274,9 @@ class ProjectExecutionGrantTests(unittest.TestCase):
         from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
         self.fixture.store = ProjectHistory(self.fixture.directory, self.fixture.project, result_key=self.fixture.key,
                                              result_capacity=ResultCapacity(8, 2 * MAX_RESULT_BODY_BYTES, 1_800_000, 120_000),
-                                             result_clock_ms=lambda: self.fixture.base.stamp, allow_schema_upgrade=True)
-        self.assertEqual(4, self.fixture.store._connection.execute("PRAGMA user_version").fetchone()[0])
+                                             result_clock_ms=lambda: self.fixture.base.stamp, allow_schema_upgrade=True,
+                                             allow_legacy_orchestration_reference=True)
+        self.assertEqual(5, self.fixture.store._connection.execute("PRAGMA user_version").fetchone()[0])
         self.assertEqual(before_lease, self.fixture.store.result_lease(self.fixture.scope))
         self.assertEqual(before_result, self.fixture.store.result_reservation(self.binding))
         self.consume(grant)

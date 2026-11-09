@@ -54,6 +54,7 @@ class ProjectServiceTests(unittest.TestCase):
 
     def open(self):
         return ProjectHistory(self.directory, PROJECT_A, result_key=KEY,
+                              allow_legacy_orchestration_reference=True,
                               result_capacity=self.capacity, result_clock_ms=lambda: 1000)
 
     def history_authorizer(self, request, context):
@@ -210,7 +211,7 @@ class ProjectServiceTests(unittest.TestCase):
                 self.service.close()
             except HistoryError as exc:
                 replies.append(exc.reason_code)
-        with mock.patch.object(self.service, "_result_read", side_effect=AssertionError("foreign routing")) as route:
+        with mock.patch.object(self.service, "_wire_operation", side_effect=AssertionError("foreign routing")) as route:
             worker = threading.Thread(target=foreign)
             worker.start()
             worker.join(timeout=5)
@@ -237,6 +238,7 @@ def factory():
  global opens
  opens+=1
  return ProjectHistory(Path(directory),binding.project_id,result_key=b'r'*32,
+  allow_legacy_orchestration_reference=True,
   result_capacity=ResultCapacity(8,2*MAX_RESULT_BODY_BYTES,60000,120000),result_clock_ms=lambda:1000)
 def authorize_history(request,token):
  if token is not context:return None

@@ -26,6 +26,8 @@ from codex_agents.host_result_contracts import HostResultContext, HostResultRefe
 from codex_agents.learning_contracts import canonical_json, content_digest, keyed_digest
 from codex_agents.learning_engine import build_host_result_records
 from codex_agents.learning_adapters import empty_usage
+from codex_agents.orchestration_api import OrchestrationLimits, OrchestrationRequest, OrchestrationScope, SCOPE_FIELDS
+from codex_agents.orchestration_store import OrchestrationOwner
 from codex_agents.result_contracts import ResultObservation
 from codex_agents.service_transport import ServiceTransportError
 from tests.learning_support import event_record
@@ -91,6 +93,58 @@ class ProjectHostResultTests(unittest.TestCase):
     def assert_held(self):
         self.assertIsNone(self.base.ledger._connection.execute("SELECT released_at_ms FROM active_run_capacity").fetchone()[0])
         self.assertEqual(0, len(self.base.ledger._capacity_executions._pending))
+
+    def reference_lifecycle(self):
+        # Deterministic entropy links this isolated old result fixture to a new
+        # journal only for closure/retirement tests. It proves no migration,
+        # native enrollment or fresh managed execution authority.
+        store = self.fixture.store
+        store._orchestration_limits = OrchestrationLimits(1, 3)
+        scope = OrchestrationScope(**{name: getattr(self.binding, name) for name in SCOPE_FIELDS})
+        owner = OrchestrationOwner(store)
+        command = OrchestrationRequest(1, 'orchestration.open', 'reference-open', scope, {})
+        with mock.patch('codex_agents.orchestration_store.secrets.token_hex', return_value=self.binding.orchestration_handle[4:]):
+            owner.apply(command, client_version='codex-host-v1', before_commit=lambda: None)
+        store._allow_legacy_orchestration_reference = False
+        closing = OrchestrationRequest(1, 'orchestration.close', 'reference-close', scope, {
+            'orchestration_handle': self.binding.orchestration_handle, 'expected_sequence': 1,
+            'status': 'completed', 'goal_tokens_used': None, 'goal_time_used_seconds': None,
+        })
+        return owner, closing
+
+    def test_close_requires_host_outcome_and_bounded_retirement_keeps_exact_receipts_and_account_charge(self):
+        owner, closing = self.reference_lifecycle()
+        with self.assertRaisesRegex(HistoryError, 'history_orchestration_pending'):
+            owner.apply(closing, client_version='codex-host-v1', before_commit=lambda: None)
+        admitted = self.call()
+        before = self.fixture.store.result_reservation(self.binding)
+        owner.apply(closing, client_version='codex-host-v1', before_commit=lambda: None)
+        with self.assertRaisesRegex(HistoryError, 'history_orchestration_state'):
+            self.fixture.store.read_result(self.binding)
+        self.assertEqual(1, self.fixture.store.expire_results(limit=1))
+        after = self.fixture.store.result_reservation(self.binding)
+        self.assertEqual('expired', after.state)
+        self.assertEqual(before.expires_at_ms, after.expires_at_ms)
+        self.assertEqual(before.retained_until_ms, after.retained_until_ms)
+        self.assertEqual(before.result_digest, after.result_digest)
+        self.assertEqual(admitted, self.call())
+        self.assertEqual((self.delivery,), self.fixture.store.pending_terminals())
+        self.assert_held()
+
+    def test_failed_closed_body_deletion_retains_charge_until_actual_retry_cleanup(self):
+        owner, closing = self.reference_lifecycle()
+        self.call()
+        owner.apply(closing, client_version='codex-host-v1', before_commit=lambda: None)
+        with mock.patch('codex_agents.project_history.os.unlink', side_effect=PermissionError('PRIVATE-DELETE')):
+            with self.assertRaisesRegex(HistoryError, 'history_unavailable'):
+                self.fixture.store.expire_results(limit=1)
+        row = self.fixture.store._connection.execute('SELECT state FROM result_reservations').fetchone()
+        self.assertEqual('retiring', row['state'])
+        self.assertEqual(1, len(list(self.fixture.directory.glob('.result-*'))))
+        self.assert_held()
+        self.assertEqual(1, self.fixture.store.expire_results(limit=1))
+        self.assertEqual([], list(self.fixture.directory.glob('.result-*')))
+        self.assert_held()
 
     def test_client_service_derives_exact_existing_unverified_records_without_account_outcomes(self):
         with mock.patch.object(history_api, "exchange_frame", side_effect=lambda path, raw, **opts: self.service.handle(raw, self.context)):

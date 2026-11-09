@@ -42,7 +42,8 @@ class ResultPersistenceTests(unittest.TestCase):
 
     def open_history(self):
         self.factory_threads.append(threading.current_thread())
-        return ProjectHistory(self.directory, self.project, result_key=KEY, result_capacity=self.capacity)
+        return ProjectHistory(self.directory, self.project, result_key=KEY, result_capacity=self.capacity,
+                              allow_legacy_orchestration_reference=True)
 
     def new_lane(self, **changes):
         # Explicit local reference fixture; normal lease execution requires the
@@ -371,7 +372,8 @@ class ResultPersistenceTests(unittest.TestCase):
         opened = []
 
         def wrong_project():
-            store = ProjectHistory(other, project, result_key=KEY, result_capacity=self.capacity)
+            store = ProjectHistory(other, project, result_key=KEY, result_capacity=self.capacity,
+                                   allow_legacy_orchestration_reference=True)
             opened.append(store)
             return store
 

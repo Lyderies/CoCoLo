@@ -4,6 +4,41 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; the source codec does not enable a service.
 
+## Project orchestration lifecycle (uninstalled source)
+
+The closed project protocol has `open`, `pause`, `resume`, `checkpoint`, `close`
+and `status` operations. Its request scope includes project, primary session,
+runtime, supervisor instance and generation. A separate default-deny server
+adapter must independently authorize that scope and the exact request digest.
+The history service lends the same writer connection to the lifecycle handler;
+it does not open a second project writer or run local timers on that thread.
+
+Mutation replies distinguish the original committed `receipt` from `current`
+state. Reusing the same scoped request identity with different parameters
+conflicts. A known old active receipt is metadata and cannot reopen a terminal
+orchestration. The client makes one bounded exchange and never automatically
+retries a possibly committed request. Callers should retain an explicit request
+ID for reconciliation after a lost reply.
+
+Project schema5 adds only the lifecycle pointer, checkpoint and request journal
+tables. Ordinary opens refuse older schemas; the explicit drained-owner upgrade
+accepts exact recognized schemas1 through4. This path preserves old records,
+outbox, reservations, retention windows and execution consumption. It does not
+infer current ownership from legacy rows. Isolated old result fixtures explicitly
+set `allow_legacy_orchestration_reference=True`; that setting is not a native
+authorization adapter. Full migration, independent review and native activation
+remain open. The installed0.8.12 runtime is unchanged.
+
+Fresh reservations, arming, current storage evidence and execution consumption
+check the actual active owned state. Historical receipts do not rearm work.
+Close refuses reserved, uncertain or unadmitted results; a terminal lifecycle
+blocks private result reads. Bounded `expire_results` verifies sealed closure
+before retiring an unexpired body. Failed deletion remains charged and retryable;
+the original retention window, terminal/outbox and known host receipt survive.
+Closure and body deletion never release account execution capacity. Checkpoint
+and request identities are sealed together, and a bounded chain check rejects
+missing predecessors and a stale current pointer.
+
 ## Worker result persistence lane
 
 ### Client-observed usage travels with the actual return

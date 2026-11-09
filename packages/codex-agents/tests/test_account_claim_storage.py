@@ -60,6 +60,7 @@ class AccountClaimStorageTests(unittest.TestCase):
 
     def open_history(self):
         return ProjectHistory(self.directory, self.project, result_key=self.key,
+                              allow_legacy_orchestration_reference=True,
                               result_capacity=ResultCapacity(8, 2 * MAX_RESULT_BODY_BYTES, 1_800_000, 120_000),
                               result_clock_ms=lambda: self.base.stamp)
 

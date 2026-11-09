@@ -54,6 +54,7 @@ def authorize(command,context):
  return ResultReadAuthorization(binding,command.result_digest,result_read_request_digest(command))
 def open_store():
  return ProjectHistory(Path(directory),binding.project_id,result_key=b'r'*32,
+  allow_legacy_orchestration_reference=True,
   result_capacity=ResultCapacity(8,3*MAX_RESULT_BODY_BYTES,60000,120000),result_clock_ms=lambda:1000)
 service=ResultReadService(binding.project_id,binding.runtime_digest,open_store,authorizer=authorize)
 listener=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
@@ -112,6 +113,7 @@ class ResultReadTests(unittest.TestCase):
 
     def open_store(self):
         return ProjectHistory(self.directory, PROJECT_A, result_key=KEY, result_capacity=self.capacity,
+                              allow_legacy_orchestration_reference=True,
                               result_clock_ms=lambda: self.now)
 
     def factory(self):

@@ -274,6 +274,7 @@ class ResultLeaseTests(unittest.TestCase):
         directory = self.fixture.directory.parent / "account-history"
         directory.mkdir(mode=0o700)
         store = ProjectHistory(directory, account.project, result_key=fixtures.KEY,
+                               allow_legacy_orchestration_reference=True,
                                result_capacity=ResultCapacity(8, 2 * fixtures.MAX_RESULT_BODY_BYTES, 1_800_000, 120_000),
                                result_clock_ms=lambda: account.stamp)
         self.addCleanup(store.close)
@@ -314,7 +315,7 @@ class Cut(ProjectHistory):
  def _set_lease(self,value):
   if value.state=='bound':os._exit(79)
   return super()._set_lease(value)
-store=Cut(Path(sys.argv[2]),PROJECT_A,result_key=KEY,
+store=Cut(Path(sys.argv[2]),PROJECT_A,result_key=KEY,allow_legacy_orchestration_reference=True,
  result_capacity=ResultCapacity(16,2*MAX_RESULT_BODY_BYTES,60000,120000),result_clock_ms=lambda:1001)
 store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_ms=2000)
 '''
@@ -336,6 +337,8 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
                     for name in ("history_identity", "records", "terminal_outbox", "result_identity", "result_reservations")}
         self.store._connection.execute("DROP TABLE project_execution_consumptions")
         self.store._connection.execute("DROP TABLE result_leases")
+        for table in ('project_orchestration_requests', 'project_orchestration_checkpoints', 'project_orchestrations'):
+            self.store._connection.execute('DROP TABLE ' + table)
         self.store._connection.execute("PRAGMA user_version=2")
         self.store.close()
         return snapshot
@@ -349,7 +352,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
                 ProjectHistory(self.fixture.directory, self.fixture.store.project_id, **options)
             self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
         self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
-        self.assertEqual(4, self.store._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(5, self.store._connection.execute("PRAGMA user_version").fetchone()[0])
         for name, rows in snapshot.items():
             self.assertEqual(rows, [tuple(row) for row in self.store._connection.execute("SELECT * FROM " + name)])
         self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))
@@ -369,6 +372,30 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
             self.assertEqual(2, connection.execute("PRAGMA user_version").fetchone()[0])
             self.assertIsNone(connection.execute("SELECT name FROM sqlite_master WHERE name='result_leases'").fetchone())
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM terminal_outbox").fetchone()[0])
+
+    def test_schema4_upgrade_preserves_all_rows_body_windows_and_does_not_invent_orchestrations(self):
+        self.fixture.reserve()
+        self.fixture.commit()
+        old_tables = ('history_identity', 'records', 'terminal_outbox', 'result_identity',
+                      'result_reservations', 'result_leases', 'project_execution_consumptions')
+        snapshot = {name: [tuple(row) for row in self.store._connection.execute('SELECT * FROM ' + name)]
+                    for name in old_tables}
+        for table in ('project_orchestration_requests', 'project_orchestration_checkpoints', 'project_orchestrations'):
+            self.store._connection.execute('DROP TABLE ' + table)
+        self.store._connection.execute('PRAGMA user_version=4')
+        self.store.close()
+        path = self.fixture.directory / 'history.sqlite3'
+        before = hashlib.sha256(path.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            self.fixture.open()
+        self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
+        self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
+        self.assertEqual(5, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        for name, rows in snapshot.items():
+            self.assertEqual(rows, [tuple(row) for row in self.store._connection.execute('SELECT * FROM ' + name)])
+        self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))
+        for table in ('project_orchestrations', 'project_orchestration_checkpoints', 'project_orchestration_requests'):
+            self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0])
 
     def test_process_death_during_schema2_upgrade_rolls_back_all_lease_ddl(self):
         snapshot = self.schema2()
