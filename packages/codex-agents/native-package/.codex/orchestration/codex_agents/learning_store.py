@@ -3378,7 +3378,7 @@ class LearningLedger:
         if checked["record_type"] in PROVIDER_OBSERVATION_TYPES | {
             "admission_decision", "billing_attestation", "dispatch_intent",
             "dispatch_result", "host_run_profile", "probe_admission",
-            "verification_binding",
+            "verification_binding", "claim_denial_settlement",
         }:
             raise LedgerError("provider evidence requires ledger-run observation")
         if (
@@ -6084,6 +6084,118 @@ class LearningLedger:
             (project, handle, run, bridge, provider, account, COLLECTOR_RUNTIME_DIGEST, policy.digest, timestamp, deadline,
              reference, deadline_ns, clock_owner),
         )
+
+    def _close_denied_attempt(self, project_id, *, runtime_digest, caller_scope, closure, storage_binding, storage_evidence):
+        """Commit a permanent exact no-launch fence before freeing body storage.
+
+        Native peer/actor/epoch proof and old-capability drain remain activation
+        gates. Claimed, ambiguous, native-bound or foreign attempts cannot close.
+        """
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+        from .claim_denial import DENIAL_LEGACY_READ_LIMITS, CloseDeniedInput, binding_digest, decode_close_denied, denial_closure, denial_record_id
+        from .claim_storage import capture_storage_evidence, verify_pending_storage_evidence
+        from .sql_read_budget import SQLReadError
+
+        if type(closure) is not CloseDeniedInput:
+            raise ClaimError('claim_denial_invalid')
+        closure = decode_close_denied(closure.payload())
+        expected, raw = capture_storage_evidence(storage_binding, storage_evidence)
+        if expected is None:
+            raise ClaimError('claim_storage_required')
+        launch = LaunchClaimInput(closure.run_handle, closure.identity_digest)
+        original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', closure.claim_request_id,
+                                  project_id, runtime_digest, launch.payload())
+        if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                or expected.run_handle != closure.run_handle or expected.claim_request_id != closure.claim_request_id
+                or expected.claim_request_digest != account_request_digest(original)):
+            raise ClaimError('claim_denial_invalid')
+        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                                    request_id=closure.claim_request_id, launch=launch)
+        if (known is None or known['state'] != 'denied' or known['receipt_digest'] != closure.denial_receipt_digest
+                or known['run_id'] != expected.run_id):
+            raise ClaimError('claim_denial_unavailable')
+        key = self.state.digest_key()
+        identity = denial_record_id(key, project_id, closure.lease_digest)
+        facts = {'run_id': expected.run_id, 'handle_digest': context.handle, 'scope_digest': context.scope,
+                 'request_digest': context.request, 'parameters_digest': context.parameters,
+                 'binding_digest': binding_digest(key, expected), 'lease_digest': closure.lease_digest, 'denial': known}
+        with self._lock:
+            prior_hint = self._connection.execute('SELECT 1 FROM records WHERE project_id=? AND record_id=?',
+                                                  (project_id, identity)).fetchone() is not None
+        lease = None if prior_hint else verify_pending_storage_evidence(key, expected, raw)
+        with self._account_transaction():
+            current = self._known_claim_receipt_locked(project_id, context.scope, context.request, context.parameters)
+            if current != known:
+                raise ClaimError('claim_denial_unavailable')
+            binding = self._connection.execute(
+                'SELECT h.*,o.handle_digest AS orchestration_digest,l.provider FROM host_run_bindings h '
+                'JOIN orchestrations o ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id '
+                'LEFT JOIN launch_inputs l ON l.project_id=h.project_id AND l.handle_digest=h.handle_digest '
+                'WHERE h.project_id=? AND h.handle_digest=?', (project_id, context.handle),
+            ).fetchone()
+            # Any durable consumed/unknown launch or capacity is contradictory.
+            if (self._connection.execute('SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?) LIMIT 1',
+                                         (project_id, context.handle, expected.run_id)).fetchone() is not None
+                    or self._connection.execute('SELECT 1 FROM active_run_capacity WHERE project_id=? AND (handle_digest=? OR run_id=?) LIMIT 1',
+                                                (project_id, context.handle, expected.run_id)).fetchone() is not None):
+                raise ClaimError('claim_denial_unavailable')
+            def legacy_intent():
+                return self._connection.execute(
+                    "SELECT 1 FROM records WHERE project_id=? AND record_type IN ('dispatch_intent','dispatch_result') "
+                    "AND json_extract(CAST(content AS TEXT),'$.run_id')=? LIMIT 1", (project_id, expected.run_id)).fetchone()
+            limited = False
+            try:
+                legacy = self._connection.transaction_read_call(DENIAL_LEGACY_READ_LIMITS, legacy_intent)
+            except SQLReadError:
+                limited = True
+            if limited:
+                raise ClaimError('claim_busy')
+            if legacy is not None:
+                raise ClaimError('claim_denial_unavailable')
+            prior = self._connection.execute('SELECT record_type,source,content_digest,length(content) AS content_size '
+                                             'FROM records WHERE project_id=? AND record_id=?', (project_id, identity)).fetchone()
+            if prior is not None:
+                if (prior['record_type'] != 'claim_denial_settlement' or prior['source'] != 'lifecycle'
+                        or type(prior['content_size']) is not int or not 0 < prior['content_size'] <= 16_384):
+                    raise ClaimError('claim_denial_conflict')
+                invalid = False
+                try:
+                    encoded = bytes(self._connection.execute('SELECT content FROM records WHERE project_id=? AND record_id=?',
+                                                             (project_id, identity)).fetchone()[0])
+                    record = validate_learning_record(parse_bounded_json(encoded, max_bytes=16_384))
+                    invalid = (prior['record_type'] != 'claim_denial_settlement' or prior['source'] != 'lifecycle'
+                               or record['record_id'] != identity or encoded != canonical_json(record)
+                               or prior['content_digest'] != content_digest(record)
+                               or any(record[n] != value for n, value in facts.items())
+                               or (binding is not None and (binding['run_id'] != expected.run_id
+                                   or binding['binding_state'] != 'abandoned' or binding['abandoned_reason'] != 'claim_denied'
+                                   or binding['assignment_digest'] != record['assignment_digest']
+                                   or binding['native_assignment_id'] is not None or binding['consumed_at_ms'] is not None)))
+                except Exception:
+                    invalid = True
+                if invalid:
+                    raise ClaimError('claim_denial_conflict')
+                return denial_closure(key, expected, record, known=True)
+            if lease is None:
+                raise ClaimError('claim_denial_unavailable')  # Never reconstruct a vanished known settlement.
+            now = self._clock_ms()
+            if (binding is None or binding['run_id'] != expected.run_id or binding['client_version'] != 'bridge-v1'
+                    or binding['provider'] != 'codex' or binding['binding_state'] != 'pending'
+                    or binding['consumed_at_ms'] is not None or binding['native_assignment_id'] is not None
+                    or binding['usage_complete'] is not None
+                    or binding['assignment_digest'] != lease.assignment_digest or lease.lease_digest != closure.lease_digest
+                    or binding['orchestration_digest'] != keyed_digest(key, expected.orchestration_handle)
+                    or not lease.created_at_ms <= known['recorded_at_ms']
+                    or type(now) is not int or not known['recorded_at_ms'] <= now <= MAX_CLAIM_INTEGER):
+                raise ClaimError('claim_denial_unavailable')
+            record = validate_learning_record({**facts, 'schema_version': 1, 'record_type': 'claim_denial_settlement',
+                                               'record_id': identity, 'assignment_digest': lease.assignment_digest,
+                                               'observed_at_ms': now})
+            self._append_checked_locked(project_id, record, producer='lifecycle', timestamp=now)
+            self._connection.execute("UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='claim_denied' "
+                                     "WHERE project_id=? AND handle_digest=? AND binding_state='pending'",
+                                     (project_id, context.handle))
+        return denial_closure(key, expected, record, known=False)
 
     def _register_project_execution(self, project_id, *, runtime_digest, caller_scope, registration,
                                     storage_binding, storage_evidence):
@@ -9189,6 +9301,7 @@ class LearningLedger:
                 "evaluation_case", "qa_evidence", "evidence_review", "evaluation_trial", "candidate", "comparison", "canary_report",
                 "grader_calibration", "owner_grant", "promotion", "learning_export",
                 "billing_attestation",
+                "claim_denial_settlement",
             }
             else timestamp + DEFAULT_RETENTION_MS
         )

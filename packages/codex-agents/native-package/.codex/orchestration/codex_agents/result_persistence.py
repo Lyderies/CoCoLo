@@ -18,6 +18,7 @@ from .bridge_liveness import BridgeLivenessOwner, CodexOwnerResult
 from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES
 from .execution_grant import MAX_EXECUTION_GRANT_BYTES
 from .terminal_delivery import MAX_TERMINAL_EVIDENCE_BYTES
+from .claim_denial import MAX_DENIAL_RECEIPT_BYTES
 from .owned_execution import OwnedExecutionKey
 from .codex_worker import CodexWorkerError, CodexWorkerHandle, CodexWorkerPacket, CodexWorkerPool, MAX_INPUT_BYTES, MAX_PACKET_BYTES, _decode_input
 from .contracts import ContractError
@@ -32,7 +33,7 @@ from .result_contracts import (
 _TIME_NS = time.time_ns
 MAX_PERSISTENCE_ENTRY_BYTES = (MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES + MAX_PACKET_BYTES
                                + MAX_STORAGE_EVIDENCE_BYTES + 2 * MAX_EXECUTION_GRANT_BYTES
-                               + 2 * MAX_TERMINAL_EVIDENCE_BYTES)
+                               + 2 * MAX_TERMINAL_EVIDENCE_BYTES + MAX_DENIAL_RECEIPT_BYTES)
 
 
 class ResultPersistenceHandle:
@@ -65,6 +66,7 @@ class _Pending:
     execution_ticket: object = None
     terminal_evidence: bytes | None = None
     acknowledgement: bytes | None = None
+    denial_receipt: bytes | None = None
 
 
 class ResultPersistenceLane:
@@ -206,6 +208,53 @@ class ResultPersistenceLane:
             if pending.bound_evidence is None or pending.lease is None or pending.lease.state != "bound":
                 raise HistoryError("history_result_not_ready")
             return pending.bound_evidence
+
+    def pending_storage_evidence(self, handle):
+        """Original writer's historical pending metadata; not fresh admission."""
+        pending = self._job(handle)
+        with self._lock:
+            if pending.state not in {'claim_pending', 'lease_claim_pending'} or pending.storage_evidence is None:
+                raise HistoryError('history_result_not_ready')
+            return pending.storage_evidence
+
+    def settle_denial(self, handle, raw=None):
+        """Queue one original native-account closure; no request/model retry."""
+        pending = self._job(handle)
+        with self._lock:
+            if self._closed or self._fault:
+                raise HistoryError('history_service_unavailable')
+            if raw is None:
+                raw = pending.denial_receipt
+            if type(raw) is not bytes or not 0 < len(raw) <= MAX_DENIAL_RECEIPT_BYTES:
+                raise HistoryError('history_invalid_input')
+            if pending.denial_receipt is not None and pending.denial_receipt != raw:
+                raise HistoryError('history_conflict')
+            if pending.state in {'denial_settling', 'denied'}:
+                return
+            if (pending.state not in {'claim_pending', 'lease_claim_pending', 'failed'} or pending.lease_binding is None
+                    or pending.claim_binding is not None or pending.grant is not None or pending.supervisor is not None):
+                raise HistoryError('history_result_not_ready')
+        with self._pool._registry._lock:
+            original = self._pool._job(pending.worker_handle)
+            if original is not pending.original_job or original.state != 'prepared' or original.payload is not pending.payload:
+                raise HistoryError('history_not_authorized')
+        with self._lock:
+            pending.denial_receipt, pending.state, pending.reason = raw, 'denial_settling', None
+            self._incoming.put_nowait(('settle_denial', handle))
+
+    def retire_denied(self, handle):
+        pending = self._job(handle)
+        with self._lock:
+            if pending.state != 'denied' or pending.lease.state != 'expired' or pending.execution_issued:
+                raise HistoryError('history_result_not_ready')
+        with self._pool._registry._lock:
+            original = self._pool._job(pending.worker_handle)
+            if original is not pending.original_job or original.state != 'prepared' or original.payload is not pending.payload:
+                raise HistoryError('history_not_authorized')
+        self._pool.withdraw_prepared(pending.worker_handle)
+        with self._lock:
+            self._jobs.pop(handle)
+            self._by_worker.pop(pending.worker_handle)
 
     def bind_claim(self, handle, binding, *, hard_deadline_at_ms):
         """After trusted account checks, queue the exact actual claim bind.
@@ -441,12 +490,15 @@ class ResultPersistenceLane:
         else:
             self._history().reserve_result(pending.binding, assignment, hard_deadline_at_ms=pending.deadline_ms)
             lease = None
+        historical = (self._history().attest_pending_result_lease(pending.lease_binding)
+                      if lease is not None and lease.state == 'claim_pending' else None)
         with self._lock:
             pending.assignment = encoded
             pending.identity = (assignment["assignment_id"], assignment["attempt"],
                                 assignment.get("retry_of_assignment_id"))
             pending.state = ("reserved" if lease is None or lease.state == "reserved" else "lease_" + lease.state)
             pending.lease = lease
+            pending.storage_evidence = historical
 
     def _arm(self, pending):
         lease = self._history().arm_result_lease(pending.lease_binding)
@@ -495,10 +547,17 @@ class ResultPersistenceLane:
         with self._lock:
             pending.state, pending.reason = 'acknowledged', None
 
+    def _settle_denial(self, pending):
+        value = self._history().settle_denied_result_lease(pending.lease_binding, pending.denial_receipt)
+        with self._lock:
+            pending.lease, pending.state, pending.reason = value, 'denied', None
+            pending.storage_evidence = None
+
     def _run(self):
         operations = {"prepare": self._prepare, "publish": self._publish,
                       "arm": self._arm, "bind_claim": self._bind_claim,
                       "consume_execution": self._consume_execution,
+                      "settle_denial": self._settle_denial,
                       "acknowledge_terminal": self._acknowledge_terminal}
         self._ready.set()
         pending = None

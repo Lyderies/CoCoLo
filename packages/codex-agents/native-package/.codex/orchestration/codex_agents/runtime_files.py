@@ -44,6 +44,7 @@ RUNTIME_FILES = (
     "codex_agents/capacity_status_contracts.py",
     "codex_agents/catalog.py",
     "codex_agents/claim_admission.py",
+    "codex_agents/claim_denial.py",
     "codex_agents/claim_storage.py",
     "codex_agents/claude_host.py",
     "codex_agents/cli_reports.py",

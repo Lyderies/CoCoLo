@@ -91,7 +91,7 @@ class SignatureJobIntakeTests(unittest.TestCase):
                                               status.reserved_rows, status.reserved_bytes))
         self.assertEqual(before, self.ledger._connection.total_changes)
         self.assertEqual({"account.health", "account.project", "account.owner_key", "account.owner_public_key",
-                          "account.claim_launch", "account.capacity_status", "account.register_execution", "account.submit_terminal"},
+                          "account.claim_launch", "account.capacity_status", "account.register_execution", "account.submit_terminal", "account.close_denied_attempt"},
                          ACCOUNT_OPERATIONS)
         self.assertNotIn("CANARY", repr(status))
 

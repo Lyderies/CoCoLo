@@ -55,7 +55,16 @@ def encode_storage_evidence(key, value):
     return raw
 
 
+def verify_pending_storage_evidence(key, expected, raw):
+    """Historical pending evidence; no current launch-readiness assertion."""
+    return _verify_historical_storage_evidence(key, expected, raw, state='claim_pending')
+
+
 def verify_bound_storage_evidence(key, expected, raw):
+    return _verify_historical_storage_evidence(key, expected, raw, state='bound')
+
+
+def _verify_historical_storage_evidence(key, expected, raw, *, state):
     """Historical bound storage metadata; current launch timing is separate."""
     if expected is None or raw is None:
         raise ClaimError("claim_storage_required")
@@ -72,7 +81,7 @@ def verify_bound_storage_evidence(key, expected, raw):
         fields = dict(body["lease"])
         fields["binding"] = ResultLeaseBinding(**fields["binding"])
         value = ResultLease(**fields)
-        invalid = (canonical_json(body) != raw or value.state != "bound" or value.binding != expected
+        invalid = (canonical_json(body) != raw or value.state != state or value.binding != expected
                    or not secrets.compare_digest(body["seal"], lease_state_seal(key, value))
                    or not secrets.compare_digest(value.lease_digest, lease_receipt_digest(
                        key, value.binding, value.assignment_digest, value.created_at_ms, value.reserved_until_ms)))

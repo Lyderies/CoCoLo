@@ -177,6 +177,11 @@ class AccountOwnerViews:
                                                      submission=submission, storage_binding=storage_binding,
                                                      storage_evidence=storage_evidence, terminal_evidence=terminal_evidence)
 
+    def close_denied_attempt(self, project_id, *, runtime_digest, caller_scope, closure, storage_binding, storage_evidence):
+        self._guard()
+        return self._ledger._close_denied_attempt(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                                  closure=closure, storage_binding=storage_binding, storage_evidence=storage_evidence)
+
     def _claim_preflight(self, project_id, *, runtime_digest, caller_scope, request_id, launch, work_limits=None,
                          storage_required=False, storage_binding=None, storage_evidence=None):
         self._guard()
@@ -693,6 +698,8 @@ class AccountService:
             registration = decode_execution_registration(request.payload) if operation == "account.register_execution" else None
             from .terminal_delivery import decode_terminal_submission
             submission = decode_terminal_submission(request.payload) if operation == 'account.submit_terminal' else None
+            from .claim_denial import decode_close_denied
+            closure = decode_close_denied(request.payload) if operation == 'account.close_denied_attempt' else None
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -717,8 +724,9 @@ class AccountService:
                 or request.operation not in authorization.allowed_operations
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
-                or (authorization.source == "project" and operation not in {"account.health", "account.register_execution", "account.submit_terminal"})
-                or (operation in {"account.register_execution", "account.submit_terminal"} and
+                or (authorization.source == "project" and operation not in {
+                    "account.health", "account.register_execution", "account.submit_terminal", "account.close_denied_attempt"})
+                or (operation in {"account.register_execution", "account.submit_terminal", "account.close_denied_attempt"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
                 or (operation in {"account.claim_launch", "account.capacity_status"} and
                     (authorization.source != "host" or authorization.caller_scope is None))
@@ -759,6 +767,12 @@ class AccountService:
                                                      caller_scope=authorization.caller_scope, submission=submission,
                                                      storage_binding=storage_binding, storage_evidence=storage_evidence,
                                                      terminal_evidence=capture_terminal_evidence(authorization.terminal_evidence))
+            elif operation == 'account.close_denied_attempt':
+                from .claim_storage import capture_storage_evidence
+                storage_binding, storage_evidence = capture_storage_evidence(authorization.storage_binding, authorization.storage_evidence)
+                result = self._views.close_denied_attempt(project, runtime_digest=runtime,
+                                                          caller_scope=authorization.caller_scope, closure=closure,
+                                                          storage_binding=storage_binding, storage_evidence=storage_evidence)
             elif request.operation == "account.health":
                 result = {"transport_alive": True, "database_checked": False}
             elif request.operation == "account.project":

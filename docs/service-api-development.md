@@ -6,6 +6,59 @@ still use the installed 0.8.12 implementation; the source codec does not enable 
 
 ## Worker result persistence lane
 
+### Verified denial settlement
+
+An armed lease stays charged until the original account outcome is known. A
+timeout, cancellation, absent process or a caller's claim that it was never sent
+cannot free it. `account.close_denied_attempt` now finalizes an exact durable
+denial for an unlaunched Codex bridge attempt. It requires the original scoped
+request/denial digest and lease identity, with separately authorized project
+context and independently expected supervisor/actor scope. Native authentication,
+current revocation and protected evidence publication remain activation gates.
+
+Before a fresh closure, the account verifies the actual historical pending lease
+and original denied receipt. One short transaction refuses any launch marker or
+capacity row for that run, refuses native assignment/consumption, records a typed
+permanent `claim_denial_settlement` and marks only that run abandoned with the fixed
+reason `claim_denied`. The fence prevents later claim requests, including another
+request identity, from dispatching it. A competing claim that wins first makes
+closure unavailable and keeps the project charge. Role metadata alone is not an
+execution identity; actual native assignment and consumed markers are checked.
+Legacy intent/result scans use the existing cooperative SQL work/time/value
+budget inside the transaction. Exhaustion returns busy and rolls back; row headers
+bound settlement content before fetching it. Real OS-I/O/latency limits still need
+the required installed validation.
+
+The central settlement uses the existing lifecycle-record store, with keyed
+binding/handle/request digests and the original safe denial receipt. It contains
+no raw handles, private result or task text and has no retention expiry. An exact
+known closure can be retrieved after account restart or clock rollback before
+fresh project proof/signature work. Changed actor/lease/fence or a record-namespace
+collision is a conflict; missing original receipts are not reconstructed.
+
+Only after independently authenticating the original account reply may the project
+writer verify its closed receipt/MAC and matching lease, confirm no local result
+reservation, and transition that unbound pending lease to its existing `expired`
+tombstone. This frees body charge while retaining logical identity quota, original
+times and replay fencing. It neither invents cleanup nor releases an execution or
+shared admission slot. An already bound/claimed or uncertain attempt stays charged.
+Both SQL schemas remain unchanged; this is a new closed internal record type.
+
+`attest_pending_result_lease` and the fixed lane's `pending_storage_evidence` return
+actual historical pending metadata without asserting fresh launch timing. Fresh
+admission still enforces the original storage window. The lane queues settlement
+on its original writer, retains first reply bytes across explicit lost-response
+retry, then lets its owner withdraw only the same never-bound prepared worker.
+It charges an additional 16 KiB receipt buffer. No placeholder monitor claim,
+execution ticket, new model request or automatic claim retry is created.
+
+Tests exercise actual denied account requests, both claim/fence orderings,
+account/local commit failure and lost replies/reopen, post-expiry uncertainty,
+native/foreign misuse and fixed-writer settlement/withdrawal with no launch.
+Orphan/missing-state and cross-generation recovery, tombstone lifecycle, native
+publication/authentication, normal-client migration and all independent/installed
+release gates remain required. These tests use synthetic enrollment and providers.
+
 ### Account acceptance of project terminal metadata
 
 After local terminal/outbox commit, the project writer exports the actual consumed

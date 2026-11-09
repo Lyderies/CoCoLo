@@ -865,6 +865,44 @@ class ProjectHistory:
         return raw
 
     @_operation
+    def attest_pending_result_lease(self, binding: ResultLeaseBinding) -> bytes:
+        """Historical armed metadata for reconciliation; no fresh timing grant."""
+        binding = self._lease_binding(binding)
+        if self._result_key is None:
+            raise HistoryError('history_result_unavailable')
+        return encode_storage_evidence(self._result_key, self._lease_row(binding))
+
+    @_operation
+    def settle_denied_result_lease(self, binding: ResultLeaseBinding, raw: bytes) -> ResultLease:
+        """Retire only after an independently authenticated account no-launch fence.
+
+        The MAC is an integrity/binding check, not proof of the native sender.
+        Expired is the existing permanent unbound tombstone, not a new attempt.
+        No local clock, caller cleanup flag or missing-row inference is used.
+        """
+        from .claim_denial import verify_denial_closure
+
+        binding = self._lease_binding(binding)
+        with self._transaction():
+            value = self._lease_row(binding)
+            invalid = False
+            try:
+                verify_denial_closure(self._result_key, value, raw)
+            except Exception:
+                invalid = True
+            if invalid:
+                raise HistoryError('history_invalid_input')
+            if value.state not in {'claim_pending', 'expired'}:
+                raise HistoryError('history_result_not_ready')
+            if self._connection.execute('SELECT 1 FROM result_reservations WHERE project_id=? AND run_handle=? AND attempt=? LIMIT 1',
+                                         (self.project_id, binding.run_handle, binding.attempt)).fetchone() is not None:
+                raise HistoryError('history_conflict')
+            if value.state == 'claim_pending':
+                value = replace(value, state='expired')
+                self._set_lease(value)
+        return value
+
+    @_operation
     def consume_execution_grant(self, binding: AttemptBinding, raw: bytes, *, task: dict, route: dict):
         """Persist one original registration BEFORE local process custody.
 
@@ -924,9 +962,9 @@ class ProjectHistory:
     def arm_result_lease(self, binding: ResultLeaseBinding) -> ResultLease:
         """Durably mark claim-send uncertainty before sending the account request.
 
-        Armed leases never expire/free capacity on a timeout or restart. Only an
-        exact actual-claim bind is supplied here; account-denial/orphan recovery
-        requires separately proven integration, never a caller 'not sent' flag.
+        Armed leases never expire/free capacity on a timeout or restart. Exact
+        actual-claim binding or verified account denial settlement resolves them;
+        missing/orphaned state remains charged, never a caller 'not sent' flag.
         """
         binding = self._lease_binding(binding)
         now = self._result_now()

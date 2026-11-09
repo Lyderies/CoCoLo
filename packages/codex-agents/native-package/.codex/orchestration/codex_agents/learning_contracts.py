@@ -60,6 +60,7 @@ RECORD_TYPES = {
     "admission_decision",
     "dispatch_intent",
     "dispatch_result",
+    "claim_denial_settlement",
     "host_run_profile",
     "probe_admission",
     "observation_unavailable",
@@ -2166,7 +2167,34 @@ def validate_verification_binding(data: Any) -> dict[str, Any]:
     return data
 
 
+def validate_claim_denial_settlement(data: Any) -> dict[str, Any]:
+    from .account_claim_contracts import checked_claim_receipt
+
+    fields = {'schema_version', 'record_type', 'record_id', 'run_id', 'handle_digest', 'scope_digest',
+              'request_digest', 'parameters_digest', 'binding_digest', 'lease_digest', 'assignment_digest',
+              'denial', 'observed_at_ms'}
+    data = _closed(data, fields, 'claim_denial_settlement')
+    _base(data, 'claim_denial_settlement')
+    if type(data['schema_version']) is not int:
+        raise ContractError('unsupported learning schema version')
+    _identifier(data['run_id'], 'run_id')
+    for name in ('handle_digest', 'scope_digest', 'request_digest', 'parameters_digest', 'binding_digest',
+                 'lease_digest', 'assignment_digest'):
+        _digest(data[name], name)
+    invalid = False
+    try:
+        denial = checked_claim_receipt(data['denial'])
+        invalid = denial['state'] != 'denied' or denial['known'] is not True or denial['run_id'] != data['run_id']
+    except Exception:
+        invalid = True
+    if invalid:
+        raise ContractError('denial settlement is invalid')
+    _integer(data['observed_at_ms'], 'observed_at_ms', minimum=denial['recorded_at_ms'])
+    return data
+
+
 VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
+    "claim_denial_settlement": validate_claim_denial_settlement,
     "event": validate_event,
     "outcome": validate_outcome,
     "feedback": validate_feedback,
