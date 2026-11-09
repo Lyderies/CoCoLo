@@ -61,6 +61,7 @@ RECORD_TYPES = {
     "dispatch_intent",
     "dispatch_result",
     "claim_denial_settlement",
+    "host_result_admission",
     "host_run_profile",
     "probe_admission",
     "observation_unavailable",
@@ -2167,6 +2168,33 @@ def validate_verification_binding(data: Any) -> dict[str, Any]:
     return data
 
 
+def validate_host_result_admission(data: Any) -> dict[str, Any]:
+    """Safe immutable project-local links, not QA or execution authority."""
+    data = _closed(data, {
+        "schema_version", "record_type", "record_id", "run_id", "binding_digest",
+        "registration_digest", "dispatch_result", "terminal_content_digest",
+        "event_record_id", "event_content_digest", "outcome_record_id",
+        "host_outcome_digest", "observed_at_ms",
+    }, "host_result_admission")
+    _base(data, "host_result_admission")
+    if type(data["schema_version"]) is not int:
+        raise ContractError("unsupported learning schema version")
+    for name in ("run_id", "event_record_id", "outcome_record_id"):
+        _identifier(data[name], name)
+    for name in ("binding_digest", "registration_digest", "terminal_content_digest",
+                 "event_content_digest", "host_outcome_digest"):
+        _digest(data[name], name)
+    terminal = validate_dispatch_result(data["dispatch_result"])
+    if (type(terminal["schema_version"]) is not int
+            or terminal["schema_version"] != DISPATCH_RESULT_SCHEMA_VERSION
+            or terminal["run_id"] != data["run_id"]
+            or content_digest(terminal) != data["terminal_content_digest"]
+            or type(data["observed_at_ms"]) is not int
+            or data["observed_at_ms"] != terminal["observed_at_ms"]):
+        raise ContractError("host result admission links are invalid")
+    return data
+
+
 def validate_claim_denial_settlement(data: Any) -> dict[str, Any]:
     from .account_claim_contracts import checked_claim_receipt
 
@@ -2194,6 +2222,7 @@ def validate_claim_denial_settlement(data: Any) -> dict[str, Any]:
 
 
 VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
+    "host_result_admission": validate_host_result_admission,
     "claim_denial_settlement": validate_claim_denial_settlement,
     "event": validate_event,
     "outcome": validate_outcome,

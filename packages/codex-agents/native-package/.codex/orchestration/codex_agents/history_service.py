@@ -20,6 +20,7 @@ from .history_api import (
     HistoryRequest, decode_history_request, decode_history_response, history_request_digest,
 )
 from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGEST, _PROJECT, matches
+from .host_result_contracts import HostResultContext, decode_host_result_reference
 from .learning_contracts import canonical_json, parse_bounded_json
 from .project_history import ProjectHistory
 from .result_read_api import RESULT_READ_OPERATION, ResultReadRequest
@@ -36,6 +37,7 @@ class HistoryAuthorization:
     request_digest: str
     source: str
     allowed_operations: frozenset[str]
+    host_result_context: HostResultContext | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -45,6 +47,7 @@ class HistoryAuthorization:
             or type(self.allowed_operations) is not frozenset or not self.allowed_operations
             or any(type(operation) is not str for operation in self.allowed_operations)
             or not self.allowed_operations <= HISTORY_OPERATIONS
+            or (self.host_result_context is not None and type(self.host_result_context) is not HostResultContext)
         ):
             raise HistoryError("history_not_authorized")
 
@@ -159,8 +162,34 @@ class HistoryService:
                 or (authorization.source != "host" and request.operation != "history.record_event")
             ):
                 raise HistoryError("history_not_authorized")
-            self._history()
-            result = self._execute(request, authorization)
+            if request.operation == "history.admit_host_result":
+                if authorization.host_result_context is None:
+                    raise HistoryError("history_not_authorized")
+                original_context, captured = authorization.host_result_context.snapshot()
+                reference = decode_host_result_reference(request.payload)
+                if captured.pop("binding") != reference.binding.as_data():
+                    raise HistoryError("history_not_authorized")
+                self._history()
+
+                def reauthorize():
+                    # Recheck the independent current authority after body I/O.
+                    # Immutable copies of the original inputs enter the writer;
+                    # mutable adapter data cannot change what gets admitted.
+                    current = self._authorizer(request, transport_context)
+                    if type(current) is not HistoryAuthorization:
+                        raise HistoryError("history_not_authorized")
+                    current.__post_init__()
+                    if (current.project_id != self._project or current.runtime_digest != self._runtime
+                            or current.request_digest != digest or history_request_digest(request) != digest
+                            or current.source != "host" or request.operation not in current.allowed_operations
+                            or current.host_result_context is None
+                            or current.host_result_context.snapshot()[0] != original_context):
+                        raise HistoryError("history_not_authorized")
+
+                result = self._store.admit_host_result(reference, **captured, before_commit=reauthorize)
+            else:
+                self._history()
+                result = self._execute(request, authorization)
             reply = self._reply(identity, request_digest=digest, project_id=project, runtime_digest=runtime, result=result)
             if request.operation == "history.pending_terminals":
                 # The owner caps the bare list; the wire envelope must fit too.

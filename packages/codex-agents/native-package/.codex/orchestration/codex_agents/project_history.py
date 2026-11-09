@@ -30,6 +30,7 @@ from .history_contracts import (
     MAX_SEQUENCE, AttemptBinding, HistoryEntry, HistoryError, TerminalDelivery,
     _DIGEST, _ID, _PROJECT, matches, valid_integer,
 )
+from .host_result_contracts import HostResultReference, decode_host_result_reference
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
     keyed_digest, parse_bounded_json, validate_execution_configuration, validate_learning_record,
@@ -42,7 +43,8 @@ from .result_contracts import (
 
 _APPLICATION_ID = 0x43444831
 _SCHEMA_VERSION = 4
-_RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding"})
+_RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
+                           "host_result_admission"})
 MAX_DELIVERY_PAGE_BYTES = 16_384
 MAX_BINDING_BYTES = 4096
 MAX_HISTORY_ROW_BYTES = 2 * MAX_RECORD_BYTES
@@ -460,7 +462,7 @@ class ProjectHistory:
     @_operation
     def append_record(self, content: bytes, *, source: str, ingested_at_ms: int) -> HistoryEntry:
         checked = self._checked_record(content, source, ingested_at_ms)
-        if checked["record_type"] == "dispatch_result":
+        if checked["record_type"] in {"dispatch_result", "host_result_admission"}:
             # A terminal record must never bypass its atomic delivery outbox.
             raise HistoryError("history_invalid_input")
         with self._transaction():
@@ -1383,6 +1385,143 @@ class ProjectHistory:
             # details, after other selected rows have had their cleanup turn.
             raise HistoryError(failure)
         return retired
+
+    @_operation
+    def admit_host_result(self, reference: HostResultReference, *, assignment: dict, task: dict,
+                          route: dict, client_capability: dict, before_commit: Callable[[], None]) -> dict:
+        """Derive one non-accepted outcome from this writer's exact durable return.
+
+        Original input and current primary authority are server-side obligations.
+        The callback rechecks current authority after artifact I/O, before any
+        mutation (and on known retries). No account store, new ticket, admission
+        acceptance, repair, QA decision or cleanup release is created here.
+        """
+        from .host_result_contracts import HostResultContext
+        from .learning_adapters import empty_usage
+        from .learning_engine import build_host_result_records
+
+        if type(reference) is not HostResultReference or not callable(before_commit):
+            raise HistoryError("history_invalid_input")
+        reference = decode_host_result_reference(reference.as_data())
+        binding = self._result_binding(reference.binding)
+        _, inputs = HostResultContext(binding, assignment, task, route, client_capability).snapshot()
+        assignment, task, route, client_capability = (inputs[name] for name in (
+            "assignment", "task", "route", "client_capability"))
+        row = self._connection.execute(
+            "SELECT * FROM project_execution_consumptions WHERE project_id=? AND claim_id=?",
+            (self.project_id, binding.claim_id),
+        ).fetchone()
+        if row is None:
+            raise HistoryError("history_execution_not_ready")
+        invalid = False
+        try:
+            grant = verify_execution_grant(self._result_key, binding,
+                                          self._stored_blob(row["grant"], maximum=MAX_EXECUTION_GRANT_BYTES))
+            configuration = validate_execution_configuration(route["execution_configuration"])
+            invalid = (
+                row["registration_digest"] != grant.registration_digest
+                or not valid_integer(row["consumed_at_ms"], minimum=grant.claimed_at_ms,
+                                     maximum=grant.deadline_at_ms - 1)
+                or grant.assignment_digest != keyed_digest(self._result_key, assignment_bytes(assignment, binding))
+                or grant.task_digest != keyed_digest(self._result_key, canonical_json(validate_task(task)))
+                or grant.route_digest != keyed_digest(self._result_key, canonical_json(route))
+                or grant.configuration_digest != content_digest(configuration)
+                or configuration["client_digest"] != content_digest(client_capability)
+            )
+        except Exception:
+            invalid = True
+        if invalid:
+            raise HistoryError("history_conflict")
+        _, reservation = self._result_row(binding)
+        outbox = self._connection.execute("SELECT * FROM terminal_outbox WHERE project_id=? AND claim_id=?",
+                                          (self.project_id, binding.claim_id)).fetchone()
+        if outbox is None or reservation.state not in {"committed", "expired"}:
+            raise HistoryError("history_result_not_ready")
+        delivery = self._delivery(outbox)
+        terminal_entry = self.record(delivery.record_id)
+        terminal = parse_bounded_json(terminal_entry.content)
+        if (delivery.binding != binding or delivery.record_id != reference.terminal_record_id
+                or delivery.record_content_digest != reference.terminal_content_digest
+                or delivery.result_digest != reference.result_digest
+                or reservation.assignment_digest != grant.assignment_digest
+                or reservation.hard_deadline_at_ms != grant.deadline_at_ms
+                or reservation.terminal_record_id != delivery.record_id
+                or reservation.result_digest != delivery.result_digest
+                or terminal_entry.source != "host" or terminal_entry.content_digest != delivery.record_content_digest
+                or terminal["schema_version"] != DISPATCH_RESULT_SCHEMA_VERSION
+                or terminal["bridge_run_id"] != binding.claim_id
+                or terminal["observed_at_ms"] < grant.claimed_at_ms):
+            raise HistoryError("history_conflict")
+        scope_digest = keyed_digest(self._result_key, b"project-host-result-v1\0" + canonical_json(binding.as_data()))
+        identity = "host_result_admission:" + scope_digest
+        expected = {
+            "schema_version": 1, "record_type": "host_result_admission", "record_id": identity,
+            "run_id": binding.run_id, "binding_digest": scope_digest,
+            "registration_digest": grant.registration_digest, "dispatch_result": terminal,
+            "terminal_content_digest": terminal_entry.content_digest,
+            "observed_at_ms": terminal["observed_at_ms"],
+        }
+        prior = self._connection.execute("SELECT * FROM records WHERE project_id=? AND record_id=?",
+                                         (self.project_id, identity)).fetchone()
+        if prior is not None:
+            entry = self._entry(prior)
+            receipt = parse_bounded_json(entry.content)
+            if entry.source != "host" or any(receipt.get(name) != value for name, value in expected.items()):
+                raise HistoryError("history_conflict")
+            result = self._host_result_receipt(entry)
+            before_commit()
+            return result
+        body = self.read_result(binding)
+        checked_result_body(body, assignment, terminal)
+        checked_result = parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
+        observation = {"run_id": binding.run_id, "client_version": "bridge-v1",
+                       "result_attempts": [{"status": "accepted", "reason_code": None, "receipt_id": None}]}
+        if terminal["terminal_state"] is not None:
+            observation["terminal_state"] = terminal["terminal_state"]
+        # The original result lane has no repair operation: one immutable actual
+        # return is admitted, including its invalid-result fence. A caller cannot
+        # smuggle a legacy repair or substitute its own body/observations here.
+        event, outcome, _ = build_host_result_records(
+            assignment=assignment, task=task, result=checked_result, observation=observation,
+            host_evidence={"run_id": binding.run_id, "coverage": "lifecycle_partial", "usage": empty_usage(),
+                           "observed_at_ms": terminal["observed_at_ms"], "no_progress_events": 0,
+                           "usage_source": "host_observed"},
+            execution_configuration=configuration, digest_key=self._result_key, client_capability=client_capability,
+        )
+        receipt = {**expected, "event_record_id": event["record_id"], "event_content_digest": content_digest(event),
+                   "outcome_record_id": outcome["record_id"], "host_outcome_digest": content_digest(outcome)}
+        encoded = [canonical_json(value) for value in (event, outcome, receipt)]
+        checked = [self._checked_record(value, "host", terminal["observed_at_ms"]) for value in encoded]
+        before_commit()
+        now = self._result_now()
+        if (self.result_reservation(binding) != reservation or now >= reservation.expires_at_ms
+                or now < terminal["observed_at_ms"]):
+            raise HistoryError("history_result_expired")
+        with self._transaction():
+            for value, content in zip(checked, encoded):
+                entry = self._append_locked(value, content, "host", now)
+        return self._host_result_receipt(entry)
+
+    def _host_result_receipt(self, entry: HistoryEntry) -> dict:
+        receipt = parse_bounded_json(entry.content)
+        commits = {}
+        for label, record_type, identity, digest in (
+            ("event_commit", "event", receipt["event_record_id"], receipt["event_content_digest"]),
+            ("outcome_commit", "outcome", receipt["outcome_record_id"], receipt["host_outcome_digest"]),
+        ):
+            linked = self.record(identity)
+            value = parse_bounded_json(linked.content)
+            if (linked.source != "host" or value["record_type"] != record_type
+                    or value["run_id"] != receipt["run_id"] or linked.content_digest != digest):
+                raise HistoryError("history_conflict")
+            commits[label] = self._host_result_metadata(linked)
+        return {"admission": receipt, "admission_commit": self._host_result_metadata(entry), **commits}
+
+    @staticmethod
+    def _host_result_metadata(entry: HistoryEntry) -> dict:
+        return {name: getattr(entry, name) for name in (
+            "record_id", "source", "source_sequence", "observed_at_ms", "ingested_at_ms", "content_digest", "late",
+        )}
 
     @_operation
     def attest_terminal_delivery(self, binding: AttemptBinding) -> bytes:

@@ -66,6 +66,7 @@ RUNTIME_FILES = (
     "codex_agents/hook_config.py",
     "codex_agents/host_commands.py",
     "codex_agents/host_paths.py",
+    "codex_agents/host_result_contracts.py",
     "codex_agents/hosts.py",
     "codex_agents/learning_adapters.py",
     "codex_agents/learning_contracts.py",

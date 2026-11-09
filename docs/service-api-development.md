@@ -6,6 +6,45 @@ still use the installed 0.8.12 implementation; the source codec does not enable 
 
 ## Worker result persistence lane
 
+### Project-owned host-result admission
+
+`history.admit_host_result` now takes only an attempt binding and the exact durable
+terminal ID/content/result digests. It accepts no result body, replacement
+observation, repair receipt, configuration, acceptance flag or QA decision. The
+server adapter must separately authenticate the current owning primary and supply
+an independently expected full attempt binding, original assignment, task, route
+and installed client capability. A different session/supervisor generation is
+refused before opening storage. Labels,
+dataclasses and shared-key MACs do not establish that authority; native enrollment
+and current revocation remain activation gates.
+
+The project persistence owner checks those inputs against its actual consumed
+account execution grant, original reservation, outbox and closed terminal record.
+It reads and verifies the original canonical result artifact, then derives the
+existing diagnostic event/outcome with the existing builder. Completed work stays
+unverified; fenced failures keep their rejection. The full fence,
+review flag and bounded validator/client diagnostics remain in the terminal
+reference. It rechecks authority after body I/O and checks retention before one
+transaction stores the event, outcome and a protected `host_result_admission`
+link record. This does not accept a result, issue a verifier or pass operational
+QA. It releases no execution or shared capacity.
+
+The bounded reply contains safe terminal metadata and exact event/outcome commit
+IDs/digests. Raw task/result text stays out of records and replies. Known exact
+receipts survive writer restart, body retirement and clock rollback without
+reopening a private artifact or inventing a missing result. A first admission
+after body expiry is unavailable. Changed inputs, scope, terminals, record links
+or namespaces conflict; lost replies require an explicit exact retry. Generic
+append cannot create the protected admission record. Project4/account9 SQL layouts
+remain unchanged; only the typed internal record vocabulary grows.
+
+Primary tests cover an actual Unix-socket client and writer-owned connection,
+lost transport/commit replies, rollback, changed grant inputs, current-authority
+revocation after I/O, expiry, corruption, diagnostic fencing and SQLite-free client
+imports. Enrollment is synthetic. The normal CLI still consumes legacy shared
+records: moving it and verifier/QA state to the project owner, retaining original
+repair/evaluation semantics, remains required. No native endpoint is activated.
+
 ### Verified denial settlement
 
 An armed lease stays charged until the original account outcome is known. A
