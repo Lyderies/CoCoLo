@@ -335,6 +335,8 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
         self.fixture.commit()
         snapshot = {name: [tuple(row) for row in self.store._connection.execute("SELECT * FROM " + name)]
                     for name in ("history_identity", "records", "terminal_outbox", "result_identity", "result_reservations")}
+        self.store._connection.execute('DROP TABLE project_qa_check_requests')
+        self.store._connection.execute('DROP TABLE project_qa_check_receipts')
         self.store._connection.execute('DROP TABLE project_host_opens')
         self.store._connection.execute("DROP TABLE project_execution_consumptions")
         self.store._connection.execute("DROP TABLE result_leases")
@@ -353,7 +355,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
                 ProjectHistory(self.fixture.directory, self.fixture.store.project_id, **options)
             self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
         self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
-        self.assertEqual(6, self.store._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(7, self.store._connection.execute("PRAGMA user_version").fetchone()[0])
         for name, rows in snapshot.items():
             self.assertEqual(rows, [tuple(row) for row in self.store._connection.execute("SELECT * FROM " + name)])
         self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))
@@ -381,6 +383,8 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
                       'result_reservations', 'result_leases', 'project_execution_consumptions')
         snapshot = {name: [tuple(row) for row in self.store._connection.execute('SELECT * FROM ' + name)]
                     for name in old_tables}
+        self.store._connection.execute('DROP TABLE project_qa_check_requests')
+        self.store._connection.execute('DROP TABLE project_qa_check_receipts')
         self.store._connection.execute('DROP TABLE project_host_opens')
         for table in ('project_orchestration_requests', 'project_orchestration_checkpoints', 'project_orchestrations'):
             self.store._connection.execute('DROP TABLE ' + table)
@@ -392,7 +396,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
             self.fixture.open()
         self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
         self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
-        self.assertEqual(6, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(7, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
         for name, rows in snapshot.items():
             self.assertEqual(rows, [tuple(row) for row in self.store._connection.execute('SELECT * FROM ' + name)])
         self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))

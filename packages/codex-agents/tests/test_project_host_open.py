@@ -288,6 +288,8 @@ class ProjectHostOpenTests(unittest.TestCase):
                   'project_orchestration_checkpoints', 'project_orchestration_requests')
         before = {name: [tuple(row) for row in self.store._connection.execute('SELECT * FROM '+name)] for name in tables}
         capacity = self.store._result_capacity
+        self.store._connection.execute('DROP TABLE project_qa_check_requests')
+        self.store._connection.execute('DROP TABLE project_qa_check_receipts')
         self.store._connection.execute('DROP TABLE project_host_opens')
         self.store._connection.execute('PRAGMA user_version=5')
         self.service.close()
@@ -300,7 +302,7 @@ class ProjectHostOpenTests(unittest.TestCase):
         self.fixture.store = ProjectHistory(self.fixture.directory, self.scope.project_id,
             result_key=self.fixture.key, result_capacity=capacity, result_clock_ms=lambda: self.fixture.base.stamp,
             orchestration_limits=OrchestrationLimits(1, 8), allow_schema_upgrade=True)
-        self.assertEqual(6, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(7, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
         for name, rows in before.items():
             self.assertEqual(rows, [tuple(row) for row in self.store._connection.execute('SELECT * FROM '+name)])
         self.assertEqual((0, 0), self.counts())

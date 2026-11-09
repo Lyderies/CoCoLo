@@ -260,6 +260,8 @@ class ProjectExecutionGrantTests(unittest.TestCase):
         grant = self.grant()
         before_lease = self.fixture.store.result_lease(self.fixture.scope)
         before_result = self.fixture.store.result_reservation(self.binding)
+        self.fixture.store._connection.execute('DROP TABLE project_qa_check_requests')
+        self.fixture.store._connection.execute('DROP TABLE project_qa_check_receipts')
         self.fixture.store._connection.execute('DROP TABLE project_host_opens')
         self.fixture.store._connection.execute("DROP TABLE project_execution_consumptions")
         for table in ('project_orchestration_requests', 'project_orchestration_checkpoints', 'project_orchestrations'):
@@ -277,7 +279,7 @@ class ProjectExecutionGrantTests(unittest.TestCase):
                                              result_capacity=ResultCapacity(8, 2 * MAX_RESULT_BODY_BYTES, 1_800_000, 120_000),
                                              result_clock_ms=lambda: self.fixture.base.stamp, allow_schema_upgrade=True,
                                              allow_legacy_orchestration_reference=True)
-        self.assertEqual(6, self.fixture.store._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(7, self.fixture.store._connection.execute("PRAGMA user_version").fetchone()[0])
         self.assertEqual(before_lease, self.fixture.store.result_lease(self.fixture.scope))
         self.assertEqual(before_result, self.fixture.store.result_reservation(self.binding))
         self.consume(grant)

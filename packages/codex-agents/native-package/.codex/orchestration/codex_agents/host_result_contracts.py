@@ -118,6 +118,32 @@ class OperationalQAContext:
             'binding': AttemptBinding(**value[name]['binding'])}) for name in ('worker', 'verifier')})
 
 
+@dataclass(frozen=True, repr=False)
+class OperationalCheckContext:
+    """Original fixed-runner report and original pair held by the server adapter.
+
+    This value does not authenticate a check runner. Native adapters must prove
+    actual approved runner/report custody and current caller authority; normal
+    request JSON cannot supply a report, passed flags or this context.
+    """
+    qa_context: OperationalQAContext
+    report: dict
+
+    def snapshot(self):
+        if type(self.qa_context) is not OperationalQAContext or type(self.report) is not dict:
+            raise HistoryError('history_not_authorized')
+        try:
+            encoded = canonical_json(self.report)
+            if not 0 < len(encoded) <= 65_536:
+                raise ValueError()
+            report = parse_bounded_json(encoded, max_bytes=65_536)
+            value = {'qa_context': self.qa_context.snapshot()[1], 'report': report}
+            raw = canonical_json(value)
+        except Exception:
+            raise HistoryError('history_not_authorized') from None
+        return raw, value
+
+
 def decode_host_result_reference(value):
     invalid = False
     try:

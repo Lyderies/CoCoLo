@@ -8,6 +8,7 @@ back to SQLite, and never retries an ambiguously delivered mutation automaticall
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,7 @@ _RECORD_OPERATIONS = {
 HISTORY_OPERATIONS = frozenset({
     *_RECORD_OPERATIONS, "history.pending_terminals", "history.acknowledge_terminal", "history.read_record",
     "history.admit_host_result", "history.record_host_open", "history.worker_reference", "history.qa_scope",
+    "history.issue_qa_checks",
 })
 HISTORY_RECORD_TYPES = frozenset({*_RECORD_OPERATIONS.values(), "host_result_admission",
                                   "provider_usage", "observation_unavailable", "execution_provenance", "host_open_provenance"})
@@ -97,7 +99,7 @@ def _validate_request(request: HistoryRequest) -> None:
             identity = binding.claim_id
         if request.request_id != identity:
             raise HistoryError("history_invalid_request")
-    elif operation == 'history.qa_scope':
+    elif operation in {'history.qa_scope', 'history.issue_qa_checks'}:
         if not _closed(payload, {'worker_binding', 'verifier_binding', 'host_outcome_digest', 'verifier_host_outcome_digest'}):
             raise HistoryError('history_invalid_request')
         for name in ('worker_binding', 'verifier_binding'):
@@ -107,7 +109,8 @@ def _validate_request(request: HistoryRequest) -> None:
             if binding.project_id != request.project_id or binding.runtime_digest != request.runtime_digest:
                 raise HistoryError('history_invalid_request')
         if (not all(matches(payload[name], _DIGEST) for name in ('host_outcome_digest', 'verifier_host_outcome_digest'))
-                or request.request_id != hashlib.sha256(canonical_json(payload)).hexdigest()):
+                or (operation == 'history.qa_scope'
+                    and request.request_id != hashlib.sha256(canonical_json(payload)).hexdigest())):
             raise HistoryError('history_invalid_request')
     elif operation == 'history.worker_reference':
         if not _closed(payload, {'binding', 'host_outcome_digest'}) or type(payload['binding']) is not dict:
@@ -240,7 +243,15 @@ def _validate_host_reference(result, binding, digest, *, verification):
 
 def _validate_result(request: HistoryRequest, result: object) -> None:
     operation = request.operation
-    if operation == 'history.qa_scope':
+    if operation == 'history.issue_qa_checks':
+        if (not _closed(result, {'check_receipt', 'check_report_digest', 'checks_passed', 'expires_at_ms', 'known'})
+                or type(result['check_receipt']) is not str
+                or re.fullmatch(r'oqc_[0-9a-f]{48}', result['check_receipt']) is None
+                or not matches(result['check_report_digest'], _DIGEST)
+                or type(result['checks_passed']) is not bool or type(result['known']) is not bool
+                or not valid_integer(result['expires_at_ms'])):
+            raise HistoryError('history_invalid_response')
+    elif operation == 'history.qa_scope':
         if not _closed(result, {'worker', 'verifier'}):
             raise HistoryError('history_invalid_response')
         for name, key in (('worker', 'host_outcome_digest'), ('verifier', 'verifier_host_outcome_digest')):
@@ -445,6 +456,15 @@ class HistoryClient:
         payload = {'worker_binding': worker.as_data(), 'verifier_binding': verifier.as_data(),
                    'host_outcome_digest': host_outcome_digest, 'verifier_host_outcome_digest': verifier_host_outcome_digest}
         return self._call('history.qa_scope', hashlib.sha256(canonical_json(payload)).hexdigest(), payload)
+
+    def issue_operational_check_receipt(self, worker: AttemptBinding, verifier: AttemptBinding,
+                                       host_outcome_digest: str, verifier_host_outcome_digest: str, *, request_id: str) -> dict:
+        """Name original pair/report identity; the trusted report stays server-side."""
+        if type(worker) is not AttemptBinding or type(verifier) is not AttemptBinding:
+            raise HistoryError('history_invalid_input')
+        return self._call('history.issue_qa_checks', request_id,
+            {'worker_binding': worker.as_data(), 'verifier_binding': verifier.as_data(),
+             'host_outcome_digest': host_outcome_digest, 'verifier_host_outcome_digest': verifier_host_outcome_digest})
 
     def bind_verifier(self, record: dict) -> dict:
         return self._record_call("history.bind_verifier", record)

@@ -33,6 +33,7 @@ from .history_contracts import (
 from .host_result_contracts import HostResultReference, decode_host_result_reference
 from .orchestration_api import OrchestrationLimits
 from .orchestration_schema import ORCHESTRATION_SCHEMA, ORCHESTRATION_COLUMNS
+from .project_qa_checks import CHECK_SCHEMA, CHECK_COLUMNS
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
     keyed_digest, parse_bounded_json, validate_execution_configuration, validate_learning_record,
@@ -44,7 +45,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -126,9 +127,11 @@ CREATE TABLE project_host_opens(
  FOREIGN KEY(project_id,run_handle,attempt) REFERENCES result_leases(project_id,run_handle,attempt),
  FOREIGN KEY(project_id,record_id) REFERENCES records(project_id,record_id));
 """
-_SCHEMA = _SCHEMA_V5 + _HOST_OPEN_SCHEMA
+_SCHEMA_V6 = _SCHEMA_V5 + _HOST_OPEN_SCHEMA
+_SCHEMA = _SCHEMA_V6 + CHECK_SCHEMA
 _COLUMNS = {
     **ORCHESTRATION_COLUMNS,
+    **CHECK_COLUMNS,
     "history_identity": ("project_id", "next_source_sequence", "next_delivery_sequence"),
     "records": ("project_id", "record_id", "record_type", "source", "source_sequence",
                 "observed_at_ms", "ingested_at_ms", "content", "content_digest", "late"),
@@ -360,21 +363,23 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5} and application == _APPLICATION_ID
-              and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4, 5: _SCHEMA_V5}[version])):
+        elif (version in {1, 2, 3, 4, 5, 6} and application == _APPLICATION_ID
+              and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
+                                               5: _SCHEMA_V5, 6: _SCHEMA_V6}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {"project_host_opens", *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*CHECK_COLUMNS, *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             self._check_schema_identity({name: columns for name, columns in _COLUMNS.items() if name not in omitted})
             with self._transaction():
                 additions = ((_RESULT_SCHEMA if version == 1 else "") + (_LEASE_SCHEMA if version < 3 else "")
                              + (_EXECUTION_SCHEMA if version < 4 else "")
-                             + (ORCHESTRATION_SCHEMA if version < 5 else "") + _HOST_OPEN_SCHEMA)
+                             + (ORCHESTRATION_SCHEMA if version < 5 else "")
+                             + (_HOST_OPEN_SCHEMA if version < 6 else "") + CHECK_SCHEMA)
                 for statement in additions.split(";"):
                     if statement.strip():
                         connection.execute(statement)
@@ -1059,6 +1064,13 @@ class ProjectHistory:
         from .project_operational_qa import operational_qa_scope
         return operational_qa_scope(self, context, host_outcome_digest, verifier_host_outcome_digest,
                                    before_reply=before_reply)
+
+    @_operation
+    def issue_operational_check_receipt(self, context, host_outcome_digest, verifier_host_outcome_digest,
+                                       report, *, request_id, before_commit):
+        from .project_qa_checks import issue_check_receipt
+        return issue_check_receipt(self, context, host_outcome_digest, verifier_host_outcome_digest,
+                                   report, request_id=request_id, before_commit=before_commit)
 
     def _execution_provenance(self, grant):
         identity = self._execution_provenance_id(grant)
