@@ -106,3 +106,59 @@ class HostOpenLaneTests(unittest.TestCase):
             raise HistoryError('history_result_not_ready')
         with mock.patch.object(ProjectHistory, 'record_host_open', new=blocked):
             self.prepare_until(opening)
+
+    def test_withdrawal_after_precommit_cannot_publish_a_successful_writer_acknowledgement(self):
+        committed, resume = threading.Event(), threading.Event()
+        self.addCleanup(resume.set)
+        records = []
+        def commit_then_wait(store, *args, **kwargs):
+            kwargs['before_commit']()
+            records.append(self.entry)  # Fixed boundary has committed; reply is still withheld.
+            committed.set()
+            if not resume.wait(5):
+                raise RuntimeError('fixture postcommit gate expired')
+            return self.entry
+        def opening(target, worker_handle, handle):
+            self.lane.record_host_open(handle, b'{}')
+            self.assertTrue(committed.wait(3))
+            self.worker.pool.withdraw_prepared(worker_handle)
+            resume.set()
+            self.worker.until(lambda: self.lane.snapshot(handle)['state'] != 'recording_host_open')
+            self.assertEqual('failed', self.lane.snapshot(handle)['state'])
+            self.assertEqual('history_not_authorized', self.lane.snapshot(handle)['reason_code'])
+            self.assertEqual([self.entry], records)  # Do not erase/rebuild a committed journal.
+            with self.assertRaises(HistoryError):
+                self.lane.host_open_record(handle)
+            raise HistoryError('history_result_not_ready')
+        with mock.patch.object(ProjectHistory, 'record_host_open', new=commit_then_wait):
+            self.prepare_until(opening)
+
+    def test_previously_confirmed_acknowledgement_rechecks_prepared_worker_custody(self):
+        def commit(store, *args, **kwargs):
+            kwargs['before_commit']()
+            return self.entry
+        def opening(target, worker_handle, handle):
+            self.lane.record_host_open(handle, b'{}')
+            self.worker.until(lambda: self.lane.snapshot(handle)['state'] != 'recording_host_open')
+            self.assertEqual(self.entry.record_id, self.lane.host_open_record(handle)['record_id'])
+            self.worker.pool.withdraw_prepared(worker_handle)
+            with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+                self.lane.host_open_record(handle)
+            raise HistoryError('history_result_not_ready')
+        with mock.patch.object(ProjectHistory, 'record_host_open', new=commit):
+            self.prepare_until(opening)
+
+    def test_pool_close_invalidates_a_previously_confirmed_acknowledgement(self):
+        def commit(store, *args, **kwargs):
+            kwargs['before_commit']()
+            return self.entry
+        def opening(target, worker_handle, handle):
+            self.lane.record_host_open(handle, b'{}')
+            self.worker.until(lambda: self.lane.snapshot(handle)['state'] != 'recording_host_open')
+            self.assertEqual(self.entry.record_id, self.lane.host_open_record(handle)['record_id'])
+            self.worker.pool.close()
+            with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+                self.lane.host_open_record(handle)
+            raise HistoryError('history_result_not_ready')
+        with mock.patch.object(ProjectHistory, 'record_host_open', new=commit):
+            self.prepare_until(opening)

@@ -237,13 +237,7 @@ class ResultPersistenceLane:
                     or pending.grant_raw is not None or pending.supervisor is not None):
                 raise HistoryError('history_result_not_ready')
         with self._pool._registry._lock:
-            try:
-                original = self._pool._job(pending.worker_handle)
-            except CodexWorkerError:
-                raise HistoryError('history_not_authorized') from None
-            if (self._pool._closed or original is not pending.original_job or original.state != 'prepared'
-                    or original.payload is not pending.payload):
-                raise HistoryError('history_not_authorized')
+            self._prepared_open_worker_locked(pending)
         with self._lock:
             pending.open_provenance_raw, pending.open_record = raw, None
             pending.state, pending.reason = 'recording_host_open', None
@@ -252,13 +246,23 @@ class ResultPersistenceLane:
     def host_open_record(self, handle):
         """Return only the writer's confirmed original record identity."""
         pending = self._job(handle)
-        with self._lock:
-            if self._closed or self._fault:
-                raise HistoryError('history_service_unavailable')
-            if pending.state != 'claim_pending' or pending.open_record is None:
-                raise HistoryError('history_result_not_ready')
-            identity, digest = pending.open_record
-            return {'record_id': identity, 'content_digest': digest}
+        with self._pool._registry._lock:
+            with self._lock:
+                if self._closed or self._fault:
+                    raise HistoryError('history_service_unavailable')
+                if pending.state != 'claim_pending' or pending.open_record is None:
+                    raise HistoryError('history_result_not_ready')
+                self._prepared_open_worker_locked(pending)
+                identity, digest = pending.open_record
+                return {'record_id': identity, 'content_digest': digest}
+
+    def _prepared_open_worker_locked(self, pending):
+        """Caller holds the pool registry lock; no SQL, callbacks or file I/O."""
+        original = self._pool._jobs.get(pending.worker_handle)
+        if (self._pool._closed or original is not pending.original_job or original.state != 'prepared'
+                or original.payload is not pending.payload or original.slot.current is not pending.worker_handle
+                or original.slot.fault or not original.slot.thread.is_alive()):
+            raise HistoryError('history_not_authorized')
 
     def bound_storage_evidence(self, handle):
         pending = self._job(handle)
@@ -601,16 +605,20 @@ class ResultPersistenceLane:
             # Brief custody check only: never retain this lock through SQL or
             # private-file work, so control/cancellation remain independent.
             with self._pool._registry._lock:
-                original = self._pool._jobs.get(pending.worker_handle)
-                if (self._pool._closed or original is not pending.original_job or original.state != 'prepared'
-                        or original.payload is not pending.payload):
-                    raise HistoryError('history_not_authorized')
+                self._prepared_open_worker_locked(pending)
 
         entry = self._history().record_host_open(pending.lease_binding, request, proof,
             assignment=assignment, task=data['task'], route=data['route'], before_commit=still_prepared)
-        with self._lock:
-            pending.open_record = (entry.record_id, entry.content_digest)
-            pending.state, pending.reason = 'claim_pending', None
+        # A committed journal remains immutable if custody ended during I/O.
+        # Admit the acknowledgement only under the same brief lock order used
+        # for execution issue; neither lock is retained across the store call.
+        with self._pool._registry._lock:
+            self._prepared_open_worker_locked(pending)
+            with self._lock:
+                if self._closed or self._fault:
+                    raise HistoryError('history_service_unavailable')
+                pending.open_record = (entry.record_id, entry.content_digest)
+                pending.state, pending.reason = 'claim_pending', None
 
     def _consume_execution(self, pending):
         data, _ = _decode_input(pending.payload)
