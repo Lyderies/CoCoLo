@@ -3378,7 +3378,7 @@ class LearningLedger:
         if checked["record_type"] in PROVIDER_OBSERVATION_TYPES | {
             "admission_decision", "billing_attestation", "dispatch_intent",
             "dispatch_result", "host_run_profile", "probe_admission",
-            "verification_binding", "claim_denial_settlement", "host_result_admission",
+            "verification_binding", "claim_denial_settlement", "host_result_admission", "execution_provenance",
         }:
             raise LedgerError("provider evidence requires ledger-run observation")
         if (
@@ -6196,6 +6196,13 @@ class LearningLedger:
                                      "WHERE project_id=? AND handle_digest=? AND binding_state='pending'",
                                      (project_id, context.handle))
         return denial_closure(key, expected, record, known=False)
+
+    def _attest_run_provenance(self, project_id, *, runtime_digest, caller_scope, request,
+                              storage_binding, storage_evidence, work_limits):
+        from .account_run_provenance import attest_run_provenance
+        return attest_run_provenance(self, project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                     request=request, storage_binding=storage_binding,
+                                     storage_evidence=storage_evidence, work_limits=work_limits)
 
     def _register_project_execution(self, project_id, *, runtime_digest, caller_scope, registration,
                                     storage_binding, storage_evidence):

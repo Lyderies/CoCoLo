@@ -46,7 +46,7 @@ from .result_contracts import (
 _APPLICATION_ID = 0x43444831
 _SCHEMA_VERSION = 5
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
-                           "host_result_admission", "provider_usage", "observation_unavailable"})
+                           "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance"})
 MAX_DELIVERY_PAGE_BYTES = 16_384
 MAX_BINDING_BYTES = 4096
 MAX_HISTORY_ROW_BYTES = 2 * MAX_RECORD_BYTES
@@ -479,7 +479,7 @@ class ProjectHistory:
     @_operation
     def append_record(self, content: bytes, *, source: str, ingested_at_ms: int) -> HistoryEntry:
         checked = self._checked_record(content, source, ingested_at_ms)
-        if checked["record_type"] in {"dispatch_result", "host_result_admission", "provider_usage", "observation_unavailable"}:
+        if checked["record_type"] in {"dispatch_result", "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance"}:
             # Closed business writers own terminal, usage and admission records.
             raise HistoryError("history_invalid_input")
         with self._transaction():
@@ -924,7 +924,7 @@ class ProjectHistory:
         return value
 
     @_operation
-    def consume_execution_grant(self, binding: AttemptBinding, raw: bytes, *, task: dict, route: dict):
+    def consume_execution_grant(self, binding: AttemptBinding, raw: bytes, *, task: dict, route: dict, provenance=None):
         """Persist one original registration BEFORE local process custody.
 
         This internal operation requires an independently authenticated account
@@ -976,9 +976,56 @@ class ProjectHistory:
             clock = time.monotonic_ns()
             if type(clock) is not int or not grant.clock_reference_ns <= clock < grant.deadline_ns:
                 raise HistoryError("history_execution_not_ready")
+            record = self._new_execution_provenance(grant, task, route, provenance, now)
+            if record is not None:
+                self._append_locked(record, canonical_json(record), 'host', now)
             self._connection.execute("INSERT INTO project_execution_consumptions VALUES(?,?,?,?,?)",
                                      (self.project_id, binding.claim_id, grant.registration_digest, raw, now))
         return grant
+
+    def _new_execution_provenance(self, grant, task, route, provenance, now):
+        if provenance is None and self._allow_legacy_orchestration_reference:
+            return None  # Explicit isolated pre-provenance fixture only.
+        from .run_provenance import decode_run_provenance_input, verify_run_provenance
+        invalid = False
+        try:
+            facts = provenance['provenance']
+            request = decode_run_provenance_input({name: facts[name] for name in ('registration', 'registration_digest', 'assignment_id')})
+            checked = verify_run_provenance(self._result_key, request, grant, provenance)
+            facts = checked['provenance']
+            invalid = facts['task_family'] != task['family'] or facts['provider'] != route.get('provider', 'codex')
+        except Exception:
+            invalid = True
+        if invalid:
+            raise HistoryError('history_execution_not_ready')
+        return validate_learning_record({
+            'schema_version': 1, 'record_type': 'execution_provenance',
+            'record_id': self._execution_provenance_id(grant), 'run_id': grant.binding.run_id,
+            'registration_digest': grant.registration_digest, 'provenance': checked, 'observed_at_ms': now,
+        })
+
+    def _execution_provenance_id(self, grant):
+        return 'execution_provenance:' + keyed_digest(self._result_key, canonical_json(grant.binding.as_data()))
+
+    def _execution_provenance(self, grant):
+        identity = self._execution_provenance_id(grant)
+        try:
+            entry = self.record(identity)
+        except HistoryError as exc:
+            if exc.reason_code == 'history_not_found' and self._allow_legacy_orchestration_reference:
+                return None
+            raise HistoryError('history_execution_not_ready') from None
+        record = parse_bounded_json(entry.content)
+        if (entry.source != 'host' or record['record_type'] != 'execution_provenance'
+                or record['run_id'] != grant.binding.run_id or record['registration_digest'] != grant.registration_digest):
+            raise HistoryError('history_incompatible')
+        from .run_provenance import decode_run_provenance_input, verify_run_provenance
+        try:
+            facts = record['provenance']['provenance']
+            request = decode_run_provenance_input({name: facts[name] for name in ('registration', 'registration_digest', 'assignment_id')})
+            return verify_run_provenance(self._result_key, request, grant, record['provenance'])
+        except Exception:
+            raise HistoryError('history_incompatible') from None
 
     @_operation
     def arm_result_lease(self, binding: ResultLeaseBinding) -> ResultLease:
@@ -1536,6 +1583,11 @@ class ProjectHistory:
             invalid = True
         if invalid:
             raise HistoryError("history_conflict")
+        provenance = self._execution_provenance(grant)
+        if provenance is not None:
+            facts = provenance['provenance']
+            if facts['task_family'] != task['family'] or facts['provider'] != route.get('provider', 'codex'):
+                raise HistoryError('history_conflict')
         reservation_row, reservation = self._result_row(binding)
         outbox = self._connection.execute("SELECT * FROM terminal_outbox WHERE project_id=? AND claim_id=?",
                                           (self.project_id, binding.claim_id)).fetchone()

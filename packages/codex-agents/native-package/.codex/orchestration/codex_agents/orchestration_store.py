@@ -173,6 +173,7 @@ class OrchestrationOwner:
                     or reservation.assignment_digest != grant.assignment_digest
                     or reservation.hard_deadline_at_ms != grant.deadline_at_ms):
                 raise HistoryError('history_incompatible')
+            self._history._execution_provenance(grant)
             digest = keyed_digest(self._key(), b'project-host-result-v1\0' + canonical_json(binding.as_data()))
             try:
                 entry = self._history.record('host_result_admission:' + digest)

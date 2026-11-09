@@ -23,6 +23,7 @@ from .capacity_status_contracts import CapacityStatusInput, checked_capacity_sta
 from .execution_grant import ExecutionRegistrationInput, checked_execution_reply, decode_execution_registration
 from .terminal_delivery import checked_terminal_receipt, decode_terminal_submission
 from .claim_denial import CloseDeniedInput, checked_denial_closure, decode_close_denied
+from .run_provenance import RunProvenanceInput, checked_run_provenance, decode_run_provenance_input
 
 ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
@@ -32,6 +33,7 @@ ACCOUNT_READ_OPERATIONS = frozenset({
 })
 ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.close_denied_attempt",
+    "account.run_provenance",
 }
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
@@ -103,6 +105,11 @@ def _checked_request(data: object) -> None:
             decode_execution_registration(data["payload"])
         except ClaimError:
             raise AccountError("account_invalid_request") from None
+    elif data['operation'] == 'account.run_provenance':
+        try:
+            decode_run_provenance_input(data['payload'])
+        except ClaimError:
+            raise AccountError('account_invalid_request') from None
     elif data["operation"] == "account.capacity_status":
         try:
             decode_capacity_status_input(data["payload"])
@@ -164,6 +171,12 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
             return checked_execution_reply(result)
         except ClaimError:
             raise AccountError("account_invalid_response") from None
+    elif request.operation == 'account.run_provenance':
+        try:
+            return checked_run_provenance(result, decode_run_provenance_input(request.payload),
+                                           request.project_id, request.runtime_digest)
+        except ClaimError:
+            raise AccountError('account_invalid_response') from None
     elif request.operation == "account.capacity_status":
         try:
             return checked_capacity_status(result)
@@ -330,6 +343,25 @@ class AccountClient:
             failed = True
         if failed:
             raise AccountError("account_unavailable")
+        return decode_account_response(raw, request)
+
+    def run_provenance(self, provenance_request, *, request_id):
+        """Read original registered metadata once; never retry or register work."""
+        if type(provenance_request) is not RunProvenanceInput:
+            raise AccountError('account_invalid_request')
+        try:
+            request = AccountRequest(1, 'account.run_provenance', request_id, self._project, self._runtime,
+                                     provenance_request.payload())
+        except ClaimError:
+            raise AccountError('account_invalid_request') from None
+        failed = False
+        try:
+            raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
+                                 request_limit=MAX_ACCOUNT_FRAME_BYTES, response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError:
+            failed = True
+        if failed:
+            raise AccountError('account_unavailable')
         return decode_account_response(raw, request)
 
     def submit_terminal(self, submission, *, request_id):

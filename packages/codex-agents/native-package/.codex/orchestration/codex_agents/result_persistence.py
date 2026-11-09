@@ -17,6 +17,7 @@ import weakref
 from .bridge_liveness import BridgeLivenessOwner, CodexOwnerResult
 from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES
 from .execution_grant import MAX_EXECUTION_GRANT_BYTES
+from .run_provenance import MAX_RUN_PROVENANCE_BYTES
 from .terminal_delivery import MAX_TERMINAL_EVIDENCE_BYTES
 from .claim_denial import MAX_DENIAL_RECEIPT_BYTES
 from .owned_execution import OwnedExecutionKey
@@ -33,6 +34,7 @@ from .result_contracts import (
 _TIME_NS = time.time_ns
 MAX_PERSISTENCE_ENTRY_BYTES = (MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES + MAX_PACKET_BYTES
                                + MAX_STORAGE_EVIDENCE_BYTES + 2 * MAX_EXECUTION_GRANT_BYTES
+                               + 2 * MAX_RUN_PROVENANCE_BYTES
                                + 2 * MAX_TERMINAL_EVIDENCE_BYTES + MAX_DENIAL_RECEIPT_BYTES)
 
 
@@ -61,6 +63,7 @@ class _Pending:
     storage_evidence: bytes | None = None
     bound_evidence: bytes | None = None
     grant_raw: bytes | None = None
+    provenance_raw: bytes | None = None
     grant: object = None
     execution_issued: bool = False
     execution_ticket: object = None
@@ -308,7 +311,7 @@ class ResultPersistenceLane:
             pending.payload = None
             pending.state = "reserved"
 
-    def consume_execution(self, handle, raw):
+    def consume_execution(self, handle, raw, *, provenance=None):
         """Queue a server-authenticated account registration for durable use.
 
         No ticket is accepted or returned here. Native peer identity and the
@@ -318,10 +321,16 @@ class ResultPersistenceLane:
         self._owner._monitor._entry(pending.binding)
         if type(raw) is not bytes or not 0 < len(raw) <= MAX_EXECUTION_GRANT_BYTES:
             raise HistoryError("history_invalid_input")
+        if provenance is not None and (type(provenance) is not bytes or not 0 < len(provenance) <= MAX_RUN_PROVENANCE_BYTES):
+            raise HistoryError("history_invalid_input")
+        if provenance is None and not self._allow_local_reference:
+            # Refuse before capturing the immutable retry identity or queuing
+            # work, so an absent receipt cannot poison the original grant.
+            raise HistoryError('history_execution_not_ready')
         with self._lock:
             if self._closed or self._fault:
                 raise HistoryError("history_service_unavailable")
-            if pending.grant_raw is not None and pending.grant_raw != raw:
+            if pending.grant_raw is not None and (pending.grant_raw != raw or pending.provenance_raw != provenance):
                 raise HistoryError("history_conflict")
             if pending.state in {"consuming_execution", "execution_consumed", "execution_issued"}:
                 return
@@ -329,6 +338,7 @@ class ResultPersistenceLane:
                     or pending.lease is None or pending.lease.state != "bound"):
                 raise HistoryError("history_execution_not_ready")
             pending.grant_raw, pending.state, pending.reason = raw, "consuming_execution", None
+            pending.provenance_raw = provenance
             self._incoming.put_nowait(("consume_execution", handle))
 
     def issue_execution(self, handle):
@@ -521,8 +531,10 @@ class ResultPersistenceLane:
 
     def _consume_execution(self, pending):
         data, _ = _decode_input(pending.payload)
-        grant = self._history().consume_execution_grant(pending.binding, pending.grant_raw,
-                                                       task=data["task"], route=data["route"])
+        options = {'task': data['task'], 'route': data['route']}
+        if pending.provenance_raw is not None:
+            options['provenance'] = parse_bounded_json(pending.provenance_raw, max_bytes=MAX_RUN_PROVENANCE_BYTES)
+        grant = self._history().consume_execution_grant(pending.binding, pending.grant_raw, **options)
         with self._lock:
             pending.grant, pending.state, pending.reason = grant, "execution_consumed", None
 

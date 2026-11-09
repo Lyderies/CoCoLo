@@ -30,6 +30,7 @@ PERSISTENCE_MODULES = frozenset({
     "codex_agents.history_service", "codex_agents.account_service", "codex_agents.result_read_service",
     "codex_agents.result_persistence",
     "codex_agents.orchestration_store", "codex_agents.orchestration_service", "codex_agents.orchestration_schema",
+    "codex_agents.account_run_provenance",
 })
 SELECTED_METHODS = frozenset({"append", "_append_checked_locked", "_append_locked", "commit_owner_record"})
 KEY_METHODS = frozenset({"keyed_digest", "external_id", "digest_key"})

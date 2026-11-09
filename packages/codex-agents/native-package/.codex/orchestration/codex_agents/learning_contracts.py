@@ -62,6 +62,7 @@ RECORD_TYPES = {
     "dispatch_result",
     "claim_denial_settlement",
     "host_result_admission",
+    "execution_provenance",
     "host_run_profile",
     "probe_admission",
     "observation_unavailable",
@@ -2228,7 +2229,32 @@ def validate_claim_denial_settlement(data: Any) -> dict[str, Any]:
     return data
 
 
+def validate_execution_provenance(data: Any) -> dict[str, Any]:
+    """Closed protected metadata; shape is not native/account authentication."""
+    from .run_provenance import decode_run_provenance_input, checked_run_provenance
+    data = _closed(data, {'schema_version', 'record_type', 'record_id', 'run_id',
+                          'registration_digest', 'provenance', 'observed_at_ms'}, 'execution_provenance')
+    _base(data, 'execution_provenance')
+    if type(data['schema_version']) is not int:
+        raise ContractError('unsupported learning schema version')
+    _identifier(data['run_id'], 'run_id')
+    _digest(data['registration_digest'], 'registration_digest')
+    _integer(data['observed_at_ms'], 'observed_at_ms')
+    invalid = False
+    try:
+        facts = data['provenance']['provenance']
+        request = decode_run_provenance_input({name: facts[name] for name in ('registration', 'registration_digest', 'assignment_id')})
+        checked_run_provenance(data['provenance'], request, facts['binding']['project_id'], facts['binding']['runtime_digest'])
+        invalid = data['run_id'] != facts['binding']['run_id'] or data['registration_digest'] != facts['registration_digest']
+    except Exception:
+        invalid = True
+    if invalid:
+        raise ContractError('invalid execution provenance')
+    return data
+
+
 VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
+    "execution_provenance": validate_execution_provenance,
     "host_result_admission": validate_host_result_admission,
     "claim_denial_settlement": validate_claim_denial_settlement,
     "event": validate_event,

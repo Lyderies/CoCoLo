@@ -29,6 +29,8 @@ from codex_agents.project_history import ProjectHistory
 from codex_agents.project_monitor import ProjectMonitor, SupervisorScope
 from codex_agents.result_contracts import LEASE_SCOPE_FIELDS, MAX_RESULT_BODY_BYTES, ResultCapacity, ResultLeaseBinding
 from codex_agents.result_persistence import MAX_PERSISTENCE_ENTRY_BYTES, ResultPersistenceLane
+from codex_agents.orchestration_api import OrchestrationLimits, OrchestrationRequest, OrchestrationScope
+from codex_agents.orchestration_store import OrchestrationOwner
 from codex_agents.service_protocol import service_request_digest
 
 SECOND = 1_000_000_000
@@ -69,14 +71,23 @@ def main():
     key = bytes.fromhex(data["fixture_key"])
 
     def open_history():
-        return ProjectHistory(Path(data["history"]), scope.project_id, result_key=key,
-                              allow_legacy_orchestration_reference=True,
-                              result_capacity=ResultCapacity(8, 2 * MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
+        managed = data.get('with_provenance', False)
+        store = ProjectHistory(Path(data["history"]), scope.project_id, result_key=key,
+                               allow_legacy_orchestration_reference=not managed,
+                               orchestration_limits=OrchestrationLimits(1, 8) if managed else None,
+                               result_capacity=ResultCapacity(8, 2 * MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
+        if managed:
+            # Explicit deterministic fake enrollment, never native authority.
+            opened = OrchestrationRequest(1, 'orchestration.open', 'fixture-open', OrchestrationScope(**asdict(scope)), {})
+            with mock.patch('codex_agents.orchestration_store.secrets.token_hex', return_value=lease_scope.orchestration_handle[4:]):
+                OrchestrationOwner(store).apply(opened, client_version='codex-host-v1', before_commit=lambda: None)
+        return store
 
     lane = None
     try:
         lane = ResultPersistenceLane(owner, pool, open_history, max_entries=1,
-                                     retained_bytes=MAX_PERSISTENCE_ENTRY_BYTES)
+                                     retained_bytes=MAX_PERSISTENCE_ENTRY_BYTES,
+                                     allow_local_execution_reference=not data.get('with_provenance', False))
 
         def until(predicate):
             end = time.monotonic() + 12
@@ -103,7 +114,8 @@ def main():
         lane.bind_claim(handle, binding, hard_deadline_at_ms=receipt["deadline_at_ms"])
         until(lambda: lane.snapshot(handle)["state"] != "binding_claim")
         emit(stage="bound", evidence=lane.bound_storage_evidence(handle).hex())
-        grant = checked_execution_grant(receive()["grant"])
+        registered = receive()
+        grant = checked_execution_grant(registered["grant"])
         monitor.register(binding, hard_deadline_ns=grant.deadline_ns)
 
         def refuses_issue(value):
@@ -114,7 +126,20 @@ def main():
             raise RuntimeError("fixture_duplicate_execution")
 
         refuses_issue(handle)  # Bound storage alone cannot issue local custody.
-        lane.consume_execution(handle, grant.encode())
+        options = {}
+        if data.get('with_provenance', False):
+            from codex_agents.learning_contracts import canonical_json
+            options['provenance'] = canonical_json(registered['provenance'])
+            try:
+                lane.consume_execution(handle, grant.encode())
+            except HistoryError as error:
+                if error.reason_code != 'history_execution_not_ready':
+                    raise
+            else:
+                raise RuntimeError('fixture_missing_provenance_admitted')
+            if lane.snapshot(handle)['state'] != 'reserved':
+                raise RuntimeError('fixture_missing_provenance_changed_state')
+        lane.consume_execution(handle, grant.encode(), **options)
         until(lambda: lane.snapshot(handle)["state"] != "consuming_execution")
         refuses_issue(copy(handle))
         ticket = lane.issue_execution(handle)

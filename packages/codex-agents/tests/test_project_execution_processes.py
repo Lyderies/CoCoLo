@@ -27,6 +27,8 @@ from codex_agents.result_contracts import ResultLeaseBinding
 from codex_agents.project_history import ProjectHistory
 from codex_agents.service_protocol import ServiceTarget
 from codex_agents.terminal_delivery import TerminalSubmissionInput
+from codex_agents.run_provenance import RunProvenanceInput
+from codex_agents.sql_read_budget import SQLReadLimits
 
 
 class ProjectExecutionProcessTests(unittest.TestCase):
@@ -39,7 +41,8 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         self.bridge = self.base.fixture.fixture
         self.children, self.contexts = [], {}
         self.addCleanup(self.stop_children)
-        self.service = AccountService(COLLECTOR_RUNTIME_DIGEST, self.base.views, authorizer=self.authorize)
+        self.service = AccountService(COLLECTOR_RUNTIME_DIGEST, self.base.views, authorizer=self.authorize,
+                                      run_provenance_work_limits=SQLReadLimits(100_000, 1000, 2 * 1_048_576))
         self.addCleanup(self.service.close)
 
     def authorize(self, request, context):
@@ -47,7 +50,7 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         if entry is None or entry["scope"].project_id != request.project_id:
             return None
         return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
-                                    entry["source"], frozenset({"account.claim_launch", "account.register_execution", "account.submit_terminal"}),
+                                    entry["source"], frozenset({"account.claim_launch", "account.register_execution", "account.submit_terminal", "account.run_provenance"}),
                                     "a" * 64, entry["scope"], entry["evidence"], entry.get('terminal_evidence'))
 
     def account(self, request, context):
@@ -97,7 +100,7 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         self.assertEqual(expected, value["stage"])
         return value
 
-    def start(self, scope, request, history, name):
+    def start(self, scope, request, history, name, *, with_provenance=False):
         root = Path(self.bridge.temporary.name) / name
         root.mkdir(mode=0o700)
         for directory in ("control", "export", "tmp"):
@@ -132,7 +135,8 @@ time.sleep(30)
         self.contexts[context] = {"scope": scope, "source": "host", "evidence": None}
         self.send(child, {"scope": scope.as_data(), "root": str(root), "history": str(history),
                           "fixture_key": self.fixture.key.hex(), "task": self.bridge.task(),
-                          "route": self.base.fixture.route, "assignment": self.base.fixture.assignment})
+                          "route": self.base.fixture.route, "assignment": self.base.fixture.assignment,
+                          "with_provenance": with_provenance})
         armed = self.read(child, "armed")
         self.contexts[context]["evidence"] = bytes.fromhex(armed["evidence"])
         receipt = self.account(request, context)
@@ -147,6 +151,12 @@ time.sleep(30)
                                           payload=registration.payload()), context)
         self.assertFalse(registered["known"])
         child['registration'], child['registration_digest'] = registration, registered['grant']['registration_digest']
+        if with_provenance:
+            provenance = RunProvenanceInput(registration, registered['grant']['registration_digest'],
+                                            self.base.fixture.assignment['assignment_id'])
+            actual = self.account(replace(request, operation='account.run_provenance', request_id='provenance-' + name,
+                                          payload=provenance.payload()), context)
+            registered = {**registered, 'provenance': actual}
         self.send(child, registered)
         started = self.read(child, "started")
         self.assertEqual(process.pid, started["pid"])
@@ -217,8 +227,8 @@ time.sleep(30)
             process.stderr.close()
 
     def test_suspended_project_a_cannot_block_project_b_control_cleanup_or_history(self):
-        first = self.start(self.fixture.scope, self.fixture.request, self.fixture.directory, "supervisor-a")
-        second = self.start(*self.second_project(), "supervisor-b")
+        first = self.start(self.fixture.scope, self.fixture.request, self.fixture.directory, "supervisor-a", with_provenance=True)
+        second = self.start(*self.second_project(), "supervisor-b", with_provenance=True)
         self.assertNotEqual(first["process"].pid, second["process"].pid)
         self.assertEqual(0, len(self.ledger._capacity_executions._pending))
         os.kill(first["process"].pid, signal.SIGSTOP)
@@ -252,6 +262,8 @@ time.sleep(30)
             try:
                 self.assertEqual((), store.pending_terminals())
                 self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM terminal_outbox WHERE receipt_digest IS NOT NULL').fetchone()[0])
+                self.assertEqual(1, store._connection.execute("SELECT COUNT(*) FROM records WHERE record_type='execution_provenance'").fetchone()[0])
+                self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM project_orchestrations').fetchone()[0])
             finally:
                 store.close()
         self.assertEqual(2, self.ledger._connection.execute("SELECT COUNT(*) FROM capacity_executions").fetchone()[0])

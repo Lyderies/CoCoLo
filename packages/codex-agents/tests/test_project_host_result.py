@@ -105,7 +105,8 @@ class ProjectHostResultTests(unittest.TestCase):
         command = OrchestrationRequest(1, 'orchestration.open', 'reference-open', scope, {})
         with mock.patch('codex_agents.orchestration_store.secrets.token_hex', return_value=self.binding.orchestration_handle[4:]):
             owner.apply(command, client_version='codex-host-v1', before_commit=lambda: None)
-        store._allow_legacy_orchestration_reference = False
+        # This remains the explicitly configured legacy-reference fixture;
+        # fresh managed consumption requires its original provenance companion.
         closing = OrchestrationRequest(1, 'orchestration.close', 'reference-close', scope, {
             'orchestration_handle': self.binding.orchestration_handle, 'expected_sequence': 1,
             'status': 'completed', 'goal_tokens_used': None, 'goal_time_used_seconds': None,

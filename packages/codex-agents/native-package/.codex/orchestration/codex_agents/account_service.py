@@ -37,6 +37,7 @@ from .signature_inputs import (
 )
 from .account_claim_contracts import ClaimError, LaunchClaimInput, decode_claim_input
 from .capacity_status_contracts import CapacityStatusInput, decode_capacity_status_input
+from .run_provenance import decode_run_provenance_input
 
 # Fixed owner query: do not parse JSON or select variable record values during
 # preliminary quota checks. Foreign-account/provider candidates are charged too.
@@ -163,6 +164,13 @@ class AccountOwnerViews:
                 raise AccountError("account_unavailable")
             self._project_locked(project_id)
             return self._ledger._capacity_status(project_id, status)
+
+    def run_provenance(self, project_id, *, runtime_digest, caller_scope, request,
+                       storage_binding, storage_evidence, work_limits):
+        self._guard()
+        return self._ledger._attest_run_provenance(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                                  request=request, storage_binding=storage_binding,
+                                                  storage_evidence=storage_evidence, work_limits=work_limits)
 
     def register_execution(self, project_id, *, runtime_digest, caller_scope, registration, storage_binding, storage_evidence):
         self._guard()
@@ -617,10 +625,16 @@ class AccountService:
         authorizer: Callable[[AccountRequest, object], AccountAuthorization | None] | None = None,
         claim_jobs=None,
         allow_unleased_claim_reference=False,
+        run_provenance_work_limits: SQLReadLimits | None = None,
     ) -> None:
         if (not matches(runtime_digest, _DIGEST) or not isinstance(views, AccountOwnerViews)
                 or (authorizer is not None and not callable(authorizer)) or type(allow_unleased_claim_reference) is not bool):
             raise AccountError("account_invalid_request")
+        if run_provenance_work_limits is not None and type(run_provenance_work_limits) is not SQLReadLimits:
+            raise AccountError('account_invalid_request')
+        self._provenance_limits = (None if run_provenance_work_limits is None else SQLReadLimits(
+            run_provenance_work_limits.max_callbacks, run_provenance_work_limits.max_duration_ms,
+            run_provenance_work_limits.max_value_bytes))
         if claim_jobs is not None:
             from .account_claim_jobs import AccountClaimJobs
 
@@ -700,6 +714,7 @@ class AccountService:
             submission = decode_terminal_submission(request.payload) if operation == 'account.submit_terminal' else None
             from .claim_denial import decode_close_denied
             closure = decode_close_denied(request.payload) if operation == 'account.close_denied_attempt' else None
+            provenance = decode_run_provenance_input(request.payload) if operation == 'account.run_provenance' else None
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -725,8 +740,8 @@ class AccountService:
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
                 or (authorization.source == "project" and operation not in {
-                    "account.health", "account.register_execution", "account.submit_terminal", "account.close_denied_attempt"})
-                or (operation in {"account.register_execution", "account.submit_terminal", "account.close_denied_attempt"} and
+                    "account.health", "account.register_execution", "account.submit_terminal", "account.close_denied_attempt", "account.run_provenance"})
+                or (operation in {"account.register_execution", "account.submit_terminal", "account.close_denied_attempt", "account.run_provenance"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
                 or (operation in {"account.claim_launch", "account.capacity_status"} and
                     (authorization.source != "host" or authorization.caller_scope is None))
@@ -758,6 +773,32 @@ class AccountService:
                 result = self._views.register_execution(project, runtime_digest=runtime,
                                                         caller_scope=authorization.caller_scope, registration=registration,
                                                         storage_binding=storage_binding, storage_evidence=storage_evidence)
+            elif operation == 'account.run_provenance':
+                from .claim_storage import capture_storage_evidence
+                self._provenance_live()
+                if self._provenance_limits is None:
+                    raise ClaimError('claim_execution_unavailable')
+                storage_binding, storage_evidence = capture_storage_evidence(authorization.storage_binding, authorization.storage_evidence)
+                caller = authorization.caller_scope
+                result = self._views.run_provenance(project, runtime_digest=runtime, caller_scope=caller,
+                                                    request=provenance, storage_binding=storage_binding,
+                                                    storage_evidence=storage_evidence, work_limits=self._provenance_limits)
+                self._provenance_live()
+                # Fresh immutable request and current independent authority;
+                # adapter closure/mutation/revocation cannot expose cached data.
+                fresh = decode_account_request(raw)
+                current = self._authorizer(fresh, transport_context)
+                if type(current) is not AccountAuthorization:
+                    raise AccountError('account_not_authorized')
+                current.__post_init__()
+                new_binding, new_evidence = capture_storage_evidence(current.storage_binding, current.storage_evidence)
+                self._provenance_live()
+                if (current.source != 'project' or current.project_id != project or current.runtime_digest != runtime
+                        or current.caller_scope != caller or current.request_digest != digest
+                        or account_request_digest(fresh) != digest or operation not in current.allowed_operations
+                        or new_binding != storage_binding or new_evidence != storage_evidence):
+                    raise AccountError('account_not_authorized')
+                self._views._guard()
             elif operation == 'account.submit_terminal':
                 from .claim_storage import capture_storage_evidence
                 from .terminal_delivery import capture_terminal_evidence
@@ -795,6 +836,13 @@ class AccountService:
         except Exception:
             reason = "account_unavailable"
         return self._reply(labels, reason=reason)
+
+    def _provenance_live(self):
+        if self._pid != os.getpid():
+            raise AccountError('account_wrong_owner')
+        with self._front_lock:
+            if self._closed:
+                raise AccountError('account_not_authorized')
 
     def close(self) -> None:
         if self._pid != os.getpid():

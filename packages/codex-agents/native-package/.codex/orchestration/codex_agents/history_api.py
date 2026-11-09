@@ -32,7 +32,7 @@ HISTORY_OPERATIONS = frozenset({
     "history.admit_host_result",
 })
 HISTORY_RECORD_TYPES = frozenset({*_RECORD_OPERATIONS.values(), "host_result_admission",
-                                  "provider_usage", "observation_unavailable"})
+                                  "provider_usage", "observation_unavailable", "execution_provenance"})
 _REQUEST_FIELDS = {"protocol_version", "operation", "request_id", "project_id", "runtime_digest", "payload"}
 _RESPONSE_FIELDS = {"protocol_version", "project_id", "runtime_digest", "request_id", "request_digest", "ready", "result", "reason_code"}
 _METADATA_FIELDS = {"record_id", "source", "source_sequence", "observed_at_ms", "ingested_at_ms", "content_digest", "late"}

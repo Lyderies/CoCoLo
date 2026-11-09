@@ -39,6 +39,41 @@ Closure and body deletion never release account execution capacity. Checkpoint
 and request identities are sealed together, and a bounded chain check rejects
 missing predecessors and a stale current pointer.
 
+## Original account run provenance (uninstalled source)
+
+`account.run_provenance` reads the original registered claim, admission decision
+and keyed host-start record. Its closed request identifies the registration,
+registration digest and assignment ID. The project-only authorizer supplies the
+independently expected bound storage scope and evidence. The producer creates no
+registration, admission, execution or release and refreshes no original time or
+retention window. Missing, conflicting or corrupt source rows refuse the read.
+
+The account owner uses explicit trusted SQL read limits, a bounded two-candidate
+uniqueness check and one read snapshot. There is no numeric production default;
+an unconfigured operation is unavailable. Cooperative SQL limits do not establish
+a whole-operation OS-I/O latency bound. The client exchanges once without retry
+or SQLite fallback. Current authorization, full scope and service lifetime are
+checked again before a reply; closure during an adapter cannot return evidence.
+
+Managed project execution consumption now requires this receipt. The writer
+checks its MAC and complete original grant, admitted provider, task family and
+registered-claim identity. Protected `execution_provenance` metadata commits in
+the same transaction as the original one-use consumption. A failed commit rolls
+both back; a consumed grant cannot issue another ticket. Missing expected
+companions refuse host-outcome admission rather than becoming unknown evidence.
+Generic append cannot create this record. Only explicitly configured isolated
+legacy-reference fixtures retain their earlier no-companion path.
+
+The fixed persistence lane retains bounded immutable provenance bytes before
+handoff and parses them on its writer. Its entry budget reserves the additional
+bytes. The two-project inert fixture now exercises actual owned orchestration
+state and the account receipt before one ticket/launch per project; cancellation,
+terminal ACKs and retained account charges are unchanged. Enrollment and provider
+execution remain synthetic. SQL layouts stay project5/account9; the new internal
+record vocabulary, native peer authentication/current revocation, protected
+publication and complete activation/legacy migration still require validation.
+Neither the MAC nor a registered-assignment label proves a native PID or thread.
+
 ## Worker result persistence lane
 
 ### Client-observed usage travels with the actual return
