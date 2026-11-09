@@ -1217,6 +1217,10 @@ class ProjectHistory:
         # terminal metadata, including the owner's keyed private-body digest.
         record = {**material, "record_id": f"dispatch_result:{content_digest(material)}"}
         content = canonical_json(validate_learning_record(record))
+        if client_usage is None:
+            # Preserve the original reference call shape as well as its bytes.
+            # Actual fixed-worker publication always supplies an observation.
+            return self.commit_result(content, binding, snapshot, body)
         return self.commit_result(content, binding, snapshot, body, client_usage=client_usage)
 
     @_operation
