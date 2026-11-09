@@ -92,6 +92,32 @@ class HostResultReference:
         return asdict(self)
 
 
+@dataclass(frozen=True, repr=False)
+class OperationalQAContext:
+    """Two independently held original inputs, never taken from QA request JSON.
+
+    Native identity, current permission and original input custody remain the
+    server adapter's responsibility. Registered claim labels are not process
+    identity or proof that the same-user caller is authorized.
+    """
+    worker: HostResultContext
+    verifier: HostResultContext
+
+    def snapshot(self):
+        if type(self.worker) is not HostResultContext or type(self.verifier) is not HostResultContext:
+            raise HistoryError('history_not_authorized')
+        value = {name: getattr(self, name).snapshot()[1] for name in ('worker', 'verifier')}
+        raw = canonical_json(value)
+        if len(raw) > 2 * MAX_HOST_RESULT_CONTEXT_BYTES:
+            raise HistoryError('history_not_authorized')
+        return raw, value
+
+    @classmethod
+    def from_snapshot(cls, value):
+        return cls(**{name: HostResultContext(**{**value[name],
+            'binding': AttemptBinding(**value[name]['binding'])}) for name in ('worker', 'verifier')})
+
+
 def decode_host_result_reference(value):
     invalid = False
     try:

@@ -12,19 +12,16 @@ from .learning_contracts import canonical_json, keyed_digest, parse_bounded_json
 from .project_host_open import read_host_open
 
 
-def current_worker_reference(history, context, outcome_digest):
-    if (type(context) is not WorkerResultContext or not matches(outcome_digest, _DIGEST)
-            or history._result_key is None):
+def current_host_reference(history, binding, outcome_digest):
+    """Read the original consumed return, including for a verification run.
+
+    This internal persistence-owner helper does not authenticate a caller or
+    authorize QA. Its caller must establish protected original input custody.
+    """
+    if not matches(outcome_digest, _DIGEST) or history._result_key is None:
         raise HistoryError('history_invalid_input')
     history._require_owner()
-    _, captured = context.snapshot()
-    binding = history._result_binding(AttemptBinding(**captured['binding']))
-    try:
-        task = validate_task(captured['task'])
-        if task.get('verification_for_outcome') != outcome_digest:
-            raise ValueError()
-    except Exception:
-        raise HistoryError('history_invalid_input') from None
+    binding = history._result_binding(binding)
     # No legacy missing-reference exception: a real current project journal
     # and original pre-execution host open are mandatory on this new path.
     if history._connection.execute('SELECT 1 FROM project_orchestrations '
@@ -59,10 +56,7 @@ def current_worker_reference(history, context, outcome_digest):
             or any(facts[n] != registered[n] for n in ('assignment_id', 'provider', 'task_family', 'client_version',
                 'admission_record_id', 'admission_content_digest', 'admission_observed_at_ms',
                 'start_record_id', 'start_content_digest', 'observation_deadline_at_ms'))
-            or facts['opened_at_ms'] != registered['started_at_ms']
-            or facts['worker_outcome_digest'] is not None or facts['task_family'] == 'verification'
-            or facts['task_family'] != task['verification_for_family']
-            or facts['provider'] != task['verification_for_provider']):
+            or facts['opened_at_ms'] != registered['started_at_ms']):
         raise HistoryError('history_conflict')
     identity = 'host_result_admission:' + keyed_digest(history._result_key,
         b'project-host-result-v1\0' + canonical_json(binding.as_data()))
@@ -83,7 +77,7 @@ def current_worker_reference(history, context, outcome_digest):
             or terminal['record_id'] != reservation.terminal_record_id):
         raise HistoryError('history_conflict')
     outcome = parse_bounded_json(history.record(receipt['outcome_record_id']).content)
-    if (outcome['task_slice'].startswith('verification-') or outcome['task_slice'].split('-')[0] != facts['task_family']
+    if (outcome['task_slice'].split('-')[0] != facts['task_family']
             or outcome['assignment_id'] != facts['assignment_id']
             or outcome['configuration_digest'] != grant.configuration_digest
             or reservation.result_digest not in outcome['evidence_digests']
@@ -116,6 +110,25 @@ def current_worker_reference(history, context, outcome_digest):
         'host_open_record_id': opened.record_id, 'host_open_content_digest': opened.content_digest,
         'result_digest': reservation.result_digest, 'body_size': reservation.body_size,
         'terminal_record_id': reservation.terminal_record_id, 'expires_at_ms': reservation.expires_at_ms}
+    return reference, reservation, facts, grant, outcome
+
+
+def current_worker_reference(history, context, outcome_digest):
+    if type(context) is not WorkerResultContext:
+        raise HistoryError('history_invalid_input')
+    _, captured = context.snapshot()
+    try:
+        task = validate_task(captured['task'])
+        if task.get('verification_for_outcome') != outcome_digest:
+            raise ValueError()
+    except Exception:
+        raise HistoryError('history_invalid_input') from None
+    reference, reservation, facts, _, _ = current_host_reference(
+        history, AttemptBinding(**captured['binding']), outcome_digest)
+    if (facts['worker_outcome_digest'] is not None or facts['task_family'] == 'verification'
+            or facts['task_family'] != task['verification_for_family']
+            or facts['provider'] != task['verification_for_provider']):
+        raise HistoryError('history_conflict')
     return reference, reservation
 
 

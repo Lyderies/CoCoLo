@@ -20,7 +20,7 @@ from .history_api import (
     HistoryRequest, decode_history_request, decode_history_response, history_request_digest,
 )
 from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGEST, _PROJECT, matches
-from .host_result_contracts import HostResultContext, WorkerResultContext, decode_host_result_reference
+from .host_result_contracts import HostResultContext, OperationalQAContext, WorkerResultContext, decode_host_result_reference
 from .host_open_contracts import HostOpenContext, decode_host_open_submission
 from .learning_contracts import canonical_json, parse_bounded_json
 from .project_history import ProjectHistory
@@ -44,6 +44,7 @@ class HistoryAuthorization:
     host_result_context: HostResultContext | None = None
     host_open_context: HostOpenContext | None = None
     worker_result_context: WorkerResultContext | None = None
+    operational_qa_context: OperationalQAContext | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -56,6 +57,7 @@ class HistoryAuthorization:
             or (self.host_result_context is not None and type(self.host_result_context) is not HostResultContext)
             or (self.host_open_context is not None and type(self.host_open_context) is not HostOpenContext)
             or (self.worker_result_context is not None and type(self.worker_result_context) is not WorkerResultContext)
+            or (self.operational_qa_context is not None and type(self.operational_qa_context) is not OperationalQAContext)
         ):
             raise HistoryError("history_not_authorized")
 
@@ -183,7 +185,35 @@ class HistoryService:
                 or (authorization.source != "host" and request.operation != "history.record_event")
             ):
                 raise HistoryError("history_not_authorized")
-            if request.operation == 'history.worker_reference':
+            if request.operation == 'history.qa_scope':
+                if authorization.operational_qa_context is None:
+                    raise HistoryError('history_not_authorized')
+                original_context, captured = authorization.operational_qa_context.snapshot()
+                if any(captured[name]['binding'] != request.payload[name + '_binding'] for name in ('worker', 'verifier')):
+                    raise HistoryError('history_not_authorized')
+                expected_qa_context = OperationalQAContext.from_snapshot(captured)
+                worker_digest = request.payload['host_outcome_digest']
+                verifier_digest = request.payload['verifier_host_outcome_digest']
+                self._history()
+
+                def authorize_qa():
+                    self._history()
+                    fresh = decode_history_request(raw)
+                    current = self._authorizer(fresh, transport_context)
+                    if type(current) is not HistoryAuthorization:
+                        raise HistoryError('history_not_authorized')
+                    current.__post_init__()
+                    if (current.project_id != self._project or current.runtime_digest != self._runtime
+                            or current.source != 'host' or current.request_digest != digest
+                            or history_request_digest(fresh) != digest or 'history.qa_scope' not in current.allowed_operations
+                            or current.operational_qa_context is None
+                            or current.operational_qa_context.snapshot()[0] != original_context):
+                        raise HistoryError('history_not_authorized')
+                    self._history()._require_owner()
+
+                result = self._store.operational_qa_scope(expected_qa_context, worker_digest, verifier_digest,
+                                                        before_reply=authorize_qa)
+            elif request.operation == 'history.worker_reference':
                 if authorization.worker_result_context is None:
                     raise HistoryError('history_not_authorized')
                 original_context, captured = authorization.worker_result_context.snapshot()
@@ -291,6 +321,11 @@ class HistoryService:
                 from .project_worker_result import current_worker_reference
                 current, _ = current_worker_reference(self._store, expected_context, outcome_digest)
                 if current != result:
+                    raise HistoryError('history_conflict')
+            if request.operation == 'history.qa_scope':
+                authorize_qa()
+                from .project_operational_qa import current_qa_scope
+                if current_qa_scope(self._store, expected_qa_context, worker_digest, verifier_digest) != result:
                     raise HistoryError('history_conflict')
             return reply
         except HistoryError as exc:

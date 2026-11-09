@@ -1054,6 +1054,12 @@ class ProjectHistory:
         from .project_worker_result import verification_worker_reference
         return verification_worker_reference(self, context, outcome_digest, before_reply=before_reply)
 
+    @_operation
+    def operational_qa_scope(self, context, host_outcome_digest, verifier_host_outcome_digest, *, before_reply):
+        from .project_operational_qa import operational_qa_scope
+        return operational_qa_scope(self, context, host_outcome_digest, verifier_host_outcome_digest,
+                                   before_reply=before_reply)
+
     def _execution_provenance(self, grant):
         identity = self._execution_provenance_id(grant)
         try:

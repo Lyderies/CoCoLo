@@ -31,7 +31,7 @@ _RECORD_OPERATIONS = {
 }
 HISTORY_OPERATIONS = frozenset({
     *_RECORD_OPERATIONS, "history.pending_terminals", "history.acknowledge_terminal", "history.read_record",
-    "history.admit_host_result", "history.record_host_open", "history.worker_reference",
+    "history.admit_host_result", "history.record_host_open", "history.worker_reference", "history.qa_scope",
 })
 HISTORY_RECORD_TYPES = frozenset({*_RECORD_OPERATIONS.values(), "host_result_admission",
                                   "provider_usage", "observation_unavailable", "execution_provenance", "host_open_provenance"})
@@ -97,6 +97,18 @@ def _validate_request(request: HistoryRequest) -> None:
             identity = binding.claim_id
         if request.request_id != identity:
             raise HistoryError("history_invalid_request")
+    elif operation == 'history.qa_scope':
+        if not _closed(payload, {'worker_binding', 'verifier_binding', 'host_outcome_digest', 'verifier_host_outcome_digest'}):
+            raise HistoryError('history_invalid_request')
+        for name in ('worker_binding', 'verifier_binding'):
+            if type(payload[name]) is not dict:
+                raise HistoryError('history_invalid_request')
+            binding = AttemptBinding(**payload[name])
+            if binding.project_id != request.project_id or binding.runtime_digest != request.runtime_digest:
+                raise HistoryError('history_invalid_request')
+        if (not all(matches(payload[name], _DIGEST) for name in ('host_outcome_digest', 'verifier_host_outcome_digest'))
+                or request.request_id != hashlib.sha256(canonical_json(payload)).hexdigest()):
+            raise HistoryError('history_invalid_request')
     elif operation == 'history.worker_reference':
         if not _closed(payload, {'binding', 'host_outcome_digest'}) or type(payload['binding']) is not dict:
             raise HistoryError('history_invalid_request')
@@ -207,19 +219,36 @@ def _decoded_delivery(value: object) -> TerminalDelivery:
     return delivery
 
 
-def _validate_result(request: HistoryRequest, result: object) -> None:
-    operation = request.operation
-    if operation == 'history.worker_reference':
-        if (not _closed(result, {'binding', 'host_outcome_digest', 'provider', 'task_family', 'host_open_record_id',
+def _validate_host_reference(result, binding, digest, *, verification):
+    if (not _closed(result, {'binding', 'host_outcome_digest', 'provider', 'task_family', 'host_open_record_id',
                 'host_open_content_digest', 'result_digest', 'body_size', 'terminal_record_id', 'expires_at_ms'})
-                or result['binding'] != request.payload['binding']
-                or result['host_outcome_digest'] != request.payload['host_outcome_digest']
-                or result['provider'] != 'codex' or type(result['task_family']) is not str
-                or result['task_family'] not in TASK_FAMILIES or result['task_family'] == 'verification'
+                or result['binding'] != binding or result['host_outcome_digest'] != digest
+                or type(result['provider']) is not str or result['provider'] not in {'codex', 'claude'}
+                or type(result['task_family']) is not str or result['task_family'] not in TASK_FAMILIES
+                or (result['task_family'] == 'verification') != verification
                 or not all(matches(result[n], _DIGEST) for n in ('result_digest', 'host_open_content_digest'))
                 or not all(matches(result[n], _ID) for n in ('host_open_record_id', 'terminal_record_id'))
                 or not valid_integer(result['body_size'], minimum=1, maximum=MAX_RESULT_BODY_BYTES)
                 or not valid_integer(result['expires_at_ms'])):
+        raise HistoryError('history_invalid_response')
+    # Dict equality alone treats JSON true as integer 1. Validate every nested
+    # scope field before accepting equality to the independently sent binding.
+    if type(result['binding']) is not dict:
+        raise HistoryError('history_invalid_response')
+    AttemptBinding(**result['binding'])
+
+
+def _validate_result(request: HistoryRequest, result: object) -> None:
+    operation = request.operation
+    if operation == 'history.qa_scope':
+        if not _closed(result, {'worker', 'verifier'}):
+            raise HistoryError('history_invalid_response')
+        for name, key in (('worker', 'host_outcome_digest'), ('verifier', 'verifier_host_outcome_digest')):
+            _validate_host_reference(result[name], request.payload[name + '_binding'], request.payload[key],
+                                     verification=name == 'verifier')
+    elif operation == 'history.worker_reference':
+        _validate_host_reference(result, request.payload['binding'], request.payload['host_outcome_digest'], verification=False)
+        if result['provider'] != 'codex':
             raise HistoryError('history_invalid_response')
     elif operation == 'history.record_host_open':
         if not _closed(result, {'record', 'metadata'}):
@@ -407,6 +436,15 @@ class HistoryClient:
             raise HistoryError('history_invalid_input')
         return self._call('history.worker_reference', host_outcome_digest,
             {'binding': binding.as_data(), 'host_outcome_digest': host_outcome_digest})
+
+    def operational_qa_scope(self, worker: AttemptBinding, verifier: AttemptBinding,
+                             host_outcome_digest: str, verifier_host_outcome_digest: str) -> dict:
+        """Resolve protected originals before checks; no result bodies or QA booleans."""
+        if type(worker) is not AttemptBinding or type(verifier) is not AttemptBinding:
+            raise HistoryError('history_invalid_input')
+        payload = {'worker_binding': worker.as_data(), 'verifier_binding': verifier.as_data(),
+                   'host_outcome_digest': host_outcome_digest, 'verifier_host_outcome_digest': verifier_host_outcome_digest}
+        return self._call('history.qa_scope', hashlib.sha256(canonical_json(payload)).hexdigest(), payload)
 
     def bind_verifier(self, record: dict) -> dict:
         return self._record_call("history.bind_verifier", record)

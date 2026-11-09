@@ -87,6 +87,7 @@ RUNTIME_FILES = (
     "codex_agents/project_history.py",
     "codex_agents/project_host_open.py",
     "codex_agents/project_monitor.py",
+    "codex_agents/project_operational_qa.py",
     "codex_agents/project_worker_result.py",
     "codex_agents/providers.py",
     "codex_agents/result_contracts.py",
