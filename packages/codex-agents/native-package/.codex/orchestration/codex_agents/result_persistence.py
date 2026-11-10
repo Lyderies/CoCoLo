@@ -28,6 +28,8 @@ from .contracts import ContractError
 from .history_contracts import AttemptBinding, HistoryError, TerminalDelivery, valid_integer
 from .learning_contracts import parse_bounded_json
 from .project_history import ProjectHistory, _ExecutionProvenanceRejected
+from .history_service import HistoryService
+from .project_request_queue import ProjectRequestLimits, ProjectRequestQueue
 from .project_monitor import _capture_binding
 from .result_contracts import (
     MAX_ASSIGNMENT_CANONICAL_BYTES, CodexUsageObservation, ResultLeaseBinding, ResultObservation, assignment_bytes,
@@ -98,24 +100,39 @@ class ResultPersistenceLane:
     retries retain the first selected bytes and observation time, never execution.
     """
 
-    def __init__(self, owner, pool, open_history, *, max_entries, retained_bytes, allow_local_execution_reference=False):
+    def __init__(self, owner, pool, open_history, *, max_entries, retained_bytes, allow_local_execution_reference=False,
+                 request_limits=None, history_authorizer=None, result_authorizer=None, orchestration_authorizer=None):
         if (type(owner) is not BridgeLivenessOwner or type(pool) is not CodexWorkerPool
                 or not callable(open_history) or type(max_entries) is not int or not 1 <= max_entries <= 64
                 or type(retained_bytes) is not int
                 or not max_entries * MAX_PERSISTENCE_ENTRY_BYTES <= retained_bytes <= 512 * 1_048_576
-                or type(allow_local_execution_reference) is not bool):
+                or type(allow_local_execution_reference) is not bool
+                or (request_limits is not None and type(request_limits) is not ProjectRequestLimits)
+                or any(value is not None and not callable(value)
+                       for value in (history_authorizer, result_authorizer, orchestration_authorizer))
+                or (request_limits is None and any(value is not None
+                    for value in (history_authorizer, result_authorizer, orchestration_authorizer)))):
             raise HistoryError("history_invalid_input")
+        if request_limits is not None:
+            request_limits.__post_init__()
+            request_limits = ProjectRequestLimits(request_limits.requests, request_limits.max_wait_ns)
+            if max_entries * MAX_PERSISTENCE_ENTRY_BYTES + request_limits.retained_bytes > retained_bytes:
+                raise HistoryError("history_invalid_input")
         owner._owner()
         pool._owner()
         self._owner, self._pool, self._open = owner, pool, open_history
         self._project = owner._monitor.scope().project_id
+        self._runtime = owner._monitor.scope().runtime_digest
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._maximum = max_entries
         self._allow_local_reference = allow_local_execution_reference
         self._lock = threading.Lock()
         self._jobs = weakref.WeakKeyDictionary()
         self._by_worker = weakref.WeakKeyDictionary()
-        self._incoming = queue.Queue(maxsize=max_entries + 1)  # Reserved close marker.
+        self._requests = None if request_limits is None else ProjectRequestQueue(request_limits)
+        self._service_authorizers = (history_authorizer, result_authorizer, orchestration_authorizer)
+        # API requests cannot consume one slot per result entry or the close marker.
+        self._incoming = queue.Queue(maxsize=max_entries + 1 + (0 if request_limits is None else request_limits.requests))
         self._ready = threading.Event()
         self._closed = self._fault = False
         self._store = None
@@ -124,6 +141,46 @@ class ResultPersistenceLane:
         if not self._ready.wait(5):
             self.close()
             raise HistoryError("history_service_unavailable")
+        if self._fault:
+            self.close()
+            raise HistoryError("history_service_unavailable")
+
+    def queue_request(self, raw, transport_context=None, *, deadline_ns):
+        """Trusted frontend intake: immutable frame, bounded token, no SQL/wait."""
+        if self._pid != os.getpid():
+            raise HistoryError("history_wrong_owner")
+        with self._lock:
+            if self._closed or self._fault or self._requests is None:
+                raise HistoryError("history_service_unavailable")
+            handle = self._requests.prepare(raw, transport_context, deadline_ns=deadline_ns)
+            try:
+                self._incoming.put_nowait(("api", handle))
+            except queue.Full:
+                self._requests.reject_unqueued(handle)
+                self._fault = True
+                raise HistoryError("history_service_unavailable") from None
+            return handle
+
+    def take_request(self, handle):
+        if self._pid != os.getpid():
+            raise HistoryError("history_wrong_owner")
+        if self._requests is None:
+            raise HistoryError("history_service_unavailable")
+        return self._requests.take(handle)
+
+    def abandon_request(self, handle):
+        if self._pid != os.getpid():
+            raise HistoryError("history_wrong_owner")
+        if self._requests is None:
+            raise HistoryError("history_service_unavailable")
+        self._requests.abandon(handle)
+
+    def request_snapshot(self):
+        if self._pid != os.getpid():
+            raise HistoryError("history_wrong_owner")
+        if self._requests is None:
+            raise HistoryError("history_service_unavailable")
+        return self._requests.snapshot()
 
     def _check_owner(self):
         if self._pid != os.getpid() or self._thread is not threading.current_thread():
@@ -688,6 +745,8 @@ class ResultPersistenceLane:
         with self._lock:
             if not self._closed:
                 self._closed = True
+                if self._requests is not None:
+                    self._requests.close()
                 self._incoming.put_nowait(None)
 
     def _history(self):
@@ -854,14 +913,24 @@ class ResultPersistenceLane:
                       "acknowledge_terminal": self._acknowledge_terminal,
                       "prepare_cleanup": self._prepare_cleanup,
                       "acknowledge_release": self._acknowledge_release}
-        self._ready.set()
+        service = None
         pending = None
         try:
+            if self._requests is not None:
+                history_auth, result_auth, orchestration_auth = self._service_authorizers
+                service = HistoryService(self._project, self._runtime, self._history,
+                    authorizer=history_auth, result_authorizer=result_auth,
+                    orchestration_authorizer=orchestration_auth, close_history=False)
+            self._ready.set()
             while True:
                 command = self._incoming.get()
                 if command is None:
                     return
                 operation, handle = command
+                if operation == "api":
+                    self._requests.execute(handle, service)
+                    handle = command = None
+                    continue
                 with self._lock:
                     pending = self._jobs[handle]
                     if operation == "publish":
@@ -883,6 +952,14 @@ class ResultPersistenceLane:
                     if retained.state not in {"committed", "failed"}:
                         retained.state, retained.reason = "unknown", "history_service_unavailable"
         finally:
+            self._ready.set()
+            if service is not None:
+                try:
+                    service.close()
+                    self._requests.finish_writer(service)
+                except BaseException:
+                    with self._lock:
+                        self._fault = True
             if self._store is not None:
                 try:
                     self._store.close()

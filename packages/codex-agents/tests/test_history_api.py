@@ -103,6 +103,73 @@ class HistoryApiTests(unittest.TestCase):
         self.assertEqual(canonical_json(event_record()), canonical_json(read["record"]))
         self.assertEqual(first, read["metadata"])
 
+    def test_borrowed_project_writer_is_reconsulted_and_never_closed_by_service(self):
+        store = ProjectHistory(self.directory, PROJECT_A)
+        self.addCleanup(store.close)
+        borrowed = mock.Mock(return_value=store)
+        service = HistoryService(PROJECT_A, RUNTIME, borrowed, authorizer=fixture_authorizer,
+                                 clock_ms=lambda: 1000, close_history=False)
+        self.addCleanup(service.close)
+        command = request()
+        first = decode_history_response(service.handle(encode_history_request(command), FIXTURE_CONTEXT), command)
+        self.assertEqual(first["source_sequence"], 1)
+        before = borrowed.call_count
+        read = request("history.read_record", identity="read", payload={"record_id": event_record()["record_id"]})
+        decode_history_response(service.handle(encode_history_request(read), FIXTURE_CONTEXT), read)
+        self.assertGreater(borrowed.call_count, before)
+        service.close()
+        self.assertEqual(store.record(event_record()["record_id"]).content, canonical_json(event_record()))
+
+    def test_borrowed_foreign_project_is_refused_without_closing_its_owner(self):
+        store = ProjectHistory(self.directory, PROJECT_B)
+        self.addCleanup(store.close)
+        service = HistoryService(PROJECT_A, RUNTIME, lambda: store, authorizer=fixture_authorizer,
+                                 clock_ms=lambda: 1000, close_history=False)
+        self.addCleanup(service.close)
+        command = request()
+        reply = json.loads(service.handle(encode_history_request(command), FIXTURE_CONTEXT))
+        self.assertFalse(reply["ready"])
+        service.close()
+        self.assertEqual(store.append_record(canonical_json(event_record()), source="host", ingested_at_ms=1000).source_sequence, 1)
+
+    def test_borrowed_store_substitution_refuses_and_preserves_both_owners(self):
+        first = ProjectHistory(self.directory, PROJECT_A)
+        self.addCleanup(first.close)
+        other_directory = self.base / "other-history"
+        other_directory.mkdir(mode=0o700)
+        other = ProjectHistory(other_directory, PROJECT_A)
+        self.addCleanup(other.close)
+        current = [first]
+        service = HistoryService(PROJECT_A, RUNTIME, lambda: current[0], authorizer=fixture_authorizer,
+                                 clock_ms=lambda: 1000, close_history=False)
+        self.addCleanup(service.close)
+        command = request()
+        decode_history_response(service.handle(encode_history_request(command), FIXTURE_CONTEXT), command)
+        current[0] = other
+        self.assertFalse(json.loads(service.handle(encode_history_request(command), FIXTURE_CONTEXT))["ready"])
+        service.close()
+        self.assertEqual(first.record(event_record()["record_id"]).source_sequence, 1)
+        self.assertEqual(other.append_record(canonical_json(event_record()), source="host", ingested_at_ms=1000).source_sequence, 1)
+
+    def test_borrowed_owner_revocation_is_observed_before_reuse(self):
+        store = ProjectHistory(self.directory, PROJECT_A)
+        self.addCleanup(store.close)
+        live = [True]
+        def original_owner():
+            if not live[0]:
+                raise HistoryError("history_service_unavailable")
+            return store
+        service = HistoryService(PROJECT_A, RUNTIME, original_owner, authorizer=fixture_authorizer,
+                                 clock_ms=lambda: 1000, close_history=False)
+        self.addCleanup(service.close)
+        command = request()
+        decode_history_response(service.handle(encode_history_request(command), FIXTURE_CONTEXT), command)
+        live[0] = False
+        reply = json.loads(service.handle(encode_history_request(command), FIXTURE_CONTEXT))
+        self.assertFalse(reply["ready"])
+        self.assertEqual(reply["reason_code"], "history_service_unavailable")
+        self.assertEqual(store.record(event_record()["record_id"]).source_sequence, 1)
+
     def test_named_record_operations_round_trip_their_exact_records(self):
         intent = {
             "schema_version": 1, "record_type": "dispatch_intent", "record_id": "intent-api",

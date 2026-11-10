@@ -90,6 +90,7 @@ class HistoryService:
         result_authorizer: Callable[[ResultReadRequest, object], ResultReadAuthorization | None] | None = None,
         orchestration_authorizer: Callable | None = None,
         clock_ms: Callable[[], int] | None = None,
+        close_history: bool = True,
     ) -> None:
         if (
             not matches(project_id, _PROJECT) or not matches(runtime_digest, _DIGEST)
@@ -97,9 +98,11 @@ class HistoryService:
             or (result_authorizer is not None and not callable(result_authorizer))
             or (orchestration_authorizer is not None and not callable(orchestration_authorizer))
             or (clock_ms is not None and not callable(clock_ms))
+            or type(close_history) is not bool
         ):
             raise HistoryError("history_invalid_input")
         self._project, self._runtime, self._open = project_id, runtime_digest, open_history
+        self._close_history = close_history
         self._authorizer, self._clock = authorizer, clock_ms or (lambda: time.time_ns() // 1_000_000)
         self._pid = os.getpid()
         self._thread = threading.current_thread()
@@ -118,18 +121,23 @@ class HistoryService:
         """
         if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise HistoryError("history_wrong_owner")
-        if self._store is None:
+        # A borrowed factory is consulted every time: the original writer's
+        # closure and ownership checks must remain authoritative.
+        if self._store is None or not self._close_history:
             store = self._open()
             if not isinstance(store, ProjectHistory):
                 raise HistoryError("history_service_unavailable")
             store._require_owner()
             if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
-                store.close()
+                if self._close_history:
+                    store.close()
                 raise HistoryError('history_wrong_owner')
-            if store.project_id != self._project:
-                store.close()
+            if store.project_id != self._project or (self._store is not None and store is not self._store):
+                if self._close_history:
+                    store.close()
                 raise HistoryError("history_service_unavailable")
             self._store = store
+        self._store._require_owner()
         return self._store
 
     @staticmethod
@@ -500,5 +508,5 @@ class HistoryService:
             self._reader.close()
             self._orchestrations.close()
         finally:
-            if self._store is not None:
+            if self._store is not None and self._close_history:
                 self._store.close()
