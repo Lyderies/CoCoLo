@@ -21,7 +21,7 @@ from .host_open_contracts import MAX_OPEN_PROVENANCE_BYTES, OpenProvenanceInput
 from .run_provenance import MAX_RUN_PROVENANCE_BYTES
 from .terminal_delivery import MAX_TERMINAL_EVIDENCE_BYTES
 from .claim_denial import MAX_DENIAL_RECEIPT_BYTES
-from .owned_execution import OwnedExecutionKey
+from .owned_execution import ExecutionCustodyError, OwnedExecutionKey
 from .codex_worker import CodexWorkerError, CodexWorkerHandle, CodexWorkerPacket, CodexWorkerPool, MAX_INPUT_BYTES, MAX_PACKET_BYTES, MAX_REPORT_BYTES, _decode_input
 from .contracts import ContractError
 from .history_contracts import AttemptBinding, HistoryError, TerminalDelivery, valid_integer
@@ -75,6 +75,7 @@ class _Pending:
     terminal_evidence: bytes | None = None
     acknowledgement: bytes | None = None
     denial_receipt: bytes | None = None
+    cleanup_custody: object = None
 
 
 class ResultPersistenceLane:
@@ -507,6 +508,42 @@ class ResultPersistenceLane:
                 raise HistoryError('history_result_not_ready')
             pending.acknowledgement, pending.state, pending.reason = raw, 'acknowledging', None
             self._incoming.put_nowait(('acknowledge_terminal', handle))
+
+    def retain_cleanup(self, handle):
+        """Capture original native custody for this writer after terminal ACK.
+
+        The opaque reference carries no account release or native endpoint
+        authority. Durable cleanup issuance and authenticated delivery remain
+        separate steps; uncertainty keeps both the execution and slot held.
+        """
+        self._check_owner()
+        pending = self._job(handle)
+        with self._lock:
+            if self._closed or self._fault or self._allow_local_reference:
+                raise HistoryError('history_not_authorized')
+            if (pending.state != 'acknowledged' or pending.execution_ticket is None
+                    or not pending.execution_issued or pending.grant is None or pending.delivery is None
+                    or pending.acknowledgement is None or pending.terminal_evidence is None):
+                raise HistoryError('history_result_not_ready')
+            grant, binding, ticket = pending.grant, pending.binding, pending.execution_ticket
+        registry = self._pool._registry
+        with registry._lock:
+            original = self._pool._jobs.get(pending.worker_handle)
+            if original is not pending.original_job or original.ticket is not ticket:
+                raise HistoryError('history_not_authorized')
+            try:
+                proof = registry.retain_cleanup(ticket, self._pool, pending.worker_handle, consumer=self._writer)
+                snapshot = registry.cleanup_snapshot(proof)
+            except ExecutionCustodyError:
+                raise HistoryError('history_not_authorized') from None
+            if (snapshot['key'] != OwnedExecutionKey(binding.project_id, grant.handle_digest, binding.run_id, binding.claim_id)
+                    or snapshot['deadline_ns'] != grant.deadline_ns):
+                raise HistoryError('history_not_authorized')
+            with self._lock:
+                if pending.cleanup_custody is not None and pending.cleanup_custody is not proof:
+                    raise HistoryError('history_conflict')
+                pending.cleanup_custody = proof
+            return proof
 
     def delivery(self, handle):
         pending = self._job(handle)

@@ -23,6 +23,7 @@ from .process_tree import ProcessTree
 
 _POPEN = subprocess.Popen
 MAX_OWNED_EXECUTIONS = 64
+_KEY_FIELDS = ('project_id', 'handle_digest', 'run_id', 'bridge_run_id')
 EXECUTION_STOP_REASONS = LIVENESS_STOP_REASONS
 
 
@@ -149,6 +150,35 @@ class ExecutionSupervisor:
         return self._registry.receive_activity(self)
 
 
+class ExecutionCleanup:
+    """Opaque original cleanup reference for one selected native reader.
+
+    Registry membership, original worker return and current retained custody
+    are checked on every read. This is not serializable, native peer identity,
+    closed-descendant containment proof or permission to release account slots.
+    """
+    __slots__ = ("_registry", "__weakref__")
+
+    def __init__(self, registry):
+        self._registry = registry
+
+
+@dataclass(frozen=True, repr=False)
+class _CleanupReference:
+    entry: object
+    ticket: object
+    pool: object
+    worker: object
+    job: object
+    slot: object
+    issuer: object
+    consumer: object
+    key: object
+    identity: tuple
+    deadline_ns: int
+    run_handle: str
+
+
 @dataclass
 class _Owned:
     key: OwnedExecutionKey
@@ -182,6 +212,8 @@ class OwnedExecutionRegistry:
         self._keys = set()
         self._supervisors = weakref.WeakKeyDictionary()
         self._worker_pools = weakref.WeakSet()
+        self._cleanups = weakref.WeakKeyDictionary()
+        self._cleanup_by_ticket = weakref.WeakKeyDictionary()
 
     def _entry(self, ticket, *, issuer=False):
         if self._pid != os.getpid() or type(ticket) is not ExecutionTicket or ticket._registry is not self:
@@ -551,6 +583,71 @@ class OwnedExecutionRegistry:
                 raise ExecutionCustodyError()
             return entry.key
 
+    def retain_cleanup(self, ticket, pool, worker, *, consumer):
+        """Retain actual issuer custody before handing facts to its writer.
+
+        No SQL, clock, callbacks, process inspection or waiting occurs here.
+        The fixed worker must already have returned after registry cleanup.
+        A different reader cannot adopt an existing retained reference.
+        """
+        with self._lock:
+            entry = self._entry(ticket, issuer=True)
+            current = threading.current_thread()
+            if (entry.issuer_thread is not current or pool not in self._worker_pools
+                    or (consumer is not current and type(consumer) is not threading.Thread)
+                    or not consumer.is_alive()):
+                raise ExecutionCustodyError()
+            reference = self._cleanup_by_ticket.get(ticket)
+            previous = None if reference is None else reference()
+            if previous is not None:
+                existing = self._cleanups.get(previous)
+                if existing is None or existing.consumer is not consumer:
+                    raise ExecutionCustodyError()
+                self._cleanup_reference(previous)
+                return previous
+            if len(self._cleanups) >= MAX_OWNED_EXECUTIONS:
+                raise ExecutionCustodyError()
+            job = pool._jobs.get(worker)
+            if job is None:
+                raise ExecutionCustodyError()
+            proof = ExecutionCleanup(self)
+            self._cleanups[proof] = _CleanupReference(entry, ticket, pool, worker, job, job.slot,
+                current, consumer, entry.key, tuple(getattr(entry.key, name) for name in _KEY_FIELDS), entry.deadline_ns, entry.run_handle)
+            try:
+                self._cleanup_reference(proof)
+            except BaseException:
+                self._cleanups.pop(proof, None)
+                raise
+            self._cleanup_by_ticket[ticket] = weakref.ref(proof)
+            return proof
+
+    def _cleanup_reference(self, proof):
+        if (self._pid != os.getpid() or type(proof) is not ExecutionCleanup or proof._registry is not self):
+            raise ExecutionCustodyError()
+        reference = self._cleanups.get(proof)
+        current = threading.current_thread()
+        if (reference is None or current not in (reference.issuer, reference.consumer)
+                or not reference.issuer.is_alive() or not reference.consumer.is_alive()):
+            raise ExecutionCustodyError()
+        entry, pool = reference.entry, reference.pool
+        job = pool._jobs.get(reference.worker)
+        if (self._issued.get(reference.ticket) is not entry or self._pending.get(reference.ticket) is not entry
+                or entry.issuer_thread is not reference.issuer or entry.state != 'cleaned' or entry.worker_returned is not True
+                or entry.worker_pool is not pool or entry.worker_handle is not reference.worker
+                or pool not in self._worker_pools or pool._closed or job is not reference.job
+                or job.state != 'returned' or job.ticket is not reference.ticket or job.slot is not reference.slot
+                or job.slot.current is not reference.worker or job.slot.fault or not job.slot.thread.is_alive()
+                or entry.key is not reference.key or tuple(getattr(entry.key, name) for name in _KEY_FIELDS) != reference.identity
+                or entry.deadline_ns != reference.deadline_ns or entry.run_handle != reference.run_handle):
+            raise ExecutionCustodyError()
+        return reference
+
+    def cleanup_snapshot(self, proof):
+        """Fresh original facts only; a copied snapshot carries no custody."""
+        with self._lock:
+            reference = self._cleanup_reference(proof)
+            return {'key': OwnedExecutionKey(*reference.identity), 'deadline_ns': reference.deadline_ns}
+
     def acknowledge_release(self, ticket):
         with self._lock:
             entry = self._entry(ticket, issuer=True)
@@ -562,3 +659,7 @@ class OwnedExecutionRegistry:
             self._keys.remove(entry.key)
             entry.process = entry.tree = None
             entry.state = "released"
+            reference = self._cleanup_by_ticket.pop(ticket, None)
+            proof = None if reference is None else reference()
+            if proof is not None:
+                self._cleanups.pop(proof, None)

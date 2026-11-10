@@ -2224,3 +2224,19 @@ enrollment, provider observations and a non-model executable. They establish
 component composition, not real-provider or endpoint authorization acceptance.
 Account reservations remain held after confirmed local cleanup and terminal ACK:
 the native authenticated project-to-account cleanup/release path is still required.
+
+### Retained native cleanup custody
+
+After the original terminal acknowledgement is committed, the persistence lane
+can retain an opaque `ExecutionCleanup` reference for its existing writer thread.
+Only the original issuer can capture it. Every read checks the original registry,
+process, ticket, fixed worker return, slot, key, deadline and selected reader.
+Copied references, another reader, a stopped owner/writer, altered originals and
+released custody refuse. References are bounded and retired with the original
+execution. Capture performs no database work, clock refresh or process wait.
+
+The reference exposes only a copy of the original key and deadline. It supplies
+local custody to the subsequent writer operation; it establishes no native peer
+identity or closed-descendant containment profile. Durable cleanup receipt
+issuance, authenticated account release and acknowledgement before local
+retirement remain mandatory. Account reservations stay held at this stage.

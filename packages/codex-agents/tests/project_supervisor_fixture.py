@@ -248,6 +248,14 @@ def main():
         until(lambda: lane.snapshot(handle)["state"] in {"committed", "failed", "unknown"})
         if lane.snapshot(handle)["state"] != "committed":
             raise RuntimeError("fixture_persistence_failed")
+        if data.get('retain_cleanup', False):
+            try:
+                lane.retain_cleanup(handle)
+            except HistoryError as error:
+                if error.reason_code != 'history_result_not_ready':
+                    raise
+            else:
+                raise RuntimeError('fixture_cleanup_before_terminal_ack')
         emit(stage='terminal', evidence=lane.terminal_evidence(handle).hex(), delivery=lane.delivery(handle).as_data())
         from codex_agents.learning_contracts import canonical_json
         acknowledgement = canonical_json(receive())
@@ -271,12 +279,22 @@ def main():
             raise RuntimeError('fixture_replaced_acknowledgement')
         if lane.snapshot(handle)['state'] != 'acknowledged':
             raise RuntimeError('fixture_acknowledgement_failed')
+        cleanup = {}
+        if data.get('retain_cleanup', False):
+            proof = lane.retain_cleanup(handle)
+            if lane.retain_cleanup(handle) is not proof:
+                raise RuntimeError('fixture_replaced_cleanup_custody')
+            snapshot = registry.cleanup_snapshot(proof)
+            if (snapshot['key'] != registry.key(ticket, cleaned=True)
+                    or snapshot['deadline_ns'] != grant.deadline_ns):
+                raise RuntimeError('fixture_cleanup_original_mismatch')
+            cleanup['cleanup_custody_retained'] = True
         emit(stage="done", cleanup_confirmed=supervisor.snapshot()["cleanup_confirmed"],
              fenced=selected.packet.fenced, terminal_state=selected.packet.terminal_state,
              stop_reason=selected.stop_reason, ticket_count=len(registry._issued),
              launches=(root / "launches").read_text().splitlines(),
              acknowledged=lane.snapshot(handle)['state'] == 'acknowledged',
-             persisted_claim=lane.delivery(handle).binding.claim_id)
+             persisted_claim=lane.delivery(handle).binding.claim_id, **cleanup)
     finally:
         pool.close()
         if lane is not None:

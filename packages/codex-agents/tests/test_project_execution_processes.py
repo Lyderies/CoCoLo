@@ -141,7 +141,8 @@ time.sleep(30)
                           "fixture_key": self.fixture.key.hex(), "task": self.bridge.task(),
                           "route": self.base.fixture.route, "assignment": self.base.fixture.assignment,
                           "with_provenance": with_provenance, "lose_consumption_reply": lose_consumption_reply,
-                          "lose_open_reply": lose_open_reply, 'managed_original_open': self.managed_original_open})
+                          "lose_open_reply": lose_open_reply, 'managed_original_open': self.managed_original_open,
+                          'retain_cleanup': self.managed_original_open})
         if self.managed_original_open:
             self.assertEqual({'stage': 'prepared', 'tickets': 0, 'launched': False}, self.read(child, 'prepared'))
             scope, request = self.open_prepared(child, original)
@@ -304,6 +305,8 @@ time.sleep(30)
         done_a = self.accept_terminal(first)
         for child, done in ((first, done_a), (second, done_b)):
             self.assertTrue(done["cleanup_confirmed"])
+            if self.managed_original_open:
+                self.assertTrue(done['cleanup_custody_retained'])
             self.assertTrue(done["fenced"])
             self.assertEqual("cancelled", done["terminal_state"])
             self.assertEqual("cancel_requested", done["stop_reason"])
