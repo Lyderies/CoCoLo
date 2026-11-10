@@ -77,6 +77,15 @@ def _seal(key, material):
     return keyed_digest(key, _SEAL_DOMAIN + canonical_json(material))
 
 
+def qa_scope_digest(history, context):
+    """Bind internal consumers to the same protected original input snapshot."""
+    key = _key(history)
+    if type(context) is not OperationalQAContext:
+        raise HistoryError('history_invalid_input')
+    raw, _ = context.snapshot()
+    return keyed_digest(key, _SCOPE_DOMAIN + raw)
+
+
 def _receipt_identity(key, value):
     # Consumption changes its sealed state, never its original issuance identity.
     return keyed_digest(key, _IDENTITY_DOMAIN + canonical_json({n: value[n]
@@ -154,6 +163,28 @@ def _metadata(row, *, known):
             'checks_passed': passed, 'expires_at_ms': row['expires_at_ms'], 'known': known}
 
 
+def consume_check_receipt(history, receipt):
+    """Internal atomic-QA transition; never a separately activated API."""
+    key = _key(history)
+    if not history._connection.in_transaction or type(receipt) is not dict:
+        raise HistoryError('history_invalid_input')
+    current = read_check_receipt(history, receipt.get('receipt_id'))
+    now = history._result_now()
+    if (current != receipt or current['consumed_at_ms'] is not None
+            or not valid_integer(now, minimum=current['created_at_ms'], maximum=current['expires_at_ms'] - 1)):
+        raise HistoryError('history_conflict')
+    material = {n: current[n] for n in _FIELDS if n != 'record_seal'}
+    material['consumed_at_ms'] = now
+    seal = _seal(key, material)
+    updated = history._connection.execute('UPDATE project_qa_check_receipts '
+        'SET consumed_at_ms=?,record_seal=? WHERE project_id=? AND receipt_id=? '
+        'AND consumed_at_ms IS NULL AND record_seal=?',
+        (now, seal, history.project_id, current['receipt_id'], current['record_seal']))
+    if updated.rowcount != 1:
+        raise HistoryError('history_conflict')
+    return {**material, 'record_seal': seal}
+
+
 def _known(history, request_id, request_digest, before_commit):
     row = history._connection.execute('SELECT receipt_id FROM project_qa_check_receipts '
         'WHERE project_id=? AND request_id=?', (history.project_id, request_id)).fetchone()
@@ -181,11 +212,11 @@ def issue_check_receipt(history, context, host_outcome_digest, verifier_host_out
             or not matches(host_outcome_digest, _DIGEST) or not matches(verifier_host_outcome_digest, _DIGEST)
             or host_outcome_digest == verifier_host_outcome_digest):
         raise HistoryError('history_invalid_input')
-    raw_context, captured = context.snapshot()
+    _, captured = context.snapshot()
     context = OperationalQAContext.from_snapshot(captured)
     encoded_report, report, _ = _report(report)
     report_digest = content_digest(report)
-    scope_digest = keyed_digest(key, _SCOPE_DOMAIN + raw_context)
+    scope_digest = qa_scope_digest(history, context)
     request_digest = keyed_digest(key, _REQUEST_DOMAIN + canonical_json({
         'request_id': request_id, 'scope_digest': scope_digest, 'worker': host_outcome_digest,
         'verifier': verifier_host_outcome_digest, 'report_digest': report_digest}))
@@ -238,4 +269,11 @@ def issue_check_receipt(history, context, host_outcome_digest, verifier_host_out
         journal['request_seal'] = keyed_digest(key, _JOURNAL_DOMAIN + canonical_json(journal))
         history._connection.execute('INSERT INTO project_qa_check_requests VALUES('
             + ','.join('?' for _ in _REQUEST_FIELDS) + ')', tuple(journal[n] for n in _REQUEST_FIELDS))
+        # Permission can change after an earlier authorization and before the
+        # durable commit. Denial here rolls back both original journals.
+        before_commit()
+        _key(history)
+        if (current_qa_scope(history, context, host_outcome_digest, verifier_host_outcome_digest) != reference
+                or read_check_receipt(history, value['receipt_id']) != value):
+            raise HistoryError('history_conflict')
     return _metadata(value, known=False)

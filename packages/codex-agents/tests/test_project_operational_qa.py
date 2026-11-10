@@ -121,8 +121,7 @@ class ProjectOperationalQATests(unittest.TestCase):
                 assignment['assignment_id']), storage_binding=scope, storage_evidence=evidence,
             work_limits=self.worker.base.limits)
         self.store.consume_execution_grant(binding, grant.encode(), task=self.verifier_task, route=route, provenance=proof)
-        self.verifier_body = canonical_json({**result(), 'assignment_id': assignment['assignment_id'],
-            'summary': 'PRIVATE-ORIGINAL-VERIFIER'})
+        self.verifier_body = canonical_json(self.verifier_result(assignment))
         delivered = self.store.publish_result(binding, assignment, self.verifier_body,
             ResultObservation(binding.claim_id, self.fixture.base.stamp, False, True, None))
         admitted = self.store.admit_host_result(HostResultReference(binding, delivered.record_id,
@@ -132,6 +131,9 @@ class ProjectOperationalQATests(unittest.TestCase):
         self.verifier_binding = binding
         self.verifier_context = HostResultContext(binding, assignment, self.verifier_task, route,
                                                  self.bridge.clients['bridge-v1'])
+
+    def verifier_result(self, assignment):
+        return {**result(), 'assignment_id': assignment['assignment_id'], 'summary': 'PRIVATE-ORIGINAL-VERIFIER'}
 
     def authorize(self, command, token):
         if token is not self.token:

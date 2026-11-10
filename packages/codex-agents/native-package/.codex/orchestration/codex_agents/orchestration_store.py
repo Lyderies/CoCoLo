@@ -123,6 +123,12 @@ class OrchestrationOwner:
         view = self._current(scope, binding.orchestration_handle, missing_reference=True)
         return view is not None and view['snapshot']['status'] in ORCHESTRATION_TERMINAL_STATES
 
+    @_operation
+    def metadata_for(self, binding):
+        """Validate the actual owned journal without authorizing fresh work."""
+        scope = OrchestrationScope(**{name: getattr(binding, name) for name in SCOPE_FIELDS})
+        return self._current(scope, binding.orchestration_handle)
+
     def _positions(self, table):
         # Only fixed owner-selected tables, bounded scalar rows before any blob.
         if table not in {'result_leases', 'result_reservations', 'project_execution_consumptions'}:

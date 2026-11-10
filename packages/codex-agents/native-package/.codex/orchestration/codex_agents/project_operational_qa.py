@@ -11,10 +11,10 @@ from .learning_contracts import (canonical_json, content_digest, keyed_digest, p
                                  provider_for_model, validate_execution_configuration)
 from .orchestration_api import SCOPE_FIELDS
 from .project_worker_result import current_host_reference
-from .result_contracts import assignment_bytes, checked_result_body
+from .result_contracts import MAX_RESULT_BODY_BYTES, assignment_bytes, checked_result_body
 
 
-def current_qa_scope(history, context, host_outcome_digest, verifier_host_outcome_digest):
+def current_qa_scope(history, context, host_outcome_digest, verifier_host_outcome_digest, *, live=True):
     """Check both original metadata chains against independently held inputs."""
     if type(context) is not OperationalQAContext:
         raise HistoryError('history_invalid_input')
@@ -27,7 +27,7 @@ def current_qa_scope(history, context, host_outcome_digest, verifier_host_outcom
         raise HistoryError('history_conflict')
     results = {}
     for name, digest in (('worker', host_outcome_digest), ('verifier', verifier_host_outcome_digest)):
-        reference, _, facts, grant, outcome = current_host_reference(history, bindings[name], digest)
+        reference, _, facts, grant, outcome = current_host_reference(history, bindings[name], digest, live=live)
         original = captured[name]
         try:
             task = validate_task(original['task'])
@@ -68,20 +68,29 @@ def current_qa_scope(history, context, host_outcome_digest, verifier_host_outcom
     return {'worker': worker_reference, 'verifier': verifier_reference}
 
 
-def operational_qa_scope(history, context, host_outcome_digest, verifier_host_outcome_digest, *, before_reply):
+def operational_qa_inputs(history, context, host_outcome_digest, verifier_host_outcome_digest, *, before_reply):
     if type(context) is not OperationalQAContext or not callable(before_reply):
         raise HistoryError('history_invalid_input')
     # A private immutable copy survives mutable server adapters and body I/O.
     _, captured = context.snapshot()
     context = OperationalQAContext.from_snapshot(captured)
     reference = current_qa_scope(history, context, host_outcome_digest, verifier_host_outcome_digest)
+    results = {}
     for name in ('worker', 'verifier'):
         binding = AttemptBinding(**reference[name]['binding'])
         body = history.read_result(binding)
         terminal = history.record(reference[name]['terminal_record_id'])
         checked_result_body(body, captured[name]['assignment'], parse_bounded_json(terminal.content))
+        results[name] = parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
     before_reply()  # Fresh native permission after both artifact reads, outside SQL.
     current = current_qa_scope(history, context, host_outcome_digest, verifier_host_outcome_digest)
     if current != reference:
         raise HistoryError('history_conflict')
-    return reference
+    outcomes = {name: current_host_reference(history, AttemptBinding(**reference[name]['binding']), digest)[4]
+        for name, digest in (('worker', host_outcome_digest), ('verifier', verifier_host_outcome_digest))}
+    return reference, captured, results, outcomes
+
+
+def operational_qa_scope(history, context, host_outcome_digest, verifier_host_outcome_digest, *, before_reply):
+    return operational_qa_inputs(history, context, host_outcome_digest, verifier_host_outcome_digest,
+                                 before_reply=before_reply)[0]

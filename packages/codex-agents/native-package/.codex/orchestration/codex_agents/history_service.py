@@ -188,7 +188,40 @@ class HistoryService:
                 or (authorization.source != "host" and request.operation != "history.record_event")
             ):
                 raise HistoryError("history_not_authorized")
-            if request.operation == 'history.issue_qa_checks':
+            if request.operation in {'history.commit_qa', 'history.qa_details'}:
+                if authorization.operational_qa_context is None:
+                    raise HistoryError('history_not_authorized')
+                original_context, captured = authorization.operational_qa_context.snapshot()
+                if any(captured[name]['binding'] != request.payload[name + '_binding'] for name in ('worker', 'verifier')):
+                    raise HistoryError('history_not_authorized')
+                commit_qa_context = OperationalQAContext.from_snapshot(captured)
+                qa_worker_digest = request.payload['host_outcome_digest']
+                qa_verifier_digest = request.payload['verifier_host_outcome_digest']
+                qa_receipt = request.payload['check_receipt']
+                self._history()
+
+                def authorize_qa_commit():
+                    self._history()
+                    fresh = decode_history_request(raw)
+                    current = self._authorizer(fresh, transport_context)
+                    if type(current) is not HistoryAuthorization:
+                        raise HistoryError('history_not_authorized')
+                    current.__post_init__()
+                    if (current.project_id != self._project or current.runtime_digest != self._runtime
+                            or current.source != 'host' or current.request_digest != digest
+                            or history_request_digest(fresh) != digest or fresh.operation not in current.allowed_operations
+                            or current.operational_qa_context is None
+                            or current.operational_qa_context.snapshot()[0] != original_context):
+                        raise HistoryError('history_not_authorized')
+                    self._history()._require_owner()
+
+                if request.operation == 'history.commit_qa':
+                    result = self._store.commit_operational_qa(commit_qa_context, qa_worker_digest, qa_verifier_digest,
+                                                              qa_receipt, before_commit=authorize_qa_commit)
+                else:
+                    result = self._store.operational_qa_details(commit_qa_context, qa_worker_digest, qa_verifier_digest,
+                                                               qa_receipt, before_reply=authorize_qa_commit)
+            elif request.operation == 'history.issue_qa_checks':
                 if authorization.operational_check_context is None:
                     raise HistoryError('history_not_authorized')
                 original_context, captured = authorization.operational_check_context.snapshot()
@@ -341,7 +374,7 @@ class HistoryService:
                         result["deliveries"][-1]["delivery_sequence"] if result["deliveries"] else None
                     )
                     reply = self._reply(identity, request_digest=digest, project_id=project, runtime_digest=runtime, result=result)
-            limit = MAX_FRAME_BYTES if request.operation == "history.read_record" else MAX_HISTORY_REPLY_BYTES
+            limit = MAX_FRAME_BYTES if request.operation in {"history.read_record", 'history.qa_details'} else MAX_HISTORY_REPLY_BYTES
             if len(reply) + 1 > limit:
                 raise HistoryError("history_service_unavailable")
             decode_history_response(reply, request)
@@ -372,6 +405,19 @@ class HistoryService:
                 if not result['known']:
                     from .project_operational_qa import current_qa_scope
                     current_qa_scope(self._store, check_qa_context, check_worker_digest, check_verifier_digest)
+            if request.operation in {'history.commit_qa', 'history.qa_details'}:
+                authorize_qa_commit()
+                details = self._store.operational_qa_details(commit_qa_context, qa_worker_digest, qa_verifier_digest,
+                                                            qa_receipt, before_reply=authorize_qa_commit)
+                if request.operation == 'history.qa_details':
+                    if details != result:
+                        raise HistoryError('history_conflict')
+                else:
+                    if {**details['summary'], 'known': result['known']} != result:
+                        raise HistoryError('history_conflict')
+                    if not result['known']:
+                        from .project_operational_qa import current_qa_scope
+                        current_qa_scope(self._store, commit_qa_context, qa_worker_digest, qa_verifier_digest)
             return reply
         except HistoryError as exc:
             reason = exc.reason_code

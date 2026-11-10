@@ -20,6 +20,7 @@ from .history_contracts import (
 from .host_result_contracts import HostResultReference, decode_host_result_reference
 from .host_open_contracts import OpenProvenanceInput, decode_host_open_submission
 from .learning_contracts import SOURCES, canonical_json, parse_bounded_json, validate_learning_record
+from .operational_qa_contracts import checked_operational_qa, checked_qa_summary
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .service_transport import MAX_FRAME_BYTES, MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
 
@@ -34,6 +35,7 @@ HISTORY_OPERATIONS = frozenset({
     *_RECORD_OPERATIONS, "history.pending_terminals", "history.acknowledge_terminal", "history.read_record",
     "history.admit_host_result", "history.record_host_open", "history.worker_reference", "history.qa_scope",
     "history.issue_qa_checks",
+    "history.commit_qa", "history.qa_details",
 })
 HISTORY_RECORD_TYPES = frozenset({*_RECORD_OPERATIONS.values(), "host_result_admission",
                                   "provider_usage", "observation_unavailable", "execution_provenance", "host_open_provenance"})
@@ -99,14 +101,21 @@ def _validate_request(request: HistoryRequest) -> None:
             identity = binding.claim_id
         if request.request_id != identity:
             raise HistoryError("history_invalid_request")
-    elif operation in {'history.qa_scope', 'history.issue_qa_checks'}:
-        if not _closed(payload, {'worker_binding', 'verifier_binding', 'host_outcome_digest', 'verifier_host_outcome_digest'}):
+    elif operation in {'history.qa_scope', 'history.issue_qa_checks', 'history.commit_qa', 'history.qa_details'}:
+        fields = {'worker_binding', 'verifier_binding', 'host_outcome_digest', 'verifier_host_outcome_digest'}
+        if operation in {'history.commit_qa', 'history.qa_details'}:
+            fields.add('check_receipt')
+        if not _closed(payload, fields):
             raise HistoryError('history_invalid_request')
         for name in ('worker_binding', 'verifier_binding'):
             if type(payload[name]) is not dict:
                 raise HistoryError('history_invalid_request')
             binding = AttemptBinding(**payload[name])
             if binding.project_id != request.project_id or binding.runtime_digest != request.runtime_digest:
+                raise HistoryError('history_invalid_request')
+        if operation in {'history.commit_qa', 'history.qa_details'}:
+            if (type(payload['check_receipt']) is not str or re.fullmatch(r'oqc_[0-9a-f]{48}', payload['check_receipt']) is None
+                    or request.request_id != payload['check_receipt']):
                 raise HistoryError('history_invalid_request')
         if (not all(matches(payload[name], _DIGEST) for name in ('host_outcome_digest', 'verifier_host_outcome_digest'))
                 or (operation == 'history.qa_scope'
@@ -243,7 +252,29 @@ def _validate_host_reference(result, binding, digest, *, verification):
 
 def _validate_result(request: HistoryRequest, result: object) -> None:
     operation = request.operation
-    if operation == 'history.issue_qa_checks':
+    if operation in {'history.commit_qa', 'history.qa_details'}:
+        summary = result
+        if operation == 'history.qa_details':
+            if not _closed(result, {'qa', 'summary', 'outcome_commit'}):
+                raise HistoryError('history_invalid_response')
+            summary = result['summary']
+        checked_qa_summary(summary, request.payload['host_outcome_digest'],
+                           request.payload['verifier_host_outcome_digest'], request.payload['check_receipt'])
+        if operation == 'history.qa_details':
+            qa = checked_operational_qa(result['qa'])
+            _validate_metadata(result['outcome_commit'])
+            metadata = result['outcome_commit']
+            if (summary['known'] is not True or qa['record_id'] != summary['qa_record_id']
+                    or hashlib.sha256(canonical_json(qa)).hexdigest() != summary['qa_digest']
+                    or qa['host_outcome_digest'] != summary['host_outcome_digest']
+                    or qa['verifier_host_outcome_digest'] != summary['verifier_host_outcome_digest']
+                    or any(qa[n] != summary[n] for n in ('accepted', 'deterministic_pass', 'security_pass',
+                        'required_criteria_total', 'required_criteria_passed', 'verifier_disagreement'))
+                    or metadata['record_id'] != summary['outcome_record_id'] or metadata['source'] != 'verifier'
+                    or metadata['content_digest'] != summary['outcome_digest']
+                    or metadata['observed_at_ms'] != qa['observed_at_ms']):
+                raise HistoryError('history_invalid_response')
+    elif operation == 'history.issue_qa_checks':
         if (not _closed(result, {'check_receipt', 'check_report_digest', 'checks_passed', 'expires_at_ms', 'known'})
                 or type(result['check_receipt']) is not str
                 or re.fullmatch(r'oqc_[0-9a-f]{48}', result['check_receipt']) is None
@@ -347,7 +378,7 @@ def decode_history_response(raw: bytes, request: HistoryRequest) -> dict:
     invalid = False
     try:
         _validate_request(request)
-        limit = MAX_FRAME_BYTES if request.operation == "history.read_record" else MAX_HISTORY_REPLY_BYTES
+        limit = MAX_FRAME_BYTES if request.operation in {"history.read_record", 'history.qa_details'} else MAX_HISTORY_REPLY_BYTES
         if type(raw) is not bytes or len(raw) + 1 > limit:
             raise HistoryError("history_invalid_response")
         response = parse_bounded_json(raw, max_bytes=limit - 1)
@@ -401,7 +432,8 @@ class HistoryClient:
         failure = False
         try:
             raw = exchange_frame(self._endpoint, encoded, timeout=self._timeout,
-                                 response_limit=MAX_FRAME_BYTES if operation == "history.read_record" else MAX_HISTORY_REPLY_BYTES)
+                                 response_limit=MAX_FRAME_BYTES if operation in {"history.read_record", 'history.qa_details'}
+                                 else MAX_HISTORY_REPLY_BYTES)
         except ServiceTransportError:
             failure = True
         if failure:
@@ -465,6 +497,22 @@ class HistoryClient:
         return self._call('history.issue_qa_checks', request_id,
             {'worker_binding': worker.as_data(), 'verifier_binding': verifier.as_data(),
              'host_outcome_digest': host_outcome_digest, 'verifier_host_outcome_digest': verifier_host_outcome_digest})
+
+    def _qa_call(self, operation, worker, verifier, host_outcome_digest, verifier_host_outcome_digest, check_receipt):
+        if type(worker) is not AttemptBinding or type(verifier) is not AttemptBinding:
+            raise HistoryError('history_invalid_input')
+        return self._call(operation, check_receipt, {'worker_binding': worker.as_data(), 'verifier_binding': verifier.as_data(),
+            'host_outcome_digest': host_outcome_digest, 'verifier_host_outcome_digest': verifier_host_outcome_digest,
+            'check_receipt': check_receipt})
+
+    def commit_operational_qa(self, worker: AttemptBinding, verifier: AttemptBinding,
+                              host_outcome_digest: str, verifier_host_outcome_digest: str, check_receipt: str) -> dict:
+        return self._qa_call('history.commit_qa', worker, verifier, host_outcome_digest, verifier_host_outcome_digest, check_receipt)
+
+    def operational_qa_details(self, worker: AttemptBinding, verifier: AttemptBinding,
+                               host_outcome_digest: str, verifier_host_outcome_digest: str, check_receipt: str) -> dict:
+        """Read full approved QA metadata; the linked outcome uses read_record."""
+        return self._qa_call('history.qa_details', worker, verifier, host_outcome_digest, verifier_host_outcome_digest, check_receipt)
 
     def bind_verifier(self, record: dict) -> dict:
         return self._record_call("history.bind_verifier", record)

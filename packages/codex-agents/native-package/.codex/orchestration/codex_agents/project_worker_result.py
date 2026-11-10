@@ -12,13 +12,13 @@ from .learning_contracts import canonical_json, keyed_digest, parse_bounded_json
 from .project_host_open import read_host_open
 
 
-def current_host_reference(history, binding, outcome_digest):
+def current_host_reference(history, binding, outcome_digest, *, live=True):
     """Read the original consumed return, including for a verification run.
 
     This internal persistence-owner helper does not authenticate a caller or
     authorize QA. Its caller must establish protected original input custody.
     """
-    if not matches(outcome_digest, _DIGEST) or history._result_key is None:
+    if not matches(outcome_digest, _DIGEST) or history._result_key is None or type(live) is not bool:
         raise HistoryError('history_invalid_input')
     history._require_owner()
     binding = history._result_binding(binding)
@@ -28,7 +28,10 @@ def current_host_reference(history, binding, outcome_digest):
             'WHERE project_id=? AND orchestration_handle=?',
             (binding.project_id, binding.orchestration_handle)).fetchone() is None:
         raise HistoryError('history_orchestration_unavailable')
-    history._orchestration_owner().active_for(binding)
+    if live:
+        history._orchestration_owner().active_for(binding)
+    else:
+        history._orchestration_owner().metadata_for(binding)
     lease_row = history._connection.execute('SELECT * FROM result_leases WHERE project_id=? AND claim_id=?',
         (binding.project_id, binding.claim_id)).fetchone()
     if lease_row is None:
@@ -63,15 +66,16 @@ def current_host_reference(history, binding, outcome_digest):
     entry = history.record(identity)
     receipt = history._host_result_receipt(entry)['admission']
     terminal = receipt['dispatch_result']
-    reservation = history.result_reservation(binding)
-    if reservation.state in {'expired', 'retiring'}:
+    reservation = history.result_reservation(binding) if live else history._result_row(binding)[1]
+    if live and reservation.state in {'expired', 'retiring'}:
         raise HistoryError('history_result_expired')
     if (entry.source != 'host' or receipt['run_id'] != binding.run_id
             or receipt['registration_digest'] != grant.registration_digest
             or receipt['binding_digest'] != identity.split(':', 1)[1]
             or receipt['host_outcome_digest'] != outcome_digest
             or terminal['bridge_run_id'] != binding.claim_id
-            or reservation.state != 'committed' or terminal['result_digest'] != reservation.result_digest
+            or (live and reservation.state != 'committed') or reservation.committed_at_ms is None
+            or terminal['result_digest'] != reservation.result_digest
             or reservation.assignment_digest != grant.assignment_digest
             or reservation.hard_deadline_at_ms != grant.deadline_at_ms
             or terminal['record_id'] != reservation.terminal_record_id):

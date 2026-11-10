@@ -101,6 +101,15 @@ class ProjectCheckReceiptTests(unittest.TestCase):
         self.assertIn(True, calls)
         self.assertEqual(0, self.count())
 
+    def test_revocation_after_internal_writes_before_commit_rolls_back_both_journals(self):
+        def revoke():
+            if self.store._connection.in_transaction and self.count():
+                raise HistoryError('history_not_authorized')
+        with self.assertRaises(HistoryError):
+            self.issue(before_commit=revoke)
+        self.assertEqual(0,self.count())
+        self.assertEqual(0,self.store._connection.execute('SELECT COUNT(*) FROM project_qa_check_requests').fetchone()[0])
+
     def test_original_evidence_changed_by_final_authorizer_is_rechecked_before_insert(self):
         def remove():
             if self.store._connection.in_transaction:
@@ -193,6 +202,7 @@ class ProjectCheckReceiptTests(unittest.TestCase):
         self.assertEqual(0,self.store._connection.execute('SELECT COUNT(*) FROM project_qa_check_requests').fetchone()[0])
 
     def test_explicit_schema6_upgrade_keeps_all_original_rows_and_invents_no_receipts(self):
+        self.store._connection.execute('DROP TABLE project_operational_qa')
         self.store._connection.execute('DROP TABLE project_qa_check_requests')
         self.store._connection.execute('DROP TABLE project_qa_check_receipts')
         self.store._connection.execute('PRAGMA user_version=6')
@@ -210,7 +220,7 @@ class ProjectCheckReceiptTests(unittest.TestCase):
             result_clock_ms=lambda:self.base.fixture.base.stamp,
             orchestration_limits=OrchestrationLimits(1,8),allow_schema_upgrade=True)
         self.store=self.base.fixture.store
-        self.assertEqual(7,self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(8,self.store._connection.execute('PRAGMA user_version').fetchone()[0])
         for name,rows in before.items():
             self.assertEqual(rows,[tuple(row) for row in self.store._connection.execute('SELECT * FROM '+name)])
         self.assertEqual(0,self.count())
