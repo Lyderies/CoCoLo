@@ -6159,7 +6159,7 @@ class LearningLedger:
                 or expected.claim_request_digest != account_request_digest(original)):
             raise ClaimError('claim_denial_invalid')
         context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
-                                                    request_id=closure.claim_request_id, launch=launch)
+                                                    request_id=closure.claim_request_id, launch=launch, storage_binding=expected)
         if (known is None or known['state'] != 'denied' or known['receipt_digest'] != closure.denial_receipt_digest
                 or known['run_id'] != expected.run_id):
             raise ClaimError('claim_denial_unavailable')
@@ -6290,7 +6290,7 @@ class LearningLedger:
         if expected.claim_request_digest != account_request_digest(original):
             raise ClaimError("claim_execution_invalid")
         context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
-                                                    request_id=registration.claim_request_id, launch=launch)
+                                                    request_id=registration.claim_request_id, launch=launch, storage_binding=expected)
         if (known is None or known["state"] != "claimed" or known["bridge_run_id"] != registration.bridge_run_id
                 or known["receipt_digest"] != registration.claim_digest):
             raise ClaimError("claim_execution_unavailable")
@@ -6401,7 +6401,7 @@ class LearningLedger:
         if not secrets.compare_digest(claim_binding, lease.claim_binding_digest):
             raise ClaimError('claim_terminal_invalid')
         context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
-                                                    request_id=registration.claim_request_id, launch=launch)
+                                                    request_id=registration.claim_request_id, launch=launch, storage_binding=expected)
         if (known is None or known['state'] != 'claimed' or known['bridge_run_id'] != registration.bridge_run_id
                 or known['receipt_digest'] != registration.claim_digest):
             raise ClaimError('claim_terminal_unavailable')
@@ -6677,9 +6677,7 @@ class LearningLedger:
         # Even a failed verification job may retrieve a durable receipt produced
         # independently while it waited. This never releases an active worker.
         with self._lock:
-            known = self._connection.read_call(work_limits, lambda: self._known_claim_receipt_locked(
-                context.project_id, context.scope, context.request, context.parameters,
-            ))
+            known = self._connection.read_call(work_limits, lambda: self._known_claim_for_request_locked(context))
         if known is not None:
             return known
         if result.reason != "signature_execution_completed":
@@ -6702,11 +6700,36 @@ class LearningLedger:
         if type(context) is not _ClaimRequest or context.origin is not self._attestation_origin:
             raise ClaimError("claim_invalid_request")
 
+    def _known_claim_for_request_locked(self, context):
+        """Original managed integrity also applies to clock-free known replies."""
+        known = self._known_claim_receipt_locked(context.project_id, context.scope, context.request, context.parameters)
+        if known is None:
+            return None
+        origin = self._connection.execute('SELECT history_owner FROM host_run_bindings WHERE project_id=? AND handle_digest=?',
+                                          (context.project_id, context.handle)).fetchone()
+        managed = any(self._connection.execute('SELECT 1 FROM '+table+' WHERE project_id=? AND handle_digest=?',
+                                              (context.project_id, context.handle)).fetchone() is not None
+                      for table in ('account_open_receipts', 'account_open_requests'))
+        if not managed and ((origin is not None and origin[0] == 'legacy')
+                            or (origin is None and known['state'] != 'claimed')):
+            return known
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+
+        expected = context.storage_binding
+        original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', context.request_id,
+                                  context.project_id, context.runtime_digest, context.launch.payload())
+        if (expected is None or expected.project_id != context.project_id or expected.runtime_digest != context.runtime_digest
+                or expected.run_handle != context.launch.run_handle or expected.run_id != known['run_id']
+                or expected.claim_request_id != context.request_id or expected.claim_request_digest != account_request_digest(original)):
+            raise ClaimError('claim_storage_invalid')
+        self._claim_original_orchestration_digest(expected, 'claim_storage_invalid')
+        return known
+
     def _claim_commit_header(self, context, *, capture_clock=False):
         project = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (context.project_id,)).fetchone()
         if project is None or project[0] != "active":
             raise ClaimError("claim_unavailable")
-        known = self._known_claim_receipt_locked(context.project_id, context.scope, context.request, context.parameters)
+        known = self._known_claim_for_request_locked(context)
         if known is not None:
             return (known, None, None) if capture_clock else (known, None)
         reference = self._capacity_clock_reference() if capture_clock else None

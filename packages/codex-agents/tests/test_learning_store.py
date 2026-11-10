@@ -630,7 +630,7 @@ class LearningStoreTests(unittest.TestCase):
         connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         snapshot = self.ledger.ingestion_snapshot(self.project_a_id, now_ms=30)
-        self.assertEqual(9, self.ledger._connection.execute(
+        self.assertEqual(10, self.ledger._connection.execute(
             "PRAGMA user_version"
         ).fetchone()[0])
         self.assertEqual(1, snapshot["accepted_hook_event_count"])
@@ -3409,7 +3409,7 @@ class LearningStoreTests(unittest.TestCase):
         self.addCleanup(server.stop)
         client = CollectorClient(self.state.socket, timeout=0.2)
         health = client.health(self.project_a)
-        self.assertEqual(9, health["schema_version"])
+        self.assertEqual(10, health["schema_version"])
         self.assertEqual(PACKAGE_VERSION, health["runtime_version"])
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, health["runtime_digest"])
         self.assertIsInstance(health["started_at_ms"], int)
@@ -3457,7 +3457,7 @@ class LearningStoreTests(unittest.TestCase):
             "_request",
             return_value={
                 "ok": True,
-                "schema_version": 9,
+                "schema_version": 10,
                 "runtime_version": PACKAGE_VERSION,
                 "runtime_digest": "0" * 64,
             },
@@ -3667,7 +3667,7 @@ class LearningStoreTests(unittest.TestCase):
         shutdown.assert_not_called()
 
         healthy = {
-            "schema_version": 9,
+            "schema_version": 10,
             "runtime_version": PACKAGE_VERSION,
             "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
         }
@@ -3704,7 +3704,7 @@ class LearningStoreTests(unittest.TestCase):
 
     def test_client_rejects_older_or_newer_schema_with_matching_runtime(self) -> None:
         client = CollectorClient(self.state.socket)
-        for schema, error in ((6, CollectorUpgradeRequired), (7, CollectorUpgradeRequired), (8, CollectorUpgradeRequired), (10, CollectorNewerVersionError)):
+        for schema, error in ((6, CollectorUpgradeRequired), (7, CollectorUpgradeRequired), (8, CollectorUpgradeRequired), (9, CollectorUpgradeRequired), (11, CollectorNewerVersionError)):
             with self.subTest(schema=schema), mock.patch.object(client, "_request", return_value={
                 "ok": True, "schema_version": schema,
                 "runtime_version": PACKAGE_VERSION, "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
@@ -3756,7 +3756,7 @@ class LearningStoreTests(unittest.TestCase):
     def test_detached_collector_receives_no_inherited_environment(self) -> None:
         healthy = {
             "ok": True,
-            "schema_version": 9,
+            "schema_version": 10,
             "runtime_version": PACKAGE_VERSION,
             "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
             "started_at_ms": 1,

@@ -532,7 +532,8 @@ class CapacityCompletionTests(unittest.TestCase):
 
     def test_released_backup_requires_execution_and_completion_provenance(self):
         self.run_one()
-        body = learning_store._snapshot_project_partition(self.ledger._connection, self.fixture.project_id, ledger_schema_version=9)
+        body = learning_store._snapshot_project_partition(self.ledger._connection, self.fixture.project_id,
+                                                         ledger_schema_version=learning_store.LEDGER_SCHEMA_VERSION)
         self.assertEqual(1, learning_store._verify_project_backup_body(body)["capacity_completions"])
         for table in ("capacity_completions", "capacity_executions"):
             broken = deepcopy(body)

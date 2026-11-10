@@ -2192,6 +2192,8 @@ settlement and terminal delivery verify those original facts against the
 independently supplied project lease. The immutable origin column distinguishes
 project-owned and legacy runs; a missing or contradictory managed companion
 refuses instead of falling back or reconstructing evidence. Original receipts
+also remain mandatory for known managed claim replies, using the independently
+enrolled lease scope without a clock read or new signature work. Original receipts
 are metadata, not native identity, current permission, process custody or cleanup
 proof. Neither opening nor terminal acknowledgement releases account capacity.
 

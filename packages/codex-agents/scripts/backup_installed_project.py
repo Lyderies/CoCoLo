@@ -110,6 +110,7 @@ _TABLE_COLUMNS = {
         "native_assignment_id", "agent_type", "usage_complete", "binding_state",
         "abandoned_reason", "observation_started_at_ms",
         "observation_deadline_at_ms", "last_progress_at_ms", "deadline_observed",
+        "history_owner",
     ),
     "hook_ingestion": ("event_code", "accepted_count", "last_accepted_at_ms"),
     "orchestrations": (
@@ -131,6 +132,9 @@ _TABLE_COLUMNS = {
         "expires_at_ms", "consumed_at_ms", "report",
     ),
     "tombstones": ("deletion_id", "deleted_at_ms"),
+    "account_open_receipts": ("handle_digest", "run_id", "request_key", "scope_digest", "parameters_digest", "content", "content_seal"),
+    "account_open_requests": ("request_key", "original_key", "parameters_digest", "handle_digest", "run_id", "state", "opened_at_ms",
+                              "observation_deadline_at_ms", "receipt_digest", "request_seal"),
 }
 _TABLE_ORDER = {
     "sessions": ("session_digest", "producer"),
@@ -156,6 +160,8 @@ _TABLE_ORDER = {
     "operational_qa": ("observed_at_ms", "qa_id"),
     "operational_check_receipts": ("issued_at_ms", "receipt_id"),
     "tombstones": ("deletion_id",),
+    "account_open_receipts": ("handle_digest",),
+    "account_open_requests": ("request_key",),
 }
 
 
@@ -171,21 +177,24 @@ def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
             return tuple(column for column in _TABLE_COLUMNS[table] if column not in {
                 "binding_state", "abandoned_reason", "observation_started_at_ms",
                 "observation_deadline_at_ms", "last_progress_at_ms",
-                "deadline_observed",
+                "deadline_observed", "history_owner",
             })
         if table == "orchestration_checkpoints":
             return ()
+    if schema_version < 10 and table == 'host_run_bindings':
+        return tuple(n for n in _TABLE_COLUMNS[table] if n != 'history_owner')
     return _TABLE_COLUMNS[table]
 
 
 def _tables(schema_version: int) -> tuple[str, ...]:
-    if schema_version not in {5, 6, 7, 8, 9}:
+    if schema_version not in {5, 6, 7, 8, 9, 10}:
         raise RuntimeError("installed ledger schema does not support this backup")
     return tuple(table for table in _TABLE_COLUMNS
                  if (schema_version >= 7 or table != "launch_claims")
                  and (schema_version >= 8 or table not in {
                      "launch_inputs", "launch_observations", "launch_receipts"})
-                 and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"}))
+                 and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"})
+                 and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'}))
 
 
 def _encode(value: object) -> object:
@@ -353,7 +362,7 @@ def _main() -> int:
         project_id = ledger.project_for_root(target)
         connection = ledger._connection
         schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if schema_version not in {5, 6, 7, 8, 9}:
+        if schema_version not in {5, 6, 7, 8, 9, 10}:
             raise RuntimeError("installed ledger schema does not support this backup")
         project_columns = {
             str(row[1])

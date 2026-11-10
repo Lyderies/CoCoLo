@@ -384,6 +384,28 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
         self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM launch_claims WHERE run_id=?',
             (state['scope'].run_id,)).fetchone()[0])
 
+    def test_known_managed_claim_checks_original_companions_without_clock_or_new_signature_work(self):
+        client, state, launch = self.managed_lifecycle()
+        scope = state['scope']
+        receipt = client.claim_launch(launch.run_handle, launch.identity_digest, request_id=scope.claim_request_id)
+        self.assertEqual('claimed', receipt['state'])
+        with (mock.patch.object(self.ledger, '_clock_ms', side_effect=AssertionError('known clock renewed')),
+                mock.patch.object(self.jobs._intake, 'capture_admission', side_effect=AssertionError('known signature work'))):
+            self.assertEqual({**receipt, 'known': True}, client.claim_launch(launch.run_handle,
+                launch.identity_digest, request_id=scope.claim_request_id))
+            for table in ('account_open_receipts', 'account_open_requests'):
+                with self.subTest(missing=table):
+                    rows = self.ledger._connection.execute('SELECT * FROM '+table).fetchall()
+                    try:
+                        self.ledger._connection.execute('DELETE FROM '+table)
+                        with self.assertRaisesRegex(AccountError, 'claim_storage_invalid'):
+                            client.claim_launch(launch.run_handle, launch.identity_digest, request_id=scope.claim_request_id)
+                    finally:
+                        for row in rows:
+                            self.ledger._connection.execute('INSERT INTO '+table+' VALUES('+','.join('?' for _ in row)+')', tuple(row))
+        self.assertEqual(1, self.ledger._connection.execute('SELECT COUNT(*) FROM launch_claims WHERE run_id=?',
+            (scope.run_id,)).fetchone()[0])
+
     def test_managed_denial_fence_and_lease_retirement_need_no_central_orchestration(self):
         client, state, launch = self.managed_lifecycle()
         self.ledger._connection.execute('DELETE FROM owner_attestations')

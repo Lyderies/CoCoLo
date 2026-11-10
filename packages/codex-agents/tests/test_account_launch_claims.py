@@ -16,12 +16,16 @@ from codex_agents.learning_contracts import canonical_json
 from codex_agents.learning_store import DEFAULT_RETENTION_MS, LearningLedger, LedgerError, StateError
 
 
-def drop_active_capacity_for_legacy_fixture(ledger):
+def drop_original_open_for_legacy_fixture(ledger):
     # Remove the newer original-open layout when constructing an exact old
     # fixture; a version label alone must not make newer authority look legacy.
     ledger._connection.execute('DROP TABLE account_open_requests')
     ledger._connection.execute('DROP TABLE account_open_receipts')
     ledger._connection.execute('ALTER TABLE host_run_bindings DROP COLUMN history_owner')
+
+
+def drop_active_capacity_for_legacy_fixture(ledger):
+    drop_original_open_for_legacy_fixture(ledger)
     ledger._connection.execute("DROP TRIGGER preserve_active_capacity_on_project_deletion")
     ledger._connection.execute("DROP TABLE capacity_completions")
     ledger._connection.execute("DROP TABLE capacity_executions")

@@ -353,7 +353,7 @@ class AccountClaimOperationTests(unittest.TestCase):
         signed = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_attestations")]
         self.backup_seven()
         self.ledger.close()
-        self.ledger = LearningLedger(self.fixture.fixture.state, client_capabilities=self.fixture.fixture.clients)
+        self.ledger = LearningLedger(self.fixture.fixture.state, client_capabilities=self.fixture.fixture.clients, allow_schema_upgrade=True)
         self.addCleanup(self.ledger.close)
         self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
         markers = [tuple(row) for row in self.ledger._connection.execute("SELECT kind,bridge_run_id FROM launch_claims ORDER BY kind")]
@@ -366,7 +366,7 @@ class AccountClaimOperationTests(unittest.TestCase):
         self.legacy_seven()
         self.ledger.close()
         with self.assertRaisesRegex(LedgerError, "registered verified schema 7"):
-            LearningLedger(self.fixture.fixture.state, client_capabilities=self.fixture.fixture.clients)
+            LearningLedger(self.fixture.fixture.state, client_capabilities=self.fixture.fixture.clients, allow_schema_upgrade=True)
         connection = sqlite3.connect(self.fixture.fixture.state.database)
         try:
             self.assertEqual(7, connection.execute("PRAGMA user_version").fetchone()[0])
@@ -389,7 +389,7 @@ class AccountClaimOperationTests(unittest.TestCase):
 
         with mock.patch.object(LearningLedger, "_initialize_launch_operations_locked", autospec=True, side_effect=interrupted), \
                 self.assertRaises(FixtureStop):
-            LearningLedger(self.fixture.fixture.state, client_capabilities=self.fixture.fixture.clients)
+            LearningLedger(self.fixture.fixture.state, client_capabilities=self.fixture.fixture.clients, allow_schema_upgrade=True)
         connection = sqlite3.connect(self.fixture.fixture.state.database)
         try:
             self.assertEqual(7, connection.execute("PRAGMA user_version").fetchone()[0])
@@ -397,7 +397,7 @@ class AccountClaimOperationTests(unittest.TestCase):
             self.assertIsNone(connection.execute("SELECT 1 FROM sqlite_master WHERE name='launch_receipts'").fetchone())
         finally:
             connection.close()
-        self.ledger = LearningLedger(self.fixture.fixture.state, client_capabilities=self.fixture.fixture.clients)
+        self.ledger = LearningLedger(self.fixture.fixture.state, client_capabilities=self.fixture.fixture.clients, allow_schema_upgrade=True)
         self.addCleanup(self.ledger.close)
         self.assertEqual(2, self.count("launch_claims"))
 

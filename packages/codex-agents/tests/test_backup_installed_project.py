@@ -8,6 +8,7 @@ from tests.support import REPOSITORY_ROOT
 from codex_agents import learning_store
 from codex_agents.learning_contracts import content_digest, validate_learning_record
 import tests.test_account_claim_operation as fixture_module
+from tests.test_account_launch_claims import drop_original_open_for_legacy_fixture
 
 
 TOOL = runpy.run_path(str(REPOSITORY_ROOT / "scripts/backup_installed_project.py"))
@@ -15,18 +16,20 @@ TOOL = runpy.run_path(str(REPOSITORY_ROOT / "scripts/backup_installed_project.py
 
 class InstalledBackupManifestTests(unittest.TestCase):
     def test_exact_version_manifests_match_owner_reader_and_keep_old_tables_absent(self):
-        for version in (5, 6, 7, 8, 9):
+        for version in (5, 6, 7, 8, 9, 10):
             with self.subTest(version=version):
                 tables = TOOL["_tables"](version)
                 self.assertEqual(learning_store._backup_tables(version), tables)
                 self.assertEqual(version >= 7, "launch_claims" in tables)
                 self.assertEqual(version >= 8, "launch_receipts" in tables)
                 self.assertEqual(version >= 9, "active_run_capacity" in tables)
+                self.assertEqual(version >= 10, 'account_open_requests' in tables)
+                self.assertEqual(version >= 10, 'account_open_receipts' in tables)
                 for table in tables:
                     self.assertEqual(learning_store._backup_expected_columns(version, table),
                                      TOOL["_expected_columns"](version, table))
                     self.assertEqual(learning_store._BACKUP_ORDER_COLUMNS[table], TOOL["_TABLE_ORDER"][table])
-        for version in (0, 4, 10):
+        for version in (0, 4, 11):
             with self.subTest(unsupported=version), self.assertRaises(RuntimeError):
                 TOOL["_tables"](version)
 
@@ -38,6 +41,8 @@ class InstalledBackupManifestTests(unittest.TestCase):
         return case
 
     def restore(self, case, version):
+        if version < 10 and 'history_owner' in {row[1] for row in case.ledger._connection.execute('PRAGMA table_info(host_run_bindings)')}:
+            drop_original_open_for_legacy_fixture(case.ledger)
         body = learning_store._snapshot_project_partition(case.ledger._connection, case.project,
                                                          ledger_schema_version=version)
         TOOL["_verify_relational_restore"](case.ledger._connection, body,
@@ -72,8 +77,27 @@ class InstalledBackupManifestTests(unittest.TestCase):
         self.assertNotIn("launch_receipts", body["columns"])
         self.assertNotIn("launch_receipts", body["counts"])
 
+    def test_schema_ten_preserves_the_actual_pending_original_open_journal(self):
+        from tests.test_account_original_open import OriginalAccountOpenPendingTests
+
+        original = OriginalAccountOpenPendingTests(methodName='runTest')
+        original.setUp()
+        self.addCleanup(original.doCleanups)
+        request, _ = original.preflight()
+        body = learning_store._snapshot_project_partition(original.ledger._connection,
+            original.base.scope.project_id, ledger_schema_version=10)
+        TOOL['_verify_relational_restore'](original.ledger._connection, body,
+            validate_learning_record=validate_learning_record, content_digest=content_digest)
+        self.assertEqual(1, body['counts']['account_open_requests'])
+        self.assertEqual(0, body['counts']['account_open_receipts'])
+        row = body['tables']['account_open_requests'][0]
+        self.assertEqual(request.journal_seal, row['request_seal'])
+        self.assertEqual(request.opened_at_ms, row['opened_at_ms'])
+        self.assertEqual(request.observation_deadline_at_ms, row['observation_deadline_at_ms'])
+
     def test_unicode_project_backup_envelope_is_accepted_by_owner_verifier(self):
         case = self.fixture()
+        drop_original_open_for_legacy_fixture(case.ledger)
         root = Path(case.fixture.fixture.temporary.name) / "caf\u00e9-\u65e5\u672c"
         root.mkdir()
         project = case.ledger.register_project(root, now_ms=case.stamp)

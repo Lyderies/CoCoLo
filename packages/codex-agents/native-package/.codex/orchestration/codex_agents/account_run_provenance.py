@@ -49,7 +49,7 @@ def attest_run_provenance(ledger, project_id, *, runtime_digest, caller_scope, r
     try:
         context, known, _, _ = ledger._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                                                       request_id=registration.claim_request_id, launch=launch,
-                                                      work_limits=work_limits)
+                                                      work_limits=work_limits, storage_binding=expected)
         if (known is None or known['state'] != 'claimed' or known['bridge_run_id'] != registration.bridge_run_id
                 or known['receipt_digest'] != registration.claim_digest):
             raise ClaimError('claim_execution_unavailable')
