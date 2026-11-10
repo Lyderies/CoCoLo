@@ -16,7 +16,7 @@ from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 
-from codex_agents import bridge, host_commands, host_paths, learning_store
+from codex_agents import bridge, collector_runtime, host_commands, host_paths, learning_store
 from codex_agents.host_commands import HostCommandError, interpreter_path
 from codex_agents.host_paths import (
     PYTHON_ISOLATION_FLAGS,
@@ -279,7 +279,7 @@ class PythonLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
             state = LearningState(Path(directory) / "state")
             learning_store.authorize_collector_runtime(state, ORCHESTRATION_ROOT / "cli.py")
-            with mock.patch.object(learning_store.subprocess, "Popen", record), \
+            with mock.patch.object(collector_runtime.subprocess, "Popen", record), \
                     self.assertRaises(OSError):
                 learning_store._start_collector_locked(
                     state, ORCHESTRATION_ROOT / "cli.py", project_root=Path(directory),

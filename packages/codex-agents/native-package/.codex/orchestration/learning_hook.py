@@ -102,9 +102,8 @@ def _record(args: argparse.Namespace, raw: bytes, checkout_root: Path | None) ->
     from codex_agents.host_paths import HostPathError
     from codex_agents.learning_adapters import normalize_hook
     from codex_agents.learning_contracts import parse_bounded_json
-    from codex_agents.learning_store import (
-        LearningState,
-        StateError,
+    from codex_agents.collector_paths import CollectorPaths, StateError
+    from codex_agents.collector_runtime import (
         client_health_clear,
         client_health_increment,
         ensure_collector,
@@ -117,7 +116,7 @@ def _record(args: argparse.Namespace, raw: bytes, checkout_root: Path | None) ->
         payload = parse_bounded_json(raw)
         if not isinstance(payload, dict):
             raise ContractError("hook payload must be an object")
-        state = LearningState(args.state_root, create=False)
+        state = CollectorPaths(args.state_root)
         session = payload.get("session_id")
         cwd = payload.get("cwd")
         if not isinstance(cwd, str):

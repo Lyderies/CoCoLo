@@ -3489,7 +3489,7 @@ class LearningStoreTests(unittest.TestCase):
     def test_missing_or_spoofed_authorization_cannot_start_collector(self) -> None:
         self.state.collector_authorization.unlink()
         with mock.patch(
-            "codex_agents.learning_store.subprocess.Popen"
+            "codex_agents.collector_runtime.subprocess.Popen"
         ) as popen, self.assertRaisesRegex(CollectorError, "not authorized"):
             ensure_collector(
                 self.state,
@@ -3500,13 +3500,13 @@ class LearningStoreTests(unittest.TestCase):
         authorize_collector_runtime(self.state, ORCHESTRATION_ROOT / "cli.py")
         with (
             mock.patch(
-                "codex_agents.learning_store.PACKAGE_VERSION", "99.0.0"
+                "codex_agents.collector_runtime.PACKAGE_VERSION", "99.0.0"
             ),
             mock.patch(
                 "codex_agents.learning_store.CollectorClient.health"
             ) as health,
             mock.patch(
-                "codex_agents.learning_store.subprocess.Popen"
+                "codex_agents.collector_runtime.subprocess.Popen"
             ) as popen,
             self.assertRaisesRegex(
                 CollectorError, "differs from the owner-authorized runtime"
@@ -3528,7 +3528,7 @@ class LearningStoreTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "codex_agents.learning_store.subprocess.Popen"
+                "codex_agents.collector_runtime.subprocess.Popen"
             ) as popen,
             self.assertRaisesRegex(CollectorError, "quiesced"),
         ):
@@ -3747,7 +3747,7 @@ class LearningStoreTests(unittest.TestCase):
                 "codex_agents.learning_store.CollectorClient.health",
                 side_effect=CollectorNewerVersionError("newer runtime"),
             ),
-            mock.patch("codex_agents.learning_store.subprocess.Popen") as popen,
+            mock.patch("codex_agents.collector_runtime.subprocess.Popen") as popen,
         ):
             with self.assertRaises(CollectorNewerVersionError):
                 _start_collector_locked(
@@ -3770,7 +3770,7 @@ class LearningStoreTests(unittest.TestCase):
                 "codex_agents.learning_store.CollectorClient.health",
                 side_effect=[CollectorError("unavailable"), healthy],
             ),
-            mock.patch("codex_agents.learning_store.subprocess.Popen") as popen,
+            mock.patch("codex_agents.collector_runtime.subprocess.Popen") as popen,
         ):
             self.assertEqual(
                 healthy,

@@ -12,7 +12,6 @@ import secrets
 import socket
 import sqlite3
 import stat
-import subprocess
 import sys
 import threading
 import time
@@ -25,6 +24,29 @@ try:  # AF_UNIX collector is currently supported on POSIX hosts.
 except ImportError:  # pragma: no cover - Windows has no supported collector transport yet.
     fcntl = None  # type: ignore[assignment]
 
+from .collector_paths import (
+    StateError as StateError,
+    UNMOVED_STATE as UNMOVED_STATE,
+    _assert_no_symlink_components as _assert_no_symlink_components,
+    _canonical_project_root as _canonical_project_root,
+    _check_owner_mode as _check_owner_mode,
+    _unmoved_legacy_state as _unmoved_legacy_state,
+    default_state_root as default_state_root,
+)
+from .collector_runtime import (
+    CLIENT_HEALTH_CODES as CLIENT_HEALTH_CODES,
+    COLLECTOR_AUTHORIZATION_SCHEMA_VERSION as COLLECTOR_AUTHORIZATION_SCHEMA_VERSION,
+    HOOK_INGEST_REASON_CODES as HOOK_INGEST_REASON_CODES,
+    _client_health_data as _client_health_data,
+    _collector_runtime_authorization as _collector_runtime_authorization,
+    _start_collector_locked as _start_collector_locked,
+    authorized_collector_runtime as authorized_collector_runtime,
+    client_health_clear as client_health_clear,
+    client_health_increment as client_health_increment,
+    client_health_snapshot as client_health_snapshot,
+    ensure_collector as ensure_collector,
+    require_authorized_collector_runtime as require_authorized_collector_runtime,
+)
 from .collector_client import (
     COLLECTOR_RUNTIME_DIGEST as COLLECTOR_RUNTIME_DIGEST,
     PACKAGE_VERSION as PACKAGE_VERSION,
@@ -95,7 +117,6 @@ from .account_claim_contracts import (
     checked_claim_receipt, matches as claim_matches,
 )
 
-COLLECTOR_AUTHORIZATION_SCHEMA_VERSION = 1
 # The one line `install_owner_public_key` writes; the allowed-signers file holds nothing else.
 # The owner's allowed-signers file is read whole up to this size; anything longer refuses.
 OWNER_KEY_REPLACE_HINT = "run ./setup.sh and choose Replace a lost owner key"
@@ -175,12 +196,6 @@ SOURCE_BY_PRODUCER = {
     "provider": "provider",
 }
 HOOK_EVENT_CODES = tuple(value[0] for value in HOOK_EVENTS.values())
-HOOK_INGEST_REASON_CODES = {
-    "binding_invalid", "provenance_mismatch", "capability_mismatch",
-    "operation_rejected", "operation_invalid", "project_unregistered", "record_conflict",
-    "request_timeout", "request_oversized", "request_invalid", "protocol_mismatch",
-    "transport_unavailable", "response_invalid", "unknown_rejection",
-}
 HOOK_REJECTION_CODES = {
     "hook_normalization_rejected",
     "hook_binding_rejected",
@@ -233,8 +248,6 @@ def empty_ingestion_snapshot(*, registered: bool) -> dict[str, Any]:
     }
 
 
-class StateError(RuntimeError):
-    """Raised when local state would violate an accepted boundary."""
 
 
 class OwnerSignerNotConfigured(StateError):
@@ -804,22 +817,6 @@ def _verify_backup_envelope(
     return body, counts, manifest_digest
 
 
-def default_state_root() -> Path:
-    """`$XDG_STATE_HOME/codex-agents`, else `~/.local/state/codex-agents` in the
-    account's home folder (host_paths.default_state_root), macOS included."""
-
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA")
-        if not base:
-            raise StateError("LOCALAPPDATA is required on Windows")
-        return Path(base) / "codex-agents"
-    from .host_paths import HostPathError
-    from .host_paths import default_state_root as host_default_state_root
-
-    try:
-        return host_default_state_root()
-    except HostPathError as exc:
-        raise StateError(str(exc)) from None
 
 
 def _prepare_default_state_root() -> Path:
@@ -836,11 +833,6 @@ def _prepare_default_state_root() -> Path:
 # The pre-0.8.10 macOS folder (host_paths.legacy_state_root) is moved once, by the
 # owner's `learning-register`; every other use of the default state refuses while
 # only the old folder exists, so nothing starts a second, empty state beside it.
-UNMOVED_STATE = (
-    "the learning state is still in its old macOS folder "
-    "(~/Library/Application Support/codex-agents); ask the owner to run ./setup.sh "
-    "(collector step), which moves it to ~/.local/state/codex-agents"
-)
 BOTH_STATES = (
     "the learning state exists both in its old macOS folder "
     "(~/Library/Application Support/codex-agents) and in its new one "
@@ -886,19 +878,6 @@ STATE_SOCKET_TOO_LONG = (
 UNIX_SOCKET_PATH_MAX = 103 if sys.platform == "darwin" else 107
 
 
-def _unmoved_legacy_state() -> bool:
-    """Whether only the pre-0.8.10 macOS state folder exists."""
-
-    if os.name == "nt":
-        return False
-    from .host_paths import legacy_state_root
-
-    legacy = legacy_state_root()
-    return (
-        legacy is not None
-        and os.path.lexists(legacy)
-        and not os.path.lexists(default_state_root())
-    )
 
 
 # Not copied: the stale socket, lock files (recreated on use), the database and
@@ -1191,30 +1170,8 @@ def _inside_git_tree(path: Path) -> bool:
     return any((parent / ".git").exists() for parent in (path, *path.parents))
 
 
-def _assert_no_symlink_components(path: Path) -> None:
-    current = Path(path.anchor)
-    for part in path.parts[1:]:
-        current = current / part
-        if not current.exists():
-            continue
-        try:
-            mode = current.lstat().st_mode
-        except OSError as exc:
-            raise StateError("state path cannot be inspected") from exc
-        if stat.S_ISLNK(mode):
-            raise StateError("state path contains a symlink component")
 
 
-def _check_owner_mode(path: Path, *, directory: bool) -> None:
-    info = path.stat()
-    if hasattr(os, "getuid") and info.st_uid != os.getuid():
-        raise StateError("state path is not owned by the current user")
-    expected = 0o700 if directory else 0o600
-    if stat.S_IMODE(info.st_mode) != expected:
-        raise StateError("state path has unsafe permissions")
-    # A second hard link would let whoever holds it change the file in place.
-    if not directory and info.st_nlink != 1:
-        raise StateError("state file has another hard link")
 
 
 
@@ -1709,97 +1666,10 @@ def validate_collector_runtime(cli_path: Path) -> dict[str, str | int]:
         ) from exc
 
 
-def _collector_runtime_authorization(
-    state: LearningState, *, allow_quiesced: bool
-) -> dict[str, str | int | bool]:
-    """Read a valid active or upgrade-quiesced collector identity."""
-
-    path = state.collector_authorization
-    if not path.exists():
-        raise CollectorAuthorizationError(
-            "collector runtime is not authorized; run learning-register",
-            code="runtime_authorization_missing",
-        )
-    if path.is_symlink():
-        raise CollectorAuthorizationError(
-            "collector runtime authorization is unsafe",
-            code="runtime_authorization_invalid",
-        )
-    try:
-        _check_owner_mode(path, directory=False)
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode):
-                raise StateError("collector runtime authorization is unsafe")
-            raw = os.read(descriptor, 1025)
-        finally:
-            os.close(descriptor)
-        if len(raw) > 1024:
-            raise StateError("collector runtime authorization is invalid")
-        value = json.loads(raw)
-    except (OSError, StateError, UnicodeError, json.JSONDecodeError) as exc:
-        raise CollectorAuthorizationError(
-            "collector runtime authorization is invalid",
-            code="runtime_authorization_invalid",
-        ) from exc
-    if (
-        not isinstance(value, dict)
-        or set(value) not in (
-            {"schema_version", "runtime_version", "runtime_digest"},
-            {
-                "schema_version", "runtime_version", "runtime_digest",
-                "quiesced_for_upgrade",
-            },
-        )
-        or value.get("schema_version") != COLLECTOR_AUTHORIZATION_SCHEMA_VERSION
-        or _version_tuple(value.get("runtime_version")) is None
-        or not isinstance(value.get("runtime_digest"), str)
-        or len(value["runtime_digest"]) != 64
-        or any(
-            character not in "0123456789abcdef"
-            for character in value["runtime_digest"]
-        )
-    ):
-        raise CollectorAuthorizationError(
-            "collector runtime authorization is invalid",
-            code="runtime_authorization_invalid",
-        )
-    if value.get("quiesced_for_upgrade") is not True and "quiesced_for_upgrade" in value:
-        raise CollectorAuthorizationError(
-            "collector runtime authorization is invalid",
-            code="runtime_authorization_invalid",
-        )
-    if value.get("quiesced_for_upgrade") is True and not allow_quiesced:
-        raise CollectorAuthorizationError(
-            "collector runtime is quiesced for an owner-authorized upgrade",
-            code="runtime_authorization_quiesced",
-        )
-    return value
 
 
-def authorized_collector_runtime(state: LearningState) -> dict[str, str | int]:
-    """Read the exact active collector identity authorized in owner-only state."""
-
-    return _collector_runtime_authorization(state, allow_quiesced=False)
 
 
-def require_authorized_collector_runtime(
-    state: LearningState,
-) -> dict[str, str | int]:
-    """Fail closed unless this process is the exact owner-authorized runtime."""
-
-    authorized = authorized_collector_runtime(state)
-    if (
-        authorized["runtime_version"] != PACKAGE_VERSION
-        or authorized["runtime_digest"] != COLLECTOR_RUNTIME_DIGEST
-    ):
-        raise CollectorAuthorizationError(
-            "installed collector differs from the owner-authorized runtime; "
-            "run learning-register from the intended package",
-            code="runtime_unauthorized",
-        )
-    return authorized
 
 
 def authorize_collector_runtime(
@@ -1856,15 +1726,6 @@ def authorize_collector_runtime(
     return identity
 
 
-def _canonical_project_root(path: Path) -> Path:
-    if not path.is_absolute():
-        raise StateError("project root must be absolute")
-    _assert_no_symlink_components(path)
-    resolved = path.resolve(strict=True)
-    if not resolved.is_dir():
-        raise StateError("project root must be a directory")
-    _assert_no_symlink_components(resolved)
-    return resolved
 
 
 @dataclass(frozen=True)
@@ -11518,266 +11379,18 @@ class CollectorServer:
         return not self._thread.is_alive()
 
 
-CLIENT_HEALTH_CODES = {
-    "collector_start_failed",
-    "collector_unavailable",
-    "maintenance_active",
-    "hook_normalization_rejected",
-    "hook_binding_rejected",
-    "hook_ingest_rejected",
-}
 
 
-def _client_health_data(state: LearningState) -> dict[str, Any]:
-    if not state.client_health.exists():
-        return {"schema_version": 1, "projects": {}}
-    if state.client_health.is_symlink():
-        raise StateError("client health path is unsafe")
-    _check_owner_mode(state.client_health, directory=False)
-    try:
-        raw = state.client_health.read_bytes()
-        if len(raw) > 65_536:
-            raise StateError("client health state is invalid")
-        value = json.loads(raw)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise StateError("client health state is invalid") from exc
-    if (
-        not isinstance(value, dict)
-        or value.get("schema_version") != 1
-        or not isinstance(value.get("projects"), dict)
-    ):
-        raise StateError("client health state is invalid")
-    allowed_codes = CLIENT_HEALTH_CODES
-    for project_digest, counters in value["projects"].items():
-        if (
-            not isinstance(project_digest, str)
-            or len(project_digest) != 64
-            or any(character not in "0123456789abcdef" for character in project_digest)
-            or not isinstance(counters, dict)
-            or set(counters) - allowed_codes
-        ):
-            raise StateError("client health state is invalid")
-        for counter in counters.values():
-            if (
-                not isinstance(counter, dict)
-                or set(counter) not in ({"count", "updated_at_ms"},
-                                        {"count", "updated_at_ms", "last_reason_code"})
-                or ("last_reason_code" in counter
-                    and (not isinstance(counter["last_reason_code"], str)
-                         or counter["last_reason_code"] not in HOOK_INGEST_REASON_CODES))
-                or not isinstance(counter["count"], int)
-                or isinstance(counter["count"], bool)
-                or counter["count"] < 1
-                or not isinstance(counter["updated_at_ms"], int)
-                or isinstance(counter["updated_at_ms"], bool)
-                or counter["updated_at_ms"] < 0
-            ):
-                raise StateError("client health state is invalid")
-    return value
 
 
-def client_health_increment(
-    state: LearningState,
-    project_root: Path,
-    code: str,
-    *,
-    now_ms: int | None = None,
-    reason_code: str | None = None,
-) -> None:
-    """Persist one content-free, project-keyed client failure counter."""
-
-    if code not in CLIENT_HEALTH_CODES or fcntl is None:
-        return
-    root = _canonical_project_root(project_root)
-    project_digest = keyed_digest(state.digest_key(), str(root))
-    descriptor = os.open(
-        state.client_health_lock,
-        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    try:
-        os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        data = _client_health_data(state)
-        projects = data["projects"]
-        if project_digest not in projects and len(projects) >= 4096:
-            return
-        project = projects.setdefault(project_digest, {})
-        current = project.get(code, {"count": 0, "updated_at_ms": 0})
-        timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        project[code] = {
-            "count": int(current.get("count", 0)) + 1,
-            "updated_at_ms": timestamp,
-        }
-        if reason_code is not None and code == "hook_ingest_rejected":
-            project[code]["last_reason_code"] = (
-                reason_code if isinstance(reason_code, str) and reason_code in HOOK_INGEST_REASON_CODES
-                else "unknown_rejection"
-            )
-        temporary = state.root / f".collector-client-health.{secrets.token_hex(8)}.tmp"
-        payload = canonical_json(data) + b"\n"
-        file_descriptor = os.open(
-            temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-        )
-        try:
-            with os.fdopen(file_descriptor, "wb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, state.client_health)
-            os.chmod(state.client_health, 0o600)
-        finally:
-            with contextlib.suppress(FileNotFoundError):
-                temporary.unlink()
-    finally:
-        with contextlib.suppress(OSError):
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
 
 
-def client_health_snapshot(state: LearningState, project_root: Path) -> dict[str, Any]:
-    root = _canonical_project_root(project_root)
-    project_digest = keyed_digest(state.digest_key(), str(root))
-    return dict(_client_health_data(state)["projects"].get(project_digest, {}))
 
 
-def client_health_clear(state: LearningState, project_root: Path) -> None:
-    """Remove one deleted project's content-free client counters."""
-
-    if fcntl is None or not state.client_health.exists():
-        return
-    root = _canonical_project_root(project_root)
-    project_digest = keyed_digest(state.digest_key(), str(root))
-    descriptor = os.open(
-        state.client_health_lock,
-        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    try:
-        os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        data = _client_health_data(state)
-        if data["projects"].pop(project_digest, None) is None:
-            return
-        temporary = state.root / f".collector-client-health.{secrets.token_hex(8)}.tmp"
-        descriptor_out = os.open(
-            temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-        )
-        try:
-            with os.fdopen(descriptor_out, "wb") as handle:
-                handle.write(canonical_json(data) + b"\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, state.client_health)
-            os.chmod(state.client_health, 0o600)
-        finally:
-            with contextlib.suppress(FileNotFoundError):
-                temporary.unlink()
-    finally:
-        with contextlib.suppress(OSError):
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
 
 
-def ensure_collector(
-    state: LearningState,
-    cli_path: Path,
-    *,
-    project_root: Path,
-    timeout: float = 1.0,
-) -> dict[str, Any]:
-    """Ensure one detached collector is healthy without storing its project path."""
-
-    require_authorized_collector_runtime(state)
-    client = CollectorClient(state.socket)
-    try:
-        return client.health()
-    except CollectorVersionError:
-        client_health_increment(state, project_root, "collector_start_failed")
-        raise
-    except CollectorError:
-        pass
-    if fcntl is None:
-        client_health_increment(state, project_root, "collector_start_failed")
-        raise CollectorError("collector auto-start is unavailable")
-    descriptor = os.open(
-        state.runtime_lock,
-        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    try:
-        os.fchmod(descriptor, 0o600)
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            client_health_increment(state, project_root, "maintenance_active")
-            raise CollectorError("collector maintenance is active") from exc
-        return _start_collector_locked(
-            state,
-            cli_path,
-            project_root=project_root,
-            timeout=timeout,
-        )
-    finally:
-        with contextlib.suppress(OSError):
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
 
 
-def _start_collector_locked(
-    state: LearningState,
-    cli_path: Path,
-    *,
-    project_root: Path,
-    timeout: float = 1.0,
-) -> dict[str, Any]:
-    """Start the collector while the caller owns the runtime maintenance lock."""
-
-    require_authorized_collector_runtime(state)
-    client = CollectorClient(state.socket)
-    try:
-        return client.health()
-    except CollectorVersionError:
-        client_health_increment(state, project_root, "collector_start_failed")
-        raise
-    except CollectorError:
-        pass
-    from .host_paths import PYTHON_ISOLATION_FLAGS
-
-    subprocess.Popen(
-        [
-            sys.executable,
-            # Isolated, no bytecode in managed paths (isolated mode ignores
-            # PYTHONDONTWRITEBYTECODE), and no site-packages, so no .pth file or
-            # sitecustomize a sandboxed session could reach runs in the collector.
-            *PYTHON_ISOLATION_FLAGS,
-            str(cli_path.resolve(strict=True)),
-            "learning-serve",
-            "--state-root",
-            str(state.root),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        cwd="/",
-        close_fds=True,
-        # No inherited environment; macOS developer tools skip the xcrun lookup cache
-        # under $TMPDIR, which a sandboxed session can write.
-        env={"PATH": os.defpath, "xcrun_nocache": "1"},
-        start_new_session=True,
-    )
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            return client.health()
-        except CollectorError:
-            time.sleep(0.02)
-    client_health_increment(state, project_root, "collector_start_failed")
-    raise CollectorError("collector did not become healthy")
 
 
 def _wait_for_writer_release(state: LearningState, deadline: float) -> bool:

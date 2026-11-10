@@ -387,10 +387,12 @@ class CheckoutGuardTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertGreater(ingested, 0)
-        # The same event from the checkout's own top folder imports the package as before.
+        # The checkout event imports client support without loading a persistence owner.
         stdout, imported = self.probe(self.checkout, self.base / "no-state")
         self.assertEqual("{}\n", stdout)
-        self.assertIn("codex_agents.learning_store", imported)
+        self.assertIn("codex_agents.collector_paths", imported)
+        self.assertIn("codex_agents.collector_runtime", imported)
+        self.assertNotIn("codex_agents.learning_store", imported)
 
 if __name__ == "__main__":
     unittest.main()

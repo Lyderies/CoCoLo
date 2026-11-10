@@ -61,6 +61,8 @@ RUNTIME_FILES = (
     "codex_agents/codex_worker.py",
     "codex_agents/collector_client.py",
     "codex_agents/collector_contracts.py",
+    "codex_agents/collector_paths.py",
+    "codex_agents/collector_runtime.py",
     "codex_agents/contracts.py",
     "codex_agents/control_api.py",
     "codex_agents/control_loop.py",
