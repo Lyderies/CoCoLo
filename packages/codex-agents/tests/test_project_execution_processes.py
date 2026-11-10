@@ -396,6 +396,10 @@ class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
                              "UPDATE project_cleanup_receipts SET evidence=x'50524956415445'",
                              "UPDATE terminal_outbox SET receipt_digest='"+'f'*64+"'",
                              'DELETE FROM project_execution_consumptions',
+                             "UPDATE project_execution_consumptions SET registration_digest='"+'f'*64+"'",
+                             'UPDATE project_execution_consumptions SET consumed_at_ms=0',
+                             "DELETE FROM records WHERE record_type='execution_provenance'",
+                             'DELETE FROM project_host_opens',
                              'UPDATE result_leases SET cleanup_reservation_digest=NULL'):
                 with self.subTest(mutation=mutation):
                     store._connection.execute('SAVEPOINT fixture_cleanup_corruption')

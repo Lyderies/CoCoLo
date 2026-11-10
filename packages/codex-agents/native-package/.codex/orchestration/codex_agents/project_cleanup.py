@@ -7,7 +7,7 @@ Native custody and closed-descendant containment remain separate requirements.
 import secrets
 from dataclasses import replace
 
-from .history_contracts import HistoryError, _DIGEST, matches
+from .history_contracts import HistoryError, _DIGEST, matches, valid_integer
 from .learning_contracts import canonical_json, keyed_digest
 
 MAX_CLEANUP_RESERVATIONS = 4096
@@ -116,6 +116,19 @@ def _original_material(store, binding):
     from .learning_contracts import parse_bounded_json
     attempt = AttemptBinding(**parse_bounded_json(store._stored_blob(attempt_row['binding'], maximum=4096)))
     evidence = verify_terminal_evidence(store._result_key, binding, store.attest_terminal_delivery(attempt))
+    # This new cleanup protocol never downgrades a missing managed original to
+    # the explicit pre-journal fixture/legacy execution path. Both original
+    # provenance and its independent host-open journal remain indispensable.
+    store._execution_provenance(evidence.grant)
+    consumed = store._connection.execute('SELECT * FROM project_execution_consumptions '
+        'WHERE project_id=? AND claim_id=?', (binding.project_id, lease.claim_id)).fetchone()
+    provenance = store.record(store._execution_provenance_id(evidence.grant))
+    if (consumed is None or consumed['registration_digest'] != evidence.grant.registration_digest
+            or not valid_integer(consumed['consumed_at_ms'], minimum=evidence.grant.claimed_at_ms,
+                                 maximum=evidence.grant.deadline_at_ms - 1)
+            or provenance.observed_at_ms != consumed['consumed_at_ms']
+            or provenance.ingested_at_ms != consumed['consumed_at_ms']):
+        raise HistoryError('history_incompatible')
     row = store._connection.execute('SELECT receipt_digest FROM terminal_outbox '
         'WHERE project_id=? AND claim_id=?', (binding.project_id, lease.claim_id)).fetchone()
     expected = terminal_receipt(store._result_key, evidence.grant, evidence.delivery, known=False)['receipt_digest']
