@@ -2247,8 +2247,9 @@ Project schema 9 reserves one cleanup journal slot atomically with every new
 pre-claim result lease. The sealed lease binds that original reservation. The
 fixed 4,096-slot limit includes expired reservations; capacity exhaustion refuses
 before account admission. An existing lease never creates a replacement slot.
-The two new tables store only bounded binding metadata and at most one 16 KiB
-cleanup receipt per slot, without result bodies, process lists or a new clock.
+The cleanup tables store only bounded binding metadata and at most one 16 KiB
+cleanup receipt plus one 16 KiB account acknowledgement per slot, without result
+bodies, process lists or a new clock.
 
 After the real account terminal acknowledgement, `prepare_cleanup()` queues the
 retained original worker custody to the existing project writer. The writer
@@ -2304,8 +2305,34 @@ authority. Legacy account-local release digests remain unchanged. Backups retain
 the exact version-specific column manifests and check journal coverage in both
 directions. Ordinary startup cannot migrate an older ledger.
 
-The actual process fixture now carries an original project-writer cleanup receipt
-into account settlement while its supervisor remains alive. Native enrollment
-and containment are still synthetic there. Durable project acknowledgement and
-local registry/persistence retirement remain a separate required next step;
-neither the new API nor its tests authorizes production activation or release.
+The actual process fixture carries an original project-writer cleanup receipt
+into account settlement while its supervisor remains alive, then persists the
+account acknowledgement before retiring the original local execution. Native
+enrollment and containment are still synthetic there; these tests do not
+authorize production activation or release.
+
+### Durable project release acknowledgement
+
+Project schema 10 adds an independent account acknowledgement journal and a
+sealed reference on the original cleanup reservation. The original pre-claim
+slot covers both bounded receipts. `acknowledge_release()` retains the first
+account reply and queues verification and SQL on the existing project writer.
+The writer checks the original cleanup, account receipt and live selected-reader
+custody before and after each write and before publishing confirmation.
+Custody loss rolls back both journal and reference. A lost committed reply
+recovers the exact first bytes; known-flag changes cannot replace that original.
+Missing journal companions refuse rather than remint acknowledgement state.
+
+Only the writer-confirmed `release_acknowledged` state permits the control owner
+to call `finish_release()`. It acknowledges the original registry ticket without
+SQL or waiting. Lane and fixed-worker retirement require that released original
+entry. An account receipt alone, an unknown writer response or constructed
+cleanup reference cannot free local custody. Historical acknowledgement reads
+verify original companions without a new clock or native authority.
+
+The explicit schema-9 upgrade preserves original cleanup receipts, row/blob
+bytes and v1 state seals, adds a null acknowledgement reference, and invents no
+account or native fact. An interrupted initialization closes its own connection
+and writer lock while preserving the original interruption. Ordinary startup
+still refuses migration; genuine archives and rollback tests do not prove native
+drain or the independently required real-provider/containment activation gates.

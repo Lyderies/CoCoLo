@@ -17,6 +17,7 @@ def legacy_cleanup_layout(store):
             'WHERE project_id=? AND run_handle=? AND attempt=?',
             (lease_state_seal(store._result_key, value), value.binding.project_id,
              value.binding.run_handle, value.binding.attempt))
+    store._connection.execute('DROP TABLE project_cleanup_acknowledgements')
     store._connection.execute('DROP TABLE project_cleanup_receipts')
     store._connection.execute('DROP TABLE project_cleanup_reservations')
     store._connection.execute('ALTER TABLE result_leases DROP COLUMN cleanup_reservation_digest')

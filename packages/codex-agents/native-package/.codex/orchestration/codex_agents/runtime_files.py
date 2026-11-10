@@ -101,6 +101,7 @@ RUNTIME_FILES = (
     "codex_agents/project_operational_qa.py",
     "codex_agents/project_qa_checks.py",
     "codex_agents/project_qa_commit.py",
+    "codex_agents/project_release_ack.py",
     "codex_agents/project_worker_result.py",
     "codex_agents/providers.py",
     "codex_agents/release_contracts.py",

@@ -39,7 +39,7 @@ MAX_PERSISTENCE_ENTRY_BYTES = (MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES 
                                + 2 * MAX_RUN_PROVENANCE_BYTES
                                + 2 * MAX_OPEN_PROVENANCE_BYTES + 1024
                                + 2 * MAX_TERMINAL_EVIDENCE_BYTES + MAX_DENIAL_RECEIPT_BYTES
-                               + 2 * MAX_CLEANUP_EVIDENCE_BYTES)
+                               + 4 * MAX_CLEANUP_EVIDENCE_BYTES)
 
 
 class ResultPersistenceHandle:
@@ -79,6 +79,8 @@ class _Pending:
     denial_receipt: bytes | None = None
     cleanup_custody: object = None
     cleanup_raw: bytes | None = None
+    release_acknowledgement: bytes | None = None
+    release_confirmed: bytes | None = None
 
 
 class ResultPersistenceLane:
@@ -598,12 +600,74 @@ class ResultPersistenceLane:
     def delivery(self, handle):
         pending = self._job(handle)
         with self._lock:
-            if pending.state not in {"committed", "acknowledging", "acknowledged", "preparing_cleanup", "cleanup_ready"} or pending.delivery is None:
+            if pending.state not in {"committed", "acknowledging", "acknowledged", "preparing_cleanup", "cleanup_ready",
+                                     "acknowledging_release", "release_acknowledged", "released"} or pending.delivery is None:
                 raise HistoryError("history_result_not_ready")
             value = pending.delivery
             # Return a metadata copy, never the registry's retained authority.
             return TerminalDelivery(value.delivery_sequence, _capture_binding(value.binding),
                                     value.record_id, value.record_content_digest, value.result_digest)
+
+    def acknowledge_release(self, handle, raw=None):
+        """Queue original account settlement; do not yet free native custody."""
+        pending = self._job(handle)
+        with self._lock:
+            if self._closed or self._fault or self._allow_local_reference:
+                raise HistoryError('history_not_authorized')
+            if raw is None:
+                raw = pending.release_acknowledgement
+            if type(raw) is not bytes or not 0 < len(raw) <= MAX_CLEANUP_EVIDENCE_BYTES:
+                raise HistoryError('history_invalid_input')
+            if pending.release_acknowledgement is not None and pending.release_acknowledgement != raw:
+                raise HistoryError('history_conflict')
+            if pending.state in {'acknowledging_release', 'release_acknowledged', 'released'}:
+                return
+            if (pending.state not in {'cleanup_ready', 'failed'} or pending.cleanup_raw is None
+                    or pending.cleanup_custody is None or pending.lease_binding is None):
+                raise HistoryError('history_result_not_ready')
+        self._cleanup_snapshot(pending)
+        with self._lock:
+            if self._closed or self._fault:
+                raise HistoryError('history_service_unavailable')
+            pending.release_acknowledgement = raw
+            pending.state, pending.reason = 'acknowledging_release', None
+            self._incoming.put_nowait(('acknowledge_release', handle))
+
+    def release_receipt(self, handle):
+        pending = self._job(handle)
+        with self._pool._registry._lock:
+            self._cleanup_snapshot(pending)
+            with self._lock:
+                if self._closed or self._fault:
+                    raise HistoryError('history_service_unavailable')
+                if pending.state != 'release_acknowledged' or pending.release_confirmed is None:
+                    raise HistoryError('history_result_not_ready')
+                return pending.release_confirmed
+
+    def finish_release(self, handle):
+        """No SQL or wait: finish only the writer-confirmed original execution."""
+        pending = self._job(handle)
+        registry = self._pool._registry
+        with registry._lock:
+            original = self._pool._jobs.get(pending.worker_handle)
+            if original is not pending.original_job or original.ticket is not pending.execution_ticket:
+                raise HistoryError('history_not_authorized')
+            with self._lock:
+                if self._closed or self._fault or pending.release_confirmed is None:
+                    raise HistoryError('history_result_not_ready')
+                if pending.state == 'released':
+                    entry = registry._issued.get(pending.execution_ticket)
+                    if entry is None or entry.state != 'released':
+                        raise HistoryError('history_not_authorized')
+                    return
+                if pending.state != 'release_acknowledged':
+                    raise HistoryError('history_result_not_ready')
+                self._cleanup_snapshot(pending)
+                try:
+                    registry.acknowledge_release(pending.execution_ticket)
+                except ExecutionCustodyError:
+                    raise HistoryError('history_not_authorized') from None
+                pending.state = 'released'
 
     def retire(self, handle):
         """Free local memory only after commit AND original account release."""
@@ -614,7 +678,7 @@ class ResultPersistenceLane:
             if original is not pending.original_job or entry is None or entry.state != "released":
                 raise HistoryError("history_not_authorized")
         with self._lock:
-            if pending.state not in {"committed", "acknowledged", "cleanup_ready"}:
+            if pending.state not in {"committed", "acknowledged", "cleanup_ready", "released"}:
                 raise HistoryError("history_result_not_ready")
             self._jobs.pop(handle)
             self._by_worker.pop(pending.worker_handle)
@@ -763,6 +827,18 @@ class ResultPersistenceLane:
                     raise HistoryError('history_service_unavailable')
                 pending.cleanup_raw, pending.state, pending.reason = raw, 'cleanup_ready', None
 
+    def _acknowledge_release(self, pending):
+        self._cleanup_snapshot(pending)
+        raw = self._history().record_account_release(pending.lease_binding, pending.release_acknowledgement,
+            registry=self._pool._registry, custody=pending.cleanup_custody)
+        with self._pool._registry._lock:
+            self._cleanup_snapshot(pending)
+            with self._lock:
+                if self._closed or self._fault:
+                    raise HistoryError('history_service_unavailable')
+                pending.release_confirmed = raw
+                pending.state, pending.reason = 'release_acknowledged', None
+
     def _settle_denial(self, pending):
         value = self._history().settle_denied_result_lease(pending.lease_binding, pending.denial_receipt)
         with self._lock:
@@ -776,7 +852,8 @@ class ResultPersistenceLane:
                       "consume_execution": self._consume_execution,
                       "settle_denial": self._settle_denial,
                       "acknowledge_terminal": self._acknowledge_terminal,
-                      "prepare_cleanup": self._prepare_cleanup}
+                      "prepare_cleanup": self._prepare_cleanup,
+                      "acknowledge_release": self._acknowledge_release}
         self._ready.set()
         pending = None
         try:

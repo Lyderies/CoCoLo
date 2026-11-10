@@ -22,7 +22,7 @@ from codex_agents.account_service import AccountAuthorization, AccountService
 from codex_agents.control_api import ControlScope, control_request, decode_control_response, encode_control_request
 from codex_agents.execution_grant import ExecutionRegistrationInput
 from codex_agents.host_open_contracts import OpenProvenanceInput
-from codex_agents.learning_contracts import content_digest, keyed_digest
+from codex_agents.learning_contracts import canonical_json, content_digest, keyed_digest
 from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST
 from codex_agents.result_contracts import ResultLeaseBinding
 from codex_agents.project_history import ProjectHistory
@@ -374,13 +374,30 @@ class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
         self.assertEqual({**receipt, 'known': True}, self.account(request, child['context']))
         self.send(child, receipt)
         reply = self.read(child, 'release_received')
-        self.assertFalse(reply['local_execution_released'])
-        self.assertFalse(reply['local_persistence_retired'])
+        self.assertTrue(reply['local_execution_released'])
+        self.assertTrue(reply['local_persistence_retired'])
+        self.assertTrue(reply['local_worker_retired'])
+        self.assertTrue(reply['release_custody_loss_rolled_back'])
+        self.assertEqual(canonical_json(receipt), bytes.fromhex(reply['release_ack']))
         self.assertEqual(0, child['process'].wait(timeout=10))
         state = self.ledger._capacity_status(child['scope'].project_id,
             CapacityStatusInput(child['scope'].run_handle, child['receipt']['bridge_run_id']))
         self.assertEqual('released', state['state'])
         self.assertEqual(receipt['receipt_digest'], state['receipt_digest'])
+        from unittest import mock
+        from codex_agents.history_contracts import HistoryError
+        store = ProjectHistory(child['history'], child['scope'].project_id, result_key=self.fixture.key,
+            result_capacity=ResultCapacity(8, 2*MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
+        try:
+            with mock.patch.object(store,'_result_clock',side_effect=AssertionError('release ACK recovery clock')):
+                self.assertEqual(canonical_json(receipt),store.account_release_receipt(child['scope']))
+            store._connection.execute('DELETE FROM project_cleanup_acknowledgements')
+            with self.assertRaises(HistoryError):
+                store.account_release_receipt(child['scope'])
+            self.assertIsNotNone(store._connection.execute('SELECT account_release_digest FROM project_cleanup_reservations').fetchone()[0])
+            self.assertEqual(0,store._connection.execute('SELECT COUNT(*) FROM project_cleanup_acknowledgements').fetchone()[0])
+        finally:
+            store.close()
 
     def test_process_death_during_cleanup_insert_rolls_back_and_keeps_account_charged(self):
         from codex_agents.history_contracts import HistoryError

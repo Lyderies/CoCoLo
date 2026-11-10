@@ -54,7 +54,7 @@ class ProjectCleanupReservationTests(unittest.TestCase):
                     with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
                         operation()
                 self.store._connection.execute('DELETE FROM project_cleanup_reservations')
-                self.store._connection.execute('INSERT INTO project_cleanup_reservations VALUES(?,?,?,?,?,?,?,?)', row)
+                self.store._connection.execute('INSERT INTO project_cleanup_reservations VALUES(?,?,?,?,?,?,?,?,?)', row)
         self.assertEqual(1, self.count())
 
     def test_bounded_cleanup_slots_are_reserved_before_launch_and_not_reused_on_expiry(self):
@@ -106,6 +106,7 @@ class ProjectCleanupReservationTests(unittest.TestCase):
         self.store._connection.execute('DELETE FROM project_cleanup_reservations')
         self.store._connection.execute('UPDATE result_leases SET cleanup_reservation_digest=NULL,state_digest=?',
                                        (lease_state_seal(fixtures.fixtures.KEY, legacy),))
+        self.store._connection.execute('DROP TABLE project_cleanup_acknowledgements')
         self.store._connection.execute('DROP TABLE project_cleanup_receipts')
         self.store._connection.execute('DROP TABLE project_cleanup_reservations')
         self.store._connection.execute('ALTER TABLE result_leases DROP COLUMN cleanup_reservation_digest')

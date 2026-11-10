@@ -356,11 +356,78 @@ def main():
             original = lane.cleanup_evidence(handle)
             value = verify_cleanup_evidence(key, lease_scope, original)
             from codex_agents.learning_contracts import keyed_digest
-            verify_release_receipt(key, value, keyed_digest(key, original), canonical_json(receive()))
-            # This fixture proves account settlement, not the still-required
-            # durable project acknowledgement/local retirement handoff.
+            account_reply = canonical_json(receive())
+            verify_release_receipt(key, value, keyed_digest(key, original), account_reply)
+            try:
+                lane.finish_release(handle)
+            except HistoryError:
+                pass
+            else:
+                raise RuntimeError('fixture_retired_before_durable_release_ack')
+            try:
+                lane.retire(handle)
+            except HistoryError:
+                pass
+            else:
+                raise RuntimeError('fixture_lane_retired_before_release_ack')
+            record_release = ProjectHistory.record_account_release
+            release_attempts = []
+            release_race_checked = []
+            def lose_release_reply(store, *args, **options):
+                if not release_race_checked:
+                    reference = registry._cleanups[proof]
+                    def withdraw(sql):
+                        if sql.lstrip().startswith('INSERT INTO project_cleanup_acknowledgements'):
+                            with registry._lock:
+                                registry._cleanups.pop(proof)
+                    store._connection.set_trace_callback(withdraw)
+                    try:
+                        try:
+                            record_release(store, *args, **options)
+                        except HistoryError as error:
+                            if error.reason_code != 'history_not_authorized':
+                                raise
+                        else:
+                            raise RuntimeError('fixture_release_custody_loss_accepted')
+                    finally:
+                        with registry._lock:
+                            registry._cleanups[proof] = reference
+                        store._connection.set_trace_callback(None)
+                    if (store._connection.execute('SELECT COUNT(*) FROM project_cleanup_acknowledgements').fetchone()[0] != 0
+                            or store._connection.execute('SELECT account_release_digest FROM project_cleanup_reservations').fetchone()[0] is not None):
+                        raise RuntimeError('fixture_release_custody_loss_not_rolled_back')
+                    release_race_checked.append(True)
+                raw = record_release(store, *args, **options)
+                release_attempts.append(raw)
+                with mock.patch.object(store, '_result_clock', side_effect=AssertionError('release ACK clock')):
+                    if store.account_release_receipt(args[0]) != raw:
+                        raise RuntimeError('fixture_changed_original_release_ack')
+                if len(release_attempts) == 1:
+                    raise OSError('fixture_lost_project_release_ack')
+                return raw
+            with mock.patch.object(ProjectHistory, 'record_account_release', new=lose_release_reply):
+                lane.acknowledge_release(handle, account_reply)
+                until(lambda: lane.snapshot(handle)['state'] != 'acknowledging_release')
+                if lane.snapshot(handle)['state'] != 'failed' or registry._issued[ticket].state != 'cleaned':
+                    raise RuntimeError('fixture_early_original_release')
+                try:
+                    lane.finish_release(handle)
+                except HistoryError:
+                    pass
+                else:
+                    raise RuntimeError('fixture_released_after_unknown_writer_reply')
+                lane.acknowledge_release(handle)
+                until(lambda: lane.snapshot(handle)['state'] != 'acknowledging_release')
+            if release_attempts != [account_reply, account_reply] or lane.release_receipt(handle) != account_reply:
+                raise RuntimeError('fixture_replaced_project_release_ack')
+            lane.finish_release(handle)
+            lane.finish_release(handle)
+            lane.retire(handle)
+            owner.retire(binding, pool, worker)
             emit(stage='release_received', local_execution_released=registry._issued[ticket].state == 'released',
-                 local_persistence_retired=handle not in lane._jobs)
+                 local_persistence_retired=handle not in lane._jobs,
+                 local_worker_retired=worker not in pool._jobs, release_ack=account_reply.hex(),
+                 release_custody_loss_rolled_back=release_race_checked == [True])
     finally:
         pool.close()
         if lane is not None:

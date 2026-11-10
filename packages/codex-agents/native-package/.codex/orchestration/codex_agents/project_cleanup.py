@@ -13,7 +13,7 @@ from .learning_contracts import canonical_json, keyed_digest
 MAX_CLEANUP_RESERVATIONS = 4096
 MAX_CLEANUP_EVIDENCE_BYTES = 16_384
 
-CLEANUP_SCHEMA = """
+CLEANUP_SCHEMA_V9 = """
 CREATE TABLE project_cleanup_reservations(
  project_id TEXT NOT NULL,run_handle TEXT NOT NULL,attempt INTEGER NOT NULL,
  binding BLOB NOT NULL,lease_digest TEXT NOT NULL,reservation_digest TEXT NOT NULL,
@@ -26,9 +26,11 @@ CREATE TABLE project_cleanup_receipts(
  PRIMARY KEY(project_id,run_handle,attempt),UNIQUE(project_id,claim_id),
  FOREIGN KEY(project_id,run_handle,attempt) REFERENCES project_cleanup_reservations(project_id,run_handle,attempt));
 """
+CLEANUP_SCHEMA = CLEANUP_SCHEMA_V9.replace('cleanup_digest TEXT,state_digest TEXT NOT NULL,',
+    'cleanup_digest TEXT,state_digest TEXT NOT NULL, account_release_digest TEXT,')
 CLEANUP_COLUMNS = {
     'project_cleanup_reservations': ('project_id', 'run_handle', 'attempt', 'binding', 'lease_digest',
-                                     'reservation_digest', 'cleanup_digest', 'state_digest'),
+                                     'reservation_digest', 'cleanup_digest', 'state_digest', 'account_release_digest'),
     'project_cleanup_receipts': ('project_id', 'run_handle', 'attempt', 'claim_id', 'evidence',
                                 'cleanup_digest', 'journal_seal'),
 }
@@ -41,11 +43,15 @@ def _reservation_digest(store, lease):
     }))
 
 
-def _state_seal(store, reservation_digest, cleanup_digest):
-    return keyed_digest(store._result_key, canonical_json({
-        'domain': 'project-cleanup-reservation-state-v1',
+def _state_seal(store, reservation_digest, cleanup_digest, *, account_release_digest=None):
+    material = {
+        'domain': ('project-cleanup-reservation-state-v1' if account_release_digest is None
+                   else 'project-cleanup-reservation-state-v2'),
         'reservation_digest': reservation_digest, 'cleanup_digest': cleanup_digest,
-    }))
+    }
+    if account_release_digest is not None:
+        material['account_release_digest'] = account_release_digest
+    return keyed_digest(store._result_key, canonical_json(material))
 
 
 def _journal_seal(store, lease, claim_id, digest):
@@ -62,7 +68,7 @@ def reserve_cleanup(store, lease):
     if count >= MAX_CLEANUP_RESERVATIONS:
         raise HistoryError('history_result_capacity')
     digest = _reservation_digest(store, lease)
-    store._connection.execute('INSERT INTO project_cleanup_reservations VALUES(?,?,?,?,?,?,NULL,?)',
+    store._connection.execute('INSERT INTO project_cleanup_reservations VALUES(?,?,?,?,?,?,NULL,?,NULL)',
         (lease.binding.project_id, lease.binding.run_handle, lease.binding.attempt,
          canonical_json(lease.binding.as_data()), lease.lease_digest, digest, _state_seal(store, digest, None)))
     return replace(lease, cleanup_reservation_digest=digest)
@@ -78,6 +84,8 @@ def check_cleanup_reservation(store, lease):
     if lease.cleanup_reservation_digest is None:
         if row is not None or receipt is not None:
             raise HistoryError('history_incompatible')
+        from .project_release_ack import check_release_ack_companion
+        check_release_ack_companion(store, lease, None)
         return None
     if row is None:
         raise HistoryError('history_incompatible')
@@ -87,7 +95,8 @@ def check_cleanup_reservation(store, lease):
             or row['reservation_digest'] != lease.cleanup_reservation_digest
             or row['reservation_digest'] != _reservation_digest(store, lease)
             or not matches(row['state_digest'], _DIGEST)
-            or not secrets.compare_digest(row['state_digest'], _state_seal(store, row['reservation_digest'], digest))
+            or not secrets.compare_digest(row['state_digest'], _state_seal(store, row['reservation_digest'], digest,
+                account_release_digest=row['account_release_digest']))
             or (digest is not None and not matches(digest, _DIGEST))
             or (digest is None) != (receipt is None)):
         raise HistoryError('history_incompatible')
@@ -98,6 +107,8 @@ def check_cleanup_reservation(store, lease):
                 or not matches(receipt['journal_seal'], _DIGEST)
                 or not secrets.compare_digest(receipt['journal_seal'], _journal_seal(store, lease, lease.claim_id, digest))):
             raise HistoryError('history_incompatible')
+    from .project_release_ack import check_release_ack_companion
+    check_release_ack_companion(store, lease, row)
     return row
 
 

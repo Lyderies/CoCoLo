@@ -25,7 +25,8 @@ from typing import Callable
 
 from .contracts import ContractError, validate_task
 from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES, encode_storage_evidence, lease_data, lease_receipt_digest, lease_state_seal
-from .project_cleanup import CLEANUP_COLUMNS, CLEANUP_SCHEMA, check_cleanup_reservation, reserve_cleanup
+from .project_cleanup import CLEANUP_COLUMNS, CLEANUP_SCHEMA, CLEANUP_SCHEMA_V9, check_cleanup_reservation, reserve_cleanup
+from .project_release_ack import ACK_COLUMNS, ACK_SCHEMA
 from .execution_grant import MAX_EXECUTION_GRANT_BYTES, verify_execution_grant
 from .history_contracts import (
     MAX_SEQUENCE, AttemptBinding, HistoryEntry, HistoryError, TerminalDelivery,
@@ -47,7 +48,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 9
+_SCHEMA_VERSION = 10
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -132,9 +133,12 @@ CREATE TABLE project_host_opens(
 _SCHEMA_V6 = _SCHEMA_V5 + _HOST_OPEN_SCHEMA
 _SCHEMA_V7 = _SCHEMA_V6 + CHECK_SCHEMA
 _SCHEMA_V8 = _SCHEMA_V7 + QA_SCHEMA
+_SCHEMA_V9 = _SCHEMA_V8.replace('state_digest TEXT NOT NULL,',
+                            'state_digest TEXT NOT NULL, cleanup_reservation_digest TEXT,') + CLEANUP_SCHEMA_V9
 _SCHEMA = _SCHEMA_V8.replace('state_digest TEXT NOT NULL,',
-                            'state_digest TEXT NOT NULL, cleanup_reservation_digest TEXT,') + CLEANUP_SCHEMA
+                            'state_digest TEXT NOT NULL, cleanup_reservation_digest TEXT,') + CLEANUP_SCHEMA + ACK_SCHEMA
 _COLUMNS = {
+    **ACK_COLUMNS,
     **CLEANUP_COLUMNS,
     **ORCHESTRATION_COLUMNS,
     **CHECK_COLUMNS,
@@ -281,6 +285,12 @@ class ProjectHistory:
             failure = exc.reason_code
         except (OSError, sqlite3.Error):
             failure = "history_unavailable"
+        except BaseException:
+            # Interrupted initialization must not strand the original writer
+            # lock/connection. Preserve the original nonlocal interruption.
+            with contextlib.suppress(Exception):
+                self.close()
+            raise
         if failure is not None:
             self.close()
             raise HistoryError(failure)
@@ -370,18 +380,19 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8} and application == _APPLICATION_ID
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9} and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
-                                               5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8}[version])):
+                                               5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8, 9: _SCHEMA_V9}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*CLEANUP_COLUMNS, *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*ACK_COLUMNS, *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
-            old_columns = {name: (columns[:-1] if name == 'result_leases' else columns)
+            old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
+                                                 or (name == 'project_cleanup_reservations' and version == 9)) else columns)
                            for name, columns in _COLUMNS.items() if name not in omitted}
             self._check_schema_identity(old_columns)
             with self._transaction():
@@ -393,8 +404,11 @@ class ProjectHistory:
                 for statement in additions.split(";"):
                     if statement.strip():
                         connection.execute(statement)
-                connection.execute('ALTER TABLE result_leases ADD COLUMN cleanup_reservation_digest TEXT')
-                for statement in CLEANUP_SCHEMA.split(';'):
+                if version < 9:
+                    connection.execute('ALTER TABLE result_leases ADD COLUMN cleanup_reservation_digest TEXT')
+                else:
+                    connection.execute('ALTER TABLE project_cleanup_reservations ADD COLUMN account_release_digest TEXT')
+                for statement in ((CLEANUP_SCHEMA if version < 9 else '') + ACK_SCHEMA).split(';'):
                     if statement.strip():
                         connection.execute(statement)
                 connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
@@ -1892,6 +1906,16 @@ class ProjectHistory:
     def cleanup_evidence(self, binding):
         from .project_cleanup import read_cleanup
         return read_cleanup(self, self._lease_binding(binding))
+
+    @_operation
+    def record_account_release(self, binding, raw, *, registry, custody):
+        from .project_release_ack import record_account_release
+        return record_account_release(self, self._lease_binding(binding), raw, registry=registry, custody=custody)
+
+    @_operation
+    def account_release_receipt(self, binding):
+        from .project_release_ack import read_account_release
+        return read_account_release(self, self._lease_binding(binding))
 
     @_operation
     def pending_terminals(self, *, after_sequence: int = 0, limit: int = 10) -> tuple[TerminalDelivery, ...]:
