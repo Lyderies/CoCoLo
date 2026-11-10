@@ -51,8 +51,9 @@ def emit(**value):
 
 def main():
     data = receive()
-    lease_scope = ResultLeaseBinding(**data["scope"])
-    scope = SupervisorScope(**{name: getattr(lease_scope, name) for name in (
+    managed_open = data.get('managed_original_open', False)
+    lease_scope = None if managed_open else ResultLeaseBinding(**data["scope"])
+    scope = SupervisorScope(**{name: data['scope'][name] for name in (
         "project_id", "primary_session_id", "runtime_digest", "supervisor_instance_id", "supervisor_generation")})
     monitor = ProjectMonitor(scope, LivenessLimits(30 * SECOND, 2 * SECOND, 5 * SECOND, 20 * SECOND),
                              max_tracked_attempts=2, clock_ns=time.monotonic_ns)
@@ -77,7 +78,7 @@ def main():
                                allow_legacy_orchestration_reference=not managed,
                                orchestration_limits=OrchestrationLimits(1, 8) if managed else None,
                                result_capacity=ResultCapacity(8, 2 * MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
-        if managed:
+        if managed and not managed_open:
             # Explicit deterministic fake enrollment, never native authority.
             opened = OrchestrationRequest(1, 'orchestration.open', 'fixture-open', OrchestrationScope(**asdict(scope)), {})
             with mock.patch('codex_agents.orchestration_store.secrets.token_hex', return_value=lease_scope.orchestration_handle[4:]):
@@ -104,6 +105,13 @@ def main():
                               "executable": str(root / "inert-exec"), "environ": {"PATH": os.defpath},
                               "role_prompt": "Read the inert fixture only.", "worker_result_path": None}).encode()
         worker = pool.prepare(payload)
+        if managed_open:
+            # Actual local resources and original inputs exist before account
+            # admission. This fixture message is not native enrollment proof.
+            emit(stage='prepared', tickets=len(registry._issued), launched=(root/'launches').exists())
+            lease_scope = ResultLeaseBinding(**receive()['scope'])
+            if any(getattr(lease_scope, name) != value for name, value in asdict(scope).items()):
+                raise RuntimeError('fixture_foreign_original_open')
         handle = lane.prepare_lease(lease_scope, worker)
         until(lambda: lane.snapshot(handle)["state"] != "preparing")
         lane.arm(handle)

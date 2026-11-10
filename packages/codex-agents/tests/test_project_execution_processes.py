@@ -33,6 +33,7 @@ from codex_agents.sql_read_budget import SQLReadLimits
 
 
 class ProjectExecutionProcessTests(unittest.TestCase):
+    managed_original_open = False
     def setUp(self):
         self.fixture = fixtures.AccountClaimStorageTests(methodName="runTest")
         self.fixture.setUp()
@@ -103,6 +104,7 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         return value
 
     def start(self, scope, request, history, name, *, with_provenance=False, lose_consumption_reply=False, lose_open_reply=False):
+        original = self.original_context(scope, history) if self.managed_original_open else None
         root = Path(self.bridge.temporary.name) / name
         root.mkdir(mode=0o700)
         for directory in ("control", "export", "tmp"):
@@ -139,7 +141,13 @@ time.sleep(30)
                           "fixture_key": self.fixture.key.hex(), "task": self.bridge.task(),
                           "route": self.base.fixture.route, "assignment": self.base.fixture.assignment,
                           "with_provenance": with_provenance, "lose_consumption_reply": lose_consumption_reply,
-                          "lose_open_reply": lose_open_reply})
+                          "lose_open_reply": lose_open_reply, 'managed_original_open': self.managed_original_open})
+        if self.managed_original_open:
+            self.assertEqual({'stage': 'prepared', 'tickets': 0, 'launched': False}, self.read(child, 'prepared'))
+            scope, request = self.open_prepared(child, original)
+            child['scope'] = scope
+            self.contexts[context]['scope'] = scope
+            self.send(child, {'scope': scope.as_data()})
         armed = self.read(child, "armed")
         self.contexts[context]["evidence"] = bytes.fromhex(armed["evidence"])
         if with_provenance:
@@ -317,6 +325,156 @@ time.sleep(30)
         # Completion/release transport is deliberately not invented by a local
         # fixture result. Unknown central completion must remain charged.
         self.assertEqual(2, self.ledger._connection.execute("SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL").fetchone()[0])
+
+
+@unittest.skipUnless(sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file(), 'registered macOS signature worker')
+class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
+    """Same real process races, original APIs, synthetic native/provider boundary."""
+    managed_original_open = True
+
+    def start(self, *args, **options):
+        child = super().start(*args, **options)
+        scope = child['scope']
+        self.assertEqual('project', self.ledger._connection.execute(
+            'SELECT history_owner FROM host_run_bindings WHERE project_id=? AND run_id=?',
+            (scope.project_id, scope.run_id)).fetchone()[0])
+        self.assertEqual(1, self.ledger._connection.execute(
+            'SELECT COUNT(*) FROM account_open_receipts WHERE project_id=? AND run_id=?',
+            (scope.project_id, scope.run_id)).fetchone()[0])
+        self.assertEqual(0, self.ledger._connection.execute("SELECT COUNT(*) FROM records WHERE project_id=? "
+            "AND record_type IN ('event','verification_binding','outcome','dispatch_result') "
+            "AND json_extract(CAST(content AS TEXT),'$.run_id')=?", (scope.project_id, scope.run_id)).fetchone()[0])
+        return child
+
+    def setUp(self):
+        from codex_agents.account_claim_jobs import AccountClaimJobs
+        from codex_agents.account_open_contracts import OpenOwnerLimits
+        from codex_agents.signature_job_intake import SignatureIntakeLimits
+        from codex_agents.signature_worker_pool import SignatureWorkerLimits
+
+        super().setUp()
+        self.service.close()
+        self.jobs = AccountClaimJobs(self.base.views, SignatureIntakeLimits(2, 2, 512, 262_144, 2),
+            SignatureWorkerLimits(2, 4*1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000),
+            SQLReadLimits(100_000, 1000, 2*1_048_576), open_limits=OpenOwnerLimits(4, 16, 1_048_576))
+        self.jobs.bootstrap()
+        self.addCleanup(self.drain_jobs)
+        self.service = AccountService(COLLECTOR_RUNTIME_DIGEST, self.base.views, authorizer=self.authorize,
+            claim_jobs=self.jobs, open_provenance_work_limits=SQLReadLimits(100_000, 1000, 2*1_048_576),
+            run_provenance_work_limits=SQLReadLimits(100_000, 1000, 2*1_048_576))
+        self.addCleanup(self.service.close)
+
+    def drain_jobs(self):
+        self.jobs.request_close()
+        end = time.monotonic()+10
+        while not self.jobs.drain():
+            self.assertLess(time.monotonic(), end)
+            time.sleep(.002)
+
+    def authorize(self, request, context):
+        entry = self.contexts.get(context)
+        if entry is None or entry['scope'].project_id != request.project_id:
+            return None
+        storage = entry['scope'] if type(entry['scope']) is ResultLeaseBinding else None
+        return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
+            entry['source'], frozenset({'account.open_host_run', 'account.claim_launch', 'account.open_provenance',
+                'account.register_execution', 'account.run_provenance', 'account.submit_terminal'}), 'a'*64,
+            storage, entry['evidence'], entry.get('terminal_evidence'), entry.get('open_context'))
+
+    def account(self, request, context):
+        from codex_agents.account_api import decode_account_response, encode_account_request
+
+        self.base.stamp = time.time_ns()//1_000_000
+        ticket = self.service.begin(encode_account_request(request), context)
+        if type(ticket) is bytes:
+            return decode_account_response(ticket, request)
+        end = time.monotonic()+10
+        while True:
+            self.base.stamp = time.time_ns()//1_000_000
+            self.service.drive_claims()
+            raw = self.service.take_claim_reply(ticket)
+            if raw is not None:
+                return decode_account_response(raw, request)
+            self.assertLess(time.monotonic(), end)
+            time.sleep(.002)
+
+    def original_context(self, scope, history):
+        from copy import deepcopy
+        from tests.test_bridge import PARENT_GRANT
+        from codex_agents.account_open_contracts import AccountOpenContext
+        from codex_agents.history_api import HistoryRequest, decode_history_response, encode_history_request, history_request_digest
+        from codex_agents.history_service import HistoryAuthorization, HistoryService
+        from codex_agents.open_scope_contracts import OpenScopeContext, open_inputs_digest
+        from codex_agents.orchestration_api import OrchestrationLimits, OrchestrationRequest, OrchestrationScope, SCOPE_FIELDS
+        from codex_agents.orchestration_store import OrchestrationOwner
+        from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
+
+        actor = OrchestrationScope(**{n: getattr(scope, n) for n in SCOPE_FIELDS})
+        store = ProjectHistory(history, actor.project_id, result_key=self.fixture.key,
+            orchestration_limits=OrchestrationLimits(1, 8),
+            result_capacity=ResultCapacity(8, 2*MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
+        try:
+            opened = OrchestrationOwner(store).apply(OrchestrationRequest(1, 'orchestration.open', 'actual-project-open', actor, {}),
+                client_version='codex-host-v1', before_commit=lambda: None)
+            handle = opened['receipt']['snapshot']['orchestration_handle']
+            prospective = OpenScopeContext(actor, handle, deepcopy(self.base.fixture.assignment),
+                self.bridge.task(), deepcopy(self.base.fixture.route), deepcopy(PARENT_GRANT))
+            token = object()
+            def authorize(command, supplied):
+                if supplied is token:
+                    return HistoryAuthorization(command.project_id, command.runtime_digest, history_request_digest(command),
+                        'host', frozenset({'history.open_scope'}), open_scope_context=prospective)
+            service = HistoryService(actor.project_id, actor.runtime_digest, lambda: store, authorizer=authorize)
+            try:
+                payload = {'scope': actor.as_data(), 'orchestration_handle': handle,
+                    'inputs_digest': open_inputs_digest(prospective.assignment, prospective.task, prospective.route, prospective.parent_grant)}
+                command = HistoryRequest(1, 'history.open_scope', content_digest(payload), actor.project_id, actor.runtime_digest, payload)
+                proof = decode_history_response(service.handle(encode_history_request(command), token), command)
+                return AccountOpenContext(prospective, proof)
+            finally:
+                service.close()
+        finally:
+            store.close()
+
+    def open_prepared(self, child, original):
+        from codex_agents.account_open_contracts import AccountOpenInput
+        from codex_agents.open_scope_contracts import open_inputs_digest
+
+        prospective = original.prospective
+        entry = self.contexts[child['context']]
+        entry.update(scope=prospective.scope, open_context=original)
+        opening = AccountOpenInput(prospective.scope, prospective.orchestration_handle,
+            open_inputs_digest(prospective.assignment, prospective.task, prospective.route, prospective.parent_grant))
+        command = AccountRequest(1, 'account.open_host_run', 'original-open-'+child['root'].name,
+            prospective.scope.project_id, COLLECTOR_RUNTIME_DIGEST, opening.payload())
+        opened = self.account(command, child['context'])
+        self.assertEqual('opened', opened['state'])
+        self.assertFalse(opened['known'])
+        self.assertFalse((child['root']/'launches').exists())
+        self.assertIsNone(self.ledger._connection.execute('SELECT 1 FROM orchestrations WHERE project_id=? AND handle_digest=?',
+            (prospective.scope.project_id, keyed_digest(self.fixture.key, prospective.orchestration_handle))).fetchone())
+        identity = self.ledger.observe_provider(prospective.scope.project_id, 'codex', project_root=self.bridge.tools,
+            environ=CLEAN, run_handle=opened['run_handle'], phase='before')[0]
+        request = AccountRequest(1, 'account.claim_launch', 'original-claim-'+child['root'].name,
+            prospective.scope.project_id, COLLECTOR_RUNTIME_DIGEST,
+            LaunchClaimInput(opened['run_handle'], content_digest(identity)).payload())
+        scope = ResultLeaseBinding(**prospective.scope.as_data(), orchestration_handle=prospective.orchestration_handle,
+            run_handle=opened['run_handle'], run_id=opened['run_id'], attempt=prospective.assignment['attempt'],
+            claim_request_id=request.request_id, claim_request_digest=account_request_digest(request))
+        return scope, request
+
+    def second_project(self):
+        from codex_agents.orchestration_api import OrchestrationScope
+
+        path = Path(self.bridge.temporary.name)/'second-project'
+        path.mkdir(mode=0o700)
+        project = self.ledger.register_project(path, now_ms=1)
+        admit_provider(self.ledger, project, self.bridge.owner_key, tools=self.bridge.tools,
+            observed_at_ms=self.base.stamp-120_000)
+        self.ledger.observe_provider(project, 'codex', project_root=self.bridge.tools, environ=CLEAN)
+        history = Path(self.bridge.temporary.name)/'history-b'
+        history.mkdir(mode=0o700)
+        return OrchestrationScope(project, 'primary-b', COLLECTOR_RUNTIME_DIGEST, 'supervisor-b', 1), None, history
 
 
 if __name__ == "__main__":

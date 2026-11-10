@@ -2206,3 +2206,21 @@ legacy, and invents no managed opens. Missing schema-10 objects are corruption,
 not permission to recreate an empty journal. Actual native authorization and
 endpoint activation, legacy drain/reconciliation, normal-client migration,
 concurrent live runs and independent release validation remain mandatory.
+
+### Original-open composition with independent project processes
+
+The disposable `ManagedProjectExecutionProcessTests` uses the actual project-owned
+orchestration/open-scope proof and deferred account-open/signature pipeline before
+the existing project lease, original-open journal, claim, registration, execution
+grant, result writer and terminal acknowledgement flow. Each supervisor prepares
+its fixed inert worker before account admission. The managed path creates no
+central orchestration or copied project event/outcome history; the legacy process
+fixture remains separately exercised.
+
+The process cases cover a lost original journal reply, uncertain committed grant
+consumption without a new ticket, and status/cancellation/terminal persistence in
+project B while supervisor A is actually suspended. They use synthetic native
+enrollment, provider observations and a non-model executable. They establish
+component composition, not real-provider or endpoint authorization acceptance.
+Account reservations remain held after confirmed local cleanup and terminal ACK:
+the native authenticated project-to-account cleanup/release path is still required.
