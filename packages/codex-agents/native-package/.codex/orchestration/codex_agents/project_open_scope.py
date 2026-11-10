@@ -75,7 +75,8 @@ def current_open_scope(history, context):
         **{n + '_digest': keyed_digest(key, canonical_json(v)) for n, v in
            (('assignment', assignment), ('task', task), ('route', route), ('parent_grant', captured['parent_grant']))},
         'configuration_digest': content_digest(configuration), 'provider': 'codex', 'task_family': task['family'],
-        'worker': worker})
+        'worker': worker, 'worker_context_digest': None if context.worker is None else keyed_digest(key,
+            b'project-open-worker-input-v1\0'+canonical_json(captured['worker']))})
 
 
 def original_open_scope(history, context, *, before_reply):

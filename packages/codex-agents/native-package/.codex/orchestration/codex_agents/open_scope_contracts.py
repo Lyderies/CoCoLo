@@ -21,7 +21,8 @@ MAX_OPEN_SCOPE_CONTEXT_BYTES = 2 * MAX_HOST_RESULT_CONTEXT_BYTES
 _DOMAIN = b'project-original-open-scope-v1\0'
 _FIELDS = {'scope', 'orchestration_handle', 'orchestration_id', 'checkpoint_digest', 'sequence',
            'client_version', 'inputs_digest', 'assignment_id', 'attempt', 'assignment_digest',
-           'task_digest', 'route_digest', 'parent_grant_digest', 'configuration_digest', 'provider', 'task_family', 'worker'}
+           'task_digest', 'route_digest', 'parent_grant_digest', 'configuration_digest', 'provider', 'task_family',
+           'worker', 'worker_context_digest'}
 _WORKER_FIELDS = {'binding', 'host_outcome_digest', 'provider', 'task_family', 'host_open_record_id',
                  'host_open_content_digest', 'result_digest', 'body_size', 'terminal_record_id', 'expires_at_ms'}
 
@@ -114,6 +115,9 @@ def checked_open_scope(value, scope, handle, inputs_digest):
             raise ValueError()
         w = f['worker']
         if (w is None) != (f['task_family'] != 'verification'):
+            raise ValueError()
+        if ((w is None and f['worker_context_digest'] is not None)
+                or (w is not None and not matches(f['worker_context_digest'], _DIGEST))):
             raise ValueError()
         if w is not None:
             if type(w) is not dict or w.keys() != _WORKER_FIELDS or type(w['binding']) is not dict:

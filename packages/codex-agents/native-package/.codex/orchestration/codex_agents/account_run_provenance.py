@@ -16,6 +16,8 @@ from .learning_contracts import MAX_RECORD_BYTES, canonical_json, content_digest
 from .result_contracts import LEASE_SCOPE_FIELDS
 from .run_provenance import RunProvenanceInput, decode_run_provenance_input, seal_run_provenance
 from .sql_read_budget import SQLReadError, SQLReadLimits
+from .account_open_contracts import OpenError
+from .account_original_open import managed_open_metadata, original_orchestration_digest
 
 
 def attest_run_provenance(ledger, project_id, *, runtime_digest, caller_scope, request,
@@ -94,10 +96,9 @@ def _snapshot(ledger, context, request, lease, expected):
     row = connection.execute(
         'SELECT a.*,h.assignment_digest,h.task_digest,h.route_digest,h.configuration_digest,h.client_version,'
         'h.native_assignment_id,h.created_at_ms AS opened_at_ms,h.observation_started_at_ms,h.observation_deadline_at_ms,'
-        'o.handle_digest AS orchestration_digest,e.owner_digest AS registered_digest '
+        'e.owner_digest AS registered_digest '
         'FROM active_run_capacity a JOIN host_run_bindings h '
         'ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id '
-        'JOIN orchestrations o ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id '
         'JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest '
         'AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id '
         'WHERE a.project_id=? AND a.handle_digest=? AND a.bridge_run_id=?',
@@ -105,10 +106,15 @@ def _snapshot(ledger, context, request, lease, expected):
     ).fetchone()
     if row is None:
         raise ClaimError('claim_execution_unavailable')
+    try:
+        managed = managed_open_metadata(ledger, expected)
+        orchestration_digest = original_orchestration_digest(ledger, expected) if managed is None else managed['orchestration_digest']
+    except OpenError as error:
+        raise ClaimError('claim_execution_invalid' if error.reason_code == 'open_conflict' else 'claim_execution_unavailable') from None
     if (row['kind'] != 'claimed' or row['runtime_digest'] != context.runtime_digest or row['provider'] != 'codex'
             or row['run_id'] != expected.run_id or row['client_version'] != 'bridge-v1'
             or row['assignment_digest'] != lease.assignment_digest or row['deadline_at_ms'] != lease.hard_deadline_at_ms
-            or row['orchestration_digest'] != keyed_digest(key, expected.orchestration_handle)
+            or orchestration_digest != keyed_digest(key, expected.orchestration_handle)
             or row['native_assignment_id'] != external_id(key, 'asg', registration.bridge_run_id)):
         raise ClaimError('claim_execution_invalid')
     binding = AttemptBinding(**{name: getattr(expected, name) for name in LEASE_SCOPE_FIELDS},
@@ -126,26 +132,12 @@ def _snapshot(ledger, context, request, lease, expected):
         raise ClaimError('claim_execution_conflict')
     # LIMIT2 bounds retained candidate memory. The owner SQL work budget also
     # bounds the JSON predicate scan; overflow refuses rather than omitting rows.
-    decisions = connection.execute(
-        "SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type='admission_decision' "
-        "AND json_extract(CAST(content AS TEXT),'$.run_id')=? LIMIT 2", (context.project_id, expected.run_id),
-    ).fetchall()
-    if len(decisions) != 1:
-        raise ClaimError('claim_execution_unavailable')
-    admission = _record(decisions[0], 'admission_decision', 'lifecycle', expected.run_id)
+    if managed is not None:
+        admission, event = managed['admission'], managed['start_event']
+        decisions = [{'content_digest': content_digest(admission)}]
+    else:
+        admission, event, decisions = _legacy_original_records(connection, context, expected)
     start_id = external_id(key, 'evt', f'{expected.run_id}\0{request.assignment_id}\0started')
-    # Never let the requested assignment select one of several host starts.
-    # Both the original run's start and admission must be unique in this same
-    # budgeted snapshot; ambiguous history is not reconstructed or preferred.
-    starts = connection.execute(
-        "SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type='event' "
-        "AND source='host' AND json_extract(CAST(content AS TEXT),'$.run_id')=? "
-        "AND json_extract(CAST(content AS TEXT),'$.event_code')='subagent_started' LIMIT 2",
-        (context.project_id, expected.run_id),
-    ).fetchall()
-    if len(starts) != 1:
-        raise ClaimError('claim_execution_unavailable')
-    event = _record(starts[0], 'event', 'host', expected.run_id)
     if (admission['decision'] != 'pass' or admission['provider'] != row['provider']
             or event['record_id'] != start_id or event['event_code'] != 'subagent_started' or event['status'] != 'started'
             or event['assignment_id'] != request.assignment_id or event['configuration_digest'] != row['configuration_digest']
@@ -162,3 +154,26 @@ def _snapshot(ledger, context, request, lease, expected):
         'start_record_id': event['record_id'], 'start_content_digest': content_digest(event),
         'started_at_ms': event['observed_at_ms'], 'observation_deadline_at_ms': row['observation_deadline_at_ms'],
     })
+
+
+def _legacy_original_records(connection, context, expected):
+    decisions = connection.execute(
+        "SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type='admission_decision' "
+        "AND json_extract(CAST(content AS TEXT),'$.run_id')=? LIMIT 2", (context.project_id, expected.run_id),
+    ).fetchall()
+    if len(decisions) != 1:
+        raise ClaimError('claim_execution_unavailable')
+    admission = _record(decisions[0], 'admission_decision', 'lifecycle', expected.run_id)
+    # Never let the requested assignment select one of several host starts.
+    # Both the original run's start and admission must be unique in this same
+    # budgeted snapshot; ambiguous history is not reconstructed or preferred.
+    starts = connection.execute(
+        "SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type='event' "
+        "AND source='host' AND json_extract(CAST(content AS TEXT),'$.run_id')=? "
+        "AND json_extract(CAST(content AS TEXT),'$.event_code')='subagent_started' LIMIT 2",
+        (context.project_id, expected.run_id),
+    ).fetchall()
+    if len(starts) != 1:
+        raise ClaimError('claim_execution_unavailable')
+    event = _record(starts[0], 'event', 'host', expected.run_id)
+    return admission, event, decisions

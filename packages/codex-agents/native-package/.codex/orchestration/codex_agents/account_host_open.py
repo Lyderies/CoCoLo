@@ -12,6 +12,8 @@ from .claim_storage import capture_storage_evidence, verify_pending_storage_evid
 from .host_open_contracts import OpenProvenanceInput, decode_open_provenance_input, seal_open_provenance
 from .learning_contracts import content_digest, external_id, keyed_digest
 from .sql_read_budget import SQLReadError, SQLReadLimits
+from .account_open_contracts import OpenError
+from .account_original_open import managed_open_metadata, original_orchestration_digest
 
 
 def attest_open_provenance(ledger, project_id, *, runtime_digest, caller_scope, request,
@@ -46,23 +48,37 @@ def attest_open_provenance(ledger, project_id, *, runtime_digest, caller_scope, 
 def _snapshot(ledger, request, lease):
     connection, key, expected = ledger._connection, ledger.state.digest_key(), lease.binding
     row = connection.execute(
-        'SELECT h.*,i.runtime_digest,i.provider,o.handle_digest AS orchestration_digest,p.status AS project_status '
+        'SELECT h.*,i.runtime_digest,i.provider,p.status AS project_status '
         'FROM host_run_bindings h JOIN launch_inputs i ON i.project_id=h.project_id '
         'AND i.handle_digest=h.handle_digest AND i.run_id=h.run_id '
-        'JOIN orchestrations o ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id '
         'JOIN projects p ON p.project_id=h.project_id '
         'WHERE h.project_id=? AND h.handle_digest=?',
         (expected.project_id, keyed_digest(key, request.run_handle)),
     ).fetchone()
     if row is None:
         raise ClaimError('claim_execution_unavailable')
+    try:
+        managed = managed_open_metadata(ledger, expected)
+        orchestration_digest = original_orchestration_digest(ledger, expected) if managed is None else managed['orchestration_digest']
+    except OpenError as error:
+        raise ClaimError('claim_execution_invalid' if error.reason_code == 'open_conflict' else 'claim_execution_unavailable') from None
     if (row['project_status'] != 'active' or row['runtime_digest'] != expected.runtime_digest or row['provider'] != 'codex'
             or row['client_version'] != 'bridge-v1' or row['run_id'] != expected.run_id
             or row['assignment_digest'] != lease.assignment_digest
-            or row['orchestration_digest'] != keyed_digest(key, expected.orchestration_handle)):
+            or orchestration_digest != keyed_digest(key, expected.orchestration_handle)):
         raise ClaimError('claim_execution_invalid')
     records = {}
     for kind, code in (('admission_decision', None), ('event', 'subagent_started'), ('verification_binding', None)):
+        if managed is not None:
+            value = managed[{'admission_decision': 'admission', 'event': 'start_event',
+                             'verification_binding': 'verification_binding'}[kind]]
+            if kind == 'verification_binding' and request.worker_outcome_digest is None:
+                if value is not None:
+                    raise ClaimError('claim_execution_invalid')
+            elif value is None:
+                raise ClaimError('claim_execution_unavailable')
+            records[kind] = value
+            continue
         sql = ('SELECT record_id,content,content_digest,source FROM records WHERE project_id=? AND record_type=? '
                "AND json_extract(CAST(content AS TEXT),'$.run_id')=?")
         parameters = (expected.project_id, kind, expected.run_id)

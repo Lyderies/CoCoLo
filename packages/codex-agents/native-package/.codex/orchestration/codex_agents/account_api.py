@@ -25,6 +25,7 @@ from .terminal_delivery import checked_terminal_receipt, decode_terminal_submiss
 from .claim_denial import CloseDeniedInput, checked_denial_closure, decode_close_denied
 from .run_provenance import RunProvenanceInput, checked_run_provenance, decode_run_provenance_input
 from .host_open_contracts import OpenProvenanceInput, checked_open_provenance, decode_open_provenance_input
+from .account_open_contracts import AccountOpenInput, OpenError, OPEN_REASON_CODES, checked_account_open_reply, decode_account_open_input
 
 ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
@@ -34,13 +35,13 @@ ACCOUNT_READ_OPERATIONS = frozenset({
 })
 ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.close_denied_attempt",
-    "account.run_provenance", "account.open_provenance",
+    "account.run_provenance", "account.open_provenance", 'account.open_host_run',
 }
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
     "account_not_authorized", "account_wrong_owner", "account_unavailable",
     "account_incompatible", "account_project_not_found",
-}) | CLAIM_ERROR_CODES
+}) | CLAIM_ERROR_CODES | OPEN_REASON_CODES
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}")
 _PROJECT = re.compile(r"prj_[0-9a-f]{32}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -96,7 +97,12 @@ def _checked_request(data: object) -> None:
         or not matches(data["runtime_digest"], _DIGEST) or type(data["payload"]) is not dict
     ):
         raise AccountError("account_invalid_request")
-    if data["operation"] == "account.claim_launch":
+    if data['operation'] == 'account.open_host_run':
+        try:
+            decode_account_open_input(data['payload'], data['project_id'], data['runtime_digest'])
+        except OpenError:
+            raise AccountError('account_invalid_request') from None
+    elif data["operation"] == "account.claim_launch":
         try:
             decode_claim_input(data["payload"])
         except ClaimError:
@@ -167,7 +173,12 @@ def account_request_digest(request: AccountRequest) -> str:
 def _checked_result(result: object, request: AccountRequest) -> dict:
     if type(result) is not dict:
         raise AccountError("account_invalid_response")
-    if request.operation == "account.claim_launch":
+    if request.operation == 'account.open_host_run':
+        try:
+            return checked_account_open_reply(result, decode_account_open_input(request.payload, request.project_id, request.runtime_digest))
+        except OpenError:
+            raise AccountError('account_invalid_response') from None
+    elif request.operation == "account.claim_launch":
         try:
             return checked_claim_receipt(result)
         except ClaimError:
@@ -338,6 +349,21 @@ class AccountClient:
         if failed:
             raise AccountError("account_unavailable")
         return decode_account_response(reply, request)
+
+    def open_host_run(self, opening: AccountOpenInput, *, request_id: str) -> dict:
+        """One original-open exchange; returned metadata is not execution authority."""
+        if type(opening) is not AccountOpenInput:
+            raise AccountError('account_invalid_request')
+        try:
+            request = AccountRequest(1, 'account.open_host_run', request_id, self._project, self._runtime, opening.payload())
+        except OpenError:
+            raise AccountError('account_invalid_request') from None
+        try:
+            raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
+                                 request_limit=MAX_ACCOUNT_FRAME_BYTES, response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError:
+            raise AccountError('account_unavailable') from None
+        return decode_account_response(raw, request)
 
     def register_execution(self, run_handle, bridge_run_id, claim_digest, claim_request_id, identity_digest, *, request_id):
         try:

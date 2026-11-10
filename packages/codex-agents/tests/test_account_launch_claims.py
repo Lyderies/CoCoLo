@@ -17,6 +17,11 @@ from codex_agents.learning_store import DEFAULT_RETENTION_MS, LearningLedger, Le
 
 
 def drop_active_capacity_for_legacy_fixture(ledger):
+    # Remove the newer original-open layout when constructing an exact old
+    # fixture; a version label alone must not make newer authority look legacy.
+    ledger._connection.execute('DROP TABLE account_open_requests')
+    ledger._connection.execute('DROP TABLE account_open_receipts')
+    ledger._connection.execute('ALTER TABLE host_run_bindings DROP COLUMN history_owner')
     ledger._connection.execute("DROP TRIGGER preserve_active_capacity_on_project_deletion")
     ledger._connection.execute("DROP TABLE capacity_completions")
     ledger._connection.execute("DROP TABLE capacity_executions")
@@ -208,7 +213,7 @@ class AccountLaunchClaimsTests(unittest.TestCase):
         self.downgrade_to_six()
         self.ledger.close()
         with self.assertRaisesRegex(LedgerError, "registered verified schema 6"):
-            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.assert_six_unmodified()
 
     def test_schema_six_stale_backup_is_refused_before_mutation(self):
@@ -218,7 +223,7 @@ class AccountLaunchClaimsTests(unittest.TestCase):
             self.ledger._connection.execute("INSERT INTO collector_health VALUES(?,'fixture-after-backup',1,?)", (self.project, self.stamp))
         self.ledger.close()
         with self.assertRaisesRegex(LedgerError, "registered verified schema 6"):
-            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.assert_six_unmodified()
 
     def test_verified_schema_six_migration_fences_ambiguous_pending_run_without_intent(self):
@@ -228,7 +233,7 @@ class AccountLaunchClaimsTests(unittest.TestCase):
         records_before = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid").fetchall()]
         self.backup_six()
         self.ledger.close()
-        self.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+        self.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.addCleanup(self.ledger.close)
         self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
         self.assertEqual("legacy_fenced", self.markers()[0][2])
@@ -249,9 +254,9 @@ class AccountLaunchClaimsTests(unittest.TestCase):
 
         with mock.patch.object(LearningLedger, "_initialize_launch_claims_locked", autospec=True, side_effect=fail), \
                 self.assertRaisesRegex(RuntimeError, "fixture migration failure"):
-            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.assert_six_unmodified()
-        self.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+        self.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.addCleanup(self.ledger.close)
         self.assertEqual("legacy_fenced", self.markers()[0][2])
 
@@ -259,16 +264,17 @@ class AccountLaunchClaimsTests(unittest.TestCase):
         self.ledger.close()
         with mock.patch.object(learning_store, "LEDGER_SCHEMA_VERSION", 6), \
                 self.assertRaisesRegex(LedgerError, "newer than this package"):
-            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
 
     def test_missing_schema_seven_consumption_is_not_recreated_as_empty(self):
         self.claim()
         with self.ledger._account_transaction():
             drop_active_capacity_for_legacy_fixture(self.ledger)
             self.ledger._connection.execute("DROP TABLE launch_claims")
+            self.ledger._connection.execute('PRAGMA user_version=7')
         self.ledger.close()
         with self.assertRaisesRegex(LedgerError, "launch claim state is unavailable"):
-            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
 
 
 if __name__ == "__main__":

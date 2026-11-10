@@ -67,7 +67,7 @@ class ActiveRunCapacityTests(unittest.TestCase):
 
     def reopen(self):
         self.ledger.close()
-        self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+        self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.addCleanup(self.case.ledger.close)
 
     def test_two_projects_share_two_slots_and_third_refuses_without_receipt(self):
@@ -180,7 +180,7 @@ class ActiveRunCapacityTests(unittest.TestCase):
         self.ledger._connection.execute("DELETE FROM active_run_capacity")
         self.ledger.close()
         with self.assertRaisesRegex(LedgerError, "active capacity coverage is unavailable"):
-            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         check = sqlite3.connect(self.fixture.state.database)
         try:
             self.assertEqual(0, check.execute("SELECT COUNT(*) FROM active_run_capacity").fetchone()[0])
@@ -221,7 +221,7 @@ class ActiveRunCapacityTests(unittest.TestCase):
     def test_schema_eight_requires_verified_backup_and_stays_unmodified_on_refusal(self):
         self.schema_eight(backup=False)
         with self.assertRaisesRegex(LedgerError, "registered verified schema 8"):
-            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         check = sqlite3.connect(self.fixture.state.database)
         try:
             self.assertEqual(8, check.execute("PRAGMA user_version").fetchone()[0])
@@ -233,9 +233,9 @@ class ActiveRunCapacityTests(unittest.TestCase):
         before = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid")]
         signatures = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_attestations")]
         self.schema_eight(backup=True)
-        self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+        self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.addCleanup(self.case.ledger.close)
-        self.assertEqual(9, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(10, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
         self.assertEqual(["legacy_unknown"], [row["kind"] for row in self.rows()])
         self.assertTrue(all(self.rows()[0][field] is None for field in ("provider", "account_fingerprint", "released_at_ms")))
         after = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid")]
@@ -258,7 +258,7 @@ class ActiveRunCapacityTests(unittest.TestCase):
 
         with mock.patch.object(LearningLedger, "_initialize_active_capacity_locked", autospec=True, side_effect=interrupted), \
                 self.assertRaises(FixtureStop):
-            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+            LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         check = sqlite3.connect(self.fixture.state.database)
         try:
             self.assertEqual(8, check.execute("PRAGMA user_version").fetchone()[0])
@@ -266,7 +266,7 @@ class ActiveRunCapacityTests(unittest.TestCase):
             self.assertEqual(1, check.execute("SELECT COUNT(*) FROM launch_claims").fetchone()[0])
         finally:
             check.close()
-        self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+        self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.addCleanup(self.case.ledger.close)
         self.assertEqual(["legacy_unknown"], [row["kind"] for row in self.rows()])
 

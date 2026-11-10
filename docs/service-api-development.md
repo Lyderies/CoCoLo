@@ -2161,3 +2161,46 @@ observations do not establish closed descendant containment. Reading a receipt i
 not a new cleanup credential, a release request or permission to rerun a child.
 Service-path execution and actual release delivery, native containment/custody,
 orphan/drained migration and full normal-client migration remain mandatory.
+
+### Original project-owned account admission/open (uninstalled candidate)
+
+`AccountClient.open_host_run` sends one bounded `account.open_host_run` request
+containing the independently enrolled scope, orchestration handle and original
+input digest. The trusted server context supplies the full assignment, task,
+route, parent grant and project-owned `history.open_scope` proof. Prospective
+verifiers also bind the complete original worker context and retained project
+result. JSON cannot supply admission, an accepted flag, timestamps or permissions.
+The existing assignment validator and subscription admission evaluator remain
+authoritative; this initial producer admits read-only Codex bridge routes only.
+
+The configured account owner records a sealed pending request before signature
+work. Its original start and observation deadline survive cancellation, a lost
+reply and an explicit retry. Another request or assignment label cannot repeat
+the same task stage and attempt. Trusted startup must supply bounded pending,
+retained and copied-context limits. Unconfigured and synchronous open paths
+refuse; there is no synchronous signature or direct-database client fallback.
+Opens share the existing claim queue, per-project limits and registered fixed
+signature-worker pool. Only an actual registered worker return can reach the
+atomic admission commit. Current native authorization is checked again after
+crypto, after all writes and before reply publication.
+
+The account transaction retains minimal shared admission, launch inputs and host
+metadata plus an immutable open receipt and original request journal. It creates
+no central orchestration or copied project lifecycle/result history. Managed
+preclaim provenance, claim storage, registration, registered provenance, denial
+settlement and terminal delivery verify those original facts against the
+independently supplied project lease. The immutable origin column distinguishes
+project-owned and legacy runs; a missing or contradictory managed companion
+refuses instead of falling back or reconstructing evidence. Original receipts
+are metadata, not native identity, current permission, process custody or cleanup
+proof. Neither opening nor terminal acknowledgement releases account capacity.
+
+Account schema 10 adds this explicit origin and two sealed journals. Opening an
+older database requires explicit trusted drained-owner upgrade authorization
+and verified original partition backups; ordinary startup refuses before writing
+database pragmas. The option itself proves no native drain. Migration preserves
+old rows, blobs and schema-specific backup manifests, marks old host bindings
+legacy, and invents no managed opens. Missing schema-10 objects are corruption,
+not permission to recreate an empty journal. Actual native authorization and
+endpoint activation, legacy drain/reconciliation, normal-client migration,
+concurrent live runs and independent release validation remain mandatory.

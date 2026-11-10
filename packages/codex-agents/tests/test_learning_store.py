@@ -315,6 +315,9 @@ class LearningStoreTests(unittest.TestCase):
 
     def _downgrade_fixture_to_schema_five(self) -> None:
         with self.ledger._connection:
+            self.ledger._connection.execute('DROP TABLE account_open_requests')
+            self.ledger._connection.execute('DROP TABLE account_open_receipts')
+            self.ledger._connection.execute('ALTER TABLE host_run_bindings DROP COLUMN history_owner')
             self.ledger._connection.execute("DROP TRIGGER preserve_active_capacity_on_project_deletion")
             self.ledger._connection.execute("DROP TABLE capacity_completions")
             self.ledger._connection.execute("DROP TABLE capacity_executions")
@@ -576,7 +579,7 @@ class LearningStoreTests(unittest.TestCase):
             empty_ingestion_snapshot(registered=False)["registered_project_state"],
         )
 
-    def test_goal_statistics_and_launch_migration_use_schema_nine(self) -> None:
+    def test_goal_statistics_and_original_open_use_schema_ten(self) -> None:
         version = self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         tables = {
             str(row[0])
@@ -584,7 +587,9 @@ class LearningStoreTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        self.assertEqual(9, version)
+        self.assertEqual(10, version)
+        self.assertIn('account_open_receipts', tables)
+        self.assertIn('account_open_requests', tables)
         self.assertIn("active_run_capacity", tables)
         self.assertIn("host_run_bindings", tables)
         self.assertIn("hook_ingestion", tables)
@@ -2613,6 +2618,7 @@ class LearningStoreTests(unittest.TestCase):
             "capacity_executions",
             "hook_ingestion", "orchestrations", "orchestration_checkpoints",
             "operational_qa", "operational_check_receipts", "tombstones",
+            'account_open_receipts', 'account_open_requests',
         })
         self.assertEqual(
             {"$codex_agents_bytes_base64": "AP8="},
@@ -2764,7 +2770,7 @@ class LearningStoreTests(unittest.TestCase):
         self.ledger.close()
 
         with self.assertRaisesRegex(LedgerError, "registered verified schema 5"):
-            LearningLedger(self.state, client_capabilities=self.clients)
+            LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
 
         connection = sqlite3.connect(self.state.database)
         try:
@@ -2810,10 +2816,10 @@ class LearningStoreTests(unittest.TestCase):
         )
         self.ledger.close()
 
-        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
 
         self.assertEqual(
-            9, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+            10, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         )
         checkpoint = self.ledger._connection.execute(
             "SELECT sequence,status,observed_at_ms FROM orchestration_checkpoints "
@@ -2852,7 +2858,7 @@ class LearningStoreTests(unittest.TestCase):
         self.ledger.close()
 
         with self.assertRaisesRegex(LedgerError, "registered verified schema 5"):
-            LearningLedger(self.state, client_capabilities=self.clients)
+            LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
         self._leave_ledger_closed()
 
     def test_schema_five_launch_migration_interruption_rolls_back_the_whole_upgrade(self) -> None:
@@ -2871,7 +2877,7 @@ class LearningStoreTests(unittest.TestCase):
 
         with mock.patch.object(LearningLedger, "_initialize_launch_claims_locked", autospec=True, side_effect=interrupted), \
                 self.assertRaises(FixtureStop):
-            LearningLedger(self.state, client_capabilities=self.clients)
+            LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
         connection = sqlite3.connect(self.state.database)
         try:
             self.assertEqual(5, connection.execute("PRAGMA user_version").fetchone()[0])
@@ -2879,8 +2885,8 @@ class LearningStoreTests(unittest.TestCase):
             self.assertNotIn("binding_state", {row[1] for row in connection.execute("PRAGMA table_info(host_run_bindings)")})
         finally:
             connection.close()
-        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        self.assertEqual(9, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
+        self.assertEqual(10, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def test_schema_five_migration_rolls_back_an_injected_schema_failure(self) -> None:
         self._downgrade_fixture_to_schema_five()
@@ -2895,7 +2901,7 @@ class LearningStoreTests(unittest.TestCase):
         self.ledger.close()
 
         with self.assertRaises(sqlite3.OperationalError):
-            LearningLedger(self.state, client_capabilities=self.clients)
+            LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
 
         connection = sqlite3.connect(self.state.database)
         try:

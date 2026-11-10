@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from .account_api import _DIGEST, _ID, _PROJECT, matches
 from .account_claim_contracts import ClaimError, LaunchClaimInput
+from .account_open_contracts import AccountOpenInput, AccountOpenContext, OpenError, OpenOwnerLimits
 from .account_service import AccountOwnerViews
 from .signature_job_intake import SignatureIntakeLimits, SignatureJobIntake
 from .signature_worker_pool import SignatureWorkerLimits, SignatureWorkerPool
@@ -22,18 +23,22 @@ class ClaimJobReply:
     context: object
     result: dict | None
     reason: str | None
+    operation: str = 'account.claim_launch'
+    before_publish: object = None
 
 
 @dataclass(repr=False)
 class _Job:
     key: tuple[str, str, str, str]
-    launch: LaunchClaimInput
+    launch: LaunchClaimInput | AccountOpenInput
     context: object = None
     signature_handle: object = None
     state: str = "reserved"
     result: dict | None = None
     reason: str | None = None
     cancelled: bool = False
+    kind: str = 'claim'
+    before_commit: object = None
 
 
 class AccountClaimJobs:
@@ -48,21 +53,26 @@ class AccountClaimJobs:
     Unleased reference mode must be explicitly configured before intake.
     """
 
-    def __init__(self, views, intake_limits, worker_limits, work_limits, *, allow_unleased_claim_reference=False):
+    def __init__(self, views, intake_limits, worker_limits, work_limits, *, allow_unleased_claim_reference=False,
+                 open_limits=None):
         if (type(views) is not AccountOwnerViews or type(intake_limits) is not SignatureIntakeLimits
                 or type(worker_limits) is not SignatureWorkerLimits or type(work_limits) is not SQLReadLimits
-                or type(allow_unleased_claim_reference) is not bool):
+                or type(allow_unleased_claim_reference) is not bool
+                or (open_limits is not None and type(open_limits) is not OpenOwnerLimits)):
             raise ClaimError("claim_invalid_request")
         views._guard()
         work_limits.__post_init__()
         self._views = views
         self._allow_unleased_reference = allow_unleased_claim_reference
+        self._open_limits = None if open_limits is None else OpenOwnerLimits(
+            open_limits.max_pending, open_limits.max_retained, open_limits.max_context_bytes)
         self._work_limits = SQLReadLimits(work_limits.max_callbacks, work_limits.max_duration_ms,
                                          work_limits.max_value_bytes)
         self._intake = SignatureJobIntake(views, intake_limits)
         self._pool = SignatureWorkerPool(self._intake, worker_limits)
         self._jobs: dict[object, _Job] = {}
         self._requests: dict[tuple[str, str, str, str], object] = {}
+        self._open_requests: dict[tuple[str, str, str, str], object] = {}
         self._counts: dict[str, int] = {}
         self._signatures: dict[object, object] = {}
         self._started = self._closing = self._faulted = False
@@ -97,7 +107,7 @@ class AccountClaimJobs:
 
     def _drop(self, ticket):
         job = self._job(ticket)
-        del self._requests[job.key]
+        del (self._open_requests if job.kind == 'open' else self._requests)[job.key]
         count = self._counts[job.key[0]]
         if count == 1:
             del self._counts[job.key[0]]
@@ -178,6 +188,70 @@ class AccountClaimJobs:
                 self._faulted = True
             raise
 
+    def submit_open(self, project_id, *, runtime_digest, caller_scope, request_id, request, context,
+                    before_commit, _ingress=None):
+        """Share the original fixed worker/ticket quota with launch claims."""
+        from .account_original_open import preflight_open
+        self._guard()
+        self._delivery(_ingress)
+        if not self._started or self._closing or self._open_limits is None:
+            raise OpenError('open_unavailable')
+        if (not matches(project_id, _PROJECT) or not matches(runtime_digest, _DIGEST)
+                or not matches(caller_scope, _DIGEST) or not matches(request_id, _ID)
+                or type(request) is not AccountOpenInput or type(context) is not AccountOpenContext
+                or not callable(before_commit)):
+            raise OpenError('open_invalid_request')
+        raw, _ = context.snapshot()
+        if len(raw) > self._open_limits.max_context_bytes:
+            raise OpenError('open_busy')
+        key = (project_id, runtime_digest, caller_scope, request_id)
+        existing = self._open_requests.get(key)
+        if existing is not None:
+            job = self._job(existing)
+            if job.launch != request or job.context.context_bytes != raw:
+                raise OpenError('open_conflict')
+            if job.cancelled:
+                raise OpenError('open_busy')
+            before_commit()
+            return existing
+        limits, count = self._intake._limits, self._counts.get(project_id, 0)
+        if (count >= limits.max_jobs_per_project
+                or (not count and len(self._counts) >= limits.max_projects)
+                or len(self._jobs) >= limits.max_projects*limits.max_jobs_per_project):
+            raise OpenError('open_busy')
+        ticket, job = object(), _Job(key, request, kind='open', before_commit=before_commit)
+        try:
+            # Reserve bounded delivery and worker metadata before any SQL write.
+            self._jobs[ticket] = job
+            self._open_requests[key] = ticket
+            self._counts[project_id] = count+1
+            captured, known = preflight_open(self._views._ledger, project_id, runtime_digest=runtime_digest,
+                caller_scope=caller_scope, request_id=request_id, request=request, context=context,
+                limits=self._open_limits, work_limits=self._work_limits, before_commit=before_commit)
+            job.context = captured
+            if known is not None:
+                job.result, job.state = known, 'ready'
+            else:
+                job.signature_handle = self._intake.capture_admission(project_id, 'codex', self._work_limits)
+                self._signatures[job.signature_handle] = ticket
+                job.state = 'pending'
+            return ticket
+        except BaseException:
+            try:
+                if job.signature_handle is not None:
+                    if self._pool.cancel(job.signature_handle) != 'released':
+                        raise OpenError('open_unavailable')
+                    self._signatures.pop(job.signature_handle, None)
+                self._open_requests.pop(key, None)
+                self._jobs.pop(ticket, None)
+                if count:
+                    self._counts[project_id] = count
+                else:
+                    self._counts.pop(project_id, None)
+            except BaseException:
+                self._faulted = True
+            raise
+
     def drive(self):
         self._guard()
         if not self._started:
@@ -197,14 +271,21 @@ class AccountClaimJobs:
                     # need not wait behind the owner's ordinary request batch.
                     job.cancelled = True
                 if job.cancelled:
-                    job.reason = "claim_cancelled"
+                    job.reason = 'open_cancelled' if job.kind == 'open' else "claim_cancelled"
                 else:
                     try:
-                        job.result = self._views._claim_from_signature_job(job.context, self._pool, notice.handle)
+                        if job.kind == 'open':
+                            from .account_original_open import finish_open_from_signature_job
+                            job.result = finish_open_from_signature_job(self._views._ledger, job.context,
+                                self._pool, notice.handle, before_commit=job.before_commit)
+                        else:
+                            job.result = self._views._claim_from_signature_job(job.context, self._pool, notice.handle)
+                    except OpenError as error:
+                        job.reason = error.reason_code
                     except ClaimError as error:
                         job.reason = error.reason_code
                     except Exception:
-                        job.reason = "claim_unavailable"
+                        job.reason = 'open_unavailable' if job.kind == 'open' else "claim_unavailable"
                 # Publish the bounded reply before releasing returned inputs.
                 # Any interruption/fault fences the coordinator without replay.
                 job.state = "ready"
@@ -225,7 +306,9 @@ class AccountClaimJobs:
         job = self._job(ticket)
         if job.state != "ready":
             return None
-        reply = ClaimJobReply(job.context, None if job.result is None else dict(job.result), job.reason)
+        reply = ClaimJobReply(job.context, None if job.result is None else dict(job.result), job.reason,
+                              'account.open_host_run' if job.kind == 'open' else 'account.claim_launch',
+                              job.before_commit if job.kind == 'open' else None)
         try:
             self._drop(ticket)
         except BaseException:
@@ -247,7 +330,7 @@ class AccountClaimJobs:
             if state == "released":
                 del self._signatures[job.signature_handle]
                 job.signature_handle = None
-                job.reason, job.state = "claim_cancelled", "ready"
+                job.reason, job.state = ('open_cancelled' if job.kind == 'open' else "claim_cancelled"), "ready"
             return state
         except BaseException:
             self._faulted = True
@@ -284,6 +367,7 @@ class AccountClaimJobs:
                 return False
             self._jobs.clear()
             self._requests.clear()
+            self._open_requests.clear()
             self._counts.clear()
             self._signatures.clear()
             return True

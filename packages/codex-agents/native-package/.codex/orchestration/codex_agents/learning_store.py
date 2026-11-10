@@ -34,6 +34,7 @@ from .active_run_capacity import CAPACITY_OBJECTS, CAPACITY_SCHEMA, CAPACITY_PAR
 from .active_run_capacity import INSTALLED_ACTIVE_RUN_LIMITS
 from .owned_execution import ExecutionCustodyError, OwnedExecutionKey, OwnedExecutionRegistry
 from .capacity_status_contracts import CapacityStatusInput, checked_capacity_status
+from .account_open_schema import HISTORY_OWNER_COLUMN, OPEN_OBJECTS, assert_open_schema, install_open_schema
 from .collector_contracts import (
     COLLECTOR_PROTOCOL_VERSION as COLLECTOR_PROTOCOL_VERSION,
     LEDGER_SCHEMA_VERSION as LEDGER_SCHEMA_VERSION,
@@ -293,6 +294,7 @@ _BACKUP_TABLE_COLUMNS = {
         "native_assignment_id", "agent_type", "usage_complete", "binding_state",
         "abandoned_reason", "observation_started_at_ms",
         "observation_deadline_at_ms", "last_progress_at_ms", "deadline_observed",
+        "history_owner",
     ),
     "hook_ingestion": ("event_code", "accepted_count", "last_accepted_at_ms"),
     "orchestrations": (
@@ -314,12 +316,16 @@ _BACKUP_TABLE_COLUMNS = {
         "expires_at_ms", "consumed_at_ms", "report",
     ),
     "tombstones": ("deletion_id", "deleted_at_ms"),
+    "account_open_receipts": ("handle_digest", "run_id", "request_key", "scope_digest", "parameters_digest", "content", "content_seal"),
+    "account_open_requests": ("request_key", "original_key", "parameters_digest", "handle_digest", "run_id", "state", "opened_at_ms",
+                              "observation_deadline_at_ms", "receipt_digest", "request_seal"),
 }
 _BACKUP_V5_HOST_COLUMNS = tuple(
     column for column in _BACKUP_TABLE_COLUMNS["host_run_bindings"]
     if column not in {
         "binding_state", "abandoned_reason", "observation_started_at_ms",
         "observation_deadline_at_ms", "last_progress_at_ms", "deadline_observed",
+        "history_owner",
     }
 )
 _BACKUP_ORDER_COLUMNS = {
@@ -346,6 +352,8 @@ _BACKUP_ORDER_COLUMNS = {
     "operational_qa": ("observed_at_ms", "qa_id"),
     "operational_check_receipts": ("issued_at_ms", "receipt_id"),
     "tombstones": ("deletion_id",),
+    "account_open_receipts": ("handle_digest",),
+    "account_open_requests": ("request_key",),
 }
 _BACKUP_BYTES_KEY = "$codex_agents_bytes_base64"
 
@@ -384,6 +392,8 @@ def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]
             return _BACKUP_V5_HOST_COLUMNS
         if table == "orchestration_checkpoints":
             return ()
+    if schema_version < 10 and table == 'host_run_bindings':
+        return tuple(n for n in _BACKUP_TABLE_COLUMNS[table] if n != 'history_owner')
     return _BACKUP_TABLE_COLUMNS[table]
 
 
@@ -393,7 +403,8 @@ def _backup_tables(schema_version: int) -> tuple[str, ...]:
     return tuple(table for table in _BACKUP_TABLE_COLUMNS
                  if (schema_version >= 7 or table != "launch_claims")
                  and (schema_version >= 8 or table not in {"launch_inputs", "launch_observations", "launch_receipts"})
-                 and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"}))
+                 and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"})
+                 and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'}))
 
 
 def _snapshot_project_partition(
@@ -630,6 +641,10 @@ CREATE TABLE tombstones(project_id TEXT NOT NULL,deletion_id TEXT NOT NULL,delet
 """
 
 
+_BACKUP_RESTORE_SCHEMA += ('\nALTER TABLE host_run_bindings ADD COLUMN '+HISTORY_OWNER_COLUMN+';\n'
+                           + ';\n'.join(sql for _, _, sql in OPEN_OBJECTS)+';\n')
+
+
 def _verify_project_backup_body(
     body: Any,
     *,
@@ -642,7 +657,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -2011,7 +2026,11 @@ class LearningLedger:
         *,
         client_capabilities: dict[str, dict[str, Any]] | None = None,
         admission_policy: dict[str, Any] | None = None,
+        allow_schema_upgrade: bool = False,
     ) -> None:
+        if type(allow_schema_upgrade) is not bool:
+            raise LedgerError('ledger schema upgrade option is invalid')
+        self._allow_schema_upgrade = allow_schema_upgrade
         self.state = state
         # Admission settings come from the installed routing policy, read at
         # each decision; a caller-supplied policy is for tests only.
@@ -2080,6 +2099,9 @@ class LearningLedger:
         )
         try:
             connection.row_factory = sqlite3.Row
+            version = connection.execute('PRAGMA user_version').fetchone()[0]
+            if 5 <= version < LEDGER_SCHEMA_VERSION and not self._allow_schema_upgrade:
+                raise LedgerError('ledger schema upgrade requires explicit drained-owner authorization and verified backups')
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute("PRAGMA synchronous = FULL")
@@ -2370,6 +2392,11 @@ class LearningLedger:
                         ("trigger", "cleanup_launch_operation_state", _LAUNCH_CLEANUP_SCHEMA)]
         if version >= 9:
             schemas += list(CAPACITY_OBJECTS)
+        if version >= 10:
+            try:
+                assert_open_schema(self._connection)
+            except ValueError:
+                raise LedgerError('account original-open schema is unavailable or incompatible') from None
 
         def normalized(sql):
             return " ".join(sql.replace("IF NOT EXISTS ", "").strip().rstrip(";").split())
@@ -2400,6 +2427,12 @@ class LearningLedger:
         )
         self._assert_launch_schema_locked(9)
 
+    def _initialize_account_opens_locked(self):
+        try:
+            install_open_schema(self._connection)
+        except ValueError:
+            raise LedgerError('account original-open migration is unavailable or incompatible') from None
+
     def _migrate_six_or_seven_to_current(self, version: int) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -2415,7 +2448,8 @@ class LearningLedger:
                 )
             self._initialize_launch_operations_locked()
             self._initialize_active_capacity_locked()
-            self._connection.execute("PRAGMA user_version = 9")
+            self._initialize_account_opens_locked()
+            self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
         except BaseException:
@@ -2513,7 +2547,8 @@ class LearningLedger:
             self._initialize_launch_claims_locked(backfill=True)
             self._initialize_launch_operations_locked()
             self._initialize_active_capacity_locked()
-            self._connection.execute("PRAGMA user_version = 9")
+            self._initialize_account_opens_locked()
+            self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
         except BaseException:
@@ -2533,26 +2568,27 @@ class LearningLedger:
         if 0 < current < 5:
             raise LedgerError("legacy ledger requires a verified drained staged migration")
         if current == 5:
-            self._require_project_migration_backups(5, 9)
+            self._require_project_migration_backups(5, LEDGER_SCHEMA_VERSION)
             self._migrate_five_to_current()
             self.state.harden_database_files()
             return
         if current in {6, 7}:
             if current == 7:
                 self._assert_launch_schema_locked(7)
-            self._require_project_migration_backups(current, 9)
+            self._require_project_migration_backups(current, LEDGER_SCHEMA_VERSION)
             self._migrate_six_or_seven_to_current(current)
             self.state.harden_database_files()
             return
         if current == 8:
             self._assert_launch_schema_locked(8)
-            self._require_project_migration_backups(8, 9)
+            self._require_project_migration_backups(8, LEDGER_SCHEMA_VERSION)
             with self._account_transaction():
                 self._initialize_active_capacity_locked()
-                self._connection.execute("PRAGMA user_version = 9")
+                self._initialize_account_opens_locked()
+                self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             return
-        if current == 9:
-            self._assert_launch_schema_locked(9)
+        if current >= 9:
+            self._assert_launch_schema_locked(current)
             if self._connection.execute(
                 "SELECT 1 FROM launch_claims c LEFT JOIN active_run_capacity a "
                 "ON a.project_id=c.project_id AND a.handle_digest=c.handle_digest "
@@ -2569,6 +2605,12 @@ class LearningLedger:
             "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
             ).fetchone() is not None:
                 raise LedgerError("capacity completion coverage is unavailable")
+            if current == 9:
+                self._require_project_migration_backups(9, LEDGER_SCHEMA_VERSION)
+                with self._account_transaction():
+                    self._initialize_account_opens_locked()
+                    self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
+                return
         with self._account_transaction():
             self._migrate_layout_locked(current)
 
@@ -3155,6 +3197,7 @@ class LearningLedger:
                 self._initialize_launch_claims_locked(backfill=current != 0)
                 self._initialize_launch_operations_locked()
                 self._initialize_active_capacity_locked()
+                self._initialize_account_opens_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
         self.state.harden_database_files()
 
@@ -6134,11 +6177,11 @@ class LearningLedger:
             if current != known:
                 raise ClaimError('claim_denial_unavailable')
             binding = self._connection.execute(
-                'SELECT h.*,o.handle_digest AS orchestration_digest,l.provider FROM host_run_bindings h '
-                'JOIN orchestrations o ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id '
+                'SELECT h.*,l.provider FROM host_run_bindings h '
                 'LEFT JOIN launch_inputs l ON l.project_id=h.project_id AND l.handle_digest=h.handle_digest '
                 'WHERE h.project_id=? AND h.handle_digest=?', (project_id, context.handle),
             ).fetchone()
+            orchestration_digest = self._claim_original_orchestration_digest(expected, 'claim_denial_unavailable')
             # Any durable consumed/unknown launch or capacity is contradictory.
             if (self._connection.execute('SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?) LIMIT 1',
                                          (project_id, context.handle, expected.run_id)).fetchone() is not None
@@ -6190,7 +6233,7 @@ class LearningLedger:
                     or binding['consumed_at_ms'] is not None or binding['native_assignment_id'] is not None
                     or binding['usage_complete'] is not None
                     or binding['assignment_digest'] != lease.assignment_digest or lease.lease_digest != closure.lease_digest
-                    or binding['orchestration_digest'] != keyed_digest(key, expected.orchestration_handle)
+                    or orchestration_digest != keyed_digest(key, expected.orchestration_handle)
                     or not lease.created_at_ms <= known['recorded_at_ms']
                     or type(now) is not int or not known['recorded_at_ms'] <= now <= MAX_CLAIM_INTEGER):
                 raise ClaimError('claim_denial_unavailable')
@@ -6266,18 +6309,18 @@ class LearningLedger:
             row = self._connection.execute(
                 "SELECT a.*,h.assignment_digest,h.task_digest,h.route_digest,h.configuration_digest,"
                 "h.native_assignment_id,h.binding_state,h.consumed_at_ms,h.client_version,"
-                "o.handle_digest AS orchestration_digest,e.owner_digest AS registered_digest "
+                "e.owner_digest AS registered_digest "
                 "FROM active_run_capacity a JOIN host_run_bindings h "
                 "ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id "
-                "JOIN orchestrations o ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id "
                 "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
                 "WHERE a.project_id=? AND a.handle_digest=? AND a.bridge_run_id=?",
                 (project_id, context.handle, registration.bridge_run_id),
             ).fetchone()
+            orchestration_digest = self._claim_original_orchestration_digest(expected, 'claim_execution_unavailable')
             if (row is None or row["kind"] != "claimed" or row["runtime_digest"] != runtime_digest
                     or row["provider"] != "codex" or row["run_id"] != expected.run_id
                     or row["assignment_digest"] != lease.assignment_digest
-                    or row["orchestration_digest"] != keyed_digest(key, expected.orchestration_handle)
+                    or orchestration_digest != keyed_digest(key, expected.orchestration_handle)
                     or row["deadline_at_ms"] != lease.hard_deadline_at_ms):
                 raise ClaimError("claim_execution_invalid")
             grant = sign_execution_grant(
@@ -6369,19 +6412,19 @@ class LearningLedger:
             row = self._connection.execute(
                 'SELECT a.*,h.assignment_digest,h.task_digest,h.route_digest,h.configuration_digest,'
                 'h.native_assignment_id,h.binding_state,h.consumed_at_ms,h.client_version,'
-                'o.handle_digest AS orchestration_digest,e.owner_digest FROM active_run_capacity a '
+                'e.owner_digest FROM active_run_capacity a '
                 'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id '
-                'JOIN orchestrations o ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id '
                 'JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest '
                 'AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id '
                 'WHERE a.project_id=? AND a.handle_digest=? AND a.bridge_run_id=?',
                 (project_id, context.handle, registration.bridge_run_id),
             ).fetchone()
+            orchestration_digest = self._claim_original_orchestration_digest(expected, 'claim_terminal_unavailable')
             if (row is None or row['kind'] != 'claimed' or row['provider'] != 'codex'
                     or terminal_record['client_diagnostics'] is not None
                     or row['runtime_digest'] != runtime_digest or row['run_id'] != grant.binding.run_id
                     or row['client_version'] != 'bridge-v1' or row['owner_digest'] != grant.registration_digest
-                    or row['orchestration_digest'] != keyed_digest(key, grant.binding.orchestration_handle)
+                    or orchestration_digest != keyed_digest(key, grant.binding.orchestration_handle)
                     or row['native_assignment_id'] != external_id(key, 'asg', registration.bridge_run_id)
                     or row['execution_deadline_ns'] != grant.deadline_ns
                     or any(row[n] != getattr(grant, n) for n in (
@@ -6676,7 +6719,7 @@ class LearningLedger:
         """Read all fixed scalar inputs before any eligibility short circuit."""
         binding = self._connection.execute(
             "SELECT run_id,binding_state,consumed_at_ms,client_version,expires_at_ms,created_at_ms,assignment_digest,orchestration_id,"
-            "observation_started_at_ms,observation_deadline_at_ms "
+            "observation_started_at_ms,observation_deadline_at_ms,history_owner "
             "FROM host_run_bindings WHERE project_id=? AND handle_digest=?", (project_id, handle),
         ).fetchone()
         inputs = self._connection.execute(
@@ -6776,6 +6819,15 @@ class LearningLedger:
                 reason = "client_version_unreviewed"
         return reason, binding, inputs, identity, admission, timestamp
 
+    def _claim_original_orchestration_digest(self, expected, error_code):
+        from .account_open_contracts import OpenError
+        from .account_original_open import original_orchestration_digest
+
+        try:
+            return original_orchestration_digest(self, expected)
+        except OpenError:
+            raise ClaimError(error_code) from None
+
     def _check_claim_storage(self, context, run_id, timestamp, deadline, work_limits):
         from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
         from .claim_storage import verify_storage_evidence
@@ -6784,13 +6836,12 @@ class LearningLedger:
             raise ClaimError("claim_storage_required")
         def metadata():
             row = self._connection.execute(
-                "SELECT h.assignment_digest,o.handle_digest FROM host_run_bindings h JOIN orchestrations o "
-                "ON o.project_id=h.project_id AND o.orchestration_id=h.orchestration_id "
+                "SELECT h.assignment_digest FROM host_run_bindings h "
                 "WHERE h.project_id=? AND h.handle_digest=? AND h.run_id=?", (context.project_id, context.handle, run_id),
             ).fetchone()
             if row is None:
                 raise ClaimError("claim_storage_invalid")
-            return tuple(row)
+            return row[0], self._claim_original_orchestration_digest(context.storage_binding, 'claim_storage_invalid')
         assignment, orchestration = (metadata() if work_limits is None else
                                      self._connection.transaction_read_call(work_limits, metadata))
         request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, "account.claim_launch", context.request_id,

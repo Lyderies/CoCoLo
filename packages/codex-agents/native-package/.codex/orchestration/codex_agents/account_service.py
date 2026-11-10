@@ -39,6 +39,7 @@ from .account_claim_contracts import ClaimError, LaunchClaimInput, decode_claim_
 from .capacity_status_contracts import CapacityStatusInput, decode_capacity_status_input
 from .run_provenance import decode_run_provenance_input
 from .host_open_contracts import decode_open_provenance_input
+from .account_open_contracts import AccountOpenContext, OpenError, decode_account_open_input
 
 # Fixed owner query: do not parse JSON or select variable record values during
 # preliminary quota checks. Foreign-account/provider candidates are charged too.
@@ -72,6 +73,7 @@ class AccountAuthorization:
     storage_binding: object = None
     storage_evidence: bytes | None = None
     terminal_evidence: bytes | None = None
+    open_context: AccountOpenContext | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -82,6 +84,7 @@ class AccountAuthorization:
             or any(type(operation) is not str for operation in self.allowed_operations)
             or not self.allowed_operations <= ACCOUNT_OPERATIONS
             or (self.caller_scope is not None and not matches(self.caller_scope, _DIGEST))
+            or (self.open_context is not None and type(self.open_context) is not AccountOpenContext)
         ):
             raise AccountError("account_not_authorized")
         from .claim_storage import capture_storage_evidence
@@ -695,8 +698,10 @@ class AccountService:
         if reply is None:
             return None
         context = reply.context
-        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, "account.claim_launch", context.request_id,
-                                 context.project_id, context.runtime_digest, context.launch.payload())
+        operation = reply.operation
+        payload = context.wire_input.payload() if operation == 'account.open_host_run' else context.launch.payload()
+        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, operation, context.request_id,
+                                 context.project_id, context.runtime_digest, payload)
         labels = {"request_id": context.request_id, "project_id": context.project_id,
                   "runtime_digest": context.runtime_digest, "request_digest": account_request_digest(request)}
         raw = self._reply(labels, result=reply.result, reason=reply.reason)
@@ -708,6 +713,26 @@ class AccountService:
             # a malformed response, rather than a failed claim operation.
             if error.reason_code != reply.reason:
                 raise
+        if operation == 'account.open_host_run' and reply.result is not None:
+            try:
+                if not callable(reply.before_publish):
+                    raise OpenError('open_not_authorized')
+                reply.before_publish()
+                from .account_original_open import current_open_request
+                self._views._guard()
+                current = self._views._ledger._connection.read_call(self._claim_jobs._work_limits,
+                    lambda: current_open_request(self._views._ledger, context))[1]
+                if current is None or {**current, 'known': reply.result['known']} != reply.result:
+                    raise OpenError('open_conflict')
+                self._provenance_live()
+                with self._front_lock:
+                    if self._closed:
+                        raise OpenError('open_not_authorized')
+                    return raw
+            except OpenError as error:
+                return self._reply(labels, reason=error.reason_code)
+            except Exception:
+                return self._reply(labels, reason='open_unavailable')
         return raw
 
     def _handle(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
@@ -730,6 +755,7 @@ class AccountService:
             closure = decode_close_denied(request.payload) if operation == 'account.close_denied_attempt' else None
             provenance = decode_run_provenance_input(request.payload) if operation == 'account.run_provenance' else None
             open_provenance = decode_open_provenance_input(request.payload) if operation == 'account.open_provenance' else None
+            opening = decode_account_open_input(request.payload, project, runtime) if operation == 'account.open_host_run' else None
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -758,11 +784,41 @@ class AccountService:
                     "account.health", "account.register_execution", "account.submit_terminal", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance"})
                 or (operation in {"account.register_execution", "account.submit_terminal", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
-                or (operation in {"account.claim_launch", "account.capacity_status"} and
+                or (operation in {"account.claim_launch", "account.capacity_status", 'account.open_host_run'} and
                     (authorization.source != "host" or authorization.caller_scope is None))
             ):
                 raise AccountError("account_not_authorized")
-            if operation == "account.claim_launch":
+            if operation == 'account.open_host_run':
+                if not deferred or self._claim_jobs is None or self._claim_jobs._open_limits is None:
+                    raise OpenError('open_unavailable')
+                self._provenance_live()
+                if authorization.open_context is None:
+                    raise OpenError('open_not_authorized')
+                original_context, captured = authorization.open_context.snapshot()
+                expected_context = AccountOpenContext.from_snapshot(captured)
+                caller = authorization.caller_scope
+
+                def authorize_open():
+                    try:
+                        self._provenance_live()
+                        fresh = decode_account_request(raw)
+                        current = self._authorizer(fresh, transport_context)
+                        if type(current) is not AccountAuthorization:
+                            raise ValueError()
+                        current.__post_init__()
+                        if (current.source != 'host' or current.project_id != project or current.runtime_digest != runtime
+                                or current.caller_scope != caller or current.request_digest != digest
+                                or account_request_digest(fresh) != digest or operation not in current.allowed_operations
+                                or current.open_context is None or current.open_context.snapshot()[0] != original_context):
+                            raise ValueError()
+                        self._provenance_live()
+                        self._views._guard()
+                    except Exception:
+                        raise OpenError('open_not_authorized') from None
+
+                return self._claim_jobs.submit_open(project, runtime_digest=runtime, caller_scope=caller,
+                    request_id=identity, request=opening, context=expected_context, before_commit=authorize_open, _ingress=ingress)
+            elif operation == "account.claim_launch":
                 from .claim_storage import capture_storage_evidence
 
                 storage_binding, storage_evidence = capture_storage_evidence(
@@ -860,6 +916,8 @@ class AccountService:
         except AccountError as exc:
             reason = exc.reason_code
         except ClaimError as exc:
+            reason = exc.reason_code
+        except OpenError as exc:
             reason = exc.reason_code
         except Exception:
             reason = "account_unavailable"
