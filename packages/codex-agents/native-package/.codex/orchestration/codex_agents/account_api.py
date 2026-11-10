@@ -22,6 +22,7 @@ from .account_claim_contracts import CLAIM_ERROR_CODES, ClaimError, LaunchClaimI
 from .capacity_status_contracts import CapacityStatusInput, checked_capacity_status, decode_capacity_status_input
 from .execution_grant import ExecutionRegistrationInput, checked_execution_reply, decode_execution_registration
 from .terminal_delivery import checked_terminal_receipt, decode_terminal_submission
+from .release_contracts import checked_release_receipt
 from .claim_denial import CloseDeniedInput, checked_denial_closure, decode_close_denied
 from .run_provenance import RunProvenanceInput, checked_run_provenance, decode_run_provenance_input
 from .host_open_contracts import OpenProvenanceInput, checked_open_provenance, decode_open_provenance_input
@@ -34,7 +35,7 @@ ACCOUNT_READ_OPERATIONS = frozenset({
     "account.health", "account.project", "account.owner_key", "account.owner_public_key", "account.capacity_status",
 })
 ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
-    "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.close_denied_attempt",
+    "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt",
     "account.run_provenance", "account.open_provenance", 'account.open_host_run',
 }
 ACCOUNT_REASON_CODES = frozenset({
@@ -127,7 +128,7 @@ def _checked_request(data: object) -> None:
             decode_capacity_status_input(data["payload"])
         except ValueError:
             raise AccountError("account_invalid_request") from None
-    elif data["operation"] == "account.submit_terminal":
+    elif data["operation"] in {"account.submit_terminal", "account.release_capacity"}:
         try:
             decode_terminal_submission(data['payload'])
         except ClaimError:
@@ -210,6 +211,14 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
             checked = checked_terminal_receipt(result, decode_terminal_submission(request.payload))
             if checked['binding']['project_id'] != request.project_id or checked['binding']['runtime_digest'] != request.runtime_digest:
                 raise ClaimError('claim_terminal_invalid')
+            return checked
+        except ClaimError:
+            raise AccountError('account_invalid_response') from None
+    elif request.operation == 'account.release_capacity':
+        try:
+            checked = checked_release_receipt(result, decode_terminal_submission(request.payload))
+            if checked['binding']['project_id'] != request.project_id or checked['binding']['runtime_digest'] != request.runtime_digest:
+                raise ClaimError('claim_cleanup_invalid')
             return checked
         except ClaimError:
             raise AccountError('account_invalid_response') from None
@@ -414,6 +423,22 @@ class AccountClient:
         try:
             raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
                                  request_limit=MAX_ACCOUNT_FRAME_BYTES, response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError:
+            raise AccountError('account_unavailable') from None
+        return decode_account_response(raw, request)
+
+    def release_capacity(self, submission, *, request_id):
+        """One bounded exchange; proof comes from the enrolled project peer."""
+        from .terminal_delivery import TerminalSubmissionInput
+        if type(submission) is not TerminalSubmissionInput:
+            raise AccountError('account_invalid_request')
+        try:
+            request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.release_capacity', request_id,
+                                     self._project, self._runtime, submission.payload())
+            raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
+                                 request_limit=MAX_ACCOUNT_FRAME_BYTES, response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ClaimError:
+            raise AccountError('account_invalid_request') from None
         except ServiceTransportError:
             raise AccountError('account_unavailable') from None
         return decode_account_response(raw, request)

@@ -16,9 +16,17 @@ from codex_agents.learning_contracts import canonical_json
 from codex_agents.learning_store import DEFAULT_RETENTION_MS, LearningLedger, LedgerError, StateError
 
 
+def drop_account_cleanup_for_legacy_fixture(ledger):
+    if ledger._connection.execute('SELECT COUNT(*) FROM account_cleanup_receipts').fetchone()[0]:
+        raise AssertionError('cannot label new cleanup authority as a historical fixture')
+    ledger._connection.execute('ALTER TABLE capacity_executions DROP COLUMN cleanup_reservation_digest')
+    ledger._connection.execute('DROP TABLE account_cleanup_receipts')
+
+
 def drop_original_open_for_legacy_fixture(ledger):
     # Remove the newer original-open layout when constructing an exact old
     # fixture; a version label alone must not make newer authority look legacy.
+    drop_account_cleanup_for_legacy_fixture(ledger)
     ledger._connection.execute('DROP TABLE account_open_requests')
     ledger._connection.execute('DROP TABLE account_open_receipts')
     ledger._connection.execute('ALTER TABLE host_run_bindings DROP COLUMN history_owner')

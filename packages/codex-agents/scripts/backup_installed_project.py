@@ -102,7 +102,10 @@ _TABLE_COLUMNS = {
                             "clock_reference_ns", "execution_deadline_ns", "clock_owner_digest", "released_at_ms", "release_digest"),
     "capacity_completions": ("handle_digest", "run_id", "bridge_run_id", "terminal_record_id", "terminal_content_digest",
                              "released_at_ms", "receipt_digest"),
-    "capacity_executions": ("handle_digest", "run_id", "bridge_run_id", "owner_digest"),
+    "capacity_executions": ("handle_digest", "run_id", "bridge_run_id", "owner_digest", "cleanup_reservation_digest"),
+    "account_cleanup_receipts": ('handle_digest', 'run_id', 'bridge_run_id', 'registration_digest', 'lease_digest',
+        'binding_digest', 'reservation_digest', 'terminal_record_id', 'terminal_content_digest', 'result_digest',
+        'terminal_receipt_digest', 'terminal_recorded_at_ms', 'cleanup_digest', 'released_at_ms', 'receipt_digest', 'state_seal'),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -154,6 +157,7 @@ _TABLE_ORDER = {
     "active_run_capacity": ("handle_digest",),
     "capacity_completions": ("handle_digest",),
     "capacity_executions": ("handle_digest",),
+    "account_cleanup_receipts": ("handle_digest",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -166,6 +170,8 @@ _TABLE_ORDER = {
 
 
 def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 11 and table == 'capacity_executions':
+        return _TABLE_COLUMNS[table][:-1] if schema_version >= 9 else ()
     if schema_version < 9 and table in {"active_run_capacity", "capacity_completions", "capacity_executions"}:
         return ()
     if schema_version < 8 and table in {"launch_inputs", "launch_observations", "launch_receipts"}:
@@ -187,14 +193,15 @@ def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
 
 
 def _tables(schema_version: int) -> tuple[str, ...]:
-    if schema_version not in {5, 6, 7, 8, 9, 10}:
+    if schema_version not in {5, 6, 7, 8, 9, 10, 11}:
         raise RuntimeError("installed ledger schema does not support this backup")
     return tuple(table for table in _TABLE_COLUMNS
                  if (schema_version >= 7 or table != "launch_claims")
                  and (schema_version >= 8 or table not in {
                      "launch_inputs", "launch_observations", "launch_receipts"})
                  and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"})
-                 and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'}))
+                 and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'})
+                 and (schema_version >= 11 or table != 'account_cleanup_receipts'))
 
 
 def _encode(value: object) -> object:
@@ -298,6 +305,17 @@ def _verify_relational_restore(
             "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
         ).fetchone() is not None:
             raise RuntimeError("project backup completion coverage is incomplete")
+        if body['ledger_schema_version'] >= 11:
+            missing = restored.execute('SELECT 1 FROM capacity_executions e LEFT JOIN account_cleanup_receipts c '
+                'ON c.project_id=e.project_id AND c.reservation_digest=e.cleanup_reservation_digest '
+                'WHERE e.cleanup_reservation_digest IS NOT NULL AND '
+                '(c.handle_digest IS NULL OR c.handle_digest<>e.handle_digest OR c.run_id<>e.run_id '
+                'OR c.bridge_run_id<>e.bridge_run_id OR c.registration_digest<>e.owner_digest) LIMIT 1').fetchone()
+            orphan = restored.execute('SELECT 1 FROM account_cleanup_receipts c LEFT JOIN capacity_executions e '
+                'ON e.project_id=c.project_id AND e.handle_digest=c.handle_digest '
+                'WHERE e.cleanup_reservation_digest IS NULL OR e.cleanup_reservation_digest<>c.reservation_digest LIMIT 1').fetchone()
+            if missing is not None or orphan is not None:
+                raise RuntimeError('project backup cleanup coverage is incomplete')
         if restored.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise RuntimeError("project backup integrity verification failed")
         for table in _tables(body["ledger_schema_version"]):
@@ -362,7 +380,7 @@ def _main() -> int:
         project_id = ledger.project_for_root(target)
         connection = ledger._connection
         schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if schema_version not in {5, 6, 7, 8, 9, 10}:
+        if schema_version not in {5, 6, 7, 8, 9, 10, 11}:
             raise RuntimeError("installed ledger schema does not support this backup")
         project_columns = {
             str(row[1])

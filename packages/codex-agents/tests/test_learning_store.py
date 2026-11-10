@@ -49,6 +49,7 @@ from codex_agents.learning_store import (
     _verify_project_backup_body,
     _start_collector_locked,
 )
+from codex_agents import learning_store
 from codex_agents.learning_adapters import load_client_capabilities
 from codex_agents.learning_contracts import (
     candidate_base_digest,
@@ -315,6 +316,8 @@ class LearningStoreTests(unittest.TestCase):
 
     def _downgrade_fixture_to_schema_five(self) -> None:
         with self.ledger._connection:
+            from tests.test_account_launch_claims import drop_account_cleanup_for_legacy_fixture
+            drop_account_cleanup_for_legacy_fixture(self.ledger)
             self.ledger._connection.execute('DROP TABLE account_open_requests')
             self.ledger._connection.execute('DROP TABLE account_open_receipts')
             self.ledger._connection.execute('ALTER TABLE host_run_bindings DROP COLUMN history_owner')
@@ -587,7 +590,7 @@ class LearningStoreTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        self.assertEqual(10, version)
+        self.assertEqual(11, version)
         self.assertIn('account_open_receipts', tables)
         self.assertIn('account_open_requests', tables)
         self.assertIn("active_run_capacity", tables)
@@ -630,7 +633,7 @@ class LearningStoreTests(unittest.TestCase):
         connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         snapshot = self.ledger.ingestion_snapshot(self.project_a_id, now_ms=30)
-        self.assertEqual(10, self.ledger._connection.execute(
+        self.assertEqual(11, self.ledger._connection.execute(
             "PRAGMA user_version"
         ).fetchone()[0])
         self.assertEqual(1, snapshot["accepted_hook_event_count"])
@@ -2619,6 +2622,7 @@ class LearningStoreTests(unittest.TestCase):
             "hook_ingestion", "orchestrations", "orchestration_checkpoints",
             "operational_qa", "operational_check_receipts", "tombstones",
             'account_open_receipts', 'account_open_requests',
+            'account_cleanup_receipts',
         })
         self.assertEqual(
             {"$codex_agents_bytes_base64": "AP8="},
@@ -2819,7 +2823,7 @@ class LearningStoreTests(unittest.TestCase):
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
 
         self.assertEqual(
-            10, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+            11, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         )
         checkpoint = self.ledger._connection.execute(
             "SELECT sequence,status,observed_at_ms FROM orchestration_checkpoints "
@@ -2886,7 +2890,7 @@ class LearningStoreTests(unittest.TestCase):
         finally:
             connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
-        self.assertEqual(10, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(11, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def test_schema_five_migration_rolls_back_an_injected_schema_failure(self) -> None:
         self._downgrade_fixture_to_schema_five()
@@ -3409,7 +3413,7 @@ class LearningStoreTests(unittest.TestCase):
         self.addCleanup(server.stop)
         client = CollectorClient(self.state.socket, timeout=0.2)
         health = client.health(self.project_a)
-        self.assertEqual(10, health["schema_version"])
+        self.assertEqual(11, health["schema_version"])
         self.assertEqual(PACKAGE_VERSION, health["runtime_version"])
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, health["runtime_digest"])
         self.assertIsInstance(health["started_at_ms"], int)
@@ -3457,7 +3461,7 @@ class LearningStoreTests(unittest.TestCase):
             "_request",
             return_value={
                 "ok": True,
-                "schema_version": 10,
+                "schema_version": learning_store.LEDGER_SCHEMA_VERSION,
                 "runtime_version": PACKAGE_VERSION,
                 "runtime_digest": "0" * 64,
             },
@@ -3667,7 +3671,7 @@ class LearningStoreTests(unittest.TestCase):
         shutdown.assert_not_called()
 
         healthy = {
-            "schema_version": 10,
+            "schema_version": learning_store.LEDGER_SCHEMA_VERSION,
             "runtime_version": PACKAGE_VERSION,
             "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
         }
@@ -3704,7 +3708,7 @@ class LearningStoreTests(unittest.TestCase):
 
     def test_client_rejects_older_or_newer_schema_with_matching_runtime(self) -> None:
         client = CollectorClient(self.state.socket)
-        for schema, error in ((6, CollectorUpgradeRequired), (7, CollectorUpgradeRequired), (8, CollectorUpgradeRequired), (9, CollectorUpgradeRequired), (11, CollectorNewerVersionError)):
+        for schema, error in ((6, CollectorUpgradeRequired), (7, CollectorUpgradeRequired), (8, CollectorUpgradeRequired), (9, CollectorUpgradeRequired), (10, CollectorUpgradeRequired), (12, CollectorNewerVersionError)):
             with self.subTest(schema=schema), mock.patch.object(client, "_request", return_value={
                 "ok": True, "schema_version": schema,
                 "runtime_version": PACKAGE_VERSION, "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
@@ -3756,7 +3760,7 @@ class LearningStoreTests(unittest.TestCase):
     def test_detached_collector_receives_no_inherited_environment(self) -> None:
         healthy = {
             "ok": True,
-            "schema_version": 10,
+            "schema_version": learning_store.LEDGER_SCHEMA_VERSION,
             "runtime_version": PACKAGE_VERSION,
             "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
             "started_at_ms": 1,

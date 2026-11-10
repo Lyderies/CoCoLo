@@ -350,6 +350,17 @@ def main():
              launches=(root / "launches").read_text().splitlines(),
              acknowledged=lane.snapshot(handle)['state'] in {'acknowledged', 'cleanup_ready'},
              persisted_claim=lane.delivery(handle).binding.claim_id, **cleanup)
+        if data.get('await_release', False):
+            from codex_agents.cleanup_contracts import verify_cleanup_evidence
+            from codex_agents.release_contracts import verify_release_receipt
+            original = lane.cleanup_evidence(handle)
+            value = verify_cleanup_evidence(key, lease_scope, original)
+            from codex_agents.learning_contracts import keyed_digest
+            verify_release_receipt(key, value, keyed_digest(key, original), canonical_json(receive()))
+            # This fixture proves account settlement, not the still-required
+            # durable project acknowledgement/local retirement handoff.
+            emit(stage='release_received', local_execution_released=registry._issued[ticket].state == 'released',
+                 local_persistence_retired=handle not in lane._jobs)
     finally:
         pool.close()
         if lane is not None:

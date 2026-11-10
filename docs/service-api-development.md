@@ -2270,3 +2270,42 @@ explicit persistence-owner upgrade preserves legacy rows, private bodies,
 windows, wire representations and seals. Its added lease column is null for
 historical leases and no cleanup reservation or receipt is fabricated. This
 upgrade flag does not prove native drain or authorize production activation.
+
+### Account cleanup settlement
+
+`account.release_capacity` is a closed project-service business operation. Its
+request repeats the original terminal submission identity; it accepts no cleanup
+flag, PID, process list, arbitrary receipt or caller-selected evidence. The
+enrolled server adapter supplies the independently expected lease and protected
+storage, terminal and cleanup evidence. That adapter must separately authenticate
+the original project peer, current epoch/permissions and closed-descendant
+containment. A valid MAC or a project source label cannot establish those facts.
+
+Account schema 11 reserves its original cleanup journal during registration,
+before a model launch. Each project has at most 4,096 such retained entries.
+Terminal acceptance atomically binds the original result metadata, account
+acknowledgement and original acceptance time. Release requires that existing
+acceptance and the exact cleanup evidence; it cannot create a missing terminal
+or replace a missing journal. Three records commit atomically: the journal,
+terminal completion and shared capacity reservation. Current authority is checked
+after every write and before the encoded reply is admitted. Original claim,
+host-open, registration and terminal companions remain independently checked.
+
+Known releases recover the original timestamp and receipt without consulting a
+new clock or executing a child. A fresh clock rollback refuses release. The
+new completion digest binds the original cleanup reservation, result, account
+terminal receipt and cleanup digest. A separately sealed acknowledgement binds
+the exact project delivery. Clients make one bounded exchange and never retry
+automatically after an ambiguous reply.
+
+The verified schema-10 upgrade preserves every old row and blob, adds a null
+execution reference for historical registrations, and invents no cleanup
+authority. Legacy account-local release digests remain unchanged. Backups retain
+the exact version-specific column manifests and check journal coverage in both
+directions. Ordinary startup cannot migrate an older ledger.
+
+The actual process fixture now carries an original project-writer cleanup receipt
+into account settlement while its supervisor remains alive. Native enrollment
+and containment are still synthetic there. Durable project acknowledgement and
+local registry/persistence retirement remain a separate required next step;
+neither the new API nor its tests authorizes production activation or release.

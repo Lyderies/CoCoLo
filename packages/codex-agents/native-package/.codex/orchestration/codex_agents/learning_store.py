@@ -35,6 +35,7 @@ from .active_run_capacity import INSTALLED_ACTIVE_RUN_LIMITS
 from .owned_execution import ExecutionCustodyError, OwnedExecutionKey, OwnedExecutionRegistry
 from .capacity_status_contracts import CapacityStatusInput, checked_capacity_status
 from .account_open_schema import HISTORY_OWNER_COLUMN, OPEN_OBJECTS, assert_open_schema, install_open_schema
+from .account_cleanup_schema import RELEASE_COLUMN, RELEASE_COLUMNS, RELEASE_SCHEMA, assert_cleanup_schema, check_cleanup_coverage, install_cleanup_schema
 from .collector_contracts import (
     COLLECTOR_PROTOCOL_VERSION as COLLECTOR_PROTOCOL_VERSION,
     LEDGER_SCHEMA_VERSION as LEDGER_SCHEMA_VERSION,
@@ -286,7 +287,8 @@ _BACKUP_TABLE_COLUMNS = {
                             "clock_reference_ns", "execution_deadline_ns", "clock_owner_digest", "released_at_ms", "release_digest"),
     "capacity_completions": ("handle_digest", "run_id", "bridge_run_id", "terminal_record_id", "terminal_content_digest",
                              "released_at_ms", "receipt_digest"),
-    "capacity_executions": ("handle_digest", "run_id", "bridge_run_id", "owner_digest"),
+    "capacity_executions": ("handle_digest", "run_id", "bridge_run_id", "owner_digest", "cleanup_reservation_digest"),
+    "account_cleanup_receipts": RELEASE_COLUMNS,
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -346,6 +348,7 @@ _BACKUP_ORDER_COLUMNS = {
     "active_run_capacity": ("handle_digest",),
     "capacity_completions": ("handle_digest",),
     "capacity_executions": ("handle_digest",),
+    "account_cleanup_receipts": ("handle_digest",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -381,6 +384,8 @@ def _backup_decode_value(value: Any) -> Any:
 
 
 def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 11 and table == 'capacity_executions':
+        return _BACKUP_TABLE_COLUMNS[table][:-1] if schema_version >= 9 else ()
     if schema_version < 9 and table in {"active_run_capacity", "capacity_completions", "capacity_executions"}:
         return ()
     if schema_version < 8 and table in {"launch_inputs", "launch_observations", "launch_receipts"}:
@@ -404,7 +409,8 @@ def _backup_tables(schema_version: int) -> tuple[str, ...]:
                  if (schema_version >= 7 or table != "launch_claims")
                  and (schema_version >= 8 or table not in {"launch_inputs", "launch_observations", "launch_receipts"})
                  and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"})
-                 and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'}))
+                 and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'})
+                 and (schema_version >= 11 or table != 'account_cleanup_receipts'))
 
 
 def _snapshot_project_partition(
@@ -643,6 +649,8 @@ CREATE TABLE tombstones(project_id TEXT NOT NULL,deletion_id TEXT NOT NULL,delet
 
 _BACKUP_RESTORE_SCHEMA += ('\nALTER TABLE host_run_bindings ADD COLUMN '+HISTORY_OWNER_COLUMN+';\n'
                            + ';\n'.join(sql for _, _, sql in OPEN_OBJECTS)+';\n')
+_BACKUP_RESTORE_SCHEMA += ('\n' + RELEASE_SCHEMA + ';\nALTER TABLE capacity_executions ADD COLUMN '
+                           + RELEASE_COLUMN + ';\n')
 
 
 def _verify_project_backup_body(
@@ -657,7 +665,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -744,6 +752,8 @@ def _verify_project_backup_body(
             "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
         ).fetchone() is not None:
             raise LedgerError("project backup completion coverage is incomplete")
+        if schema_version >= 11 and not check_cleanup_coverage(restored):
+            raise LedgerError('project backup cleanup coverage is incomplete')
         integrity = restored.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise LedgerError("isolated project backup integrity check failed")
@@ -2391,7 +2401,12 @@ class LearningLedger:
                         ("index", "launch_receipt_parent", _LAUNCH_RECEIPT_PARENT_SCHEMA),
                         ("trigger", "cleanup_launch_operation_state", _LAUNCH_CLEANUP_SCHEMA)]
         if version >= 9:
-            schemas += list(CAPACITY_OBJECTS)
+            schemas += [entry for entry in CAPACITY_OBJECTS if version < 11 or entry[1] != 'capacity_executions']
+        if version >= 11:
+            try:
+                assert_cleanup_schema(self._connection)
+            except ValueError:
+                raise LedgerError('account cleanup schema is unavailable or incompatible') from None
         if version >= 10:
             try:
                 assert_open_schema(self._connection)
@@ -2433,6 +2448,12 @@ class LearningLedger:
         except ValueError:
             raise LedgerError('account original-open migration is unavailable or incompatible') from None
 
+    def _initialize_account_cleanup_locked(self):
+        try:
+            install_cleanup_schema(self._connection)
+        except ValueError:
+            raise LedgerError('account cleanup migration is unavailable or incompatible') from None
+
     def _migrate_six_or_seven_to_current(self, version: int) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -2449,6 +2470,7 @@ class LearningLedger:
             self._initialize_launch_operations_locked()
             self._initialize_active_capacity_locked()
             self._initialize_account_opens_locked()
+            self._initialize_account_cleanup_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
@@ -2548,6 +2570,7 @@ class LearningLedger:
             self._initialize_launch_operations_locked()
             self._initialize_active_capacity_locked()
             self._initialize_account_opens_locked()
+            self._initialize_account_cleanup_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
@@ -2585,6 +2608,7 @@ class LearningLedger:
             with self._account_transaction():
                 self._initialize_active_capacity_locked()
                 self._initialize_account_opens_locked()
+                self._initialize_account_cleanup_locked()
                 self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             return
         if current >= 9:
@@ -2609,8 +2633,18 @@ class LearningLedger:
                 self._require_project_migration_backups(9, LEDGER_SCHEMA_VERSION)
                 with self._account_transaction():
                     self._initialize_account_opens_locked()
+                    self._initialize_account_cleanup_locked()
                     self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
                 return
+            if current == 10:
+                self._require_project_migration_backups(10, LEDGER_SCHEMA_VERSION)
+                with self._account_transaction():
+                    self._initialize_account_cleanup_locked()
+                    self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
+                return
+            if current >= 11:
+                if not check_cleanup_coverage(self._connection):
+                    raise LedgerError('account cleanup coverage is unavailable')
         with self._account_transaction():
             self._migrate_layout_locked(current)
 
@@ -3198,6 +3232,7 @@ class LearningLedger:
                 self._initialize_launch_operations_locked()
                 self._initialize_active_capacity_locked()
                 self._initialize_account_opens_locked()
+                self._initialize_account_cleanup_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
         self.state.harden_database_files()
 
@@ -6333,6 +6368,11 @@ class LearningLedger:
             if row["registered_digest"] is not None:
                 if not secrets.compare_digest(row["registered_digest"], grant.registration_digest):
                     raise ClaimError("claim_execution_conflict")
+                registered = self._connection.execute('SELECT cleanup_reservation_digest FROM capacity_executions '
+                    'WHERE project_id=? AND handle_digest=?', (project_id, context.handle)).fetchone()
+                if registered is not None and registered['cleanup_reservation_digest'] is not None:
+                    from .account_cleanup import original_journal
+                    original_journal(self, expected, grant)
                 return {"grant": grant.as_data(), "known": True}
             clock = self._capacity_clock_reference()
             now = self._clock_ms()
@@ -6347,15 +6387,17 @@ class LearningLedger:
                         owned_key, row["clock_reference_ns"], row["execution_deadline_ns"],
                         row["claimed_at_ms"], row["deadline_at_ms"]))):
                 raise ClaimError("claim_execution_unavailable")
-            self._connection.execute("INSERT INTO capacity_executions VALUES(?,?,?,?,?)",
+            from .account_cleanup import reserve_cleanup
+            cleanup = reserve_cleanup(self, expected, grant) if lease.cleanup_reservation_digest is not None else None
+            self._connection.execute("INSERT INTO capacity_executions VALUES(?,?,?,?,?,?)",
                                      (project_id, context.handle, expected.run_id, registration.bridge_run_id,
-                                      grant.registration_digest))
+                                      grant.registration_digest, cleanup))
             self._connection.execute("UPDATE host_run_bindings SET native_assignment_id=? WHERE project_id=? AND handle_digest=?",
                                      (native_id, project_id, context.handle))
         return {"grant": grant.as_data(), "known": False}
 
     def _accept_project_terminal(self, project_id, *, runtime_digest, caller_scope, submission,
-                                 storage_binding, storage_evidence, terminal_evidence):
+                                 storage_binding, storage_evidence, terminal_evidence, require_known=False):
         """Accept exact safe terminal metadata; never infer cleanup or release.
 
         Native project enrollment/current authority and protected evidence
@@ -6438,6 +6480,8 @@ class LearningLedger:
                         or prior['terminal_record_id'] != delivery.record_id
                         or prior['terminal_content_digest'] != delivery.record_content_digest):
                     raise ClaimError('claim_terminal_conflict')
+                from .account_cleanup import record_terminal
+                record_terminal(self, expected, grant, delivery, known=True)
                 # A terminal ACK must not hide corrupt release metadata.
                 completed = self._capacity_completion_locked(OwnedExecutionKey(
                     project_id, context.handle, grant.binding.run_id, grant.binding.claim_id))
@@ -6445,10 +6489,14 @@ class LearningLedger:
                         self._capacity_completion_digest(completed, completed['released_at_ms']), completed['receipt_digest']):
                     raise ClaimError('claim_terminal_unavailable')
                 return terminal_receipt(key, grant, delivery, known=True)
+            if require_known:
+                raise ClaimError('claim_terminal_unavailable')
             now = self._clock_ms()
             if (row['released_at_ms'] is not None or row['binding_state'] != 'pending' or row['consumed_at_ms'] is not None
                     or type(now) is not int or not grant.claimed_at_ms <= observed <= now <= MAX_CLAIM_INTEGER):
                 raise ClaimError('claim_terminal_unavailable')
+            from .account_cleanup import record_terminal
+            record_terminal(self, expected, grant, delivery, known=False, recorded_at_ms=now)
             self._connection.execute(
                 'INSERT INTO capacity_completions(project_id,handle_digest,run_id,bridge_run_id,'
                 'terminal_record_id,terminal_content_digest) VALUES(?,?,?,?,?,?)',
@@ -6494,7 +6542,7 @@ class LearningLedger:
             deadline_ns = row["execution_deadline_ns"]
             owner = self._capacity_execution_owner(key)
             try:
-                self._connection.execute("INSERT INTO capacity_executions VALUES(?,?,?,?,?)",
+                self._connection.execute("INSERT INTO capacity_executions(project_id,handle_digest,run_id,bridge_run_id,owner_digest) VALUES(?,?,?,?,?)",
                                          (project_id, handle, row["run_id"], bridge_run_id, owner))
             except sqlite3.IntegrityError:
                 raise LedgerError("owned execution was already registered") from None
@@ -6514,7 +6562,8 @@ class LearningLedger:
     def _capacity_completion_locked(self, key):
         row = self._connection.execute(
             "SELECT a.*,c.terminal_record_id,c.terminal_content_digest,c.released_at_ms AS completion_released_at_ms,"
-            "c.receipt_digest,e.owner_digest AS execution_owner_digest FROM active_run_capacity a JOIN capacity_completions c "
+            "c.receipt_digest,e.owner_digest AS execution_owner_digest,e.cleanup_reservation_digest "
+            "FROM active_run_capacity a JOIN capacity_completions c "
             "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
             "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
             "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
@@ -6530,6 +6579,12 @@ class LearningLedger:
         return row
 
     def _capacity_completion_digest(self, row, timestamp):
+        if row['cleanup_reservation_digest'] is not None:
+            from .account_cleanup import checked_completion_digest
+            try:
+                return checked_completion_digest(self, row, timestamp)
+            except ClaimError:
+                raise LedgerError('capacity completion is unavailable') from None
         material = {"domain": "active-capacity-release-v1", **{name: row[name] for name in (
             "project_id", "handle_digest", "run_id", "bridge_run_id", "provider", "account_fingerprint",
             "runtime_digest", "policy_digest", "claimed_at_ms", "deadline_at_ms", "terminal_record_id", "terminal_content_digest",

@@ -18,7 +18,7 @@ from typing import Callable
 from .account_api import (
     ACCOUNT_OPERATIONS, ACCOUNT_PROTOCOL_VERSION, MAX_ACCOUNT_FRAME_BYTES,
     AccountError, AccountRequest, _DIGEST, _PROJECT, account_request_digest,
-    decode_account_request, decode_account_response, integer, matches,
+    decode_account_request, decode_account_response, encode_account_request, integer, matches,
 )
 from .admission_inputs import (
     ADMISSION_CAPTURE_RECORD_TYPES, AdmissionCaptureError, AdmissionCaptureLimits,
@@ -74,6 +74,7 @@ class AccountAuthorization:
     storage_evidence: bytes | None = None
     terminal_evidence: bytes | None = None
     open_context: AccountOpenContext | None = None
+    cleanup_evidence: bytes | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -94,6 +95,8 @@ class AccountAuthorization:
             capture_storage_evidence(self.storage_binding, self.storage_evidence)
             from .terminal_delivery import capture_terminal_evidence
             capture_terminal_evidence(self.terminal_evidence)
+            from .release_contracts import capture_cleanup_evidence
+            capture_cleanup_evidence(self.cleanup_evidence)
         except ClaimError:
             invalid = True
         if invalid:
@@ -200,6 +203,11 @@ class AccountOwnerViews:
         self._guard()
         return self._ledger._close_denied_attempt(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                                                   closure=closure, storage_binding=storage_binding, storage_evidence=storage_evidence)
+
+    def release_capacity(self, project_id, **options):
+        self._guard()
+        from .account_cleanup import release_capacity
+        return release_capacity(self._ledger, project_id, **options)
 
     def _claim_preflight(self, project_id, *, runtime_digest, caller_scope, request_id, launch, work_limits=None,
                          storage_required=False, storage_binding=None, storage_evidence=None):
@@ -750,7 +758,7 @@ class AccountService:
             from .execution_grant import decode_execution_registration
             registration = decode_execution_registration(request.payload) if operation == "account.register_execution" else None
             from .terminal_delivery import decode_terminal_submission
-            submission = decode_terminal_submission(request.payload) if operation == 'account.submit_terminal' else None
+            submission = decode_terminal_submission(request.payload) if operation in {'account.submit_terminal', 'account.release_capacity'} else None
             from .claim_denial import decode_close_denied
             closure = decode_close_denied(request.payload) if operation == 'account.close_denied_attempt' else None
             provenance = decode_run_provenance_input(request.payload) if operation == 'account.run_provenance' else None
@@ -781,8 +789,8 @@ class AccountService:
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
                 or (authorization.source == "project" and operation not in {
-                    "account.health", "account.register_execution", "account.submit_terminal", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance"})
-                or (operation in {"account.register_execution", "account.submit_terminal", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance"} and
+                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance"})
+                or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
                 or (operation in {"account.claim_launch", "account.capacity_status", 'account.open_host_run'} and
                     (authorization.source != "host" or authorization.caller_scope is None))
@@ -872,6 +880,40 @@ class AccountService:
                         or new_binding != storage_binding or new_evidence != storage_evidence):
                     raise AccountError('account_not_authorized')
                 self._views._guard()
+            elif operation == 'account.release_capacity':
+                from .claim_storage import capture_storage_evidence
+                from .release_contracts import capture_cleanup_evidence
+                from .terminal_delivery import capture_terminal_evidence
+                storage_binding, storage_evidence = capture_storage_evidence(
+                    authorization.storage_binding, authorization.storage_evidence)
+                cleanup_raw = capture_cleanup_evidence(authorization.cleanup_evidence)
+                terminal_raw = capture_terminal_evidence(authorization.terminal_evidence)
+                caller = authorization.caller_scope
+                original_raw = encode_account_request(request)
+
+                def release_current():
+                    self._provenance_live()
+                    fresh_request = decode_account_request(original_raw)
+                    current = self._authorizer(fresh_request, transport_context)
+                    if type(current) is not AccountAuthorization:
+                        raise AccountError('account_not_authorized')
+                    current.__post_init__()
+                    current_binding, current_storage = capture_storage_evidence(current.storage_binding, current.storage_evidence)
+                    self._provenance_live()
+                    if (current.source != 'project' or current.project_id != project or current.runtime_digest != runtime
+                            or current.request_digest != digest or account_request_digest(fresh_request) != digest
+                            or current.caller_scope != caller or operation not in current.allowed_operations
+                            or current_binding != storage_binding or current_storage != storage_evidence
+                            or capture_cleanup_evidence(current.cleanup_evidence) != cleanup_raw
+                            or capture_terminal_evidence(current.terminal_evidence) != terminal_raw):
+                        raise AccountError('account_not_authorized')
+                    self._views._guard()
+
+                release_current()
+                result = self._views.release_capacity(project, runtime_digest=runtime, caller_scope=caller,
+                    submission=submission, storage_binding=storage_binding, storage_evidence=storage_evidence,
+                    terminal_evidence=terminal_raw, cleanup_evidence=cleanup_raw, before_commit=release_current)
+                release_current()
             elif operation == 'account.submit_terminal':
                 from .claim_storage import capture_storage_evidence
                 from .terminal_delivery import capture_terminal_evidence
@@ -901,6 +943,12 @@ class AccountService:
             if len(reply) + 1 > MAX_ACCOUNT_FRAME_BYTES:
                 raise AccountError("account_incompatible")
             decode_account_response(reply, request)
+            if operation == 'account.release_capacity':
+                release_current()
+                with self._front_lock:
+                    if self._closed:
+                        raise AccountError('account_not_authorized')
+                    return reply
             if operation in {'account.run_provenance', 'account.open_provenance'}:
                 if self._pid != os.getpid():
                     raise AccountError('account_wrong_owner')

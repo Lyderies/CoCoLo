@@ -105,7 +105,7 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         return value
 
     def start(self, scope, request, history, name, *, with_provenance=False, lose_consumption_reply=False,
-              lose_open_reply=False, crash_cleanup=False):
+              lose_open_reply=False, crash_cleanup=False, await_release=False):
         original = self.original_context(scope, history) if self.managed_original_open else None
         root = Path(self.bridge.temporary.name) / name
         root.mkdir(mode=0o700)
@@ -144,7 +144,8 @@ time.sleep(30)
                           "route": self.base.fixture.route, "assignment": self.base.fixture.assignment,
                           "with_provenance": with_provenance, "lose_consumption_reply": lose_consumption_reply,
                           "lose_open_reply": lose_open_reply, 'managed_original_open': self.managed_original_open,
-                          'retain_cleanup': self.managed_original_open, 'crash_cleanup': crash_cleanup})
+                          'retain_cleanup': self.managed_original_open, 'crash_cleanup': crash_cleanup,
+                          'await_release': await_release})
         if self.managed_original_open:
             self.assertEqual({'stage': 'prepared', 'tickets': 0, 'launched': False}, self.read(child, 'prepared'))
             scope, request = self.open_prepared(child, original)
@@ -351,6 +352,36 @@ class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
     """Same real process races, original APIs, synthetic native/provider boundary."""
     managed_original_open = True
 
+    def test_original_live_project_cleanup_receipt_releases_only_its_account_capacity(self):
+        from codex_agents.capacity_status_contracts import CapacityStatusInput
+        child = self.start(self.fixture.scope, self.fixture.request, self.fixture.directory,
+                           'account-cleanup-release', with_provenance=True, await_release=True)
+        self.control(child, 'project.cancel')
+        done = self.accept_terminal(child)
+        self.assertIsNone(child['process'].poll())
+        self.contexts[child['context']]['cleanup_evidence'] = bytes.fromhex(done['cleanup_evidence'])
+        terminal = self.ledger._connection.execute('SELECT terminal_record_id,terminal_content_digest '
+            'FROM capacity_completions WHERE project_id=?', (child['scope'].project_id,)).fetchone()
+        from codex_agents.cleanup_contracts import verify_cleanup_evidence
+        cleanup = verify_cleanup_evidence(self.fixture.key, child['scope'], bytes.fromhex(done['cleanup_evidence']))
+        submission = TerminalSubmissionInput(child['registration'], child['registration_digest'],
+            terminal['terminal_record_id'], terminal['terminal_content_digest'], cleanup.delivery.result_digest)
+        request = AccountRequest(1, 'account.release_capacity', 'original-capacity-release',
+            child['scope'].project_id, COLLECTOR_RUNTIME_DIGEST, submission.payload())
+        receipt = self.account(request, child['context'])
+        self.assertEqual('released', receipt['state'])
+        self.assertFalse(receipt['known'])
+        self.assertEqual({**receipt, 'known': True}, self.account(request, child['context']))
+        self.send(child, receipt)
+        reply = self.read(child, 'release_received')
+        self.assertFalse(reply['local_execution_released'])
+        self.assertFalse(reply['local_persistence_retired'])
+        self.assertEqual(0, child['process'].wait(timeout=10))
+        state = self.ledger._capacity_status(child['scope'].project_id,
+            CapacityStatusInput(child['scope'].run_handle, child['receipt']['bridge_run_id']))
+        self.assertEqual('released', state['state'])
+        self.assertEqual(receipt['receipt_digest'], state['receipt_digest'])
+
     def test_process_death_during_cleanup_insert_rolls_back_and_keeps_account_charged(self):
         from codex_agents.history_contracts import HistoryError
         from codex_agents.owned_execution import ExecutionCleanup, OwnedExecutionRegistry
@@ -466,8 +497,9 @@ class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
         storage = entry['scope'] if type(entry['scope']) is ResultLeaseBinding else None
         return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
             entry['source'], frozenset({'account.open_host_run', 'account.claim_launch', 'account.open_provenance',
-                'account.register_execution', 'account.run_provenance', 'account.submit_terminal'}), 'a'*64,
-            storage, entry['evidence'], entry.get('terminal_evidence'), entry.get('open_context'))
+                'account.register_execution', 'account.run_provenance', 'account.submit_terminal',
+                'account.release_capacity'}), 'a'*64,
+            storage, entry['evidence'], entry.get('terminal_evidence'), entry.get('open_context'), entry.get('cleanup_evidence'))
 
     def account(self, request, context):
         from codex_agents.account_api import decode_account_response, encode_account_request
