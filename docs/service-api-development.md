@@ -39,6 +39,40 @@ Closure and body deletion never release account execution capacity. Checkpoint
 and request identities are sealed together, and a bounded chain check rejects
 missing predecessors and a stale current pointer.
 
+## Original project scope before account host open (uninstalled source)
+
+`history.open_scope` resolves the original project-owned lifecycle and optional
+worker dependency before the account service creates a run. The request contains
+only the typed project/session/runtime/supervisor scope, orchestration handle and
+digest of the prospective assignment, task, route and parent grant. The server
+adapter supplies those full original inputs independently. No request field can
+supply an assignment, result body, parent permission, admission or active flag.
+
+The owner verifies its actual sealed active journal, the existing assignment
+validator, original parent permissions, routed bounds and retry history. Only
+read-only Codex bridge routes are supported at this stage; write-capable children
+remain assigned to 0.4.0. A prospective verifier additionally needs the exact
+retained worker result, original full inputs/client capability, consumed claim,
+admission, host-open, terminal and outbox companions. Family/provider/role,
+criteria and original outcome context must agree. Codex-of-Codex verification is
+allowed by the existing policy. No central project-history lookup is used.
+
+The bounded sealed reply includes safe scope/input digests, the original journal
+checkpoint and optional worker metadata. It exposes no task, assignment or result
+text and creates no run, lease, account record, clock or renewed retention window.
+Current independent authorization is rechecked after body I/O and reply encoding;
+pause, expiry, revocation, changed originals or missing companions refuse success.
+The client exchanges once without SQLite or automatic retry. The account-side
+byte verifier checks the MAC and independently expected scope/input digest; the
+MAC does not establish native identity, freshness or permission to launch.
+
+This is the project-to-account dependency handoff, not a completed account host
+opener or activated endpoint. The actual account mutation, current native custody,
+bounded admission preparation, normal-client migration and full recovery/live
+validation remain required. Project8/account9 SQL layouts are unchanged. Tests use
+synthetic enrollment and inert results, including a separate Unix-socket client
+process whose imports reject SQLite.
+
 ## Original account run provenance (uninstalled source)
 
 `account.run_provenance` reads the original registered claim, admission decision

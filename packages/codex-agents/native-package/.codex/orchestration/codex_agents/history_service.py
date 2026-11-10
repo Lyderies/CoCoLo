@@ -23,6 +23,7 @@ from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGE
 from .host_result_contracts import (HostResultContext, OperationalCheckContext, OperationalQAContext,
                                     WorkerResultContext, decode_host_result_reference)
 from .host_open_contracts import HostOpenContext, decode_host_open_submission
+from .open_scope_contracts import OpenScopeContext, decode_open_scope_request, open_inputs_digest
 from .learning_contracts import canonical_json, parse_bounded_json
 from .project_history import ProjectHistory
 from .result_contracts import ResultLeaseBinding
@@ -47,6 +48,7 @@ class HistoryAuthorization:
     worker_result_context: WorkerResultContext | None = None
     operational_qa_context: OperationalQAContext | None = None
     operational_check_context: OperationalCheckContext | None = None
+    open_scope_context: OpenScopeContext | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -61,6 +63,7 @@ class HistoryAuthorization:
             or (self.worker_result_context is not None and type(self.worker_result_context) is not WorkerResultContext)
             or (self.operational_qa_context is not None and type(self.operational_qa_context) is not OperationalQAContext)
             or (self.operational_check_context is not None and type(self.operational_check_context) is not OperationalCheckContext)
+            or (self.open_scope_context is not None and type(self.open_scope_context) is not OpenScopeContext)
         ):
             raise HistoryError("history_not_authorized")
 
@@ -188,7 +191,34 @@ class HistoryService:
                 or (authorization.source != "host" and request.operation != "history.record_event")
             ):
                 raise HistoryError("history_not_authorized")
-            if request.operation in {'history.commit_qa', 'history.qa_details'}:
+            if request.operation == 'history.open_scope':
+                if authorization.open_scope_context is None:
+                    raise HistoryError('history_not_authorized')
+                original_context, captured = authorization.open_scope_context.snapshot()
+                expected_open_context = OpenScopeContext.from_snapshot(captured)
+                scope, handle, inputs_digest = decode_open_scope_request(request.payload, project, runtime)
+                if (scope != expected_open_context.scope or handle != expected_open_context.orchestration_handle
+                        or inputs_digest != open_inputs_digest(captured['assignment'], captured['task'], captured['route'], captured['parent_grant'])):
+                    raise HistoryError('history_not_authorized')
+                self._history()
+
+                def authorize_open_scope():
+                    self._history()
+                    fresh = decode_history_request(raw)
+                    current = self._authorizer(fresh, transport_context)
+                    if type(current) is not HistoryAuthorization:
+                        raise HistoryError('history_not_authorized')
+                    current.__post_init__()
+                    if (current.project_id != self._project or current.runtime_digest != self._runtime
+                            or current.source != 'host' or current.request_digest != digest
+                            or history_request_digest(fresh) != digest or 'history.open_scope' not in current.allowed_operations
+                            or current.open_scope_context is None
+                            or current.open_scope_context.snapshot()[0] != original_context):
+                        raise HistoryError('history_not_authorized')
+                    self._history()._require_owner()
+
+                result = self._store.original_open_scope(expected_open_context, before_reply=authorize_open_scope)
+            elif request.operation in {'history.commit_qa', 'history.qa_details'}:
                 if authorization.operational_qa_context is None:
                     raise HistoryError('history_not_authorized')
                 original_context, captured = authorization.operational_qa_context.snapshot()
@@ -378,6 +408,11 @@ class HistoryService:
             if len(reply) + 1 > limit:
                 raise HistoryError("history_service_unavailable")
             decode_history_response(reply, request)
+            if request.operation == 'history.open_scope':
+                authorize_open_scope()
+                from .project_open_scope import current_open_scope
+                if current_open_scope(self._store, expected_open_context) != result:
+                    raise HistoryError('history_conflict')
             if request.operation == 'history.record_host_open':
                 # Same owner thread as close(); admit no success after an
                 # adapter/factory/encoder has closed the borrowed writer.

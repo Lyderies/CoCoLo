@@ -4,14 +4,12 @@ Only the persistence owner reads the two private bodies. This lookup creates no
 check receipt, accepted outcome, account admission or release authority. Native
 input custody, enrollment and protected publication remain activation gates.
 """
-from .contracts import ContractError, validate_task
 from .history_contracts import AttemptBinding, HistoryError
 from .host_result_contracts import OperationalQAContext
-from .learning_contracts import (canonical_json, content_digest, keyed_digest, parse_bounded_json,
-                                 provider_for_model, validate_execution_configuration)
+from .learning_contracts import parse_bounded_json
 from .orchestration_api import SCOPE_FIELDS
-from .project_worker_result import current_host_reference
-from .result_contracts import MAX_RESULT_BODY_BYTES, assignment_bytes, checked_result_body
+from .project_worker_result import current_host_reference, current_input_reference
+from .result_contracts import MAX_RESULT_BODY_BYTES, checked_result_body
 
 
 def current_qa_scope(history, context, host_outcome_digest, verifier_host_outcome_digest, *, live=True):
@@ -19,6 +17,7 @@ def current_qa_scope(history, context, host_outcome_digest, verifier_host_outcom
     if type(context) is not OperationalQAContext:
         raise HistoryError('history_invalid_input')
     _, captured = context.snapshot()
+    context = OperationalQAContext.from_snapshot(captured)
     bindings = {name: AttemptBinding(**captured[name]['binding']) for name in ('worker', 'verifier')}
     worker, verifier = bindings['worker'], bindings['verifier']
     if (any(getattr(worker, name) != getattr(verifier, name) for name in (*SCOPE_FIELDS, 'orchestration_handle'))
@@ -27,24 +26,7 @@ def current_qa_scope(history, context, host_outcome_digest, verifier_host_outcom
         raise HistoryError('history_conflict')
     results = {}
     for name, digest in (('worker', host_outcome_digest), ('verifier', verifier_host_outcome_digest)):
-        reference, _, facts, grant, outcome = current_host_reference(history, bindings[name], digest, live=live)
-        original = captured[name]
-        try:
-            task = validate_task(original['task'])
-            route, assignment = original['route'], original['assignment']
-            configuration = validate_execution_configuration(route['execution_configuration'])
-            if (grant.assignment_digest != keyed_digest(history._result_key, assignment_bytes(assignment, bindings[name]))
-                    or grant.task_digest != keyed_digest(history._result_key, canonical_json(task))
-                    or grant.route_digest != keyed_digest(history._result_key, canonical_json(route))
-                    or grant.configuration_digest != content_digest(configuration)
-                    or configuration['client_digest'] != content_digest(original['client_capability'])
-                    or any(outcome[field] != assignment[field] for field in ('assignment_id', 'model', 'effort', 'role'))
-                    or facts['provider'] != route.get('provider', 'codex')
-                    or provider_for_model(outcome['model']) != facts['provider']
-                    or task['family'] != facts['task_family']):
-                raise ValueError()
-        except (ContractError, KeyError, TypeError, ValueError):
-            raise HistoryError('history_conflict') from None
+        reference, _, facts, _, _ = current_input_reference(history, getattr(context, name), digest, live=live)
         results[name] = (reference, facts)
     worker_reference, worker_facts = results['worker']
     verifier_reference, verifier_facts = results['verifier']

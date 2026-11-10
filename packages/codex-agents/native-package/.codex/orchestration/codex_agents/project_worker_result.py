@@ -4,12 +4,13 @@ Only the fixed writer reads SQLite and the original private result. Native
 authentication/input custody and protected publication remain activation gates.
 This returns a bounded reference, never a new admission or accepted QA result.
 """
-from .contracts import validate_task
+from .contracts import ContractError, validate_task
 from .execution_grant import MAX_EXECUTION_GRANT_BYTES, verify_execution_grant
 from .history_contracts import AttemptBinding, HistoryError, _DIGEST, matches, valid_integer
-from .host_result_contracts import WorkerResultContext
-from .learning_contracts import canonical_json, keyed_digest, parse_bounded_json
+from .host_result_contracts import HostResultContext, WorkerResultContext
+from .learning_contracts import canonical_json, content_digest, keyed_digest, parse_bounded_json, provider_for_model, validate_execution_configuration
 from .project_host_open import read_host_open
+from .result_contracts import assignment_bytes
 
 
 def current_host_reference(history, binding, outcome_digest, *, live=True):
@@ -115,6 +116,33 @@ def current_host_reference(history, binding, outcome_digest, *, live=True):
         'result_digest': reservation.result_digest, 'body_size': reservation.body_size,
         'terminal_record_id': reservation.terminal_record_id, 'expires_at_ms': reservation.expires_at_ms}
     return reference, reservation, facts, grant, outcome
+
+
+def current_input_reference(history, context, outcome_digest, *, live=True):
+    """Bind one original full input snapshot to its actual consumed return."""
+    if type(context) is not HostResultContext:
+        raise HistoryError('history_invalid_input')
+    _, original = context.snapshot()
+    binding = AttemptBinding(**original['binding'])
+    values = current_host_reference(history, binding, outcome_digest, live=live)
+    _, _, facts, grant, outcome = values
+    try:
+        task = validate_task(original['task'])
+        route, assignment = original['route'], original['assignment']
+        configuration = validate_execution_configuration(route['execution_configuration'])
+        if (grant.assignment_digest != keyed_digest(history._result_key, assignment_bytes(assignment, binding))
+                or grant.task_digest != keyed_digest(history._result_key, canonical_json(task))
+                or grant.route_digest != keyed_digest(history._result_key, canonical_json(route))
+                or grant.configuration_digest != content_digest(configuration)
+                or configuration['client_digest'] != content_digest(original['client_capability'])
+                or any(outcome[field] != assignment[field] for field in ('assignment_id', 'model', 'effort', 'role'))
+                or facts['provider'] != route.get('provider', 'codex')
+                or provider_for_model(outcome['model']) != facts['provider']
+                or task['family'] != facts['task_family']):
+            raise ValueError()
+    except (ContractError, KeyError, TypeError, ValueError):
+        raise HistoryError('history_conflict') from None
+    return values
 
 
 def current_worker_reference(history, context, outcome_digest):

@@ -21,6 +21,7 @@ from .host_result_contracts import HostResultReference, decode_host_result_refer
 from .host_open_contracts import OpenProvenanceInput, decode_host_open_submission
 from .learning_contracts import SOURCES, canonical_json, parse_bounded_json, validate_learning_record
 from .operational_qa_contracts import checked_operational_qa, checked_qa_summary
+from .open_scope_contracts import checked_open_scope, decode_open_scope_request
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .service_transport import MAX_FRAME_BYTES, MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
 
@@ -35,7 +36,7 @@ HISTORY_OPERATIONS = frozenset({
     *_RECORD_OPERATIONS, "history.pending_terminals", "history.acknowledge_terminal", "history.read_record",
     "history.admit_host_result", "history.record_host_open", "history.worker_reference", "history.qa_scope",
     "history.issue_qa_checks",
-    "history.commit_qa", "history.qa_details",
+    "history.commit_qa", "history.qa_details", "history.open_scope",
 })
 HISTORY_RECORD_TYPES = frozenset({*_RECORD_OPERATIONS.values(), "host_result_admission",
                                   "provider_usage", "observation_unavailable", "execution_provenance", "host_open_provenance"})
@@ -101,6 +102,10 @@ def _validate_request(request: HistoryRequest) -> None:
             identity = binding.claim_id
         if request.request_id != identity:
             raise HistoryError("history_invalid_request")
+    elif operation == 'history.open_scope':
+        decode_open_scope_request(payload, request.project_id, request.runtime_digest)
+        if request.request_id != hashlib.sha256(canonical_json(payload)).hexdigest():
+            raise HistoryError('history_invalid_request')
     elif operation in {'history.qa_scope', 'history.issue_qa_checks', 'history.commit_qa', 'history.qa_details'}:
         fields = {'worker_binding', 'verifier_binding', 'host_outcome_digest', 'verifier_host_outcome_digest'}
         if operation in {'history.commit_qa', 'history.qa_details'}:
@@ -252,7 +257,9 @@ def _validate_host_reference(result, binding, digest, *, verification):
 
 def _validate_result(request: HistoryRequest, result: object) -> None:
     operation = request.operation
-    if operation in {'history.commit_qa', 'history.qa_details'}:
+    if operation == 'history.open_scope':
+        checked_open_scope(result, *decode_open_scope_request(request.payload, request.project_id, request.runtime_digest))
+    elif operation in {'history.commit_qa', 'history.qa_details'}:
         summary = result
         if operation == 'history.qa_details':
             if not _closed(result, {'qa', 'summary', 'outcome_commit'}):
@@ -468,6 +475,10 @@ class HistoryClient:
         if type(reference) is not HostResultReference:
             raise HistoryError("history_invalid_input")
         return self._call("history.admit_host_result", reference.binding.claim_id, reference.as_data())
+
+    def original_open_scope(self, scope, orchestration_handle: str, inputs_digest: str) -> dict:
+        payload = {'scope': scope.as_data(), 'orchestration_handle': orchestration_handle, 'inputs_digest': inputs_digest}
+        return self._call('history.open_scope', hashlib.sha256(canonical_json(payload)).hexdigest(), payload)
 
     def verification_worker_reference(self, binding: AttemptBinding, host_outcome_digest: str) -> dict:
         """Resolve metadata before verifier open; private bytes use ResultReadClient.
