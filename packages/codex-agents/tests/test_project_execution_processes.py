@@ -26,6 +26,7 @@ from codex_agents.learning_contracts import content_digest, keyed_digest
 from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST
 from codex_agents.result_contracts import ResultLeaseBinding
 from codex_agents.project_history import ProjectHistory
+from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
 from codex_agents.service_protocol import ServiceTarget
 from codex_agents.terminal_delivery import TerminalSubmissionInput
 from codex_agents.run_provenance import RunProvenanceInput
@@ -103,7 +104,8 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         self.assertEqual(expected, value["stage"])
         return value
 
-    def start(self, scope, request, history, name, *, with_provenance=False, lose_consumption_reply=False, lose_open_reply=False):
+    def start(self, scope, request, history, name, *, with_provenance=False, lose_consumption_reply=False,
+              lose_open_reply=False, crash_cleanup=False):
         original = self.original_context(scope, history) if self.managed_original_open else None
         root = Path(self.bridge.temporary.name) / name
         root.mkdir(mode=0o700)
@@ -142,7 +144,7 @@ time.sleep(30)
                           "route": self.base.fixture.route, "assignment": self.base.fixture.assignment,
                           "with_provenance": with_provenance, "lose_consumption_reply": lose_consumption_reply,
                           "lose_open_reply": lose_open_reply, 'managed_original_open': self.managed_original_open,
-                          'retain_cleanup': self.managed_original_open})
+                          'retain_cleanup': self.managed_original_open, 'crash_cleanup': crash_cleanup})
         if self.managed_original_open:
             self.assertEqual({'stage': 'prepared', 'tickets': 0, 'launched': False}, self.read(child, 'prepared'))
             scope, request = self.open_prepared(child, original)
@@ -191,7 +193,7 @@ time.sleep(30)
         self.assertEqual(registered["grant"]["deadline_ns"], started["deadline_ns"])
         return child
 
-    def accept_terminal(self, child):
+    def accept_terminal(self, child, *, crash_cleanup=False):
         terminal = self.read(child, 'terminal')
         delivery = terminal['delivery']
         context = child['context']
@@ -207,6 +209,9 @@ time.sleep(30)
         self.assertFalse(receipt['known'])
         self.assertEqual({**receipt, 'known': True}, self.account(request, context))
         self.send(child, receipt)
+        if crash_cleanup:
+            self.assertEqual(88, child['process'].wait(timeout=10))
+            return None
         return self.read(child, 'done')
 
     def control(self, child, operation):
@@ -307,6 +312,13 @@ time.sleep(30)
             self.assertTrue(done["cleanup_confirmed"])
             if self.managed_original_open:
                 self.assertTrue(done['cleanup_custody_retained'])
+                self.assertTrue(done['cleanup_lost_ack_recovered'])
+                self.assertTrue(done['cleanup_custody_race_rolled_back'])
+                from codex_agents.cleanup_contracts import verify_cleanup_evidence
+                cleanup_raw = bytes.fromhex(done['cleanup_evidence'])
+                cleanup = verify_cleanup_evidence(self.fixture.key, child['scope'], cleanup_raw)
+                self.assertEqual(child['receipt']['bridge_run_id'], cleanup.grant.binding.claim_id)
+                self.assertEqual(child['registration_digest'], cleanup.grant.registration_digest)
             self.assertTrue(done["fenced"])
             self.assertEqual("cancelled", done["terminal_state"])
             self.assertEqual("cancel_requested", done["stop_reason"])
@@ -315,12 +327,16 @@ time.sleep(30)
             self.assertTrue(done['acknowledged'])
             self.assertEqual(child["receipt"]["bridge_run_id"], done["persisted_claim"])
             self.assertEqual(0, child["process"].wait(timeout=10))
-            store = ProjectHistory(child['history'], child['scope'].project_id)
+            store = ProjectHistory(child['history'], child['scope'].project_id,
+                result_key=self.fixture.key, result_capacity=ResultCapacity(8, 2*MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
             try:
                 self.assertEqual((), store.pending_terminals())
                 self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM terminal_outbox WHERE receipt_digest IS NOT NULL').fetchone()[0])
                 self.assertEqual(1, store._connection.execute("SELECT COUNT(*) FROM records WHERE record_type='execution_provenance'").fetchone()[0])
                 self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM project_orchestrations').fetchone()[0])
+                if self.managed_original_open:
+                    self.assertEqual(cleanup_raw, store.cleanup_evidence(child['scope']))
+                    self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM project_cleanup_receipts').fetchone()[0])
             finally:
                 store.close()
         self.assertEqual(2, self.ledger._connection.execute("SELECT COUNT(*) FROM capacity_executions").fetchone()[0])
@@ -334,6 +350,71 @@ time.sleep(30)
 class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
     """Same real process races, original APIs, synthetic native/provider boundary."""
     managed_original_open = True
+
+    def test_process_death_during_cleanup_insert_rolls_back_and_keeps_account_charged(self):
+        from codex_agents.history_contracts import HistoryError
+        from codex_agents.owned_execution import ExecutionCleanup, OwnedExecutionRegistry
+        child = self.start(self.fixture.scope, self.fixture.request, self.fixture.directory,
+                           'cleanup-crash', with_provenance=True, crash_cleanup=True)
+        self.control(child, 'project.cancel')
+        self.accept_terminal(child, crash_cleanup=True)
+        store = ProjectHistory(child['history'], child['scope'].project_id, result_key=self.fixture.key,
+            result_capacity=ResultCapacity(8, 2*MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
+        try:
+            self.assertEqual(0, store._connection.execute('SELECT COUNT(*) FROM project_cleanup_receipts').fetchone()[0])
+            row = store._connection.execute('SELECT reservation_digest,cleanup_digest FROM project_cleanup_reservations').fetchone()
+            self.assertIsNotNone(row['reservation_digest'])
+            self.assertIsNone(row['cleanup_digest'])
+            self.assertEqual((), store.pending_terminals())
+            with self.assertRaisesRegex(HistoryError, 'history_result_not_ready'):
+                store.cleanup_evidence(child['scope'])
+            registry = OwnedExecutionRegistry()
+            with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+                store.issue_cleanup(child['scope'], registry=registry, custody=ExecutionCleanup(registry))
+        finally:
+            store.close()
+        self.assertEqual(1, self.ledger._connection.execute('SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL').fetchone()[0])
+
+    def test_cleanup_recovery_needs_original_journals_ack_and_consumption_after_supervisor_exit(self):
+        from unittest import mock
+        from codex_agents.history_contracts import HistoryError
+        from codex_agents.owned_execution import ExecutionCleanup, OwnedExecutionRegistry
+
+        child = self.start(self.fixture.scope, self.fixture.request, self.fixture.directory,
+                           'cleanup-recovery', with_provenance=True)
+        self.control(child, 'project.cancel')
+        done = self.accept_terminal(child)
+        self.assertEqual(0, child['process'].wait(timeout=10))
+        raw = bytes.fromhex(done['cleanup_evidence'])
+        store = ProjectHistory(child['history'], child['scope'].project_id, result_key=self.fixture.key,
+            result_capacity=ResultCapacity(8, 2*MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
+        try:
+            with mock.patch.object(store, '_result_clock', side_effect=AssertionError('cleanup recovery clock')):
+                self.assertEqual(raw, store.cleanup_evidence(child['scope']))
+            for mutation in ('DELETE FROM project_cleanup_receipts',
+                             "UPDATE project_cleanup_receipts SET journal_seal='"+'f'*64+"'",
+                             "UPDATE project_cleanup_receipts SET evidence=x'50524956415445'",
+                             "UPDATE terminal_outbox SET receipt_digest='"+'f'*64+"'",
+                             'DELETE FROM project_execution_consumptions',
+                             'UPDATE result_leases SET cleanup_reservation_digest=NULL'):
+                with self.subTest(mutation=mutation):
+                    store._connection.execute('SAVEPOINT fixture_cleanup_corruption')
+                    try:
+                        store._connection.execute(mutation)
+                        with self.assertRaises(HistoryError):
+                            store.cleanup_evidence(child['scope'])
+                    finally:
+                        store._connection.execute('ROLLBACK TO fixture_cleanup_corruption')
+                        store._connection.execute('RELEASE fixture_cleanup_corruption')
+                    self.assertEqual(raw, store.cleanup_evidence(child['scope']))
+            registry = OwnedExecutionRegistry()
+            with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+                store.issue_cleanup(child['scope'], registry=registry, custody=ExecutionCleanup(registry))
+            self.assertEqual(raw, store.cleanup_evidence(child['scope']))
+            self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM project_cleanup_receipts').fetchone()[0])
+        finally:
+            store.close()
+        self.assertEqual(1, self.ledger._connection.execute('SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL').fetchone()[0])
 
     def start(self, *args, **options):
         child = super().start(*args, **options)

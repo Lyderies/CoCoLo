@@ -9,6 +9,7 @@ from unittest import mock
 
 import tests.support  # noqa: F401
 from tests import test_account_claim_storage as fixtures
+from tests.project_schema_fixtures import legacy_cleanup_layout
 
 from codex_agents import account_api
 from codex_agents.account_api import AccountClient, AccountError, AccountRequest, account_request_digest, encode_account_request
@@ -258,8 +259,9 @@ class ProjectExecutionGrantTests(unittest.TestCase):
 
     def test_ordinary_schema3_open_refuses_and_explicit_upgrade_preserves_original_bindings(self):
         grant = self.grant()
-        before_lease = self.fixture.store.result_lease(self.fixture.scope)
+        before_lease = replace(self.fixture.store.result_lease(self.fixture.scope), cleanup_reservation_digest=None)
         before_result = self.fixture.store.result_reservation(self.binding)
+        legacy_cleanup_layout(self.fixture.store)
         self.fixture.store._connection.execute('DROP TABLE project_operational_qa')
         self.fixture.store._connection.execute('DROP TABLE project_qa_check_requests')
         self.fixture.store._connection.execute('DROP TABLE project_qa_check_receipts')
@@ -280,7 +282,7 @@ class ProjectExecutionGrantTests(unittest.TestCase):
                                              result_capacity=ResultCapacity(8, 2 * MAX_RESULT_BODY_BYTES, 1_800_000, 120_000),
                                              result_clock_ms=lambda: self.fixture.base.stamp, allow_schema_upgrade=True,
                                              allow_legacy_orchestration_reference=True)
-        self.assertEqual(8, self.fixture.store._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(9, self.fixture.store._connection.execute("PRAGMA user_version").fetchone()[0])
         self.assertEqual(before_lease, self.fixture.store.result_lease(self.fixture.scope))
         self.assertEqual(before_result, self.fixture.store.result_reservation(self.binding))
         self.consume(grant)

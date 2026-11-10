@@ -16,8 +16,18 @@ from .result_contracts import ResultLease, ResultLeaseBinding
 MAX_STORAGE_EVIDENCE_BYTES = 16_384
 
 
+def lease_data(value):
+    """Keep genuine legacy wire bytes and seals unchanged after migration."""
+    fields = asdict(value)
+    if value.cleanup_reservation_digest is None:
+        fields.pop('cleanup_reservation_digest')
+    return fields
+
+
 def lease_state_seal(key, value):
-    return keyed_digest(key, canonical_json({"domain": "project-result-lease-state-v1", **asdict(value)}))
+    domain = ('project-result-lease-state-v1' if value.cleanup_reservation_digest is None
+              else 'project-result-lease-state-v2')
+    return keyed_digest(key, canonical_json({"domain": domain, **lease_data(value)}))
 
 
 def lease_receipt_digest(key, binding, assignment_digest, created, until):
@@ -49,7 +59,7 @@ def encode_storage_evidence(key, value):
     value.__post_init__()
     if value.state != "claim_pending":
         raise HistoryError("history_result_not_ready")
-    raw = canonical_json({"protocol_version": 1, "lease": asdict(value), "seal": lease_state_seal(key, value)})
+    raw = canonical_json({"protocol_version": 1, "lease": lease_data(value), "seal": lease_state_seal(key, value)})
     if len(raw) > MAX_STORAGE_EVIDENCE_BYTES:
         raise HistoryError("history_invalid_input")
     return raw
@@ -81,7 +91,8 @@ def _verify_historical_storage_evidence(key, expected, raw, *, state):
         fields = dict(body["lease"])
         fields["binding"] = ResultLeaseBinding(**fields["binding"])
         value = ResultLease(**fields)
-        invalid = (canonical_json(body) != raw or value.state != state or value.binding != expected
+        invalid = (canonical_json(body) != raw or body['lease'] != lease_data(value)
+                   or value.state != state or value.binding != expected
                    or not secrets.compare_digest(body["seal"], lease_state_seal(key, value))
                    or not secrets.compare_digest(value.lease_digest, lease_receipt_digest(
                        key, value.binding, value.assignment_digest, value.created_at_ms, value.reserved_until_ms)))
@@ -118,7 +129,8 @@ def verify_storage_evidence(key, expected, raw, *, project_id, runtime_digest, r
         fields["binding"] = ResultLeaseBinding(**fields["binding"])
         value = ResultLease(**fields)
         invalid = (
-            canonical_json(body) != raw or value.binding != expected or value.state != "claim_pending"
+            canonical_json(body) != raw or body['lease'] != lease_data(value)
+            or value.binding != expected or value.state != "claim_pending"
             or not secrets.compare_digest(body["seal"], lease_state_seal(key, value))
             or not secrets.compare_digest(value.lease_digest, lease_receipt_digest(
                 key, value.binding, value.assignment_digest, value.created_at_ms, value.reserved_until_ms))

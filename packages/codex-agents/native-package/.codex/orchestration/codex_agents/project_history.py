@@ -18,13 +18,14 @@ import sqlite3
 import stat
 import threading
 import time
-from dataclasses import asdict, replace
+from dataclasses import replace
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
 from .contracts import ContractError, validate_task
-from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES, encode_storage_evidence, lease_receipt_digest, lease_state_seal
+from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES, encode_storage_evidence, lease_data, lease_receipt_digest, lease_state_seal
+from .project_cleanup import CLEANUP_COLUMNS, CLEANUP_SCHEMA, check_cleanup_reservation, reserve_cleanup
 from .execution_grant import MAX_EXECUTION_GRANT_BYTES, verify_execution_grant
 from .history_contracts import (
     MAX_SEQUENCE, AttemptBinding, HistoryEntry, HistoryError, TerminalDelivery,
@@ -46,7 +47,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 9
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -130,8 +131,11 @@ CREATE TABLE project_host_opens(
 """
 _SCHEMA_V6 = _SCHEMA_V5 + _HOST_OPEN_SCHEMA
 _SCHEMA_V7 = _SCHEMA_V6 + CHECK_SCHEMA
-_SCHEMA = _SCHEMA_V7 + QA_SCHEMA
+_SCHEMA_V8 = _SCHEMA_V7 + QA_SCHEMA
+_SCHEMA = _SCHEMA_V8.replace('state_digest TEXT NOT NULL,',
+                            'state_digest TEXT NOT NULL, cleanup_reservation_digest TEXT,') + CLEANUP_SCHEMA
 _COLUMNS = {
+    **CLEANUP_COLUMNS,
     **ORCHESTRATION_COLUMNS,
     **CHECK_COLUMNS,
     **QA_COLUMNS,
@@ -148,7 +152,7 @@ _COLUMNS = {
                             "terminal_record_id"),
     "result_leases": ("project_id", "run_handle", "attempt", "claim_request_id", "binding", "assignment_digest",
                       "created_at_ms", "reserved_until_ms", "state", "lease_digest", "claim_id", "claim_digest",
-                      "hard_deadline_at_ms", "claim_binding_digest", "state_digest"),
+                      "hard_deadline_at_ms", "claim_binding_digest", "state_digest", "cleanup_reservation_digest"),
     "project_execution_consumptions": ("project_id", "claim_id", "registration_digest", "grant", "consumed_at_ms"),
     "project_host_opens": ("project_id", "run_handle", "attempt", "binding", "record_id", "record_content_digest",
                            "source_sequence", "ingested_at_ms", "late", "journal_seal"),
@@ -366,25 +370,31 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7} and application == _APPLICATION_ID
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8} and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
-                                               5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7}[version])):
+                                               5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*QA_COLUMNS, *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*CLEANUP_COLUMNS, *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
-            self._check_schema_identity({name: columns for name, columns in _COLUMNS.items() if name not in omitted})
+            old_columns = {name: (columns[:-1] if name == 'result_leases' else columns)
+                           for name, columns in _COLUMNS.items() if name not in omitted}
+            self._check_schema_identity(old_columns)
             with self._transaction():
                 additions = ((_RESULT_SCHEMA if version == 1 else "") + (_LEASE_SCHEMA if version < 3 else "")
                              + (_EXECUTION_SCHEMA if version < 4 else "")
                              + (ORCHESTRATION_SCHEMA if version < 5 else "")
                              + (_HOST_OPEN_SCHEMA if version < 6 else "")
-                             + (CHECK_SCHEMA if version < 7 else "") + QA_SCHEMA)
+                             + (CHECK_SCHEMA if version < 7 else "") + (QA_SCHEMA if version < 8 else ""))
                 for statement in additions.split(";"):
+                    if statement.strip():
+                        connection.execute(statement)
+                connection.execute('ALTER TABLE result_leases ADD COLUMN cleanup_reservation_digest TEXT')
+                for statement in CLEANUP_SCHEMA.split(';'):
                     if statement.strip():
                         connection.execute(statement)
                 connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
@@ -765,7 +775,7 @@ class ProjectHistory:
             binding = ResultLeaseBinding(**parse_bounded_json(encoded, max_bytes=MAX_BINDING_BYTES))
             value = ResultLease(binding, *[row[name] for name in (
                 "assignment_digest", "created_at_ms", "reserved_until_ms", "state", "lease_digest",
-                "claim_id", "claim_digest", "hard_deadline_at_ms", "claim_binding_digest")])
+                "claim_id", "claim_digest", "hard_deadline_at_ms", "claim_binding_digest", "cleanup_reservation_digest")])
             invalid = (
                 encoded != canonical_json(binding.as_data()) or binding.project_id != self.project_id
                 or row["project_id"] != self.project_id or row["run_handle"] != binding.run_handle
@@ -793,6 +803,7 @@ class ProjectHistory:
             invalid = True
         if invalid:
             raise HistoryError("history_incompatible")
+        check_cleanup_reservation(self, value)
         return value
 
     def _lease_row(self, binding):
@@ -876,10 +887,14 @@ class ProjectHistory:
             self._check_result_capacity()
             until = now + self._result_capacity.reservation_ms
             value = ResultLease(binding, digest, now, until, "reserved", self._lease_digest(binding, digest, now, until))
-            self._connection.execute("INSERT INTO result_leases VALUES(?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?)",
+            self._connection.execute("INSERT INTO result_leases VALUES(?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,?)",
                                      (self.project_id, binding.run_handle, binding.attempt, binding.claim_request_id,
                                       canonical_json(binding.as_data()), digest, now, until, value.state,
-                                      value.lease_digest, self._lease_seal(value)))
+                                      value.lease_digest, self._lease_seal(value), None))
+            value = reserve_cleanup(self, value)
+            self._connection.execute('UPDATE result_leases SET cleanup_reservation_digest=?,state_digest=? '
+                'WHERE project_id=? AND run_handle=? AND attempt=?',
+                (value.cleanup_reservation_digest, self._lease_seal(value), self.project_id, binding.run_handle, binding.attempt))
         return value
 
     @_operation
@@ -923,7 +938,7 @@ class ProjectHistory:
         value = self._lease_row(binding)
         if value.state != "bound":
             raise HistoryError("history_result_not_ready")
-        raw = canonical_json({"protocol_version": 1, "lease": asdict(value), "seal": self._lease_seal(value)})
+        raw = canonical_json({"protocol_version": 1, "lease": lease_data(value), "seal": self._lease_seal(value)})
         if len(raw) > MAX_STORAGE_EVIDENCE_BYTES:
             raise HistoryError("history_invalid_input")
         return raw
@@ -1867,6 +1882,16 @@ class ProjectHistory:
             raise HistoryError('history_invalid_input')
         self.acknowledge_terminal(binding.claim_id, evidence.delivery.record_content_digest, receipt['receipt_digest'],
                                   runtime_digest=binding.runtime_digest)
+
+    @_operation
+    def issue_cleanup(self, binding, *, registry, custody):
+        from .project_cleanup import issue_cleanup
+        return issue_cleanup(self, self._lease_binding(binding), registry=registry, custody=custody)
+
+    @_operation
+    def cleanup_evidence(self, binding):
+        from .project_cleanup import read_cleanup
+        return read_cleanup(self, self._lease_binding(binding))
 
     @_operation
     def pending_terminals(self, *, after_sequence: int = 0, limit: int = 10) -> tuple[TerminalDelivery, ...]:

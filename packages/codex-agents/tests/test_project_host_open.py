@@ -284,6 +284,8 @@ class ProjectHostOpenTests(unittest.TestCase):
         self.assertEqual(self.call(), self.call())
 
     def test_explicit_schema5_upgrade_preserves_old_rows_and_creates_no_open_facts(self):
+        from tests.project_schema_fixtures import assert_migrated_rows, legacy_cleanup_layout
+        legacy_cleanup_layout(self.store)
         tables = ('history_identity', 'records', 'result_identity', 'result_leases', 'project_orchestrations',
                   'project_orchestration_checkpoints', 'project_orchestration_requests')
         before = {name: [tuple(row) for row in self.store._connection.execute('SELECT * FROM '+name)] for name in tables}
@@ -303,9 +305,9 @@ class ProjectHostOpenTests(unittest.TestCase):
         self.fixture.store = ProjectHistory(self.fixture.directory, self.scope.project_id,
             result_key=self.fixture.key, result_capacity=capacity, result_clock_ms=lambda: self.fixture.base.stamp,
             orchestration_limits=OrchestrationLimits(1, 8), allow_schema_upgrade=True)
-        self.assertEqual(8, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(9, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
         for name, rows in before.items():
-            self.assertEqual(rows, [tuple(row) for row in self.store._connection.execute('SELECT * FROM '+name)])
+            assert_migrated_rows(self, self.store, name, rows)
         self.assertEqual((0, 0), self.counts())
         self.persist()
         self.assertEqual((1, 1), self.counts())

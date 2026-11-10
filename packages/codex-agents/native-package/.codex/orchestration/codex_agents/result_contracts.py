@@ -105,6 +105,7 @@ class ResultLease:
     claim_digest: str | None = None
     hard_deadline_at_ms: int | None = None
     claim_binding_digest: str | None = None
+    cleanup_reservation_digest: str | None = None
 
     def __post_init__(self):
         if (type(self.binding) is not ResultLeaseBinding or not matches(self.assignment_digest, _DIGEST)
@@ -115,6 +116,8 @@ class ResultLease:
                 or type(self.state) is not str or self.state not in {"reserved", "claim_pending", "bound", "expired"}):
             raise HistoryError("history_invalid_input")
         self.binding.as_data()
+        if self.cleanup_reservation_digest is not None and not matches(self.cleanup_reservation_digest, _DIGEST):
+            raise HistoryError("history_invalid_input")
         if self.state == "bound":
             if (not matches(self.claim_id, _ID) or not matches(self.claim_digest, _DIGEST)
                     or not valid_integer(self.hard_deadline_at_ms, minimum=self.created_at_ms + 1,

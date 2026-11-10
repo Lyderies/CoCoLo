@@ -202,6 +202,8 @@ class ProjectCheckReceiptTests(unittest.TestCase):
         self.assertEqual(0,self.store._connection.execute('SELECT COUNT(*) FROM project_qa_check_requests').fetchone()[0])
 
     def test_explicit_schema6_upgrade_keeps_all_original_rows_and_invents_no_receipts(self):
+        from tests.project_schema_fixtures import assert_migrated_rows, legacy_cleanup_layout
+        legacy_cleanup_layout(self.store)
         self.store._connection.execute('DROP TABLE project_operational_qa')
         self.store._connection.execute('DROP TABLE project_qa_check_requests')
         self.store._connection.execute('DROP TABLE project_qa_check_receipts')
@@ -220,9 +222,9 @@ class ProjectCheckReceiptTests(unittest.TestCase):
             result_clock_ms=lambda:self.base.fixture.base.stamp,
             orchestration_limits=OrchestrationLimits(1,8),allow_schema_upgrade=True)
         self.store=self.base.fixture.store
-        self.assertEqual(8,self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(9,self.store._connection.execute('PRAGMA user_version').fetchone()[0])
         for name,rows in before.items():
-            self.assertEqual(rows,[tuple(row) for row in self.store._connection.execute('SELECT * FROM '+name)])
+            assert_migrated_rows(self, self.store, name, rows)
         self.assertEqual(0,self.count())
 
     def service(self, authorizer=None):

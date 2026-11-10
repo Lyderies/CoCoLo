@@ -289,11 +289,66 @@ def main():
                     or snapshot['deadline_ns'] != grant.deadline_ns):
                 raise RuntimeError('fixture_cleanup_original_mismatch')
             cleanup['cleanup_custody_retained'] = True
+            original_cleanup = ProjectHistory.issue_cleanup
+            cleanup_attempts = []
+            custody_race_checked = []
+
+            def lose_cleanup_reply(store, *args, **options):
+                if not custody_race_checked:
+                    original_reference = registry._cleanups[proof]
+                    def revoke_after_insert(sql):
+                        if sql.lstrip().startswith('INSERT INTO project_cleanup_receipts'):
+                            if data.get('crash_cleanup', False):
+                                os._exit(88)  # Disposable writer-process crash, not a cleanup acknowledgement.
+                            with registry._lock:
+                                registry._cleanups.pop(proof)
+                    store._connection.set_trace_callback(revoke_after_insert)
+                    try:
+                        try:
+                            original_cleanup(store, *args, **options)
+                        except HistoryError as error:
+                            if error.reason_code != 'history_not_authorized':
+                                raise
+                        else:
+                            raise RuntimeError('fixture_cleanup_revocation_accepted')
+                    finally:
+                        with registry._lock:
+                            registry._cleanups[proof] = original_reference
+                        store._connection.set_trace_callback(None)
+                    if (store._connection.execute('SELECT COUNT(*) FROM project_cleanup_receipts').fetchone()[0] != 0
+                            or store._connection.execute('SELECT cleanup_digest FROM project_cleanup_reservations').fetchone()[0] is not None):
+                        raise RuntimeError('fixture_cleanup_revocation_not_rolled_back')
+                    custody_race_checked.append(True)
+                raw = original_cleanup(store, *args, **options)
+                cleanup_attempts.append(raw)
+                # Recovery reads original bytes without a fresh clock/window.
+                with mock.patch.object(store, '_result_clock', side_effect=AssertionError('cleanup read clock')):
+                    if store.cleanup_evidence(args[0]) != raw:
+                        raise RuntimeError('fixture_changed_cleanup_journal')
+                if len(cleanup_attempts) == 1:
+                    raise OSError('fixture_lost_cleanup_commit_reply')
+                return raw
+
+            with mock.patch.object(ProjectHistory, 'issue_cleanup', new=lose_cleanup_reply):
+                lane.prepare_cleanup(handle)
+                until(lambda: lane.snapshot(handle)['state'] != 'preparing_cleanup')
+                if lane.snapshot(handle)['state'] != 'failed':
+                    raise RuntimeError('fixture_missing_cleanup_reply_loss')
+                lane.prepare_cleanup(handle)
+                until(lambda: lane.snapshot(handle)['state'] != 'preparing_cleanup')
+            if lane.snapshot(handle)['state'] != 'cleanup_ready' or len(cleanup_attempts) != 2:
+                raise RuntimeError('fixture_cleanup_not_ready')
+            raw = lane.cleanup_evidence(handle)
+            if cleanup_attempts != [raw, raw] or lane.cleanup_evidence(handle) is not raw:
+                raise RuntimeError('fixture_replaced_cleanup_evidence')
+            cleanup['cleanup_evidence'] = raw.hex()
+            cleanup['cleanup_lost_ack_recovered'] = True
+            cleanup['cleanup_custody_race_rolled_back'] = custody_race_checked == [True]
         emit(stage="done", cleanup_confirmed=supervisor.snapshot()["cleanup_confirmed"],
              fenced=selected.packet.fenced, terminal_state=selected.packet.terminal_state,
              stop_reason=selected.stop_reason, ticket_count=len(registry._issued),
              launches=(root / "launches").read_text().splitlines(),
-             acknowledged=lane.snapshot(handle)['state'] == 'acknowledged',
+             acknowledged=lane.snapshot(handle)['state'] in {'acknowledged', 'cleanup_ready'},
              persisted_claim=lane.delivery(handle).binding.claim_id, **cleanup)
     finally:
         pool.close()

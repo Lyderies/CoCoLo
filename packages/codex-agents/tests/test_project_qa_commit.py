@@ -253,6 +253,8 @@ class ProjectQACommitTests(unittest.TestCase):
             self.store.append_record(entry.content,source='verifier',ingested_at_ms=entry.ingested_at_ms)
 
     def test_explicit_schema7_upgrade_preserves_original_checks_and_invents_no_qa(self):
+        from tests.project_schema_fixtures import assert_migrated_rows, legacy_cleanup_layout
+        legacy_cleanup_layout(self.store)
         self.store._connection.execute('DROP TABLE project_operational_qa')
         self.store._connection.execute('PRAGMA user_version=7')
         names=[row[0] for row in self.store._connection.execute("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name")]
@@ -269,9 +271,9 @@ class ProjectQACommitTests(unittest.TestCase):
             result_clock_ms=lambda:self.pair.fixture.base.stamp,
             orchestration_limits=OrchestrationLimits(1,8),allow_schema_upgrade=True)
         self.store=self.pair.fixture.store
-        self.assertEqual(8,self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(9,self.store._connection.execute('PRAGMA user_version').fetchone()[0])
         for n,rows in before.items():
-            self.assertEqual(rows,[tuple(row) for row in self.store._connection.execute('SELECT * FROM '+n)])
+            assert_migrated_rows(self, self.store, n, rows)
         self.assertEqual(0,self.count())
         self.assertIsNone(read_check_receipt(self.store,self.receipt)['consumed_at_ms'])
 

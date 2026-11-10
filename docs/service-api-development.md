@@ -2237,6 +2237,36 @@ execution. Capture performs no database work, clock refresh or process wait.
 
 The reference exposes only a copy of the original key and deadline. It supplies
 local custody to the subsequent writer operation; it establishes no native peer
-identity or closed-descendant containment profile. Durable cleanup receipt
-issuance, authenticated account release and acknowledgement before local
-retirement remain mandatory. Account reservations stay held at this stage.
+identity or closed-descendant containment profile. Authenticated account release
+and acknowledgement before local retirement remain mandatory. Account
+reservations stay held at this stage.
+
+### Original project cleanup receipts
+
+Project schema 9 reserves one cleanup journal slot atomically with every new
+pre-claim result lease. The sealed lease binds that original reservation. The
+fixed 4,096-slot limit includes expired reservations; capacity exhaustion refuses
+before account admission. An existing lease never creates a replacement slot.
+The two new tables store only bounded binding metadata and at most one 16 KiB
+cleanup receipt per slot, without result bodies, process lists or a new clock.
+
+After the real account terminal acknowledgement, `prepare_cleanup()` queues the
+retained original worker custody to the existing project writer. The writer
+verifies the original lease, consumed grant, durable terminal outbox and account
+receipt, then checks live custody before and after each journal write and before
+publication. No registry lock spans SQL and the control path performs no SQL.
+Custody loss during writing rolls the transaction back. A lost committed reply
+recovers the same original bytes; a process crash cannot invent fresh custody.
+Missing or changed reservation, receipt, grant or terminal companions refuse.
+
+The pure cleanup codec verifies closed canonical metadata, the original grant
+MAC and an independently supplied lease scope. Constructing or sealing such
+metadata proves no actual cleanup, native peer identity, closed-descendant
+containment or current permission. The authenticated account release operation
+and its acknowledgement are still required before local retirement.
+
+Ordinary startup refuses schema 8 and earlier without migration writes. The
+explicit persistence-owner upgrade preserves legacy rows, private bodies,
+windows, wire representations and seals. Its added lease column is null for
+historical leases and no cleanup reservation or receipt is fabricated. This
+upgrade flag does not prove native drain or authorize production activation.

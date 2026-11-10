@@ -21,6 +21,7 @@ from .host_open_contracts import MAX_OPEN_PROVENANCE_BYTES, OpenProvenanceInput
 from .run_provenance import MAX_RUN_PROVENANCE_BYTES
 from .terminal_delivery import MAX_TERMINAL_EVIDENCE_BYTES
 from .claim_denial import MAX_DENIAL_RECEIPT_BYTES
+from .cleanup_contracts import MAX_CLEANUP_EVIDENCE_BYTES
 from .owned_execution import ExecutionCustodyError, OwnedExecutionKey
 from .codex_worker import CodexWorkerError, CodexWorkerHandle, CodexWorkerPacket, CodexWorkerPool, MAX_INPUT_BYTES, MAX_PACKET_BYTES, MAX_REPORT_BYTES, _decode_input
 from .contracts import ContractError
@@ -37,7 +38,8 @@ MAX_PERSISTENCE_ENTRY_BYTES = (MAX_INPUT_BYTES + MAX_ASSIGNMENT_CANONICAL_BYTES 
                                + MAX_STORAGE_EVIDENCE_BYTES + 2 * MAX_EXECUTION_GRANT_BYTES
                                + 2 * MAX_RUN_PROVENANCE_BYTES
                                + 2 * MAX_OPEN_PROVENANCE_BYTES + 1024
-                               + 2 * MAX_TERMINAL_EVIDENCE_BYTES + MAX_DENIAL_RECEIPT_BYTES)
+                               + 2 * MAX_TERMINAL_EVIDENCE_BYTES + MAX_DENIAL_RECEIPT_BYTES
+                               + 2 * MAX_CLEANUP_EVIDENCE_BYTES)
 
 
 class ResultPersistenceHandle:
@@ -76,6 +78,7 @@ class _Pending:
     acknowledgement: bytes | None = None
     denial_receipt: bytes | None = None
     cleanup_custody: object = None
+    cleanup_raw: bytes | None = None
 
 
 class ResultPersistenceLane:
@@ -545,10 +548,57 @@ class ResultPersistenceLane:
                 pending.cleanup_custody = proof
             return proof
 
+    def prepare_cleanup(self, handle):
+        """Queue original returned-worker custody; no SQL on the control path."""
+        pending = self._job(handle)
+        with self._lock:
+            if self._closed or self._fault or self._allow_local_reference:
+                raise HistoryError('history_not_authorized')
+            if pending.state in {'preparing_cleanup', 'cleanup_ready'}:
+                return
+            if pending.state not in {'acknowledged', 'failed'} or pending.lease_binding is None:
+                raise HistoryError('history_result_not_ready')
+            retry = pending.cleanup_custody is not None
+            if retry and (pending.acknowledgement is None or pending.delivery is None or pending.grant is None):
+                raise HistoryError('history_result_not_ready')
+        if not retry:
+            self.retain_cleanup(handle)
+        self._cleanup_snapshot(pending)
+        with self._lock:
+            pending.state, pending.reason, pending.cleanup_raw = 'preparing_cleanup', None, None
+            self._incoming.put_nowait(('prepare_cleanup', handle))
+
+    def _cleanup_snapshot(self, pending):
+        registry = self._pool._registry
+        try:
+            with registry._lock:
+                original = self._pool._jobs.get(pending.worker_handle)
+                if original is not pending.original_job or original.ticket is not pending.execution_ticket:
+                    raise ExecutionCustodyError()
+                snapshot = registry.cleanup_snapshot(pending.cleanup_custody)
+                grant = pending.grant
+                if (grant is None or snapshot['key'] != OwnedExecutionKey(pending.binding.project_id,
+                        grant.handle_digest, pending.binding.run_id, pending.binding.claim_id)
+                        or snapshot['deadline_ns'] != grant.deadline_ns):
+                    raise ExecutionCustodyError()
+        except ExecutionCustodyError:
+            raise HistoryError('history_not_authorized') from None
+
+    def cleanup_evidence(self, handle):
+        pending = self._job(handle)
+        with self._pool._registry._lock:
+            self._cleanup_snapshot(pending)
+            with self._lock:
+                if self._closed or self._fault:
+                    raise HistoryError('history_service_unavailable')
+                if pending.state != 'cleanup_ready' or pending.cleanup_raw is None:
+                    raise HistoryError('history_result_not_ready')
+                return pending.cleanup_raw
+
     def delivery(self, handle):
         pending = self._job(handle)
         with self._lock:
-            if pending.state not in {"committed", "acknowledging", "acknowledged"} or pending.delivery is None:
+            if pending.state not in {"committed", "acknowledging", "acknowledged", "preparing_cleanup", "cleanup_ready"} or pending.delivery is None:
                 raise HistoryError("history_result_not_ready")
             value = pending.delivery
             # Return a metadata copy, never the registry's retained authority.
@@ -564,7 +614,7 @@ class ResultPersistenceLane:
             if original is not pending.original_job or entry is None or entry.state != "released":
                 raise HistoryError("history_not_authorized")
         with self._lock:
-            if pending.state not in {"committed", "acknowledged"}:
+            if pending.state not in {"committed", "acknowledged", "cleanup_ready"}:
                 raise HistoryError("history_result_not_ready")
             self._jobs.pop(handle)
             self._by_worker.pop(pending.worker_handle)
@@ -702,6 +752,17 @@ class ResultPersistenceLane:
         with self._lock:
             pending.state, pending.reason = 'acknowledged', None
 
+    def _prepare_cleanup(self, pending):
+        self._cleanup_snapshot(pending)
+        raw = self._history().issue_cleanup(pending.lease_binding, registry=self._pool._registry,
+                                             custody=pending.cleanup_custody)
+        with self._pool._registry._lock:
+            self._cleanup_snapshot(pending)
+            with self._lock:
+                if self._closed or self._fault:
+                    raise HistoryError('history_service_unavailable')
+                pending.cleanup_raw, pending.state, pending.reason = raw, 'cleanup_ready', None
+
     def _settle_denial(self, pending):
         value = self._history().settle_denied_result_lease(pending.lease_binding, pending.denial_receipt)
         with self._lock:
@@ -714,7 +775,8 @@ class ResultPersistenceLane:
                       "record_host_open": self._record_host_open,
                       "consume_execution": self._consume_execution,
                       "settle_denial": self._settle_denial,
-                      "acknowledge_terminal": self._acknowledge_terminal}
+                      "acknowledge_terminal": self._acknowledge_terminal,
+                      "prepare_cleanup": self._prepare_cleanup}
         self._ready.set()
         pending = None
         try:

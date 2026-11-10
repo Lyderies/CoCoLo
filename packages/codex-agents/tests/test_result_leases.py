@@ -14,6 +14,7 @@ from tests import test_project_results as fixtures
 from tests import test_account_claim_operation as account_fixtures
 from tests.learning_support import assignment
 from tests.test_project_history import binding, terminal
+from tests.project_schema_fixtures import assert_migrated_rows, legacy_cleanup_layout
 
 from codex_agents.history_contracts import HistoryError
 from codex_agents.account_api import account_request_digest
@@ -333,6 +334,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
     def schema2(self):
         self.fixture.reserve()
         self.fixture.commit()
+        legacy_cleanup_layout(self.store)
         snapshot = {name: [tuple(row) for row in self.store._connection.execute("SELECT * FROM " + name)]
                     for name in ("history_identity", "records", "terminal_outbox", "result_identity", "result_reservations")}
         self.store._connection.execute('DROP TABLE project_operational_qa')
@@ -356,7 +358,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
                 ProjectHistory(self.fixture.directory, self.fixture.store.project_id, **options)
             self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
         self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
-        self.assertEqual(8, self.store._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(9, self.store._connection.execute("PRAGMA user_version").fetchone()[0])
         for name, rows in snapshot.items():
             self.assertEqual(rows, [tuple(row) for row in self.store._connection.execute("SELECT * FROM " + name)])
         self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))
@@ -380,6 +382,7 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
     def test_schema4_upgrade_preserves_all_rows_body_windows_and_does_not_invent_orchestrations(self):
         self.fixture.reserve()
         self.fixture.commit()
+        legacy_cleanup_layout(self.store)
         old_tables = ('history_identity', 'records', 'terminal_outbox', 'result_identity',
                       'result_reservations', 'result_leases', 'project_execution_consumptions')
         snapshot = {name: [tuple(row) for row in self.store._connection.execute('SELECT * FROM ' + name)]
@@ -398,9 +401,9 @@ store.bind_result_lease(lease_binding(),binding(),assignment(),hard_deadline_at_
             self.fixture.open()
         self.assertEqual(before, hashlib.sha256(path.read_bytes()).hexdigest())
         self.fixture.store = self.fixture.open(allow_schema_upgrade=True)
-        self.assertEqual(8, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(9, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
         for name, rows in snapshot.items():
-            self.assertEqual(rows, [tuple(row) for row in self.store._connection.execute('SELECT * FROM ' + name)])
+            assert_migrated_rows(self, self.store, name, rows)
         self.assertEqual(self.fixture.payload()[0], self.store.read_result(binding()))
         for table in ('project_orchestrations', 'project_orchestration_checkpoints', 'project_orchestration_requests'):
             self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0])
