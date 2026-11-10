@@ -388,6 +388,7 @@ class HistoryService:
                     # Recheck the independent current authority after body I/O.
                     # Immutable copies of the original inputs enter the writer;
                     # mutable adapter data cannot change what gets admitted.
+                    self._history()._require_owner()
                     current = self._authorizer(request, transport_context)
                     if type(current) is not HistoryAuthorization:
                         raise HistoryError("history_not_authorized")
@@ -398,6 +399,7 @@ class HistoryService:
                             or current.host_result_context is None
                             or current.host_result_context.snapshot()[0] != original_context):
                         raise HistoryError("history_not_authorized")
+                    self._history()._require_owner()
 
                 result = self._store.admit_host_result(reference, **captured, before_commit=reauthorize)
             else:
@@ -416,15 +418,14 @@ class HistoryService:
             if len(reply) + 1 > limit:
                 raise HistoryError("history_service_unavailable")
             decode_history_response(reply, request)
+            # Serialization and authorization may reenter trusted lifecycle code.
+            # Consult the original owner again before releasing any cached reply.
+            self._history()._require_owner()
             if request.operation == 'history.open_scope':
                 authorize_open_scope()
                 from .project_open_scope import current_open_scope
                 if current_open_scope(self._store, expected_open_context) != result:
                     raise HistoryError('history_conflict')
-            if request.operation == 'history.record_host_open':
-                # Same owner thread as close(); admit no success after an
-                # adapter/factory/encoder has closed the borrowed writer.
-                self._history()._require_owner()
             if request.operation == 'history.worker_reference':
                 authorize_worker()
                 from .project_worker_result import current_worker_reference

@@ -92,6 +92,45 @@ class ProjectHostResultTests(unittest.TestCase):
         return self.fixture.store._connection.execute("SELECT COUNT(*) FROM records WHERE record_type=?",
                                                        (record_type,)).fetchone()[0]
 
+    def test_reentrant_borrowed_service_close_rolls_back_host_result_admission(self):
+        def authorize(command, context):
+            auth = self.authorize(command, context)
+            if self.authorizations == 2:
+                service.close()
+            return auth
+        service = HistoryService(self.binding.project_id, self.binding.runtime_digest,
+                                 lambda: self.fixture.store, authorizer=authorize, close_history=False)
+        self.addCleanup(service.close)
+        before = self.fixture.store._connection.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+        command = self.request()
+        raw = service.handle(encode_history_request(command), self.context)
+        self.assertEqual(self.records(), 0)
+        self.assertEqual(self.fixture.store._connection.execute("SELECT COUNT(*) FROM records").fetchone()[0], before)
+        self.assertFalse(json.loads(raw)["ready"])
+        self.assert_held()
+
+    def test_borrowed_factory_revocation_during_final_authorization_rolls_back_admission(self):
+        live = [True]
+        def original_writer():
+            if not live[0]:
+                raise HistoryError("history_service_unavailable")
+            return self.fixture.store
+        def authorize(command, context):
+            auth = self.authorize(command, context)
+            if self.authorizations == 2:
+                live[0] = False
+            return auth
+        service = HistoryService(self.binding.project_id, self.binding.runtime_digest,
+                                 original_writer, authorizer=authorize, close_history=False)
+        self.addCleanup(service.close)
+        before = self.fixture.store._connection.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+        command = self.request()
+        raw = service.handle(encode_history_request(command), self.context)
+        self.assertEqual(self.records(), 0)
+        self.assertEqual(self.fixture.store._connection.execute("SELECT COUNT(*) FROM records").fetchone()[0], before)
+        self.assertFalse(json.loads(raw)["ready"])
+        self.assert_held()
+
     def assert_held(self):
         self.assertIsNone(self.base.ledger._connection.execute("SELECT released_at_ms FROM active_run_capacity").fetchone()[0])
         self.assertEqual(0, len(self.base.ledger._capacity_executions._pending))

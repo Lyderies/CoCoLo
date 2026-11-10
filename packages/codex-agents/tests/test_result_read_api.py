@@ -168,6 +168,98 @@ class ResultReadTests(unittest.TestCase):
         self.assertLessEqual(len(reply) + 1, MAX_RESULT_READ_FRAME_BYTES)
         return reply
 
+    def test_cached_borrowed_reader_reconsults_revoked_original_factory(self):
+        store = self.open_store()
+        self.addCleanup(store.close)
+        live = [True]
+        def original_writer():
+            if not live[0]:
+                raise HistoryError("history_service_unavailable")
+            return store
+        service = ResultReadService(PROJECT_A, RUNTIME, original_writer,
+                                    authorizer=fixture_authorizer, close_history=False)
+        self.addCleanup(service.close)
+        self.call(service=service)
+        live[0] = False
+        with self.assertRaises(HistoryError):
+            self.call(service=service)
+        self.assertEqual(store.read_result(binding()), self.body)
+
+    def test_borrowed_reader_refuses_original_store_substitution_without_closing_either(self):
+        store = self.open_store()
+        self.addCleanup(store.close)
+        other_directory = self.base / "other-writer"
+        other_directory.mkdir(mode=0o700)
+        other = ProjectHistory(other_directory, PROJECT_A, result_key=KEY, result_capacity=self.capacity,
+                               allow_legacy_orchestration_reference=True, result_clock_ms=lambda: self.now)
+        self.addCleanup(other.close)
+        current = [store]
+        service = ResultReadService(PROJECT_A, RUNTIME, lambda: current[0],
+                                    authorizer=fixture_authorizer, close_history=False)
+        self.addCleanup(service.close)
+        self.call(service=service)
+        current[0] = other
+        with self.assertRaises(HistoryError):
+            self.call(service=service)
+        self.assertEqual(store.read_result(binding()), self.body)
+        other._require_owner()
+
+    def test_borrowed_reader_rechecks_closure_after_final_authorization(self):
+        store = self.open_store()
+        self.addCleanup(store.close)
+        calls = []
+        def authorize(command, context):
+            auth = fixture_authorizer(command, context)
+            calls.append(True)
+            if len(calls) == 2:
+                service.close()
+            return auth
+        service = ResultReadService(PROJECT_A, RUNTIME, lambda: store,
+                                    authorizer=authorize, close_history=False)
+        self.addCleanup(service.close)
+        with self.assertRaises(HistoryError):
+            self.call(service=service)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(store.read_result(binding()), self.body)
+
+    def test_borrowed_reader_rechecks_factory_after_final_authorization(self):
+        store = self.open_store()
+        self.addCleanup(store.close)
+        live, calls = [True], []
+        def original_writer():
+            if not live[0]:
+                raise HistoryError("history_service_unavailable")
+            return store
+        def authorize(command, context):
+            calls.append(True)
+            if len(calls) == 2:
+                live[0] = False
+            return fixture_authorizer(command, context)
+        service = ResultReadService(PROJECT_A, RUNTIME, original_writer,
+                                    authorizer=authorize, close_history=False)
+        self.addCleanup(service.close)
+        with self.assertRaises(HistoryError):
+            self.call(service=service)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(store.read_result(binding()), self.body)
+
+    def test_borrowed_reader_withholds_bytes_if_encoder_closes_service(self):
+        store = self.open_store()
+        self.addCleanup(store.close)
+        service = ResultReadService(PROJECT_A, RUNTIME, lambda: store,
+                                    authorizer=fixture_authorizer, close_history=False)
+        self.addCleanup(service.close)
+        original = service._reply
+        def encode_then_close(*args, **kwargs):
+            reply = original(*args, **kwargs)
+            if kwargs.get("result") is not None:
+                service.close()
+            return reply
+        with mock.patch.object(service, "_reply", side_effect=encode_then_close):
+            with self.assertRaises(HistoryError):
+                self.call(service=service)
+        self.assertEqual(store.read_result(binding()), self.body)
+
     def test_exact_small_body_and_terminal_metadata_are_read_without_write_authority(self):
         chunk = self.call()
         self.assertEqual(self.body, chunk.data)

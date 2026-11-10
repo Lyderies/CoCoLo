@@ -86,6 +86,25 @@ class ResultReadService:
             "ready": reason is None, "result": result, "reason_code": reason,
         })
 
+    def _history(self) -> ProjectHistory:
+        if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
+            raise HistoryError("history_wrong_owner")
+        if self._store is None or not self._close_history:
+            store = self._open()
+            if (not isinstance(store, ProjectHistory) or store.project_id != self._project
+                    or (self._store is not None and store is not self._store)):
+                if isinstance(store, ProjectHistory) and self._close_history:
+                    store.close()
+                raise HistoryError("history_service_unavailable")
+            store._require_owner()
+            if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
+                if self._close_history:
+                    store.close()
+                raise HistoryError("history_wrong_owner")
+            self._store = store
+        self._store._require_owner()
+        return self._store
+
     def handle(self, raw: bytes, transport_context: object = None) -> bytes:
         request = None
         digest = None
@@ -95,14 +114,7 @@ class ResultReadService:
             request = decode_result_read_request(raw)
             digest = result_read_request_digest(request)
             self._authorize(request, transport_context, digest)
-            if self._store is None:
-                store = self._open()
-                if not isinstance(store, ProjectHistory) or store.project_id != self._project:
-                    if isinstance(store, ProjectHistory) and self._close_history:
-                        store.close()
-                    raise HistoryError("history_service_unavailable")
-                self._store = store
-            body = self._store.read_result(request.binding)
+            body = self._history().read_result(request.binding)
             reservation = self._store.result_reservation(request.binding)
             if reservation.state != "committed":
                 raise HistoryError("history_result_expired")
@@ -123,7 +135,7 @@ class ResultReadService:
             self._authorize(request, transport_context, digest)
             # Never release cached bytes after observed retirement, expiry or
             # changed metadata during body I/O, encoding or authorization work.
-            if self._store.result_reservation(request.binding) != reservation:
+            if self._history().result_reservation(request.binding) != reservation:
                 raise HistoryError("history_result_expired")
             return reply
         except HistoryError as exc:

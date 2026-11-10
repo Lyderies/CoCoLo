@@ -170,6 +170,24 @@ class HistoryApiTests(unittest.TestCase):
         self.assertEqual(reply["reason_code"], "history_service_unavailable")
         self.assertEqual(store.record(event_record()["record_id"]).source_sequence, 1)
 
+    def test_borrowed_service_withholds_committed_reply_if_encoder_closes_it(self):
+        store = ProjectHistory(self.directory, PROJECT_A)
+        self.addCleanup(store.close)
+        service = HistoryService(PROJECT_A, RUNTIME, lambda: store, authorizer=fixture_authorizer,
+                                 clock_ms=lambda: 1000, close_history=False)
+        self.addCleanup(service.close)
+        original = service._reply
+        def encode_then_close(*args, **kwargs):
+            reply = original(*args, **kwargs)
+            if kwargs.get("result") is not None:
+                service.close()
+            return reply
+        command = request()
+        with mock.patch.object(service, "_reply", side_effect=encode_then_close):
+            reply = json.loads(service.handle(encode_history_request(command), FIXTURE_CONTEXT))
+        self.assertFalse(reply["ready"])
+        self.assertEqual(store.record(event_record()["record_id"]).source_sequence, 1)
+
     def test_named_record_operations_round_trip_their_exact_records(self):
         intent = {
             "schema_version": 1, "record_type": "dispatch_intent", "record_id": "intent-api",
