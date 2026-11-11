@@ -118,6 +118,7 @@ from codex_agents.learning_engine import (  # noqa: E402
     validate_runtime_candidate,
 )
 from codex_agents.collector_client import CollectorClient  # noqa: E402
+from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.cli_reports import command_report  # noqa: E402
 from codex_agents.collector_contracts import (  # noqa: E402
     CollectorError,
@@ -1764,7 +1765,7 @@ def main() -> int:
             finally:
                 _close_ledger(ledger)
         elif args.command == "learning-normalize-app":
-            state = LearningState(args.state_root, create=False)
+            state = CollectorPaths(args.state_root)
             clients = load_client_capabilities(
                 ORCHESTRATION_ROOT / "config" / "learning-clients.json"
             )
@@ -1778,7 +1779,7 @@ def main() -> int:
             )
             report = {"ready": normalized is not None, "record": normalized}
         elif args.command == "learning-ingest-app":
-            state = LearningState(args.state_root, create=False)
+            state = CollectorPaths(args.state_root)
             clients = load_client_capabilities(
                 ORCHESTRATION_ROOT / "config" / "learning-clients.json"
             )

@@ -2374,3 +2374,18 @@ writer stalls with local cancellation, original-writer lifetime and inherited
 mutex refusal. These fixtures use synthetic native enrollment. Normal CLI and
 bridge migration, authenticated native activation, installed provider probes
 and independent release acceptance remain required.
+
+### App Server CLI client paths
+
+`learning-normalize-app` and `learning-ingest-app` use `CollectorPaths` for
+existing client paths and the bounded digest-key read. They do not construct
+`LearningState`, inspect database files or initialize persistence directories.
+Normalization preserves the existing content filtering and keyed identifiers;
+ingestion uses the existing collector bind/ingest API. An unavailable collector
+returns its normal unavailable error without a direct database fallback.
+
+Fresh CLI processes test both commands with database open/stat and SQLite
+connections forbidden. Ingestion reaches the actual disposable collector and
+preserves its startup identity. These tests cover the converted command paths;
+the complete CLI still imports legacy persistence owners for other commands,
+and full CLI/bridge migration and native caller authentication remain open.
