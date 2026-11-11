@@ -2389,3 +2389,17 @@ connections forbidden. Ingestion reaches the actual disposable collector and
 preserves its startup identity. These tests cover the converted command paths;
 the complete CLI still imports legacy persistence owners for other commands,
 and full CLI/bridge migration and native caller authentication remain open.
+
+### Validator rejection metadata client
+
+When `validate-result` rejects a synthetic or local result, its optional
+collector metadata path also uses `CollectorPaths`. The client reads its bounded
+key and uses the existing metadata API without inspecting database files. A
+healthy collector preserves the existing opaque receipt behavior; an unavailable
+collector preserves the rejection reason and returns unavailable learning
+metadata. Neither path changes, reconstructs or resubmits the rejected result.
+
+Fresh guarded CLI processes exercise both cases with database open/stat and
+SQLite connections forbidden. They retain the fixed `missing_evidence` reason
+and exclude rejected content. This command-path conversion does not establish
+full CLI import isolation, native authorization or the installed diagnostic gate.

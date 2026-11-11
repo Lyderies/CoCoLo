@@ -1560,7 +1560,7 @@ def main() -> int:
                 if args.project_root is not None:
                     learning_ready = False
                     try:
-                        state = LearningState(args.state_root, create=False)
+                        state = CollectorPaths(args.state_root)
                         ensure_collector(
                             state,
                             ORCHESTRATION_ROOT / "cli.py",
