@@ -130,6 +130,7 @@ class ResultPersistenceLane:
         self._jobs = weakref.WeakKeyDictionary()
         self._by_worker = weakref.WeakKeyDictionary()
         self._requests = None if request_limits is None else ProjectRequestQueue(request_limits)
+        self._api_ingress_owner = None
         self._service_authorizers = (history_authorizer, result_authorizer, orchestration_authorizer)
         # API requests cannot consume one slot per result entry or the close marker.
         self._incoming = queue.Queue(maxsize=max_entries + 1 + (0 if request_limits is None else request_limits.requests))

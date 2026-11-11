@@ -2336,3 +2336,41 @@ account or native fact. An interrupted initialization closes its own connection
 and writer lock while preserving the original interruption. Ordinary startup
 still refuses migration; genuine archives and rollback tests do not prove native
 drain or the independently required real-provider/containment activation gates.
+
+### Connected project API intake
+
+`project_ingress.ProjectIngress` accepts exclusively transferred, already
+connected Unix-stream sockets. One fixed I/O thread handles bounded framing and
+reply publication; the existing `ResultPersistenceLane` writer executes the
+closed history, result-read and orchestration operations on its original store.
+The frontend opens no database and binds no listener. API requests cannot consume
+the writer's reserved result slots or shutdown marker. A writer stall leaves the
+separate local cancellation and deadline owner responsive.
+
+Startup supplies finite connection and request quotas, steps per cycle, polling
+and absolute deadlines. Each connection carries one bounded frame and one reply.
+Partial input never refreshes the deadline. Extra frames refuse; send-side EOF
+after a complete request still permits its original reply. Disconnect, expiry
+and frontend shutdown cannot recycle a request slot while its writer operation
+is still executing. A lost reply can be reconciled only through the original
+business identity; the frontend does not retry an ambiguous operation.
+
+The frontend defaults to denial. Its native adapter must provide cheap current
+authorization of the whole request before queueing and before reply publication,
+including another check immediately before every send. Queue context tokens and
+callback return values establish no native identity, current permission or
+publication containment. The writer independently rechecks the exact original
+borrowed store through authorization, commit and response encoding.
+
+One frontend owns a writer lane for that lane's lifetime, including after drain.
+Its nonblocking close stops only frontend intake; the original writer retains
+its own shutdown custody. Process changes refuse before inherited mutexes are
+touched. Fatal frontend failures close its sockets and cannot restart that
+instance or replace it on the same lane.
+
+Disposable-socket and inert-worker tests cover real `HistoryClient` exchange,
+slow senders, half-close, quota pressure, revoked publication after commit,
+writer stalls with local cancellation, original-writer lifetime and inherited
+mutex refusal. These fixtures use synthetic native enrollment. Normal CLI and
+bridge migration, authenticated native activation, installed provider probes
+and independent release acceptance remain required.
