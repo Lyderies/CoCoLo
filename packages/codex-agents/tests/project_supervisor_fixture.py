@@ -57,8 +57,6 @@ def main():
     lease_scope = None if managed_open else ResultLeaseBinding(**data["scope"])
     scope = SupervisorScope(**{name: data['scope'][name] for name in (
         "project_id", "primary_session_id", "runtime_digest", "supervisor_instance_id", "supervisor_generation")})
-    monitor = ProjectMonitor(scope, LivenessLimits(30 * SECOND, 2 * SECOND, 5 * SECOND, 20 * SECOND),
-                             max_tracked_attempts=2, clock_ns=time.monotonic_ns)
     control_scope = ControlScope(**asdict(scope))
 
     def authorize(request, context):
@@ -66,11 +64,15 @@ def main():
             return ControlAuthorization(control_scope, request.target, service_request_digest(request),
                                         frozenset({"project.status", "project.cancel"}))
 
-    service = ControlService(monitor, authorizer=authorize, clock_ns=time.monotonic_ns)
-    loop = ControlLoop(monitor, service, ControlLoopLimits(4, 4, 30 * SECOND, 1_000_000))
-    owner = BridgeLivenessOwner(loop)
-    registry = OwnedExecutionRegistry()
-    pool = CodexWorkerPool(registry, CodexWorkerLimits(1, 16 * 1_048_576))
+    runtime = monitor = service = loop = owner = registry = pool = None
+    if not data.get('product_runtime', False):
+        monitor = ProjectMonitor(scope, LivenessLimits(30 * SECOND, 2 * SECOND, 5 * SECOND, 20 * SECOND),
+                                 max_tracked_attempts=2, clock_ns=time.monotonic_ns)
+        service = ControlService(monitor, authorizer=authorize, clock_ns=time.monotonic_ns)
+        loop = ControlLoop(monitor, service, ControlLoopLimits(4, 4, 30 * SECOND, 1_000_000))
+        owner = BridgeLivenessOwner(loop)
+        registry = OwnedExecutionRegistry()
+        pool = CodexWorkerPool(registry, CodexWorkerLimits(1, 16 * 1_048_576))
     root = Path(data["root"])
     key = bytes.fromhex(data["fixture_key"])
 
@@ -126,9 +128,23 @@ def main():
                             history_request_digest(request), 'host', frozenset({'history.open_scope'}),
                             open_scope_context=prospective)
                 api_options['history_authorizer'] = authorize_history
-        lane = ResultPersistenceLane(owner, pool, open_history, max_entries=1,
-                                     retained_bytes=2*MAX_PERSISTENCE_ENTRY_BYTES if api_options else MAX_PERSISTENCE_ENTRY_BYTES,
-                                     allow_local_execution_reference=not data.get('with_provenance', False), **api_options)
+        if data.get('product_runtime', False):
+            from codex_agents.project_runtime import ProjectRuntime, ProjectRuntimeLimits
+            from codex_agents.project_ingress import ProjectIngressLimits
+            limits = ProjectRuntimeLimits(2, 1, 2*MAX_PERSISTENCE_ENTRY_BYTES,
+                LivenessLimits(30*SECOND, 2*SECOND, 5*SECOND, 20*SECOND),
+                ControlLoopLimits(4, 4, 30*SECOND, 1_000_000), CodexWorkerLimits(1, 16*1_048_576),
+                api_options['request_limits'], ProjectIngressLimits(4, 4, 10*SECOND, 1_000_000))
+            runtime = ProjectRuntime(OrchestrationScope(**asdict(scope)), open_history, limits,
+                control_authorizer=authorize, ingress_authorizer=lambda raw, context, phase: context is CONTEXT,
+                history_authorizer=api_options.get('history_authorizer'), result_authorizer=api_options['result_authorizer'])
+            monitor, service, loop, owner, pool, lane, ingress = (runtime.monitor, runtime.control, runtime.loop,
+                runtime.owner, runtime.pool, runtime.persistence, runtime.ingress)
+            registry = pool._registry
+        else:
+            lane = ResultPersistenceLane(owner, pool, open_history, max_entries=1,
+                retained_bytes=2*MAX_PERSISTENCE_ENTRY_BYTES if api_options else MAX_PERSISTENCE_ENTRY_BYTES,
+                allow_local_execution_reference=not data.get('with_provenance', False), **api_options)
 
         def until(predicate):
             end = time.monotonic() + 12
@@ -141,12 +157,21 @@ def main():
                     except BlockingIOError:
                         continue
                     if kind == 'dispatch':
-                        loop.attach(connection, CONTEXT)
+                        if runtime is None:
+                            loop.attach(connection, CONTEXT)
+                        else:
+                            runtime.attach_control(connection, CONTEXT)
                     else:
-                        ingress.attach(connection, CONTEXT)
-                owner.run_once()
-                if dispatcher is not None:
-                    dispatcher.drive()
+                        if runtime is None:
+                            ingress.attach(connection, CONTEXT)
+                        else:
+                            runtime.attach_project(connection, CONTEXT)
+                if runtime is None:
+                    owner.run_once()
+                    if dispatcher is not None:
+                        dispatcher.drive()
+                else:
+                    runtime.run_once()
                 if publication_entered.is_set() and not publication.is_set() and select.select([sys.stdin], [], [], 0)[0]:
                     if receive() != {'release_writer': True}:
                         raise RuntimeError('fixture_invalid_writer_release')
@@ -160,12 +185,13 @@ def main():
 
         def start_ingress():
             nonlocal ingress
-            if ingress is not None:
+            if listeners:
                 return
             from codex_agents.project_ingress import ProjectIngress, ProjectIngressLimits
-            ingress = ProjectIngress(lane, ProjectIngressLimits(4, 4, 10*SECOND, 1_000_000),
-                                     authorizer=lambda raw, context, phase: context is CONTEXT)
-            ingress.bootstrap()
+            if ingress is None:
+                ingress = ProjectIngress(lane, ProjectIngressLimits(4, 4, 10*SECOND, 1_000_000),
+                                         authorizer=lambda raw, context, phase: context is CONTEXT)
+                ingress.bootstrap()
             for name, kind in (('d.sock', 'dispatch'), ('r.sock', 'result')):
                 listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 listener.bind(str(root/name))
@@ -318,9 +344,12 @@ def main():
                 if context is CONTEXT:
                     return DispatchAuthorization(control_scope, dispatch_request_digest(request), prepared,
                                                  frozenset({'dispatch.submit', 'dispatch.status'}))
-            dispatcher = PreparedDispatchService(owner, pool, lane, max_requests=1, steps_per_cycle=1,
-                                                 authorizer=authorize_dispatch)
-            service.bind_dispatch(dispatcher)
+            if runtime is None:
+                dispatcher = PreparedDispatchService(owner, pool, lane, max_requests=1, steps_per_cycle=1,
+                                                     authorizer=authorize_dispatch)
+                service.bind_dispatch(dispatcher)
+            else:
+                dispatcher = runtime.bind_dispatch(max_requests=1, steps_per_cycle=1, authorizer=authorize_dispatch)
             start_ingress()
             emit(stage='dispatch_ready', inputs_digest=lane.prepared_inputs_digest(handle),
                  dispatch_endpoint=str(root/'d.sock'), result_endpoint=str(root/'r.sock'),
@@ -582,23 +611,36 @@ def main():
             publication_patch.stop()
         for listener, _ in listeners:
             listener.close()
-        if ingress is not None:
-            ingress.close()
-            ingress._thread.join(6)
-            if ingress._thread.is_alive():
-                raise RuntimeError('fixture_ingress_cleanup')
-        pool.close()
-        if lane is not None:
-            lane.close()
-            lane._writer.join(6)
-            if lane._writer.is_alive():
-                raise RuntimeError("fixture_writer_cleanup")
-        for slot in pool._slots:
-            slot.thread.join(6)
-            if slot.thread.is_alive():
-                raise RuntimeError("fixture_worker_cleanup")
-        loop.close()
-        service.close()
+        if runtime is not None:
+            runtime.request_close()
+            end = time.monotonic()+6
+            while not runtime.threads_stopped():
+                if time.monotonic() >= end:
+                    raise RuntimeError('fixture_product_runtime_shutdown')
+                time.sleep(.002)
+        else:
+            if ingress is not None:
+                ingress.close()
+                ingress._thread.join(6)
+                if ingress._thread.is_alive():
+                    raise RuntimeError('fixture_ingress_cleanup')
+            if pool is not None:
+                pool.close()
+            if lane is not None:
+                lane.close()
+                lane._writer.join(6)
+                if lane._writer.is_alive():
+                    raise RuntimeError('fixture_writer_cleanup')
+            if pool is not None:
+                for slot in pool._slots:
+                    slot.thread.join(6)
+                    if slot.thread.is_alive():
+                        raise RuntimeError('fixture_worker_cleanup')
+            if loop is not None:
+                loop.close()
+            if service is not None:
+                service.close()
+
 
 
 if __name__ == "__main__":

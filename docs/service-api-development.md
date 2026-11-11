@@ -4,6 +4,53 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; these source components do not activate native services.
 
+## Project runtime and lifecycle clients (uninstalled source)
+
+`ProjectRuntime` assembles the original project monitor, control loop, bridge
+owner, fixed Codex worker pool, persistence lane and request ingress. Trusted
+startup supplies explicit limits for every component and the history factory.
+The original writer opens that history and takes its existing exclusive writer
+lock before startup returns, so a second writer refuses before a frontend can
+publish endpoints. Dispatch borrows these same owners and is driven outside the
+bridge owner's control-loop callback. The controller belongs to one process and
+thread; a native manager must isolate project startup and execution accordingly.
+
+All authorizers default to denial. This composition creates no listener, routing
+hint, enrollment, launch permission or account database connection. A reviewed
+native frontend must transfer exclusive connected-socket custody with independently
+authenticated current contexts. Scope values, runtime digests, Unix sockets and
+successful callbacks do not establish that authority. Shutdown stops intake and
+requests component shutdown without waiting for joins or releasing account
+capacity. `threads_stopped()` observes thread exit only; physical cleanup and
+the original account-release acknowledgement remain separate requirements.
+
+The normal CLI's orchestration open, checkpoint, pause, resume and close commands
+now use `orchestration.*` requests through the project endpoint. The new
+`learning-orchestration-status` command reads current lifecycle metadata. None
+opens a ledger, starts or takes over a collector, or falls back to SQLite. For
+an existing orchestration the client reads current state once, checks host-marker
+consistency, then sends a mutation with that expected sequence. These markers
+are consistency checks, not native caller authentication. The server's own
+authorization and original ownership checks remain necessary.
+
+Every invocation has a bounded request ID. The CLI accepts `--request-id` and,
+for existing-state mutations, `--expected-sequence` to reconcile an uncertain
+reply explicitly. Reuse the original request ID and original sequence; the client
+does not retry automatically or refresh the sequence after a failed mutation.
+Failures preserve validated retry metadata, including a generated open request
+ID when its committed reply was lost. Replies retain the original receipt while
+projecting the current snapshot, so replaying an old pause or open cannot present
+the orchestration as paused or active after it has resumed or completed.
+
+Disposable fresh-process tests exercise these clients against the product runtime
+and original writer, including a lost committed reply, explicit reconciliation,
+wrong-host refusal and terminal-state preservation. Existing inert worker,
+writer-stall, cancellation and original account-release process fixtures also
+use this composition. Their enrollment is synthetic. Production native bootstrap,
+original preparation/claim/completion, full run-statistics reporting and result-
+recording client migration remain incomplete. These tests do not accept live
+provider, native identity, containment or concurrent-project release criteria.
+
 ## Normal Codex host-open client (uninstalled source)
 
 The normal `learning-open-host-run` Codex branch first reads
@@ -30,8 +77,8 @@ account socket to remain present. These files remain routing hints only. The
 production keeper must prepare the actual export and local worker, establish
 the original contexts, and complete claim/registration/consumption independently
 before dispatch. Its native bootstrap, current root/environment/permission and
-held publication/containment proofs still gate activation. Normal orchestration
-lifecycle and result-recording CLI migration also remain incomplete.
+held publication/containment proofs still gate activation. Result-recording and
+full orchestration-statistics CLI migration also remain incomplete.
 
 The disposable process tests cover both primary-host variants. They prepare an
 inert worker first, then use fresh CLIs with SQL/file-access and collector-takeover traps against actual project

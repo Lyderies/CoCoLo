@@ -119,7 +119,9 @@ from codex_agents.learning_engine import (  # noqa: E402
 )
 from codex_agents.collector_client import CollectorClient  # noqa: E402
 from codex_agents.collector_paths import CollectorPaths  # noqa: E402
-from codex_agents.client_runtime import RuntimeOpenError, dispatch_codex_client, open_codex_client  # noqa: E402
+from codex_agents.client_runtime import (  # noqa: E402
+    RuntimeOpenError, RuntimeOrchestrationError, dispatch_codex_client, open_codex_client, orchestration_client,
+)
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.cli_reports import command_report  # noqa: E402
 from codex_agents.collector_contracts import (  # noqa: E402
@@ -1006,6 +1008,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     learning_close_orchestration.add_argument("--goal-tokens-used", type=int)
     learning_close_orchestration.add_argument("--goal-time-used-seconds", type=int)
+
+    for lifecycle in (learning_open_orchestration, learning_checkpoint_orchestration,
+                      learning_pause_orchestration, learning_resume_orchestration, learning_close_orchestration):
+        lifecycle.add_argument('--request-id', help='reuse the exact identity to reconcile a lost reply')
+    for lifecycle in (learning_checkpoint_orchestration, learning_pause_orchestration,
+                      learning_resume_orchestration, learning_close_orchestration):
+        lifecycle.add_argument('--expected-sequence', type=int,
+            help='original sequence for an explicit retry; otherwise read current state once')
+    learning_orchestration_status = subparsers.add_parser('learning-orchestration-status',
+        help='read current owned lifecycle metadata through the project API')
+    _add_learning_project(learning_orchestration_status)
+    learning_orchestration_status.add_argument('--orchestration-handle', required=True)
+    learning_orchestration_status.add_argument('--request-id')
 
     learning_orchestration_report = subparsers.add_parser(
         "learning-orchestration-report",
@@ -2048,70 +2063,19 @@ def main() -> int:
                     }
             finally:
                 _close_ledger(ledger)
-        elif args.command == "learning-open-orchestration":
-            ledger, project_id = _learning_ledger(args)
-            try:
-                report = {
-                    "ready": True,
-                    **ledger.open_orchestration(
-                        project_id, client_version=_host_client()
-                    ),
-                }
-            finally:
-                _close_ledger(ledger)
-        elif args.command == "learning-checkpoint-orchestration":
-            ledger, project_id = _learning_ledger(args)
-            try:
-                _require_host_owner(
-                    ledger, project_id, orchestration_handle=args.orchestration_handle
-                )
-                report = {
-                    "ready": True,
-                    **ledger.checkpoint_orchestration(
-                        project_id,
-                        orchestration_handle=args.orchestration_handle,
-                        goal_tokens_used=args.goal_tokens_used,
-                        goal_time_used_seconds=args.goal_time_used_seconds,
-                    ),
-                }
-            finally:
-                _close_ledger(ledger)
         elif args.command in {
-            "learning-pause-orchestration", "learning-resume-orchestration"
+            'learning-open-orchestration', 'learning-checkpoint-orchestration', 'learning-pause-orchestration',
+            'learning-resume-orchestration', 'learning-close-orchestration', 'learning-orchestration-status',
         }:
-            ledger, project_id = _learning_ledger(args)
-            try:
-                _require_host_owner(
-                    ledger, project_id, orchestration_handle=args.orchestration_handle
-                )
-                report = {
-                    "ready": True,
-                    **ledger.set_orchestration_paused(
-                        project_id,
-                        orchestration_handle=args.orchestration_handle,
-                        paused=args.command == "learning-pause-orchestration",
-                    ),
-                }
-            finally:
-                _close_ledger(ledger)
-        elif args.command == "learning-close-orchestration":
-            ledger, project_id = _learning_ledger(args)
-            try:
-                _require_host_owner(
-                    ledger, project_id, orchestration_handle=args.orchestration_handle
-                )
-                report = {
-                    "ready": True,
-                    **ledger.close_orchestration(
-                        project_id,
-                        orchestration_handle=args.orchestration_handle,
-                        status=args.status,
-                        goal_tokens_used=args.goal_tokens_used,
-                        goal_time_used_seconds=args.goal_time_used_seconds,
-                    ),
-                }
-            finally:
-                _close_ledger(ledger)
+            operation = ('status' if args.command == 'learning-orchestration-status'
+                         else args.command.removeprefix('learning-').removesuffix('-orchestration'))
+            report = orchestration_client(args.state_root, args.project_root, 'orchestration.'+operation,
+                host_client=_host_client(), orchestration_handle=getattr(args, 'orchestration_handle', None),
+                request_id=args.request_id, expected_sequence=getattr(args, 'expected_sequence', None),
+                goal_tokens_used=getattr(args, 'goal_tokens_used', None),
+                goal_time_used_seconds=getattr(args, 'goal_time_used_seconds', None), status=getattr(args, 'status', None))
+            _print_command_report(args, report)
+            return 0
         elif args.command == "learning-orchestration-report":
             ledger, project_id = _learning_ledger(args)
             try:
@@ -3238,6 +3202,11 @@ def main() -> int:
         return 2
     except RuntimeOpenError as exc:
         _print({'ready': False, 'error': 'host open unavailable', 'reason_code': exc.reason_code})
+        return 2
+    except RuntimeOrchestrationError as exc:
+        _print({'ready': False, 'error': 'orchestration operation unavailable', 'reason_code': exc.reason_code,
+                **({'request_id': exc.request_id} if exc.request_id is not None else {}),
+                **({'expected_sequence': exc.expected_sequence} if exc.expected_sequence is not None else {})})
         return 2
     except BridgeRefused as exc:
         # Refusal messages are fixed strings; they never carry prompts or paths.

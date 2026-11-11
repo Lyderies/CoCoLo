@@ -7,6 +7,7 @@ client never creates state, starts a runtime or falls back to a database.
 import os
 from pathlib import Path
 import signal
+import secrets
 import stat
 import threading
 
@@ -19,11 +20,11 @@ from .contracts import effective_dispatch_bounds, effective_dispatch_limits
 from .admission_metadata import api_keys_present
 from .dispatch_api import DispatchClient, DispatchError
 from .history_api import HistoryClient
-from .history_contracts import HISTORY_REASON_CODES, HistoryError
+from .history_contracts import HISTORY_REASON_CODES, HistoryError, _ID, matches
 from .hosts import HOST_CLIENTS, HostClientMismatch
 from .learning_contracts import content_digest, keyed_digest, parse_bounded_json
 from .open_scope_contracts import open_inputs_digest
-from .orchestration_api import OrchestrationScope
+from .orchestration_api import OrchestrationClient, OrchestrationRequest, OrchestrationScope
 from .service_protocol import ServiceTarget
 
 
@@ -103,6 +104,58 @@ class RuntimeOpenError(RuntimeError):
     def __init__(self, reason):
         self.reason_code = reason if type(reason) is str and reason in ACCOUNT_REASON_CODES | HISTORY_REASON_CODES else 'open_unavailable'
         super().__init__(self.reason_code)
+
+
+class RuntimeOrchestrationError(RuntimeError):
+    def __init__(self, reason, *, request_id=None, expected_sequence=None):
+        allowed = HISTORY_REASON_CODES | {'orchestration_client_unavailable', 'host_client_mismatch'}
+        self.reason_code = reason if type(reason) is str and reason in allowed else 'orchestration_client_unavailable'
+        self.request_id = request_id if matches(request_id, _ID) else None
+        self.expected_sequence = expected_sequence
+        super().__init__(self.reason_code)
+
+
+def orchestration_client(state_root, project_root, operation, *, host_client, orchestration_handle=None,
+                         request_id=None, expected_sequence=None, goal_tokens_used=None, goal_time_used_seconds=None,
+                         status=None):
+    """One lifecycle mutation, with explicit identity/sequence for reconciliation."""
+    identity = 'cli-orc-'+secrets.token_hex(16) if request_id is None else request_id
+    if not matches(identity, _ID):
+        raise RuntimeOrchestrationError('history_invalid_request')
+    captured_sequence = None
+    try:
+        scope, _, endpoint = read_runtime_hint(CollectorPaths(state_root), project_root)
+        actor = OrchestrationScope(**vars(scope))
+        client = OrchestrationClient(endpoint, actor, timeout=10)
+        if operation == 'orchestration.open':
+            payload = {}
+        else:
+            payload = {'orchestration_handle': orchestration_handle}
+            current = client.call('orchestration.status', payload,
+                request_id=identity if operation == 'orchestration.status' else 'orc-read-'+content_digest({'request': identity}))
+            snapshot = current['current']['snapshot']
+            if snapshot['client_version'] != host_client:
+                raise HostClientMismatch('host_client_mismatch')
+            if operation == 'orchestration.status':
+                return {'ready': True, **snapshot, **current, 'request_id': identity}
+            payload['expected_sequence'] = snapshot['sequence'] if expected_sequence is None else expected_sequence
+            if operation in {'orchestration.checkpoint', 'orchestration.close'}:
+                payload.update(goal_tokens_used=goal_tokens_used, goal_time_used_seconds=goal_time_used_seconds)
+            if operation == 'orchestration.close':
+                payload['status'] = status
+        request = OrchestrationRequest(1, operation, identity, actor, payload)
+        captured_sequence = request.payload.get('expected_sequence')
+        result = client.call(operation, request.payload, request_id=identity)
+        snapshot = result['current']['snapshot']
+        if snapshot['client_version'] != host_client:
+            raise HostClientMismatch('host_client_mismatch')
+    except DispatchError:
+        raise RuntimeOrchestrationError('orchestration_client_unavailable', request_id=identity) from None
+    except (HistoryError, HostClientMismatch) as error:
+        raise RuntimeOrchestrationError(error.reason_code, request_id=identity,
+                                       expected_sequence=captured_sequence) from None
+    return {'ready': True, **snapshot, **result, 'request_id': identity,
+            **({'expected_sequence': captured_sequence} if captured_sequence is not None else {})}
 
 
 def open_codex_client(state_root, project_root, orchestration_handle, task, route, assignment, parent_grant, *, host_client):

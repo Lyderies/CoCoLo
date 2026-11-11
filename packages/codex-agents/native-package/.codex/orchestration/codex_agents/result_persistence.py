@@ -102,12 +102,14 @@ class ResultPersistenceLane:
     """
 
     def __init__(self, owner, pool, open_history, *, max_entries, retained_bytes, allow_local_execution_reference=False,
-                 request_limits=None, history_authorizer=None, result_authorizer=None, orchestration_authorizer=None):
+                 request_limits=None, history_authorizer=None, result_authorizer=None, orchestration_authorizer=None,
+                 bootstrap_history=False):
         if (type(owner) is not BridgeLivenessOwner or type(pool) is not CodexWorkerPool
                 or not callable(open_history) or type(max_entries) is not int or not 1 <= max_entries <= 64
                 or type(retained_bytes) is not int
                 or not max_entries * MAX_PERSISTENCE_ENTRY_BYTES <= retained_bytes <= 512 * 1_048_576
                 or type(allow_local_execution_reference) is not bool
+                or type(bootstrap_history) is not bool
                 or (request_limits is not None and type(request_limits) is not ProjectRequestLimits)
                 or any(value is not None and not callable(value)
                        for value in (history_authorizer, result_authorizer, orchestration_authorizer))
@@ -127,6 +129,7 @@ class ResultPersistenceLane:
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._maximum = max_entries
         self._allow_local_reference = allow_local_execution_reference
+        self._bootstrap_history = bootstrap_history
         self._lock = threading.Lock()
         self._jobs = weakref.WeakKeyDictionary()
         self._by_worker = weakref.WeakKeyDictionary()
@@ -929,6 +932,11 @@ class ResultPersistenceLane:
         service = None
         pending = None
         try:
+            if self._bootstrap_history:
+                # Trusted runtime startup only, never selected by a request.
+                # Validate schema and acquire the existing exclusive writer lock
+                # before the native frontend publishes any endpoint.
+                self._history()
             if self._requests is not None:
                 history_auth, result_auth, orchestration_auth = self._service_authorizers
                 service = HistoryService(self._project, self._runtime, self._history,

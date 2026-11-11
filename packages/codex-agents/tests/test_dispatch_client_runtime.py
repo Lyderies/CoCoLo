@@ -52,7 +52,8 @@ class DispatchClientRuntimeTests(unittest.TestCase):
     def start(self, *, hold_result_publish=False, hold_result_read=False, await_release=False):
         child = self.fixture.start(self.fixture.fixture.scope, self.fixture.fixture.request,
             self.fixture.fixture.directory, 'rpc', with_provenance=True, client_dispatch=True,
-            hold_result_publish=hold_result_publish, hold_result_read=hold_result_read, await_release=await_release)
+            hold_result_publish=hold_result_publish, hold_result_read=hold_result_read, await_release=await_release,
+            product_runtime=True)
         self.assertFalse(child['dispatch_ready']['launched'])
         self.assertEqual(0, child['dispatch_ready']['tickets'])
         return child

@@ -162,7 +162,8 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
         self.fixture.primary_client = parent_host+'-host-v1'
         self.fixture.open_prepared_client = self.open_prepared_client
         child = self.fixture.start(self.fixture.fixture.scope, self.fixture.fixture.request,
-            self.fixture.fixture.directory, 'open-rpc', with_provenance=True, client_dispatch=True, client_open=True)
+            self.fixture.fixture.directory, 'open-rpc', with_provenance=True, client_dispatch=True, client_open=True,
+            product_runtime=True)
         self.assertEqual(self.opened['run_handle'], child['scope'].run_handle)
         self.assertEqual(0, child['dispatch_ready']['tickets'])
         # Only the account routing socket disappears. Original services and
