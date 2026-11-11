@@ -16,7 +16,15 @@ from codex_agents.learning_contracts import canonical_json
 from codex_agents.learning_store import DEFAULT_RETENTION_MS, LearningLedger, LedgerError, StateError
 
 
+def drop_account_observations_for_legacy_fixture(ledger):
+    for table in ('account_observation_requests', 'account_observation_origins'):
+        if ledger._connection.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0]:
+            raise AssertionError('cannot label new observation authority as a historical fixture')
+        ledger._connection.execute('DROP TABLE ' + table)
+
+
 def drop_account_cleanup_for_legacy_fixture(ledger):
+    drop_account_observations_for_legacy_fixture(ledger)
     if ledger._connection.execute('SELECT COUNT(*) FROM account_cleanup_receipts').fetchone()[0]:
         raise AssertionError('cannot label new cleanup authority as a historical fixture')
     ledger._connection.execute('ALTER TABLE capacity_executions DROP COLUMN cleanup_reservation_digest')

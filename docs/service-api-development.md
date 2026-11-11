@@ -4,6 +4,50 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; the source codec does not enable a service.
 
+## Asynchronous account provider observations (uninstalled source)
+
+`account.observe_provider` accepts only `provider`, `run_handle` and `phase`.
+The provider is Codex or Claude; a run handle requires `before` or `after`, and
+an account-wide observation has neither. The host adapter must independently
+authorize the exact request, caller scope and original observation context.
+Project callers additionally need an original open run. Hook, App Server and
+owner-key callers cannot use this operation. The synchronous handler refuses;
+`AccountClient.observe_provider` makes one bounded exchange without retry or a
+database fallback. No operation is enabled by default.
+
+The original account owner reserves a durable request before a fixed worker
+runs existing non-spending provider metadata commands. Workers receive bounded
+immutable probe inputs and no ledger or SQLite connection. The owner checks the
+original request, project root, open run, provider, deadline and current adapter
+authorization before atomically committing normalized metadata. A newer `before`
+request invalidates an older probe's launch-observation generation. An `after`
+observation and a known reply cannot refresh that generation or authorize launch.
+
+The reply contains at most eight normalized records and 12,288 bytes. Separate
+configured quotas bound projects, jobs and startup workers; each project has at
+most one active probe. Claim-worker quotas are unchanged. Queued expiry prevents
+execution. Active cancellation or expiry withholds commit and retains the slot
+until the actual worker returns; neither proves physical process cleanup. A
+missing or mismatched completion faults the pool without restarting unknown work.
+
+Account schema12 adds independent request and origin journals. A project retains
+at most 4,096 origins, including unknown or aborted requests; reaching capacity
+refuses new identities. A surviving pending request is unavailable after restart,
+and a missing companion conflicts. Neither permits an automatic reprobe. Known
+committed replies reference original retained provider records, preserving their
+timestamps and privacy expiry rather than copying their bodies into the journal.
+Ready replies re-read those original records before delivery; expiry, deletion or
+changed original journals withholds the reply without reserving or probing again.
+Explicit drained upgrades from schema11 require each active project's registered
+verified backup and preserve existing rows. Older supported backup manifests keep
+their original schema and restore behavior; schema12 includes both new journals.
+
+These components are exercised with inert provider and disposable socket/store
+fixtures. Native enrollment, current publication custody, containment, production
+configuration, full client integration and release review remain mandatory. An
+`ObservationContext`, callback or MAC supplies no native authority. Installed
+0.8.12 and project schema10 are unchanged; the candidate is not installed.
+
 ## Project orchestration lifecycle (uninstalled source)
 
 The closed project protocol has `open`, `pause`, `resume`, `checkpoint`, `close`

@@ -40,6 +40,8 @@ from .capacity_status_contracts import CapacityStatusInput, decode_capacity_stat
 from .run_provenance import decode_run_provenance_input
 from .host_open_contracts import decode_open_provenance_input
 from .account_open_contracts import AccountOpenContext, OpenError, decode_account_open_input
+from .account_observation import ObservationContext
+from .provider_observation_contracts import ObservationError, decode_observation_input
 
 # Fixed owner query: do not parse JSON or select variable record values during
 # preliminary quota checks. Foreign-account/provider candidates are charged too.
@@ -75,6 +77,7 @@ class AccountAuthorization:
     terminal_evidence: bytes | None = None
     open_context: AccountOpenContext | None = None
     cleanup_evidence: bytes | None = None
+    observation_context: ObservationContext | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -86,6 +89,7 @@ class AccountAuthorization:
             or not self.allowed_operations <= ACCOUNT_OPERATIONS
             or (self.caller_scope is not None and not matches(self.caller_scope, _DIGEST))
             or (self.open_context is not None and type(self.open_context) is not AccountOpenContext)
+            or (self.observation_context is not None and type(self.observation_context) is not ObservationContext)
         ):
             raise AccountError("account_not_authorized")
         from .claim_storage import capture_storage_evidence
@@ -646,6 +650,7 @@ class AccountService:
         allow_unleased_claim_reference=False,
         run_provenance_work_limits: SQLReadLimits | None = None,
         open_provenance_work_limits: SQLReadLimits | None = None,
+        observation_jobs=None,
     ) -> None:
         if (not matches(runtime_digest, _DIGEST) or not isinstance(views, AccountOwnerViews)
                 or (authorizer is not None and not callable(authorizer)) or type(allow_unleased_claim_reference) is not bool):
@@ -669,6 +674,12 @@ class AccountService:
             claim_jobs._guard()
         self._runtime, self._views, self._authorizer = runtime_digest, views, authorizer
         self._claim_jobs = claim_jobs
+        if observation_jobs is not None:
+            from .account_observation_jobs import AccountObservationJobs
+            if type(observation_jobs) is not AccountObservationJobs or observation_jobs._owner._views is not views:
+                raise AccountError('account_invalid_request')
+            observation_jobs._owner._guard()
+        self._observation_jobs = observation_jobs
         self._allow_unleased_reference = allow_unleased_claim_reference
         self._pid = os.getpid()
         self._closed = False
@@ -695,11 +706,39 @@ class AccountService:
         return self._handle(raw, transport_context, deferred=True, ingress=_ingress)
 
     def drive_claims(self):
-        if self._claim_jobs is None:
+        if self._claim_jobs is None and self._observation_jobs is None:
             raise ClaimError("claim_unavailable")
-        self._claim_jobs.drive()
+        if self._claim_jobs is not None:
+            self._claim_jobs.drive()
+        if self._observation_jobs is not None:
+            self._observation_jobs.drive()
 
     def take_claim_reply(self, ticket, *, _ingress=None):
+        if (self._observation_jobs is not None and type(ticket) is object
+                and ticket in self._observation_jobs._jobs):
+            reply = self._observation_jobs.take(ticket, _ingress=_ingress)
+            if reply is None:
+                return None
+            project, runtime, caller, identity = reply.key
+            request = AccountRequest(1, 'account.observe_provider', identity, project, runtime, reply.request.payload())
+            labels = {'request_id': identity, 'project_id': project, 'runtime_digest': runtime,
+                      'request_digest': account_request_digest(request)}
+            if reply.reason is not None:
+                return self._reply(labels, reason=reply.reason)
+            try:
+                raw = self._reply(labels, result=reply.result)
+                decode_account_response(raw, request)
+                if reply.before_publish() is not True:
+                    raise ObservationError('observation_not_authorized')
+                self._provenance_live()
+                with self._front_lock:
+                    if self._closed:
+                        raise ObservationError('observation_not_authorized')
+                    return raw
+            except ObservationError as error:
+                return self._reply(labels, reason=error.reason_code)
+            except Exception:
+                return self._reply(labels, reason='observation_unavailable')
         if self._claim_jobs is None:
             raise ClaimError("claim_unavailable")
         reply = self._claim_jobs.take(ticket, _ingress=_ingress)
@@ -764,6 +803,7 @@ class AccountService:
             provenance = decode_run_provenance_input(request.payload) if operation == 'account.run_provenance' else None
             open_provenance = decode_open_provenance_input(request.payload) if operation == 'account.open_provenance' else None
             opening = decode_account_open_input(request.payload, project, runtime) if operation == 'account.open_host_run' else None
+            observation = decode_observation_input(request.payload) if operation == 'account.observe_provider' else None
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -789,14 +829,46 @@ class AccountService:
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
                 or (authorization.source == "project" and operation not in {
-                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance"})
+                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance", "account.observe_provider"})
                 or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
                 or (operation in {"account.claim_launch", "account.capacity_status", 'account.open_host_run'} and
                     (authorization.source != "host" or authorization.caller_scope is None))
+                or (operation == 'account.observe_provider' and
+                    (authorization.source not in {'host', 'project'} or authorization.caller_scope is None
+                     or authorization.observation_context is None
+                     or (authorization.source == 'project' and observation.run_handle is None)))
             ):
                 raise AccountError("account_not_authorized")
-            if operation == 'account.open_host_run':
+            if operation == 'account.observe_provider':
+                if not deferred or self._observation_jobs is None:
+                    raise ObservationError('observation_unavailable')
+                caller, source = authorization.caller_scope, authorization.source
+                context = authorization.observation_context
+                expected = context.snapshot()
+
+                def authorize_observation():
+                    try:
+                        self._provenance_live()
+                        fresh = decode_account_request(raw)
+                        current = self._authorizer(fresh, transport_context)
+                        if type(current) is not AccountAuthorization:
+                            raise ValueError()
+                        current.__post_init__()
+                        if (current.source != source or current.project_id != project or current.runtime_digest != runtime
+                                or current.caller_scope != caller or current.request_digest != digest
+                                or account_request_digest(fresh) != digest or operation not in current.allowed_operations
+                                or current.observation_context is not context or context.snapshot() != expected):
+                            raise ValueError()
+                        self._provenance_live()
+                        self._views._guard()
+                        return True
+                    except Exception:
+                        raise ObservationError('observation_not_authorized') from None
+
+                return self._observation_jobs.submit(project, runtime, caller, identity, observation,
+                    context, authorize_observation, _ingress=ingress)
+            elif operation == 'account.open_host_run':
                 if not deferred or self._claim_jobs is None or self._claim_jobs._open_limits is None:
                     raise OpenError('open_unavailable')
                 self._provenance_live()
@@ -966,6 +1038,8 @@ class AccountService:
         except ClaimError as exc:
             reason = exc.reason_code
         except OpenError as exc:
+            reason = exc.reason_code
+        except ObservationError as exc:
             reason = exc.reason_code
         except Exception:
             reason = "account_unavailable"

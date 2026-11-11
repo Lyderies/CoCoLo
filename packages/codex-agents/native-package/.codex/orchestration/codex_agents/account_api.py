@@ -27,6 +27,9 @@ from .claim_denial import CloseDeniedInput, checked_denial_closure, decode_close
 from .run_provenance import RunProvenanceInput, checked_run_provenance, decode_run_provenance_input
 from .host_open_contracts import OpenProvenanceInput, checked_open_provenance, decode_open_provenance_input
 from .account_open_contracts import AccountOpenInput, OpenError, OPEN_REASON_CODES, checked_account_open_reply, decode_account_open_input
+from .provider_observation_contracts import (
+    OBSERVATION_REASONS, ObservationError, ObservationInput, checked_observation_reply, decode_observation_input,
+)
 
 ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
@@ -36,13 +39,13 @@ ACCOUNT_READ_OPERATIONS = frozenset({
 })
 ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt",
-    "account.run_provenance", "account.open_provenance", 'account.open_host_run',
+    "account.run_provenance", "account.open_provenance", 'account.open_host_run', 'account.observe_provider',
 }
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
     "account_not_authorized", "account_wrong_owner", "account_unavailable",
     "account_incompatible", "account_project_not_found",
-}) | CLAIM_ERROR_CODES | OPEN_REASON_CODES
+}) | CLAIM_ERROR_CODES | OPEN_REASON_CODES | OBSERVATION_REASONS
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}")
 _PROJECT = re.compile(r"prj_[0-9a-f]{32}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -98,7 +101,12 @@ def _checked_request(data: object) -> None:
         or not matches(data["runtime_digest"], _DIGEST) or type(data["payload"]) is not dict
     ):
         raise AccountError("account_invalid_request")
-    if data['operation'] == 'account.open_host_run':
+    if data['operation'] == 'account.observe_provider':
+        try:
+            decode_observation_input(data['payload'])
+        except ObservationError:
+            raise AccountError('account_invalid_request') from None
+    elif data['operation'] == 'account.open_host_run':
         try:
             decode_account_open_input(data['payload'], data['project_id'], data['runtime_digest'])
         except OpenError:
@@ -174,7 +182,12 @@ def account_request_digest(request: AccountRequest) -> str:
 def _checked_result(result: object, request: AccountRequest) -> dict:
     if type(result) is not dict:
         raise AccountError("account_invalid_response")
-    if request.operation == 'account.open_host_run':
+    if request.operation == 'account.observe_provider':
+        try:
+            return checked_observation_reply(result, decode_observation_input(request.payload))
+        except ObservationError:
+            raise AccountError('account_invalid_response') from None
+    elif request.operation == 'account.open_host_run':
         try:
             return checked_account_open_reply(result, decode_account_open_input(request.payload, request.project_id, request.runtime_digest))
         except OpenError:
@@ -340,6 +353,20 @@ class AccountClient:
 
     def owner_public_key(self, *, request_id: str | None = None) -> dict:
         return self._read("account.owner_public_key", request_id)
+
+    def observe_provider(self, provider, *, request_id, run_handle=None, phase=None):
+        """One explicit non-spending request; a known reply is historical metadata."""
+        try:
+            payload = ObservationInput(provider, run_handle, phase).payload()
+        except ObservationError:
+            raise AccountError('account_invalid_request') from None
+        request = AccountRequest(1, 'account.observe_provider', request_id, self._project, self._runtime, payload)
+        raw = encode_account_request(request)
+        try:
+            reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError:
+            raise AccountError('account_unavailable') from None
+        return decode_account_response(reply, request)
 
     def claim_launch(self, run_handle: str, identity_digest: str, *, request_id: str) -> dict:
         try:

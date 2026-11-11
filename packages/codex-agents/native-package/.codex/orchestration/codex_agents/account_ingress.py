@@ -79,6 +79,13 @@ class AccountIngress:
                 or jobs._ingress_owner is not None or jobs._jobs):
             raise AccountError("account_unavailable")
         self._service, self._jobs = service, jobs
+        self._observations = service._observation_jobs
+        if self._observations is not None:
+            observation = self._observations
+            if (not observation._started or observation._closing or observation._faulted
+                    or observation._ingress_owner is not None or observation._jobs):
+                raise AccountError('account_unavailable')
+            observation._owner._guard()
         self._limits = AccountIngressLimits(**vars(limits))
         self._pid, self._owner_thread = os.getpid(), threading.current_thread()
         self._lock = threading.Lock()
@@ -92,6 +99,8 @@ class AccountIngress:
         self._front_exiting = self._front_stopped = self._pumping = False
         self._thread = threading.Thread(target=self._front, name="account-ingress", daemon=True)
         jobs._ingress_owner = self
+        if self._observations is not None:
+            self._observations._ingress_owner = self
 
     def _owner(self):
         if self._pid != os.getpid() or self._owner_thread is not threading.current_thread():
@@ -321,7 +330,10 @@ class AccountIngress:
                     group = self._groups[ticket]
                     group.remove(token)
                     if not group:
-                        self._jobs.cancel(ticket, _ingress=self)
+                        if self._observations is not None and ticket in self._observations._jobs:
+                            self._observations.cancel(ticket, _ingress=self)
+                        else:
+                            self._jobs.cancel(ticket, _ingress=self)
                 with self._lock:
                     self._peers.pop(token, None)
             with self._lock:
@@ -336,7 +348,11 @@ class AccountIngress:
                 elif type(reply) is object:
                     if reply not in self._groups:
                         limits = self._jobs._intake._limits
-                        if len(self._groups) >= limits.max_projects * limits.max_jobs_per_project:
+                        maximum = limits.max_projects * limits.max_jobs_per_project
+                        if self._observations is not None:
+                            probe_limits = self._observations._limits
+                            maximum += probe_limits.max_projects * probe_limits.max_jobs_per_project
+                        if len(self._groups) >= maximum:
                             raise AccountError("account_unavailable")
                         self._groups[reply] = set()
                         self._rotation.append(reply)
@@ -376,6 +392,8 @@ class AccountIngress:
                 if not self._started:
                     self._front_stopped = True
             self._jobs.request_close()
+            if self._observations is not None:
+                self._observations.request_close()
         finally:
             self._pumping = False
 
@@ -393,7 +411,9 @@ class AccountIngress:
             if not self._closing:
                 raise AccountError("account_unavailable")
             stopped = self._front_stopped and all(p.io_closed for p in self._peers.values())
-        if not self._jobs.drain() or not stopped or self._thread.is_alive():
+        claims_drained = self._jobs.drain()
+        observations_drained = self._observations is None or self._observations.drain()
+        if not claims_drained or not observations_drained or not stopped or self._thread.is_alive():
             return False
         self._groups.clear()
         self._subscriptions.clear()

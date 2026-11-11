@@ -106,6 +106,9 @@ _TABLE_COLUMNS = {
     "account_cleanup_receipts": ('handle_digest', 'run_id', 'bridge_run_id', 'registration_digest', 'lease_digest',
         'binding_digest', 'reservation_digest', 'terminal_record_id', 'terminal_content_digest', 'result_digest',
         'terminal_receipt_digest', 'terminal_recorded_at_ms', 'cleanup_digest', 'released_at_ms', 'receipt_digest', 'state_seal'),
+    "account_observation_origins": ('request_key', 'parameters_digest', 'observed_at_ms', 'origin_seal'),
+    "account_observation_requests": ('request_key', 'parameters_digest', 'runtime_digest', 'caller_scope', 'provider',
+        'handle_digest', 'run_id', 'phase', 'observed_at_ms', 'deadline_at_ms', 'state', 'references_json', 'state_seal'),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -158,6 +161,8 @@ _TABLE_ORDER = {
     "capacity_completions": ("handle_digest",),
     "capacity_executions": ("handle_digest",),
     "account_cleanup_receipts": ("handle_digest",),
+    "account_observation_origins": ("request_key",),
+    "account_observation_requests": ("request_key",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -170,6 +175,8 @@ _TABLE_ORDER = {
 
 
 def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 12 and table in {'account_observation_origins', 'account_observation_requests'}:
+        return ()
     if schema_version < 11 and table == 'capacity_executions':
         return _TABLE_COLUMNS[table][:-1] if schema_version >= 9 else ()
     if schema_version < 9 and table in {"active_run_capacity", "capacity_completions", "capacity_executions"}:
@@ -193,7 +200,7 @@ def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
 
 
 def _tables(schema_version: int) -> tuple[str, ...]:
-    if schema_version not in {5, 6, 7, 8, 9, 10, 11}:
+    if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12}:
         raise RuntimeError("installed ledger schema does not support this backup")
     return tuple(table for table in _TABLE_COLUMNS
                  if (schema_version >= 7 or table != "launch_claims")
@@ -201,7 +208,8 @@ def _tables(schema_version: int) -> tuple[str, ...]:
                      "launch_inputs", "launch_observations", "launch_receipts"})
                  and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"})
                  and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'})
-                 and (schema_version >= 11 or table != 'account_cleanup_receipts'))
+                 and (schema_version >= 11 or table != 'account_cleanup_receipts')
+                 and (schema_version >= 12 or table not in {'account_observation_origins', 'account_observation_requests'}))
 
 
 def _encode(value: object) -> object:
@@ -316,6 +324,14 @@ def _verify_relational_restore(
                 'WHERE e.cleanup_reservation_digest IS NULL OR e.cleanup_reservation_digest<>c.reservation_digest LIMIT 1').fetchone()
             if missing is not None or orphan is not None:
                 raise RuntimeError('project backup cleanup coverage is incomplete')
+        if body['ledger_schema_version'] >= 12 and restored.execute(
+            'SELECT 1 FROM account_observation_origins o LEFT JOIN account_observation_requests r '
+            'ON r.project_id=o.project_id AND r.request_key=o.request_key WHERE r.request_key IS NULL OR '
+            'r.parameters_digest<>o.parameters_digest OR r.observed_at_ms<>o.observed_at_ms UNION ALL '
+            'SELECT 1 FROM account_observation_requests r LEFT JOIN account_observation_origins o '
+            'ON o.project_id=r.project_id AND o.request_key=r.request_key WHERE o.request_key IS NULL LIMIT 1'
+        ).fetchone() is not None:
+            raise RuntimeError('project backup observation coverage is incomplete')
         if restored.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise RuntimeError("project backup integrity verification failed")
         for table in _tables(body["ledger_schema_version"]):
@@ -380,7 +396,7 @@ def _main() -> int:
         project_id = ledger.project_for_root(target)
         connection = ledger._connection
         schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if schema_version not in {5, 6, 7, 8, 9, 10, 11}:
+        if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12}:
             raise RuntimeError("installed ledger schema does not support this backup")
         project_columns = {
             str(row[1])

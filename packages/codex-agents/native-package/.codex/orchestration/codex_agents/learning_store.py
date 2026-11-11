@@ -58,6 +58,9 @@ from .owned_execution import ExecutionCustodyError, OwnedExecutionKey, OwnedExec
 from .capacity_status_contracts import CapacityStatusInput, checked_capacity_status
 from .account_open_schema import HISTORY_OWNER_COLUMN, OPEN_OBJECTS, assert_open_schema, install_open_schema
 from .account_cleanup_schema import RELEASE_COLUMN, RELEASE_COLUMNS, RELEASE_SCHEMA, assert_cleanup_schema, check_cleanup_coverage, install_cleanup_schema
+from .account_observation_schema import (OBSERVATION_COLUMNS, OBSERVATION_SCHEMA, assert_observation_schema,
+                                         OBSERVATION_ORIGIN_COLUMNS, OBSERVATION_ORIGIN_SCHEMA,
+                                         check_observation_coverage, install_observation_schema)
 from .collector_contracts import (
     COLLECTOR_PROTOCOL_VERSION as COLLECTOR_PROTOCOL_VERSION,
     LEDGER_SCHEMA_VERSION as LEDGER_SCHEMA_VERSION,
@@ -302,6 +305,8 @@ _BACKUP_TABLE_COLUMNS = {
                              "released_at_ms", "receipt_digest"),
     "capacity_executions": ("handle_digest", "run_id", "bridge_run_id", "owner_digest", "cleanup_reservation_digest"),
     "account_cleanup_receipts": RELEASE_COLUMNS,
+    "account_observation_origins": OBSERVATION_ORIGIN_COLUMNS,
+    "account_observation_requests": OBSERVATION_COLUMNS,
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -362,6 +367,8 @@ _BACKUP_ORDER_COLUMNS = {
     "capacity_completions": ("handle_digest",),
     "capacity_executions": ("handle_digest",),
     "account_cleanup_receipts": ("handle_digest",),
+    "account_observation_origins": ("request_key",),
+    "account_observation_requests": ("request_key",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -397,6 +404,8 @@ def _backup_decode_value(value: Any) -> Any:
 
 
 def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 12 and table in {"account_observation_origins", "account_observation_requests"}:
+        return ()
     if schema_version < 11 and table == 'capacity_executions':
         return _BACKUP_TABLE_COLUMNS[table][:-1] if schema_version >= 9 else ()
     if schema_version < 9 and table in {"active_run_capacity", "capacity_completions", "capacity_executions"}:
@@ -423,7 +432,8 @@ def _backup_tables(schema_version: int) -> tuple[str, ...]:
                  and (schema_version >= 8 or table not in {"launch_inputs", "launch_observations", "launch_receipts"})
                  and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"})
                  and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'})
-                 and (schema_version >= 11 or table != 'account_cleanup_receipts'))
+                 and (schema_version >= 11 or table != 'account_cleanup_receipts')
+                 and (schema_version >= 12 or table not in {'account_observation_origins', 'account_observation_requests'}))
 
 
 def _snapshot_project_partition(
@@ -666,6 +676,8 @@ _BACKUP_RESTORE_SCHEMA += ('\n' + RELEASE_SCHEMA + ';\nALTER TABLE capacity_exec
                            + RELEASE_COLUMN + ';\n')
 
 
+_BACKUP_RESTORE_SCHEMA += '\n' + OBSERVATION_ORIGIN_SCHEMA + ';\n' + OBSERVATION_SCHEMA + ';\n'
+
 def _verify_project_backup_body(
     body: Any,
     *,
@@ -678,7 +690,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -767,6 +779,8 @@ def _verify_project_backup_body(
             raise LedgerError("project backup completion coverage is incomplete")
         if schema_version >= 11 and not check_cleanup_coverage(restored):
             raise LedgerError('project backup cleanup coverage is incomplete')
+        if schema_version >= 12 and not check_observation_coverage(restored):
+            raise LedgerError('account observation coverage is unavailable')
         integrity = restored.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise LedgerError("isolated project backup integrity check failed")
@@ -2263,6 +2277,11 @@ class LearningLedger:
                         ("trigger", "cleanup_launch_operation_state", _LAUNCH_CLEANUP_SCHEMA)]
         if version >= 9:
             schemas += [entry for entry in CAPACITY_OBJECTS if version < 11 or entry[1] != 'capacity_executions']
+        if version >= 12:
+            try:
+                assert_observation_schema(self._connection)
+            except ValueError:
+                raise LedgerError("account observation schema is unavailable or incompatible") from None
         if version >= 11:
             try:
                 assert_cleanup_schema(self._connection)
@@ -2315,6 +2334,12 @@ class LearningLedger:
         except ValueError:
             raise LedgerError('account cleanup migration is unavailable or incompatible') from None
 
+    def _initialize_account_observations_locked(self):
+        try:
+            install_observation_schema(self._connection)
+        except ValueError:
+            raise LedgerError("account observation migration is unavailable or incompatible") from None
+
     def _migrate_six_or_seven_to_current(self, version: int) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -2332,6 +2357,7 @@ class LearningLedger:
             self._initialize_active_capacity_locked()
             self._initialize_account_opens_locked()
             self._initialize_account_cleanup_locked()
+            self._initialize_account_observations_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
@@ -2432,6 +2458,7 @@ class LearningLedger:
             self._initialize_active_capacity_locked()
             self._initialize_account_opens_locked()
             self._initialize_account_cleanup_locked()
+            self._initialize_account_observations_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
@@ -2470,6 +2497,7 @@ class LearningLedger:
                 self._initialize_active_capacity_locked()
                 self._initialize_account_opens_locked()
                 self._initialize_account_cleanup_locked()
+                self._initialize_account_observations_locked()
                 self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             return
         if current >= 9:
@@ -2495,17 +2523,27 @@ class LearningLedger:
                 with self._account_transaction():
                     self._initialize_account_opens_locked()
                     self._initialize_account_cleanup_locked()
+                    self._initialize_account_observations_locked()
                     self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
                 return
             if current == 10:
                 self._require_project_migration_backups(10, LEDGER_SCHEMA_VERSION)
                 with self._account_transaction():
                     self._initialize_account_cleanup_locked()
+                    self._initialize_account_observations_locked()
                     self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
                 return
             if current >= 11:
                 if not check_cleanup_coverage(self._connection):
                     raise LedgerError('account cleanup coverage is unavailable')
+            if current >= 12 and not check_observation_coverage(self._connection):
+                raise LedgerError('account observation coverage is unavailable')
+            if current == 11:
+                self._require_project_migration_backups(11, LEDGER_SCHEMA_VERSION)
+                with self._account_transaction():
+                    self._initialize_account_observations_locked()
+                    self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                return
         with self._account_transaction():
             self._migrate_layout_locked(current)
 
@@ -3094,6 +3132,7 @@ class LearningLedger:
                 self._initialize_active_capacity_locked()
                 self._initialize_account_opens_locked()
                 self._initialize_account_cleanup_locked()
+                self._initialize_account_observations_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
         self.state.harden_database_files()
 

@@ -16,7 +16,7 @@ TOOL = runpy.run_path(str(REPOSITORY_ROOT / "scripts/backup_installed_project.py
 
 class InstalledBackupManifestTests(unittest.TestCase):
     def test_exact_version_manifests_match_owner_reader_and_keep_old_tables_absent(self):
-        for version in (5, 6, 7, 8, 9, 10, 11):
+        for version in (5, 6, 7, 8, 9, 10, 11, 12):
             with self.subTest(version=version):
                 tables = TOOL["_tables"](version)
                 self.assertEqual(learning_store._backup_tables(version), tables)
@@ -26,11 +26,13 @@ class InstalledBackupManifestTests(unittest.TestCase):
                 self.assertEqual(version >= 10, 'account_open_requests' in tables)
                 self.assertEqual(version >= 10, 'account_open_receipts' in tables)
                 self.assertEqual(version >= 11, 'account_cleanup_receipts' in tables)
+                self.assertEqual(version >= 12, 'account_observation_origins' in tables)
+                self.assertEqual(version >= 12, 'account_observation_requests' in tables)
                 for table in tables:
                     self.assertEqual(learning_store._backup_expected_columns(version, table),
                                      TOOL["_expected_columns"](version, table))
                     self.assertEqual(learning_store._BACKUP_ORDER_COLUMNS[table], TOOL["_TABLE_ORDER"][table])
-        for version in (0, 4, 12):
+        for version in (0, 4, 13):
             with self.subTest(unsupported=version), self.assertRaises(RuntimeError):
                 TOOL["_tables"](version)
 
