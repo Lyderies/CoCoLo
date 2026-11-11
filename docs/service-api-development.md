@@ -48,6 +48,28 @@ configuration, full client integration and release review remain mandatory. An
 `ObservationContext`, callback or MAC supplies no native authority. Installed
 0.8.12 and project schema10 are unchanged; the candidate is not installed.
 
+## Fixed observation failure metadata (uninstalled source)
+
+`account.record_observation_unavailable` is the closed fixed failure-metadata
+counterpart to provider observation. Its input is provider, original run handle,
+before/after phase and one existing allowlisted unavailable reason. It accepts no
+record body or timestamp and runs no provider command. Authorized host/project
+callers use the configured original observation owner; all other roles and an
+unconfigured service refuse. A failure record conveys no launch, headroom,
+billing or cleanup authority.
+
+The original record and schema12 origin/request companions commit atomically,
+sharing the existing 4,096-origin quota. Each operation needs its own scoped
+request ID; changing its reason or reusing a probe identity conflicts. A fresh
+before failure invalidates the current launch-observation generation, preventing
+an older probe from restoring eligibility. After failures and known reads do not
+change that marker. Lost replies read the original retained record without a new
+timestamp; expired/deleted records and missing companions cannot be reminted.
+Original root, request and adapter authorization are rechecked around writes and
+after reply encoding. The client exchanges once with no database or retry
+fallback. Native publication custody, actual bridge migration and release review
+remain required; this source operation does not activate an endpoint.
+
 ## Project orchestration lifecycle (uninstalled source)
 
 The closed project protocol has `open`, `pause`, `resume`, `checkpoint`, `close`

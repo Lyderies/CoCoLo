@@ -192,7 +192,7 @@ class AccountObservationOwner:
     def _generation(self, row):
         return keyed_digest(self._key, 'account-observation-pending-v1:' + row['request_key'])
 
-    def _reply(self, row, request, *, known):
+    def _retained_records(self, row):
         if row['state'] != 'committed':
             raise ObservationError('observation_unavailable')
         references = parse_bounded_json_value(row['references_json'].encode(), max_bytes=4096)
@@ -215,6 +215,10 @@ class AccountObservationOwner:
             if content_digest(value) != reference['content_digest']:
                 raise ObservationError('observation_conflict')
             records.append(value)
+        return records
+
+    def _reply(self, row, request, *, known):
+        records = self._retained_records(row)
         return checked_observation_reply({**request.payload(), 'run_id': row['run_id'],
             'observed_at_ms': row['observed_at_ms'], 'known': known, 'records': records}, request)
 

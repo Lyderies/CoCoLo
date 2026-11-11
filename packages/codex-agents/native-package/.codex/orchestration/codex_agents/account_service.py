@@ -42,6 +42,8 @@ from .host_open_contracts import decode_open_provenance_input
 from .account_open_contracts import AccountOpenContext, OpenError, decode_account_open_input
 from .account_observation import ObservationContext
 from .provider_observation_contracts import ObservationError, decode_observation_input
+from .observation_failure_contracts import decode_observation_failure
+from .account_observation_failure import record_observation_failure, recheck_observation_failure
 
 # Fixed owner query: do not parse JSON or select variable record values during
 # preliminary quota checks. Foreign-account/provider candidates are charged too.
@@ -804,6 +806,8 @@ class AccountService:
             open_provenance = decode_open_provenance_input(request.payload) if operation == 'account.open_provenance' else None
             opening = decode_account_open_input(request.payload, project, runtime) if operation == 'account.open_host_run' else None
             observation = decode_observation_input(request.payload) if operation == 'account.observe_provider' else None
+            if operation == 'account.record_observation_unavailable':
+                observation = decode_observation_failure(request.payload)
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -829,19 +833,19 @@ class AccountService:
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
                 or (authorization.source == "project" and operation not in {
-                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance", "account.observe_provider"})
+                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable"})
                 or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
                 or (operation in {"account.claim_launch", "account.capacity_status", 'account.open_host_run'} and
                     (authorization.source != "host" or authorization.caller_scope is None))
-                or (operation == 'account.observe_provider' and
+                or (operation in {'account.observe_provider', 'account.record_observation_unavailable'} and
                     (authorization.source not in {'host', 'project'} or authorization.caller_scope is None
                      or authorization.observation_context is None
                      or (authorization.source == 'project' and observation.run_handle is None)))
             ):
                 raise AccountError("account_not_authorized")
-            if operation == 'account.observe_provider':
-                if not deferred or self._observation_jobs is None:
+            if operation in {'account.observe_provider', 'account.record_observation_unavailable'}:
+                if self._observation_jobs is None or (operation == 'account.observe_provider' and not deferred):
                     raise ObservationError('observation_unavailable')
                 caller, source = authorization.caller_scope, authorization.source
                 context = authorization.observation_context
@@ -866,6 +870,18 @@ class AccountService:
                     except Exception:
                         raise ObservationError('observation_not_authorized') from None
 
+                if operation == 'account.record_observation_unavailable':
+                    owner = self._observation_jobs._owner
+                    result = record_observation_failure(owner, project, runtime, caller, identity,
+                                                         observation, context, authorize_observation)
+                    encoded = self._reply(labels, result=result)
+                    decode_account_response(encoded, request)
+                    recheck_observation_failure(owner, project, runtime, caller, identity,
+                                               observation, context, authorize_observation, result)
+                    with self._front_lock:
+                        if self._closed:
+                            raise ObservationError('observation_not_authorized')
+                        return encoded
                 return self._observation_jobs.submit(project, runtime, caller, identity, observation,
                     context, authorize_observation, _ingress=ingress)
             elif operation == 'account.open_host_run':

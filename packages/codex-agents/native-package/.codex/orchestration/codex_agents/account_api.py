@@ -30,6 +30,9 @@ from .account_open_contracts import AccountOpenInput, OpenError, OPEN_REASON_COD
 from .provider_observation_contracts import (
     OBSERVATION_REASONS, ObservationError, ObservationInput, checked_observation_reply, decode_observation_input,
 )
+from .observation_failure_contracts import (
+    ObservationFailureInput, checked_observation_failure_reply, decode_observation_failure,
+)
 
 ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
@@ -40,6 +43,7 @@ ACCOUNT_READ_OPERATIONS = frozenset({
 ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt",
     "account.run_provenance", "account.open_provenance", 'account.open_host_run', 'account.observe_provider',
+    'account.record_observation_unavailable',
 }
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
@@ -101,9 +105,10 @@ def _checked_request(data: object) -> None:
         or not matches(data["runtime_digest"], _DIGEST) or type(data["payload"]) is not dict
     ):
         raise AccountError("account_invalid_request")
-    if data['operation'] == 'account.observe_provider':
+    if data['operation'] in {'account.observe_provider', 'account.record_observation_unavailable'}:
         try:
-            decode_observation_input(data['payload'])
+            (decode_observation_input if data['operation'] == 'account.observe_provider' else
+             decode_observation_failure)(data['payload'])
         except ObservationError:
             raise AccountError('account_invalid_request') from None
     elif data['operation'] == 'account.open_host_run':
@@ -182,7 +187,12 @@ def account_request_digest(request: AccountRequest) -> str:
 def _checked_result(result: object, request: AccountRequest) -> dict:
     if type(result) is not dict:
         raise AccountError("account_invalid_response")
-    if request.operation == 'account.observe_provider':
+    if request.operation == 'account.record_observation_unavailable':
+        try:
+            return checked_observation_failure_reply(result, decode_observation_failure(request.payload))
+        except ObservationError:
+            raise AccountError('account_invalid_response') from None
+    elif request.operation == 'account.observe_provider':
         try:
             return checked_observation_reply(result, decode_observation_input(request.payload))
         except ObservationError:
@@ -361,6 +371,20 @@ class AccountClient:
         except ObservationError:
             raise AccountError('account_invalid_request') from None
         request = AccountRequest(1, 'account.observe_provider', request_id, self._project, self._runtime, payload)
+        raw = encode_account_request(request)
+        try:
+            reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError:
+            raise AccountError('account_unavailable') from None
+        return decode_account_response(reply, request)
+
+    def record_observation_unavailable(self, provider, *, run_handle, phase, reason_code, request_id):
+        """One explicit fixed-metadata request; never probe or retry a model."""
+        try:
+            payload = ObservationFailureInput(provider, run_handle, phase, reason_code).payload()
+        except ObservationError:
+            raise AccountError('account_invalid_request') from None
+        request = AccountRequest(1, 'account.record_observation_unavailable', request_id, self._project, self._runtime, payload)
         raw = encode_account_request(request)
         try:
             reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
