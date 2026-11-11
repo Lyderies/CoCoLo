@@ -241,6 +241,41 @@ class PreparedDispatchService:
         finally:
             self._busy = False
 
+    def retire_released(self, context):
+        """Trusted owner housekeeping after original release and retirement.
+
+        This is not a wire operation. Keep the lifetime metadata slot and exact
+        original context so a repeated submit cannot launch again. Drop private
+        packet/persistence references only after both original owners retired.
+        """
+        self._guard()
+        self._owner._owner()
+        if self._busy or type(context) is not PreparedDispatchContext:
+            raise DispatchError('dispatch_unavailable')
+        key = (context.binding.run_handle, context.binding.attempt)
+        job = self._jobs.get(key)
+        if job is None or job.context is not context or job.snapshot != context.snapshot():
+            raise DispatchError('dispatch_not_authorized')
+        if job.state == 'retired':
+            return
+        pending = job.pending
+        if (job.state != 'published' or pending is None or pending.binding != context.binding
+                or pending.worker_handle is not context.worker or pending.state != 'released'
+                or pending.release_confirmed is None or pending.execution_ticket is None
+                or pending.original_job.ticket is not pending.execution_ticket
+                or pending.supervisor is not job.supervisor
+                or context.persistence in self._lane._jobs or context.worker in self._pool._jobs):
+            raise DispatchError('dispatch_conflict')
+        registry = self._pool._registry
+        with registry._lock:
+            entry = registry._issued.get(pending.execution_ticket)
+            if entry is None or entry.state != 'released':
+                raise DispatchError('dispatch_conflict')
+        self._rotation.remove(key)
+        job.state = 'retired'
+        job.pending = job.supervisor = job.delivery = job.report = job.transport = None
+        job.raw = b''
+
     def close(self):
         if self._pid != os.getpid() or self._thread is not threading.current_thread():
             raise DispatchError('dispatch_unavailable')

@@ -152,3 +152,14 @@ class PreparedDispatchTests(unittest.TestCase):
         with self.assertRaisesRegex(DispatchError, 'dispatch_unavailable'):
             service.drive()
         self.assert_unlaunched()
+
+    def test_unknown_dispatch_cannot_be_retired_as_if_account_release_was_confirmed(self):
+        service = self.service(authorizer=self.authorize)
+        self.call(service)
+        service.drive()
+        job = next(iter(service._jobs.values()))
+        with self.assertRaisesRegex(DispatchError, 'dispatch_conflict'):
+            service.retire_released(self.context)
+        self.assertEqual('unknown', job.state)
+        self.assertEqual(1, len(service._jobs))
+        self.assert_unlaunched()

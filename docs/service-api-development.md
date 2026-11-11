@@ -33,6 +33,22 @@ Reports explicitly say `capacity_state: retained`; neither result delivery nor
 a cancellation acknowledgement proves account release or confirmed cleanup.
 Closing the dispatch facade leaves its borrowed owners responsible for safety.
 
+After the actual account release acknowledgement has committed, the original
+persistence lane finishes release and retires its entry, and the original worker
+owner retires its returned job. Only then may trusted owner code call
+`PreparedDispatchService.retire_released()` with the same original context.
+It checks the retained original pending entry, writer confirmation and actual
+released registry ticket, and refuses while either original owner still retains
+the job. Result delivery, cancellation, cleanup alone, a lost writer reply or an
+equal copied context cannot trigger it. This method is not a wire operation.
+
+Successful retirement drops the dispatch-held pending packet, supervisor,
+transport, report and delivery references. A small `retired` metadata tombstone
+continues to consume its configured lifetime slot. Status and repeated submit
+can report that state but cannot relaunch or redeliver the result. The waiting
+client stops rather than polling it until its deadline. Unknown work remains
+charged; the monitor's lifetime registry and replay limits are unchanged.
+
 The shared control facade checks its current owner and lifetime after each
 authorization callback and reauthorizes after reply encoding. Closure during
 authorization cannot cause a later cancellation; closure during publication

@@ -13,6 +13,10 @@ from tests import test_project_execution_processes as fixtures
 from tests.test_bridge import PARENT_GRANT
 from codex_agents.client_runtime import runtime_hint_path
 from codex_agents.collector_paths import CollectorPaths
+from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
+from codex_agents.account_api import AccountRequest
+from codex_agents.terminal_delivery import TerminalSubmissionInput
+from codex_agents.cleanup_contracts import verify_cleanup_evidence
 from codex_agents.control_api import ControlClient, ControlScope
 from codex_agents.dispatch_api import DispatchClient, DispatchError
 from codex_agents.history_contracts import AttemptBinding, HistoryError
@@ -45,10 +49,10 @@ class DispatchClientRuntimeTests(unittest.TestCase):
             if process.stderr is not None:
                 process.stderr.close()
 
-    def start(self, *, hold_result_publish=False, hold_result_read=False):
+    def start(self, *, hold_result_publish=False, hold_result_read=False, await_release=False):
         child = self.fixture.start(self.fixture.fixture.scope, self.fixture.fixture.request,
             self.fixture.fixture.directory, 'rpc', with_provenance=True, client_dispatch=True,
-            hold_result_publish=hold_result_publish, hold_result_read=hold_result_read)
+            hold_result_publish=hold_result_publish, hold_result_read=hold_result_read, await_release=await_release)
         self.assertFalse(child['dispatch_ready']['launched'])
         self.assertEqual(0, child['dispatch_ready']['tickets'])
         return child
@@ -144,6 +148,50 @@ class DispatchClientRuntimeTests(unittest.TestCase):
         # There is no launched child; terminate this disposable waiting fixture.
         child['process'].terminate()
         child['process'].wait(timeout=10)
+
+    def test_actual_account_release_retires_dispatch_payload_and_replay_cannot_launch(self):
+        child = self.start(await_release=True)
+        process = self.launch_cli(child)
+        self.fixture.read(child, 'started')
+        self.fixture.control(child, 'project.cancel')
+        done = self.fixture.accept_terminal(child)
+        output, errors = process.communicate(timeout=12)
+        self.assertEqual(0, process.returncode, errors.decode(errors='replace'))
+        self.assertEqual('retained', json.loads(output)['bridge_report']['capacity_state'])
+        raw = bytes.fromhex(done['cleanup_evidence'])
+        cleanup = verify_cleanup_evidence(self.fixture.fixture.key, child['scope'], raw)
+        self.fixture.contexts[child['context']]['cleanup_evidence'] = raw
+        delivery = cleanup.delivery
+        submission = TerminalSubmissionInput(child['registration'], child['registration_digest'],
+            delivery.record_id, delivery.record_content_digest, delivery.result_digest)
+        request = AccountRequest(1, 'account.release_capacity', 'dispatch-original-release',
+            child['scope'].project_id, COLLECTOR_RUNTIME_DIGEST, submission.payload())
+        receipt = self.fixture.account(request, child['context'])
+        self.assertEqual('released', receipt['state'])
+        self.assertEqual({**receipt, 'known': True}, self.fixture.account(request, child['context']))
+        self.fixture.send(child, receipt)
+        retired = self.fixture.read(child, 'release_received')
+        self.assertTrue(retired['local_execution_released'])
+        self.assertTrue(retired['local_persistence_retired'])
+        self.assertTrue(retired['local_worker_retired'])
+        self.assertTrue(retired['dispatch_payload_dropped'])
+        self.assertEqual(1, retired['dispatch_lifetime_slots'])
+        self.assertEqual(['running', 'published', 'acknowledged', 'cleanup_ready', 'account_reply_only',
+            'writer_reply_unknown', 'release_acknowledged', 'release_finished', 'persistence_retired'],
+            retired['dispatch_retirement_refusals'])
+        ready = child['dispatch_ready']
+        client = DispatchClient(ready['dispatch_endpoint'], ready['result_endpoint'], self.control_scope(child), timeout=2)
+        for operation in ('dispatch.status', 'dispatch.submit'):
+            view = client.call(operation, child['scope'].run_handle, child['scope'].attempt, ready['inputs_digest'])
+            self.assertEqual('retired', view['state'])
+            self.assertTrue(view['known'])
+            self.assertIsNone(view['delivery'])
+            self.assertIsNone(view['report'])
+        with self.assertRaisesRegex(DispatchError, 'dispatch_unavailable'):
+            client.dispatch(child['scope'].run_handle, child['scope'].attempt, ready['inputs_digest'], wait_seconds=2)
+        self.assertEqual(['launch'], (child['root']/'launches').read_text().splitlines())
+        self.fixture.send(child, {'client_done': True})
+        self.assertEqual(0, child['process'].wait(timeout=10))
 
     def test_active_child_can_be_inspected_and_cancelled_while_result_reader_stalls_writer(self):
         child = self.start(hold_result_read=True)

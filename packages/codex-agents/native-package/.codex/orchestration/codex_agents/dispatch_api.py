@@ -20,7 +20,7 @@ from .service_transport import MAX_TIMEOUT_SECONDS, ServiceTransportError, excha
 
 MAX_DISPATCH_FRAME_BYTES = 16_384
 DISPATCH_OPERATIONS = frozenset({'dispatch.submit', 'dispatch.status'})
-DISPATCH_STATES = frozenset({'queued', 'running', 'publishing', 'published', 'unknown'})
+DISPATCH_STATES = frozenset({'queued', 'running', 'publishing', 'published', 'unknown', 'retired'})
 DISPATCH_REASONS = frozenset({'dispatch_invalid_request', 'dispatch_invalid_response', 'dispatch_not_authorized',
     'dispatch_unavailable', 'dispatch_conflict', 'dispatch_full', 'dispatch_not_found'})
 _COMMIT = re.compile(r'(?:[0-9a-f]{40}|[0-9a-f]{64})')
@@ -198,7 +198,7 @@ class DispatchClient:
                          expected_export_commit=expected_export_commit, timeout=min(self._timeout, wait_seconds))
         self.last_binding = AttemptBinding(**view['binding'])
         while view['state'] != 'published':
-            if view['state'] == 'unknown' or time.monotonic() >= deadline:
+            if view['state'] in {'unknown', 'retired'} or time.monotonic() >= deadline:
                 raise DispatchError('dispatch_unavailable')
             time.sleep(min(.05, max(0, deadline-time.monotonic())))
             remaining = min(self._timeout, deadline-time.monotonic())

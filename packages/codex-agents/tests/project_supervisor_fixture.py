@@ -318,6 +318,24 @@ def main():
         supervisor = pool.supervisor(worker)
         if dispatcher is not None:
             ticket = lane._job(handle).execution_ticket
+        retirement_refusals = []
+        def refuses_dispatch_retirement(stage):
+            if dispatcher is None:
+                return
+            from codex_agents.dispatch_api import DispatchError
+            job = dispatcher._jobs[(binding.run_handle, binding.attempt)]
+            retained = job.pending
+            try:
+                dispatcher.retire_released(prepared)
+            except DispatchError as error:
+                if error.reason_code != 'dispatch_conflict':
+                    raise
+            else:
+                raise RuntimeError('fixture_dispatch_retired_early')
+            if job.pending is not retained:
+                raise RuntimeError('fixture_dispatch_dropped_original_on_refusal')
+            retirement_refusals.append(stage)
+        refuses_dispatch_retirement('running')
         emit(stage="started", pid=os.getpid(), registry_pid=registry._pid, deadline_ns=grant.deadline_ns)
         until(lambda: pool.snapshot(worker)["returned"])
         selected = owner.result(binding, pool, worker)
@@ -328,6 +346,7 @@ def main():
             raise RuntimeError("fixture_persistence_failed")
         if dispatcher is not None:
             dispatcher.drive()
+        refuses_dispatch_retirement('published')
         if data.get('retain_cleanup', False):
             try:
                 lane.retain_cleanup(handle)
@@ -359,6 +378,7 @@ def main():
             raise RuntimeError('fixture_replaced_acknowledgement')
         if lane.snapshot(handle)['state'] != 'acknowledged':
             raise RuntimeError('fixture_acknowledgement_failed')
+        refuses_dispatch_retirement('acknowledged')
         cleanup = {}
         if data.get('retain_cleanup', False):
             proof = lane.retain_cleanup(handle)
@@ -424,6 +444,7 @@ def main():
             cleanup['cleanup_evidence'] = raw.hex()
             cleanup['cleanup_lost_ack_recovered'] = True
             cleanup['cleanup_custody_race_rolled_back'] = custody_race_checked == [True]
+        refuses_dispatch_retirement('cleanup_ready')
         emit(stage="done", cleanup_confirmed=supervisor.snapshot()["cleanup_confirmed"],
              fenced=selected.packet.fenced, terminal_state=selected.packet.terminal_state,
              stop_reason=selected.stop_reason, ticket_count=len(registry._issued),
@@ -438,6 +459,7 @@ def main():
             from codex_agents.learning_contracts import keyed_digest
             account_reply = canonical_json(next_message())
             verify_release_receipt(key, value, keyed_digest(key, original), account_reply)
+            refuses_dispatch_retirement('account_reply_only')
             try:
                 lane.finish_release(handle)
             except HistoryError:
@@ -490,6 +512,7 @@ def main():
                 until(lambda: lane.snapshot(handle)['state'] != 'acknowledging_release')
                 if lane.snapshot(handle)['state'] != 'failed' or registry._issued[ticket].state != 'cleaned':
                     raise RuntimeError('fixture_early_original_release')
+                refuses_dispatch_retirement('writer_reply_unknown')
                 try:
                     lane.finish_release(handle)
                 except HistoryError:
@@ -500,14 +523,36 @@ def main():
                 until(lambda: lane.snapshot(handle)['state'] != 'acknowledging_release')
             if release_attempts != [account_reply, account_reply] or lane.release_receipt(handle) != account_reply:
                 raise RuntimeError('fixture_replaced_project_release_ack')
+            refuses_dispatch_retirement('release_acknowledged')
             lane.finish_release(handle)
             lane.finish_release(handle)
+            refuses_dispatch_retirement('release_finished')
             lane.retire(handle)
+            refuses_dispatch_retirement('persistence_retired')
             owner.retire(binding, pool, worker)
+            dispatch_retirement = {}
+            if dispatcher is not None:
+                from codex_agents.dispatch_api import DispatchError
+                try:
+                    dispatcher.retire_released(copy(prepared))
+                except DispatchError as error:
+                    if error.reason_code != 'dispatch_not_authorized':
+                        raise
+                else:
+                    raise RuntimeError('fixture_copied_dispatch_context_retired_original')
+                dispatcher.retire_released(prepared)
+                dispatcher.retire_released(prepared)
+                job = dispatcher._jobs[(binding.run_handle, binding.attempt)]
+                if (job.state != 'retired' or job.pending is not None or job.report is not None
+                        or job.supervisor is not None or job.delivery is not None
+                        or job.transport is not None or job.raw != b'' or dispatcher._rotation):
+                    raise RuntimeError('fixture_dispatch_payload_retained')
+                dispatch_retirement = {'dispatch_state': job.state, 'dispatch_payload_dropped': True,
+                    'dispatch_lifetime_slots': len(dispatcher._jobs), 'dispatch_retirement_refusals': retirement_refusals}
             emit(stage='release_received', local_execution_released=registry._issued[ticket].state == 'released',
                  local_persistence_retired=handle not in lane._jobs,
                  local_worker_retired=worker not in pool._jobs, release_ack=account_reply.hex(),
-                 release_custody_loss_rolled_back=release_race_checked == [True])
+                 release_custody_loss_rolled_back=release_race_checked == [True], **dispatch_retirement)
         if data.get('client_dispatch', False) and next_message() != {'client_done': True}:
             raise RuntimeError('fixture_client_not_finished')
     finally:
