@@ -8,9 +8,11 @@ from contextlib import nullcontext
 from dataclasses import asdict
 import json
 import os
+import select
 from pathlib import Path
 import socket
 import sys
+import threading
 import time
 from unittest import mock
 
@@ -86,18 +88,64 @@ def main():
         return store
 
     lane = None
+    dispatcher = ingress = None
+    listeners = []
+    publication = threading.Event()
+    publication_entered = threading.Event()
+    publication_patch = None
+    if data.get('hold_result_publish', False) or data.get('hold_result_read', False):
+        method = 'read_result' if data.get('hold_result_read', False) else 'publish_result'
+        original = getattr(ProjectHistory, method)
+        def held_writer(*args, **kwargs):
+            if not publication_entered.is_set():
+                publication_entered.set()
+                emit(stage='writer_stalled', operation=method)
+                if not publication.wait(10):
+                    raise RuntimeError('fixture_writer_not_released')
+            return original(*args, **kwargs)
+        publication_patch = mock.patch.object(ProjectHistory, method, new=held_writer)
+        publication_patch.start()
     try:
+        api_options = {}
+        if data.get('client_dispatch', False):
+            from codex_agents.project_request_queue import ProjectRequestLimits
+            from codex_agents.result_read_api import result_read_request_digest
+            from codex_agents.result_read_service import ResultReadAuthorization
+            def authorize_result(request, context):
+                if context is CONTEXT and request.binding == binding:
+                    return ResultReadAuthorization(binding, request.result_digest, result_read_request_digest(request))
+            api_options = {'request_limits': ProjectRequestLimits(4, 10*SECOND), 'result_authorizer': authorize_result}
         lane = ResultPersistenceLane(owner, pool, open_history, max_entries=1,
-                                     retained_bytes=MAX_PERSISTENCE_ENTRY_BYTES,
-                                     allow_local_execution_reference=not data.get('with_provenance', False))
+                                     retained_bytes=2*MAX_PERSISTENCE_ENTRY_BYTES if api_options else MAX_PERSISTENCE_ENTRY_BYTES,
+                                     allow_local_execution_reference=not data.get('with_provenance', False), **api_options)
 
         def until(predicate):
             end = time.monotonic() + 12
             while not predicate():
                 if time.monotonic() >= end:
                     raise RuntimeError("fixture_progress_timeout")
+                for listener, kind in listeners:
+                    try:
+                        connection, _ = listener.accept()
+                    except BlockingIOError:
+                        continue
+                    if kind == 'dispatch':
+                        loop.attach(connection, CONTEXT)
+                    else:
+                        ingress.attach(connection, CONTEXT)
                 owner.run_once()
+                if dispatcher is not None:
+                    dispatcher.drive()
+                if publication_entered.is_set() and not publication.is_set() and select.select([sys.stdin], [], [], 0)[0]:
+                    if receive() != {'release_writer': True}:
+                        raise RuntimeError('fixture_invalid_writer_release')
+                    publication.set()
                 time.sleep(.002)
+
+        def next_message():
+            if data.get('client_dispatch', False):
+                until(lambda: bool(select.select([sys.stdin], [], [], 0)[0]))
+            return receive()
 
         payload = json.dumps({"task": data["task"], "route": data["route"], "assignment": data["assignment"],
                               "parent_grant": PARENT_GRANT, "schema": RESULT_SCHEMA.decode(),
@@ -231,23 +279,55 @@ def main():
         lane.consume_execution(handle, grant.encode(), **options)
         until(lambda: lane.snapshot(handle)["state"] != "consuming_execution")
         refuses_issue(copy(handle))
-        ticket = lane.issue_execution(handle)
-        refuses_issue(handle)
-        pool.bind(worker, ticket)
-        supervisor = pool.supervisor(worker)
-        owner.bind(binding, supervisor)
-        lane.bind(handle)
+        if data.get('client_dispatch', False):
+            from codex_agents.prepared_dispatch import DispatchAuthorization, PreparedDispatchContext, PreparedDispatchService
+            from codex_agents.dispatch_api import dispatch_request_digest
+            from codex_agents.project_ingress import ProjectIngress, ProjectIngressLimits
+            prepared = PreparedDispatchContext(binding, handle, worker, lane.prepared_inputs_digest(handle), (0, '0'*40, 'a'*64))
+            def authorize_dispatch(request, context):
+                if context is CONTEXT:
+                    return DispatchAuthorization(control_scope, dispatch_request_digest(request), prepared,
+                                                 frozenset({'dispatch.submit', 'dispatch.status'}))
+            dispatcher = PreparedDispatchService(owner, pool, lane, max_requests=1, steps_per_cycle=1,
+                                                 authorizer=authorize_dispatch)
+            service.bind_dispatch(dispatcher)
+            ingress = ProjectIngress(lane, ProjectIngressLimits(4, 4, 10*SECOND, 1_000_000),
+                                     authorizer=lambda raw, context, phase: context is CONTEXT)
+            ingress.bootstrap()
+            for name, kind in (('d.sock', 'dispatch'), ('r.sock', 'result')):
+                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                listener.bind(str(root/name))
+                (root/name).chmod(0o600)
+                listener.listen(4)
+                listener.setblocking(False)
+                listeners.append((listener, kind))
+            emit(stage='dispatch_ready', inputs_digest=lane.prepared_inputs_digest(handle),
+                 dispatch_endpoint=str(root/'d.sock'), result_endpoint=str(root/'r.sock'),
+                 tickets=len(registry._issued), launched=(root/'launches').exists())
+        else:
+            ticket = lane.issue_execution(handle)
+            refuses_issue(handle)
+            pool.bind(worker, ticket)
+            owner.bind(binding, pool.supervisor(worker))
+            lane.bind(handle)
         for descriptor in sys.argv[1:]:
             loop.attach(socket.socket(fileno=int(descriptor)), CONTEXT)
-        pool.submit(worker)
+        if dispatcher is None:
+            pool.submit(worker)
         until(lambda: (root / "launches").exists())
+        supervisor = pool.supervisor(worker)
+        if dispatcher is not None:
+            ticket = lane._job(handle).execution_ticket
         emit(stage="started", pid=os.getpid(), registry_pid=registry._pid, deadline_ns=grant.deadline_ns)
         until(lambda: pool.snapshot(worker)["returned"])
         selected = owner.result(binding, pool, worker)
-        lane.submit(handle)
+        if dispatcher is None:
+            lane.submit(handle)
         until(lambda: lane.snapshot(handle)["state"] in {"committed", "failed", "unknown"})
         if lane.snapshot(handle)["state"] != "committed":
             raise RuntimeError("fixture_persistence_failed")
+        if dispatcher is not None:
+            dispatcher.drive()
         if data.get('retain_cleanup', False):
             try:
                 lane.retain_cleanup(handle)
@@ -258,7 +338,7 @@ def main():
                 raise RuntimeError('fixture_cleanup_before_terminal_ack')
         emit(stage='terminal', evidence=lane.terminal_evidence(handle).hex(), delivery=lane.delivery(handle).as_data())
         from codex_agents.learning_contracts import canonical_json
-        acknowledgement = canonical_json(receive())
+        acknowledgement = canonical_json(next_message())
         original_ack = ProjectHistory.acknowledge_account_terminal
         acknowledgements = []
 
@@ -356,7 +436,7 @@ def main():
             original = lane.cleanup_evidence(handle)
             value = verify_cleanup_evidence(key, lease_scope, original)
             from codex_agents.learning_contracts import keyed_digest
-            account_reply = canonical_json(receive())
+            account_reply = canonical_json(next_message())
             verify_release_receipt(key, value, keyed_digest(key, original), account_reply)
             try:
                 lane.finish_release(handle)
@@ -428,7 +508,19 @@ def main():
                  local_persistence_retired=handle not in lane._jobs,
                  local_worker_retired=worker not in pool._jobs, release_ack=account_reply.hex(),
                  release_custody_loss_rolled_back=release_race_checked == [True])
+        if data.get('client_dispatch', False) and next_message() != {'client_done': True}:
+            raise RuntimeError('fixture_client_not_finished')
     finally:
+        publication.set()
+        if publication_patch is not None:
+            publication_patch.stop()
+        for listener, _ in listeners:
+            listener.close()
+        if ingress is not None:
+            ingress.close()
+            ingress._thread.join(6)
+            if ingress._thread.is_alive():
+                raise RuntimeError('fixture_ingress_cleanup')
         pool.close()
         if lane is not None:
             lane.close()

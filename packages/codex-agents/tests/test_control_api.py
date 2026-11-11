@@ -158,6 +158,35 @@ class ControlApiTests(unittest.TestCase):
         self.assertEqual(before, self.clock.calls)
         self.assertFalse(self.monitor.status(binding()).stop_requested)
 
+    def test_authorizer_closure_cannot_cancel_after_the_facade_is_closed(self):
+        def closing(request, context):
+            authorization = self.authorize(request, context)
+            self.service.close()
+            return authorization
+        self.service._authorizer = closing
+        with self.assertRaisesRegex(ControlError, 'control_unavailable'):
+            self.call(self.request('project.cancel'))
+        self.assertFalse(self.monitor.status(binding()).stop_requested)
+
+    def test_closure_during_publication_withholds_reply_without_undoing_accepted_cancel(self):
+        def closing_clock():
+            self.service.close()
+            return self.publication_clock()
+        self.service._clock = closing_clock
+        with self.assertRaisesRegex(ControlError, 'control_unavailable'):
+            self.call(self.request('project.cancel'))
+        self.assertTrue(self.monitor.status(binding()).stop_requested)
+
+    def test_revocation_after_encoding_withholds_ready_status(self):
+        calls = []
+        def revoking(request, context):
+            calls.append(request.operation)
+            return self.authorize(request, context) if len(calls) == 1 else None
+        self.service._authorizer = revoking
+        with self.assertRaisesRegex(ControlError, 'control_not_authorized'):
+            self.call()
+        self.assertEqual(['project.status', 'project.status'], calls)
+
     def test_allowed_operations_and_full_authorization_binding_are_checked(self):
         before = self.clock.calls
         def status_only(request, context):

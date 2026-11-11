@@ -1128,3 +1128,41 @@ def validate_evaluation_record(data: Any) -> dict[str, Any]:
     ):
         raise ContractError("cost must be null or a non-negative number")
     return data
+
+
+def effective_dispatch_limits(route: dict[str, Any], assignment: dict[str, Any]) -> tuple[int, int]:
+    """Existing hard-timeout/model-turn projection, shared with preflight.
+
+    Inputs must have passed assignment/route validation. The historical
+    max_tool_calls field is not an exact host-enforced tool-call budget.
+    """
+
+    route_bounds, assigned_bounds = route["bounds"], assignment["bounds"]
+    explicit = validate_assignment_execution_limits(assignment, route)
+    return (
+        max(1, min(int(route_bounds["timeout_seconds"]), int(assigned_bounds["timeout_seconds"]))),
+        explicit.get("max_model_turns", max(1, min(
+            int(route_bounds["max_tool_calls"]), int(assigned_bounds["max_tool_calls"]),
+        ))),
+    )
+
+
+def effective_dispatch_bounds(route: dict[str, Any], assignment: dict[str, Any]) -> dict[str, Any]:
+    """The same requested/effective unit report for preflight and dispatch."""
+
+    deadline, turns = effective_dispatch_limits(route, assignment)
+    claude = route.get("provider") == "claude" and route.get("dispatch") == "bridge"
+    explicit = assignment.get("execution_limits", {})
+    return {
+        "execution_limit_contract": "explicit" if explicit else "legacy",
+        "requested_execution_limits": dict(explicit),
+        "hard_timeout_seconds": deadline,
+        "nominal_max_tool_calls": min(route["bounds"]["max_tool_calls"],
+                                      assignment["bounds"]["max_tool_calls"]),
+        "exact_tool_call_limit": None,
+        "model_turn_limit": turns if claude else None,
+        "model_turn_enforcement": "client --max-turns" if claude else "unavailable",
+        "model_turn_limit_source": (
+            "execution_limits.max_model_turns" if explicit else "legacy max_tool_calls projection"
+        ) if claude else "unavailable",
+    }

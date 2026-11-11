@@ -58,6 +58,7 @@ class _Pending:
     state: str = "preparing"
     assignment: bytes | None = None
     identity: tuple | None = None
+    inputs_digest: str | None = None
     supervisor: object = None
     selected: object = None
     observed_at_ms: int | None = None
@@ -251,6 +252,14 @@ class ResultPersistenceLane:
             if value is None:
                 raise HistoryError("history_result_not_ready")
             return replace(value, binding=ResultLeaseBinding(**value.binding.as_data()))
+
+    def prepared_inputs_digest(self, handle):
+        """Bounded metadata computed by the original writer, never a grant."""
+        pending = self._job(handle)
+        with self._lock:
+            if pending.inputs_digest is None:
+                raise HistoryError('history_result_not_ready')
+            return pending.inputs_digest
 
     def arm(self, handle):
         """Finish this durable marker before the trusted adapter sends a claim."""
@@ -763,12 +772,14 @@ class ResultPersistenceLane:
     def _prepare(self, pending):
         invalid = False
         try:
-            _, assignment = _decode_input(pending.payload)
+            original, assignment = _decode_input(pending.payload)
         except (CodexWorkerError, ContractError):
             invalid = True
         if invalid:
             raise HistoryError("history_invalid_input")
         encoded = assignment_bytes(assignment, pending.binding)
+        from .open_scope_contracts import open_inputs_digest
+        inputs_digest = open_inputs_digest(assignment, original['task'], original['route'], original['parent_grant'])
         if pending.lease_binding is not None:
             lease = self._history().reserve_result_lease(pending.lease_binding, assignment)
         else:
@@ -778,6 +789,7 @@ class ResultPersistenceLane:
                       if lease is not None and lease.state == 'claim_pending' else None)
         with self._lock:
             pending.assignment = encoded
+            pending.inputs_digest = inputs_digest
             pending.identity = (assignment["assignment_id"], assignment["attempt"],
                                 assignment.get("retry_of_assignment_id"))
             pending.state = ("reserved" if lease is None or lease.state == "reserved" else "lease_" + lease.state)

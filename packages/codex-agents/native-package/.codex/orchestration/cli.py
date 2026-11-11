@@ -119,6 +119,8 @@ from codex_agents.learning_engine import (  # noqa: E402
 )
 from codex_agents.collector_client import CollectorClient  # noqa: E402
 from codex_agents.collector_paths import CollectorPaths  # noqa: E402
+from codex_agents.client_runtime import dispatch_codex_client  # noqa: E402
+from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.cli_reports import command_report  # noqa: E402
 from codex_agents.collector_contracts import (  # noqa: E402
     CollectorError,
@@ -1910,6 +1912,13 @@ def main() -> int:
             assignment = _json_input(args.assignment)
             parent_grant = _json_input(args.parent_grant)
             validate_assignment(assignment, task=task, route=route, parent_grant=parent_grant)
+            if route.get("provider") == "codex":
+                _host_client()  # Existing consistency check; markers confer no authority.
+                report = {"ready": True, **dispatch_codex_client(
+                    args.state_root, args.project_root, args.run_handle, task, route, assignment, parent_grant,
+                    expected_export_commit=args.expected_export_commit)}
+                _print_command_report(args, report)
+                return 0
             ledger, project_id = _learning_ledger(args)
             completed_dispatch = None
             try:
@@ -3213,6 +3222,9 @@ def main() -> int:
             "error": "host client is unknown",
             "reason_code": "host_client_unknown",
         })
+        return 2
+    except DispatchError as exc:
+        _print({"ready": False, "error": "dispatch unavailable", "reason_code": exc.reason_code})
         return 2
     except BridgeRefused as exc:
         # Refusal messages are fixed strings; they never carry prompts or paths.

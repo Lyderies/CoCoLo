@@ -17,16 +17,20 @@ from tests.learning_support import assignment, result
 import cli
 from codex_agents.bridge import BridgeInterrupted, BridgeRefused, _fenced_result
 from codex_agents.contracts import ContractError, validate_result
+from codex_agents.dispatch_api import DispatchError
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.learning_store import CollectorError, LedgerError
 
 
 class DispatchDeliveryCliTests(unittest.TestCase):
-    """CLI boundary fixture; native admission/cleanup are not simulated proof."""
+    """Remaining Claude collector lifecycle and Codex service-client boundary.
+
+    Native admission/cleanup are not simulated proof.
+    """
 
     def invoke(self, bridge_report, *, resume_failure=True, validation_error=None,
                owner_error=None, bridge_error=None, close_error=None,
-               guard_exit_error=None, probe=None):
+               guard_exit_error=None, probe=None, provider='claude', client_error=None):
         ledger = mock.Mock()
         ledger.close.side_effect = close_error
         maintenance = mock.Mock()
@@ -37,7 +41,7 @@ class DispatchDeliveryCliTests(unittest.TestCase):
         guard.__exit__.return_value = False
         guard.__exit__.side_effect = guard_exit_error
         assigned = assignment()
-        inputs = {"task.json": {"id": assigned["task_id"]}, "route.json": {"provider": "codex"},
+        inputs = {"task.json": {"id": assigned["task_id"]}, "route.json": {"provider": provider},
                   "assignment.json": assigned, "grant.json": assigned["permissions"]}
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
             argv = ["cli.py", "dispatch", "--project-root", directory, "--run-handle", "hrn_" + "a" * 48,
@@ -48,6 +52,7 @@ class DispatchDeliveryCliTests(unittest.TestCase):
                 stack.enter_context(mock.patch.object(sys, "argv", argv))
                 for name in ("_require_protected_runtime", "_require_own_roots"):
                     stack.enter_context(mock.patch.object(cli, name))
+                stack.enter_context(mock.patch.object(cli, '_host_client', return_value='codex-host-v1'))
                 validator = stack.enter_context(mock.patch.object(cli, "validate_assignment", side_effect=validation_error))
                 owner = stack.enter_context(mock.patch.object(cli, "_require_host_owner", side_effect=owner_error))
                 opened = stack.enter_context(mock.patch.object(cli, "_learning_ledger",
@@ -56,10 +61,12 @@ class DispatchDeliveryCliTests(unittest.TestCase):
                 dispatched = stack.enter_context(mock.patch.object(cli, "dispatch_bridge",
                     return_value=bridge_report, side_effect=bridge_error))
                 stack.enter_context(mock.patch.object(cli, "bridge_signal_guard", return_value=guard))
+                client = stack.enter_context(mock.patch.object(cli, "dispatch_codex_client",
+                    return_value=bridge_report, side_effect=client_error))
                 stack.enter_context(contextlib.redirect_stdout(output))
                 if probe is not None:
                     probe.update(ledger=ledger, maintenance=maintenance, dispatched=dispatched,
-                                 output=output, guard=guard)
+                                 output=output, guard=guard, client=client)
                 code = cli.main()
             decoded = json.loads(output.getvalue())  # Exactly one complete JSON object.
             if dispatched.call_count:
@@ -79,7 +86,7 @@ class DispatchDeliveryCliTests(unittest.TestCase):
         return {"result": payload, "bridge_report": {
             "outcome": "unparseable_result" if fenced else "result",
             "terminal_state": "failed" if fenced else None,
-            "reviewed": True, "provider": "codex",
+            "reviewed": True, "provider": "claude",
         }}
 
     def test_completed_dispatch_survives_resume_error_without_result_or_fence_changes(self):
@@ -189,6 +196,33 @@ class DispatchDeliveryCliTests(unittest.TestCase):
         probe["guard"].__exit__.assert_called_once()
         probe["ledger"].close.assert_called_once_with()
         probe["maintenance"].resume.assert_called_once_with()
+
+    def test_codex_service_result_bypasses_ledger_owner_and_collector_even_for_fenced_results(self):
+        for kind in ('legacy', 'negative', 'fenced'):
+            with self.subTest(kind=kind):
+                original = self.report(kind=kind)
+                original['bridge_report']['provider'] = 'codex'
+                expected = copy.deepcopy(original)
+                probe = {}
+                code, response, ledger, maintenance, dispatched, validator, owner, opened = self.invoke(
+                    original, provider='codex', probe=probe)
+                self.assertEqual((0, {'ready': True, **expected}), (code, response))
+                self.assertEqual(expected, original)
+                validator.assert_called_once()
+                probe['client'].assert_called_once()
+                self.assertEqual('a'*40, probe['client'].call_args.kwargs['expected_export_commit'])
+                for operation in (opened, owner, dispatched, ledger.close, maintenance.resume, probe['guard'].__enter__):
+                    operation.assert_not_called()
+
+    def test_codex_service_refusal_never_falls_back_to_legacy_dispatch(self):
+        probe = {}
+        code, response, ledger, maintenance, dispatched, _, owner, opened = self.invoke(
+            self.report(), provider='codex', probe=probe, client_error=DispatchError('dispatch_not_authorized'))
+        self.assertEqual((2, {'ready': False, 'error': 'dispatch unavailable',
+                             'reason_code': 'dispatch_not_authorized'}), (code, response))
+        probe['client'].assert_called_once()
+        for operation in (opened, owner, dispatched, ledger.close, maintenance.resume):
+            operation.assert_not_called()
 
 
 if __name__ == "__main__":

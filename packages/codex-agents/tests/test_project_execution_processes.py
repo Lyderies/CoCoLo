@@ -105,9 +105,10 @@ class ProjectExecutionProcessTests(unittest.TestCase):
         return value
 
     def start(self, scope, request, history, name, *, with_provenance=False, lose_consumption_reply=False,
-              lose_open_reply=False, crash_cleanup=False, await_release=False):
+              lose_open_reply=False, crash_cleanup=False, await_release=False, client_dispatch=False,
+              hold_result_publish=False, hold_result_read=False):
         original = self.original_context(scope, history) if self.managed_original_open else None
-        root = Path(self.bridge.temporary.name) / name
+        root = (self.bridge.state.root if client_dispatch else Path(self.bridge.temporary.name)) / name
         root.mkdir(mode=0o700)
         for directory in ("control", "export", "tmp"):
             (root / directory).mkdir(mode=0o700)
@@ -135,6 +136,7 @@ time.sleep(30)
             server.close()
         child = {"process": process, "root": root, "scope": scope, 'history': history,
                  "sockets": [pair[1] for pair in pairs], "stopped": False}
+        child['client_dispatch'] = client_dispatch
         self.children.append(child)
         context = object()
         child['context'] = context
@@ -145,7 +147,8 @@ time.sleep(30)
                           "with_provenance": with_provenance, "lose_consumption_reply": lose_consumption_reply,
                           "lose_open_reply": lose_open_reply, 'managed_original_open': self.managed_original_open,
                           'retain_cleanup': self.managed_original_open, 'crash_cleanup': crash_cleanup,
-                          'await_release': await_release})
+                          'await_release': await_release, 'client_dispatch': client_dispatch,
+                          'hold_result_publish': hold_result_publish, 'hold_result_read': hold_result_read})
         if self.managed_original_open:
             self.assertEqual({'stage': 'prepared', 'tickets': 0, 'launched': False}, self.read(child, 'prepared'))
             scope, request = self.open_prepared(child, original)
@@ -187,6 +190,9 @@ time.sleep(30)
         if lose_consumption_reply:
             child['consumption_fenced'] = self.read(child, 'consumption_fenced')
             self.assertEqual(0, process.wait(timeout=10))
+            return child
+        if client_dispatch:
+            child['dispatch_ready'] = self.read(child, 'dispatch_ready')
             return child
         started = self.read(child, "started")
         self.assertEqual(process.pid, started["pid"])

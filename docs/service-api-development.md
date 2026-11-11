@@ -4,6 +4,50 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; the source codec does not enable a service.
 
+## Normal Codex dispatch client (uninstalled source)
+
+The normal CLI's Codex `dispatch` branch now submits and polls bounded metadata
+through `dispatch.submit` and `dispatch.status`, then reads the original result
+through `result.read_chunk`. It does not take collector maintenance, open a
+ledger or fall back to the legacy dispatcher. Missing, stale or incompatible
+runtime routing hints refuse the command. These private hints locate existing
+sockets; their labels, ownership and digest do not authenticate a native peer.
+The remaining Claude branch retains its earlier collector lifecycle.
+
+The dispatch owner borrows the existing monitor, fixed worker pool and original
+project persistence lane. Its trusted adapter must supply the original prepared
+worker and persistence handles after actual account admission, registration,
+host-open recording and project grant consumption. The writer computes the
+original assignment/task/route/parent input digest before dispatch. Typed or
+copied handles, matching labels, request JSON and callbacks cannot create that
+original consumption or a second execution ticket. Submit is idempotent for the
+same retained context and inputs; conflicting inputs refuse, and uncertain slots
+remain charged. The finite queue does not automatically retry execution.
+
+Control-loop request handling only queues or reads bounded dispatch metadata.
+The native runtime must call `PreparedDispatchService.drive()` outside
+`BridgeLivenessOwner.run_once()` so original owner operations are not reentrant.
+Worker return and publication use the original lane; result bodies are never
+cached in dispatch replies. Reads retain the existing expiry/deletion checks.
+Reports explicitly say `capacity_state: retained`; neither result delivery nor
+a cancellation acknowledgement proves account release or confirmed cleanup.
+Closing the dispatch facade leaves its borrowed owners responsible for safety.
+
+The shared control facade checks its current owner and lifetime after each
+authorization callback and reauthorizes after reply encoding. Closure during
+authorization cannot cause a later cancellation; closure during publication
+withholds the reply without undoing an already accepted stop. These in-process
+checks do not establish native authorization held through a socket send.
+
+Disposable tests compose actual managed grants and inert processes, including a
+fresh guarded CLI and status/cancellation while the project writer is stalled
+with a child running. Their enrollment adapter and export metadata are synthetic.
+The production native preparation/bootstrap, current caller/root/permission and
+publication custody, descendant containment, complete CLI migration and original
+account completion/cleanup/release integration still require implementation and
+proof before activation. No listener is enabled by this module; default
+authorization denies. Both actual Codex paths and then Claude remain required.
+
 ## Asynchronous account provider observations (uninstalled source)
 
 `account.observe_provider` accepts only `provider`, `run_handle` and `phase`.

@@ -19,6 +19,8 @@ from .control_api import (
     decode_control_response, scope_data, target_data,
 )
 from .learning_contracts import canonical_json
+from .learning_contracts import parse_bounded_json
+from .dispatch_api import MAX_DISPATCH_FRAME_BYTES, decode_dispatch_request, dispatch_reply
 from .project_monitor import AttemptStatus, ProjectMonitor, ProjectMonitorError
 from .service_protocol import OPERATIONS, PROTOCOL_VERSION, ServiceRequest, ServiceTarget, service_request_digest
 
@@ -82,11 +84,25 @@ class ControlService:
         self._last_published = None
         self._clock_failed = False
         self._sampling_clock = False
+        self._dispatch = None
+
+    def bind_dispatch(self, service):
+        """Trusted startup binding only; no native authority or listener."""
+        from .prepared_dispatch import PreparedDispatchService
+
+        if (self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread()
+                or self._dispatch is not None or type(service) is not PreparedDispatchService
+                or service._monitor is not self._monitor or service._owner._loop._service is not self
+                or service._control_facade is not None):
+            raise ControlError('control_unavailable')
+        self._dispatch, service._control_facade = service, self
 
     def _authorize(self, request: ServiceRequest, context: object, digest: str) -> None:
+        self._current_owner()
         if {name: getattr(request, name) for name in scope_data(self._scope)} != scope_data(self._scope) or self._authorizer is None:
             raise ControlError("control_not_authorized")
         authorization = self._authorizer(request, context)
+        self._current_owner()
         if type(authorization) is not ControlAuthorization:
             raise ControlError("control_not_authorized")
         authorization.__post_init__()
@@ -95,6 +111,10 @@ class ControlService:
                 or authorization.request_digest != digest or service_request_digest(request) != digest
                 or request.operation not in authorization.allowed_operations):
             raise ControlError("control_not_authorized")
+
+    def _current_owner(self) -> None:
+        if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
+            raise ControlError("control_unavailable")
 
     @staticmethod
     def _reply(request=None, digest=None, *, observed=None, result=None, reason=None) -> bytes:
@@ -136,6 +156,15 @@ class ControlService:
         try:
             if self._closed or self._pid != os.getpid() or self._thread is not threading.current_thread():
                 raise ControlError("control_wrong_owner")
+            if type(raw) is bytes and len(raw)+1 <= MAX_DISPATCH_FRAME_BYTES:
+                try:
+                    operation = parse_bounded_json(raw, max_bytes=MAX_DISPATCH_FRAME_BYTES-1).get('operation')
+                except Exception:
+                    operation = None
+                if type(operation) is str and operation.startswith('dispatch.'):
+                    if self._dispatch is None:
+                        return dispatch_reply(decode_dispatch_request(raw), reason='dispatch_unavailable')
+                    return self._dispatch.handle(raw, transport_context)
             request = decode_control_request(raw)
             digest = service_request_digest(request)
             self._authorize(request, transport_context, digest)
@@ -157,6 +186,7 @@ class ControlService:
             if len(reply) + 1 > MAX_CONTROL_FRAME_BYTES:
                 raise ControlError("control_unavailable")
             decode_control_response(reply, request)
+            self._authorize(request, transport_context, digest)
             return reply
         except ControlError as exc:
             reason = exc.reason_code
@@ -184,3 +214,5 @@ class ControlService:
         # The monitor and tracked executor remain responsible for local safety;
         # closing this facade neither disables timers nor confirms cleanup.
         self._closed = True
+        if self._dispatch is not None:
+            self._dispatch.close()
