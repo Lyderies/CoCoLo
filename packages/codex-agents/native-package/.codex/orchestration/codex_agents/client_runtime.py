@@ -11,13 +11,19 @@ import stat
 import threading
 
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
+from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError
+from .account_open_contracts import AccountOpenInput, OpenError
 from .collector_paths import CollectorPaths, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
 from .control_api import ControlClient, ControlScope
 from .contracts import effective_dispatch_bounds, effective_dispatch_limits
 from .admission_metadata import api_keys_present
 from .dispatch_api import DispatchClient, DispatchError
-from .learning_contracts import keyed_digest, parse_bounded_json
+from .history_api import HistoryClient
+from .history_contracts import HISTORY_REASON_CODES, HistoryError
+from .hosts import HOST_CLIENTS, HostClientMismatch
+from .learning_contracts import content_digest, keyed_digest, parse_bounded_json
 from .open_scope_contracts import open_inputs_digest
+from .orchestration_api import OrchestrationScope
 from .service_protocol import ServiceTarget
 
 
@@ -28,7 +34,7 @@ def runtime_hint_path(state, project_root):
     return state.root / 'client-runtimes' / (keyed_digest(state.digest_key(), str(root)) + '.json')
 
 
-def read_runtime_hint(state, project_root):
+def _read_runtime_endpoints(state, project_root, *, account=False):
     descriptor = None
     try:
         root = _canonical_project_root(project_root)
@@ -51,8 +57,10 @@ def read_runtime_hint(state, project_root):
                 or (after.st_dev, after.st_ino) != (current.st_dev, current.st_ino)):
             raise ValueError()
         value = parse_bounded_json(raw, max_bytes=8192)
-        if (value.keys() != {'schema_version', 'project_root_digest', 'scope', 'dispatch_endpoint', 'result_endpoint'}
-                or type(value['schema_version']) is not int or value['schema_version'] != 1
+        fields = {'schema_version', 'project_root_digest', 'scope', 'dispatch_endpoint', 'result_endpoint'}
+        version = value.get('schema_version')
+        if (type(version) is not int or version not in {1, 2}
+                or value.keys() != (fields | {'account_endpoint'} if version == 2 else fields)
                 or value['project_root_digest'] != keyed_digest(state.digest_key(), str(root))
                 or type(value['scope']) is not dict):
             raise ValueError()
@@ -60,26 +68,74 @@ def read_runtime_hint(state, project_root):
         if scope.runtime_digest != COLLECTOR_RUNTIME_DIGEST:
             raise ValueError()
         endpoints = []
-        for name in ('dispatch_endpoint', 'result_endpoint'):
+        for name in (('dispatch_endpoint', 'result_endpoint', 'account_endpoint') if version == 2
+                     else ('dispatch_endpoint', 'result_endpoint')):
             endpoint = value[name]
             if (type(endpoint) is not str or not 0 < len(endpoint) <= 4096 or '\0' in endpoint
                     or not Path(endpoint).is_absolute() or '..' in Path(endpoint).parts):
                 raise ValueError()
             endpoint = Path(endpoint)
-            _assert_no_symlink_components(endpoint)
             if not endpoint.is_relative_to(state.root):
                 raise ValueError()
+            if name == 'account_endpoint' and not account:
+                endpoints.append(endpoint)
+                continue  # An admitted dispatch must not depend on account socket availability.
+            _assert_no_symlink_components(endpoint)
             actual = endpoint.lstat()
             if (not stat.S_ISSOCK(actual.st_mode) or actual.st_nlink != 1 or stat.S_IMODE(actual.st_mode) != 0o600
                     or (hasattr(os, 'getuid') and actual.st_uid != os.getuid())):
                 raise ValueError()
             endpoints.append(endpoint)
-        return scope, endpoints[0], endpoints[1]
+        return scope, endpoints
     except Exception:
         raise DispatchError('dispatch_unavailable') from None
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def read_runtime_hint(state, project_root):
+    scope, endpoints = _read_runtime_endpoints(state, project_root)
+    return scope, endpoints[0], endpoints[1]
+
+
+class RuntimeOpenError(RuntimeError):
+    def __init__(self, reason):
+        self.reason_code = reason if type(reason) is str and reason in ACCOUNT_REASON_CODES | HISTORY_REASON_CODES else 'open_unavailable'
+        super().__init__(self.reason_code)
+
+
+def open_codex_client(state_root, project_root, orchestration_handle, task, route, assignment, parent_grant, *, host_client):
+    """Read original project scope, then open once through the account API.
+
+    Trusted native preparation supplies original inputs and reserves its local
+    resources independently. Neither this client nor the returned metadata can
+    create a launch ticket or replace that protected preparation.
+    """
+    if (host_client not in HOST_CLIENTS or route.get('provider') != 'codex' or route.get('dispatch') != 'bridge'
+            or route.get('sandbox_mode') != 'read-only' or assignment.get('permissions', {}).get('network') is not False
+            or any(not p.endswith(':read') for p in assignment.get('permissions', {}).get('filesystem', []))
+            or api_keys_present(os.environ)):
+        raise RuntimeOpenError('open_not_authorized')
+    try:
+        scope, endpoints = _read_runtime_endpoints(CollectorPaths(state_root), project_root, account=True)
+        if len(endpoints) != 3:
+            raise RuntimeOpenError('open_unavailable')
+        prospective = OrchestrationScope(**vars(scope))
+        digest = open_inputs_digest(assignment, task, route, parent_grant)
+        project_scope = HistoryClient(endpoints[1], scope.project_id, scope.runtime_digest, timeout=10).original_open_scope(
+            prospective, orchestration_handle, digest)
+        if project_scope['facts']['client_version'] != host_client:
+            raise HostClientMismatch('host_client_mismatch')
+        opening = AccountOpenInput(prospective, orchestration_handle, digest)
+        identity = 'cli-open-' + content_digest(opening.payload())
+        reply = AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=10).open_host_run(
+            opening, request_id=identity)
+    except DispatchError:
+        raise RuntimeOpenError('open_unavailable') from None
+    except (AccountError, HistoryError, OpenError) as error:
+        raise RuntimeOpenError(error.reason_code) from None
+    return {'ready': reply['state'] == 'opened', **reply, 'read_containment': 'advisory'}
 
 
 def dispatch_codex_client(state_root, project_root, run_handle, task, route, assignment, parent_grant, *, expected_export_commit=None):

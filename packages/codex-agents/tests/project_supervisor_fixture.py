@@ -115,6 +115,17 @@ def main():
                 if context is CONTEXT and request.binding == binding:
                     return ResultReadAuthorization(binding, request.result_digest, result_read_request_digest(request))
             api_options = {'request_limits': ProjectRequestLimits(4, 10*SECOND), 'result_authorizer': authorize_result}
+            if data.get('client_open', False):
+                from codex_agents.history_api import history_request_digest
+                from codex_agents.history_service import HistoryAuthorization
+                from codex_agents.open_scope_contracts import OpenScopeContext
+                prospective = OpenScopeContext.from_snapshot(data['prospective'])
+                def authorize_history(request, context):
+                    if context is CONTEXT:
+                        return HistoryAuthorization(request.project_id, request.runtime_digest,
+                            history_request_digest(request), 'host', frozenset({'history.open_scope'}),
+                            open_scope_context=prospective)
+                api_options['history_authorizer'] = authorize_history
         lane = ResultPersistenceLane(owner, pool, open_history, max_entries=1,
                                      retained_bytes=2*MAX_PERSISTENCE_ENTRY_BYTES if api_options else MAX_PERSISTENCE_ENTRY_BYTES,
                                      allow_local_execution_reference=not data.get('with_provenance', False), **api_options)
@@ -147,6 +158,22 @@ def main():
                 until(lambda: bool(select.select([sys.stdin], [], [], 0)[0]))
             return receive()
 
+        def start_ingress():
+            nonlocal ingress
+            if ingress is not None:
+                return
+            from codex_agents.project_ingress import ProjectIngress, ProjectIngressLimits
+            ingress = ProjectIngress(lane, ProjectIngressLimits(4, 4, 10*SECOND, 1_000_000),
+                                     authorizer=lambda raw, context, phase: context is CONTEXT)
+            ingress.bootstrap()
+            for name, kind in (('d.sock', 'dispatch'), ('r.sock', 'result')):
+                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                listener.bind(str(root/name))
+                (root/name).chmod(0o600)
+                listener.listen(4)
+                listener.setblocking(False)
+                listeners.append((listener, kind))
+
         payload = json.dumps({"task": data["task"], "route": data["route"], "assignment": data["assignment"],
                               "parent_grant": PARENT_GRANT, "schema": RESULT_SCHEMA.decode(),
                               "export": str(root / "export"), "control": str(root / "control"),
@@ -156,8 +183,12 @@ def main():
         if managed_open:
             # Actual local resources and original inputs exist before account
             # admission. This fixture message is not native enrollment proof.
-            emit(stage='prepared', tickets=len(registry._issued), launched=(root/'launches').exists())
-            lease_scope = ResultLeaseBinding(**receive()['scope'])
+            endpoints = {}
+            if data.get('client_open', False):
+                start_ingress()
+                endpoints = {'dispatch_endpoint': str(root/'d.sock'), 'result_endpoint': str(root/'r.sock')}
+            emit(stage='prepared', tickets=len(registry._issued), launched=(root/'launches').exists(), **endpoints)
+            lease_scope = ResultLeaseBinding(**next_message()['scope'])
             if any(getattr(lease_scope, name) != value for name, value in asdict(scope).items()):
                 raise RuntimeError('fixture_foreign_original_open')
         handle = lane.prepare_lease(lease_scope, worker)
@@ -282,7 +313,6 @@ def main():
         if data.get('client_dispatch', False):
             from codex_agents.prepared_dispatch import DispatchAuthorization, PreparedDispatchContext, PreparedDispatchService
             from codex_agents.dispatch_api import dispatch_request_digest
-            from codex_agents.project_ingress import ProjectIngress, ProjectIngressLimits
             prepared = PreparedDispatchContext(binding, handle, worker, lane.prepared_inputs_digest(handle), (0, '0'*40, 'a'*64))
             def authorize_dispatch(request, context):
                 if context is CONTEXT:
@@ -291,16 +321,7 @@ def main():
             dispatcher = PreparedDispatchService(owner, pool, lane, max_requests=1, steps_per_cycle=1,
                                                  authorizer=authorize_dispatch)
             service.bind_dispatch(dispatcher)
-            ingress = ProjectIngress(lane, ProjectIngressLimits(4, 4, 10*SECOND, 1_000_000),
-                                     authorizer=lambda raw, context, phase: context is CONTEXT)
-            ingress.bootstrap()
-            for name, kind in (('d.sock', 'dispatch'), ('r.sock', 'result')):
-                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                listener.bind(str(root/name))
-                (root/name).chmod(0o600)
-                listener.listen(4)
-                listener.setblocking(False)
-                listeners.append((listener, kind))
+            start_ingress()
             emit(stage='dispatch_ready', inputs_digest=lane.prepared_inputs_digest(handle),
                  dispatch_endpoint=str(root/'d.sock'), result_endpoint=str(root/'r.sock'),
                  tickets=len(registry._issued), launched=(root/'launches').exists())

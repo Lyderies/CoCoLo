@@ -8,12 +8,21 @@ import sqlite3
 import sys
 from unittest import mock
 
-from tests.support import ORCHESTRATION_ROOT
+_CALLER_ENV = {name: os.environ.get(name) for name in
+              ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_USE_BEDROCK')}
+from tests.support import ORCHESTRATION_ROOT  # noqa: E402 -- capture markers before test bootstrap changes them.
 
 
 def main():
+    # tests.support selects a default host for in-process tests. This fresh CLI
+    # must instead exercise the markers explicitly supplied by its caller.
+    for name, value in _CALLER_ENV.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
     def forbidden(*args, **kwargs):
-        raise AssertionError('normal Codex dispatch touched persistence')
+        raise AssertionError('normal Codex client touched persistence')
     database_names = {'learning.sqlite', 'learning.sqlite3', 'ledger.sqlite', 'history.sqlite', 'history.sqlite3'}
     def checked(function):
         def invoke(path, *args, **kwargs):

@@ -2,7 +2,45 @@
 
 Release 0.3.0 requires normal clients to use project/account services, with SQLite owned only
 by their persistence components. This boundary is being implemented. Existing CLI workflows
-still use the installed 0.8.12 implementation; the source codec does not enable a service.
+still use the installed 0.8.12 implementation; these source components do not activate native services.
+
+## Normal Codex host-open client (uninstalled source)
+
+The normal `learning-open-host-run` Codex branch first reads
+`history.open_scope`, then calls `account.open_host_run` once. Both requests name
+the complete scoped original input digest. Full assignments, tasks, routes,
+parent grants, permissions and passed flags are not sent as account-open
+authority; independently authenticated native adapters must already hold their
+protected originals. The returned project scope is checked against the detected
+host as a consistency check, and the existing Claude-parent subscription-backend
+precheck remains. Neither environment markers nor this client establish native
+identity, current permission or endpoint authentication.
+
+The account request ID is deterministic within the full scope, orchestration
+and input digest. An explicit repeat retrieves the original receipt and its
+original timestamps; this client does not retry an uncertain exchange, probe a
+provider, create a grant, issue a ticket or launch a child. Admission denial
+returns its existing bounded reason with a failing exit status. Project and
+account service failures preserve their closed reason codes. No ledger,
+collector maintenance, runtime startup or database fallback is used.
+
+Private routing-hint schema2 adds `account_endpoint`; schema1 remains supported
+for dispatch but cannot open a run. A prepared dispatch does not require that
+account socket to remain present. These files remain routing hints only. The
+production keeper must prepare the actual export and local worker, establish
+the original contexts, and complete claim/registration/consumption independently
+before dispatch. Its native bootstrap, current root/environment/permission and
+held publication/containment proofs still gate activation. Normal orchestration
+lifecycle and result-recording CLI migration also remain incomplete.
+
+The disposable process tests cover both primary-host variants. They prepare an
+inert worker first, then use fresh CLIs with SQL/file-access and collector-takeover traps against actual project
+and account owners. Missing/older hints, changed inputs, wrong host markers and
+a Claude metered-backend switch cannot create an account-open receipt. It then
+opens and explicitly rereads one original receipt, completes the original
+managed claim pipeline through the account API, and dispatches exactly once even
+while the account routing socket is absent. Enrollment and export metadata are
+synthetic; this does not prove a real provider run or native crash recovery.
 
 ## Normal Codex dispatch client (uninstalled source)
 

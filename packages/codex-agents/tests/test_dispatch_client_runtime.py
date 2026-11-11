@@ -85,7 +85,7 @@ class DispatchClientRuntimeTests(unittest.TestCase):
         self.fixture.send(child, {'client_done': True})
         self.assertEqual(0, child['process'].wait(timeout=10))
 
-    def launch_cli(self, child, *, install_hint=True):
+    def launch_cli(self, child, *, install_hint=True, host='codex'):
         ready, scope = child['dispatch_ready'], self.control_scope(child)
         state = CollectorPaths(self.bridge.state.root)
         project_root = self.bridge.project
@@ -103,9 +103,12 @@ class DispatchClientRuntimeTests(unittest.TestCase):
             target.write_bytes(canonical_json(value))
             arguments.extend(['--'+flag, str(target)])
         environment = {k: v for k, v in os.environ.items() if not any(s in k.upper() for s in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
-        for marker in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_SESSION_ID'):
+        for marker in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_SESSION_ID', 'CODEX_THREAD_ID'):
             environment.pop(marker, None)
-        environment['CODEX_THREAD_ID'] = 'fixture-dispatch-primary'
+        if host == 'codex':
+            environment['CODEX_THREAD_ID'] = 'fixture-dispatch-primary'
+        else:
+            environment.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='fixture-dispatch-primary')
         process = subprocess.Popen([sys.executable, '-B', '-m', 'tests.dispatch_cli_fixture', 'dispatch',
             '--project-root', str(project_root), '--state-root', str(state.root), '--run-handle', child['scope'].run_handle,
             *arguments], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)

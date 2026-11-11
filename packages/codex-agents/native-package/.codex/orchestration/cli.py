@@ -119,7 +119,7 @@ from codex_agents.learning_engine import (  # noqa: E402
 )
 from codex_agents.collector_client import CollectorClient  # noqa: E402
 from codex_agents.collector_paths import CollectorPaths  # noqa: E402
-from codex_agents.client_runtime import dispatch_codex_client  # noqa: E402
+from codex_agents.client_runtime import RuntimeOpenError, dispatch_codex_client, open_codex_client  # noqa: E402
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.cli_reports import command_report  # noqa: E402
 from codex_agents.collector_contracts import (  # noqa: E402
@@ -1836,6 +1836,16 @@ def main() -> int:
             # route remains untrusted until the ledger resolves and compares it.
             validate_assignment(assignment, task=task, route=supplied_route,
                                 parent_grant=parent_grant)
+            if supplied_route.get('provider') == 'codex':
+                host = _host_client()  # Consistency only; native identity is independently checked.
+                if host == CLAUDE_HOST_CLIENT:
+                    check_backend(os.environ, args.project_root.resolve())
+                if args.fallback_receipt is not None:
+                    raise ContractError('bridged open never uses a fallback receipt')
+                report = open_codex_client(args.state_root, args.project_root, args.orchestration_handle,
+                    task, supplied_route, assignment, parent_grant, host_client=host)
+                _print_command_report(args, report)
+                return 0 if report['ready'] else 2
             ledger, project_id = _learning_ledger(args)
             try:
                 host = _require_host_owner(
@@ -3225,6 +3235,9 @@ def main() -> int:
         return 2
     except DispatchError as exc:
         _print({"ready": False, "error": "dispatch unavailable", "reason_code": exc.reason_code})
+        return 2
+    except RuntimeOpenError as exc:
+        _print({'ready': False, 'error': 'host open unavailable', 'reason_code': exc.reason_code})
         return 2
     except BridgeRefused as exc:
         # Refusal messages are fixed strings; they never carry prompts or paths.

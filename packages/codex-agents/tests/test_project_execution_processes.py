@@ -106,7 +106,7 @@ class ProjectExecutionProcessTests(unittest.TestCase):
 
     def start(self, scope, request, history, name, *, with_provenance=False, lose_consumption_reply=False,
               lose_open_reply=False, crash_cleanup=False, await_release=False, client_dispatch=False,
-              hold_result_publish=False, hold_result_read=False):
+              hold_result_publish=False, hold_result_read=False, client_open=False):
         original = self.original_context(scope, history) if self.managed_original_open else None
         root = (self.bridge.state.root if client_dispatch else Path(self.bridge.temporary.name)) / name
         root.mkdir(mode=0o700)
@@ -148,10 +148,20 @@ time.sleep(30)
                           "lose_open_reply": lose_open_reply, 'managed_original_open': self.managed_original_open,
                           'retain_cleanup': self.managed_original_open, 'crash_cleanup': crash_cleanup,
                           'await_release': await_release, 'client_dispatch': client_dispatch,
+                          'client_open': client_open,
+                          'prospective': original.prospective.snapshot()[1] if client_open else None,
                           'hold_result_publish': hold_result_publish, 'hold_result_read': hold_result_read})
         if self.managed_original_open:
-            self.assertEqual({'stage': 'prepared', 'tickets': 0, 'launched': False}, self.read(child, 'prepared'))
-            scope, request = self.open_prepared(child, original)
+            prepared = self.read(child, 'prepared')
+            self.assertEqual((0, False), (prepared['tickets'], prepared['launched']))
+            if client_open:
+                child['prepared'] = prepared
+                self.contexts[context].update(scope=original.prospective.scope, open_context=original)
+                opened = self.open_prepared_client(child, original)
+                scope, request = self.open_prepared(child, original, opened=opened)
+            else:
+                self.assertEqual({'stage': 'prepared', 'tickets': 0, 'launched': False}, prepared)
+                scope, request = self.open_prepared(child, original)
             child['scope'] = scope
             self.contexts[context]['scope'] = scope
             self.send(child, {'scope': scope.as_data()})
@@ -558,7 +568,7 @@ class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
             result_capacity=ResultCapacity(8, 2*MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
         try:
             opened = OrchestrationOwner(store).apply(OrchestrationRequest(1, 'orchestration.open', 'actual-project-open', actor, {}),
-                client_version='codex-host-v1', before_commit=lambda: None)
+                client_version=getattr(self, 'primary_client', 'codex-host-v1'), before_commit=lambda: None)
             handle = opened['receipt']['snapshot']['orchestration_handle']
             prospective = OpenScopeContext(actor, handle, deepcopy(self.base.fixture.assignment),
                 self.bridge.task(), deepcopy(self.base.fixture.route), deepcopy(PARENT_GRANT))
@@ -579,7 +589,7 @@ class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
         finally:
             store.close()
 
-    def open_prepared(self, child, original):
+    def open_prepared(self, child, original, *, opened=None):
         from codex_agents.account_open_contracts import AccountOpenInput
         from codex_agents.open_scope_contracts import open_inputs_digest
 
@@ -590,7 +600,8 @@ class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
             open_inputs_digest(prospective.assignment, prospective.task, prospective.route, prospective.parent_grant))
         command = AccountRequest(1, 'account.open_host_run', 'original-open-'+child['root'].name,
             prospective.scope.project_id, COLLECTOR_RUNTIME_DIGEST, opening.payload())
-        opened = self.account(command, child['context'])
+        if opened is None:
+            opened = self.account(command, child['context'])
         self.assertEqual('opened', opened['state'])
         self.assertFalse(opened['known'])
         self.assertFalse((child['root']/'launches').exists())
