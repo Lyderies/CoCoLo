@@ -30,6 +30,16 @@ class ResultPersistenceTests(unittest.TestCase):
         self.fixture = workers.CodexWorkerTests(methodName="runTest")
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        # Keep success-path storage and observation timestamps in one elapsed
+        # fixture domain. macOS monotonic time can pause during host suspend
+        # while realtime advances beyond the real retention window. Dedicated
+        # storage tests independently exercise production expiry and rollback.
+        self._elapsed_ns = time.monotonic_ns
+        self._wall_origin_ns = time.time_ns()
+        self._elapsed_origin_ns = self._elapsed_ns()
+        clock_patch = mock.patch.object(result_persistence, "_TIME_NS", self.fixture_time_ns)
+        clock_patch.start()
+        self.addCleanup(clock_patch.stop)
         self.directory = Path(self.fixture.temporary.name) / "history"
         self.directory.mkdir(mode=0o700)
         self.project = self.fixture.monitor.scope().project_id
@@ -38,12 +48,16 @@ class ResultPersistenceTests(unittest.TestCase):
         self.factory = mock.Mock(side_effect=self.open_history)
         self.lane = self.new_lane()
         self.handles = {}
-        self.deadline_ms = time.time_ns() // 1_000_000 + 60_000
+        self.deadline_ms = self.fixture_time_ns() // 1_000_000 + 60_000
+
+    def fixture_time_ns(self):
+        return self._wall_origin_ns + self._elapsed_ns() - self._elapsed_origin_ns
 
     def open_history(self):
         self.factory_threads.append(threading.current_thread())
         return ProjectHistory(self.directory, self.project, result_key=KEY, result_capacity=self.capacity,
-                              allow_legacy_orchestration_reference=True)
+                              allow_legacy_orchestration_reference=True,
+                              result_clock_ms=lambda: self.fixture_time_ns() // 1_000_000)
 
     def new_lane(self, **changes):
         # Explicit local reference fixture; normal lease execution requires the
@@ -113,6 +127,17 @@ class ResultPersistenceTests(unittest.TestCase):
             self.assertIsNone(record["result_validation_reason_code"])
             self.assertEqual(assignment["attempt"], target.attempt)
         self.assertEqual(["launch"], (root / "launches").read_text().splitlines())
+
+    def test_fixture_result_clock_is_independent_of_unrelated_realtime_jump(self):
+        prepared = self.execution()
+        self.fixture.returned(prepared)
+        actual_time_ns = time.time_ns
+        # A host suspend or wall-clock change must not unpredictably turn this
+        # success-path fixture into a retention-expiry test. Production clocks
+        # and their explicit expiry/rollback tests remain separate.
+        with mock.patch.object(time, "time_ns", new=lambda: actual_time_ns() + 3_600_000_000_000):
+            delivery = self.committed(self.submit(prepared))
+        self.assertEqual(prepared[1], delivery.binding)
 
     def test_actual_client_usage_reaches_writer_without_model_usage_or_content(self):
         value = workers.fixtures.result()
