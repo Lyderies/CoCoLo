@@ -136,6 +136,43 @@ class AccountBillingJobTests(unittest.TestCase):
         self.assertEqual(0, self.ledger._connection.execute(
             "SELECT COUNT(*) FROM account_billing_probe_requests WHERE state='admitted'").fetchone()[0])
 
+    def test_full_signature_intake_waits_with_original_deadline_then_completes(self):
+        intake = self.claims._intake
+        occupied = [intake._reserve(self.fixture.project_id, 'claude') for _ in range(2)]
+        self.addCleanup(lambda: [intake._release(h) for h in occupied if h in intake._jobs])
+        with mock.patch.object(self.billing._owner, 'prepare', wraps=self.billing._owner.prepare) as prepare:
+            ticket = self.begin()
+            original = self.billing._jobs[ticket].reservation
+            deadline = original.deadline_ns
+            self.until(lambda: prepare.call_count > 0)
+        self.assertEqual('preparing', self.billing._jobs[ticket].state)
+        self.assertEqual([], self.launches())
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM account_billing_probe_requests WHERE state='admitted'").fetchone()[0])
+        for handle in occupied:
+            intake._release(handle)
+        result = self.take(ticket)
+        self.assertEqual('completed', result['probe'])
+        self.assertEqual(deadline, original.deadline_ns)
+        self.assertEqual(1, len(self.launches()))
+        self.assertEqual(0, self.workers._charged)
+
+    def test_cancel_while_signature_intake_is_full_retires_unadmitted_preparation(self):
+        intake = self.claims._intake
+        occupied = [intake._reserve(self.fixture.project_id, 'claude') for _ in range(2)]
+        self.addCleanup(lambda: [intake._release(h) for h in occupied if h in intake._jobs])
+        with mock.patch.object(self.billing._owner, 'prepare', wraps=self.billing._owner.prepare) as prepare:
+            ticket = self.begin()
+            self.until(lambda: prepare.call_count > 0)
+        self.billing.cancel(ticket)
+        with self.assertRaises(AccountError):
+            self.take(ticket)
+        self.assertEqual([], self.launches())
+        self.assertEqual(0, self.workers._charged)
+        self.assertEqual({}, self.billing._jobs)
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM records WHERE record_type='probe_admission'").fetchone()[0])
+
     def test_held_model_does_not_block_another_project_observation_or_health(self):
         self.fixture.frames('claude', [fixtures.PROBE_INIT, {'sleep': 3}, fixtures.FAVOURABLE, fixtures.result_frame('OK')])
         ticket = self.begin()

@@ -15,6 +15,7 @@ from .account_observation_jobs import AccountObservationJobs
 from .billing_probe_worker import BillingProbeWorkers, ProbeWorkerError
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches
 from .provider_observation_contracts import ObservationInput
+from .signature_job_intake import SignatureJobError
 
 
 @dataclass(frozen=True)
@@ -222,7 +223,15 @@ class AccountBillingJobs:
         if job.state == 'preparing':
             state = self._executions.snapshot(job.preparation)['worker_state']
             if state == 'prepared':
-                job.signature = self._owner.prepare(job.reservation)
+                try:
+                    job.signature = self._owner.prepare(job.reservation)
+                except SignatureJobError as error:
+                    if error.reason_code in {'signature_job_project_full', 'signature_job_project_limit'}:
+                        # Intake refused before returning any original handle.
+                        # Keep this unoffered preparation on the same deadline;
+                        # normal cancellation/expiry still retires it locally.
+                        return
+                    raise
                 self._signatures[job.signature], job.state = ticket, 'signature'
             elif state == 'failed':
                 self._discard(job)
