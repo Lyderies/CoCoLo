@@ -86,6 +86,18 @@ class AccountBillingExecutions:
         self._reservations[reservation] = handle
         return handle
 
+    def _prepared_identity(self, reservation):
+        """Read the associated owner's actual unoffered preparation, never a caller claim."""
+        self._guard()
+        job = self._job(self._reservations.get(reservation))
+        prepared = self._workers.prepared(job.worker)
+        if (job.reservation is not reservation or job.state != 'preparing' or job.ticket is not None
+                or prepared.inputs_digest != hashlib.sha256(job.payload).hexdigest()
+                or prepared.identity != job.identity
+                or prepared.deadline_ns != job.deadline_ns or job.deadline_ns != reservation.deadline_ns):
+            raise ProbeAdmissionError('probe_conflict')
+        return job.identity
+
     def snapshot(self, handle):
         job = self._job(handle)
         actual = self._workers.snapshot(job.worker)

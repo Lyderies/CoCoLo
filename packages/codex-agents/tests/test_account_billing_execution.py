@@ -69,7 +69,7 @@ class AccountBillingExecutionTests(unittest.TestCase):
         permit = self.owner.admit(reservation)
         return permit
 
-    def prepare(self, frames=None):
+    def prepare(self, frames=None, *, admit=True):
         self.fixture.frames('claude', frames if frames is not None else
             [bridge_fixtures.PROBE_INIT, bridge_fixtures.FAVOURABLE, bridge_fixtures.result_frame('OK')])
         reservation = self.reserve()
@@ -79,6 +79,8 @@ class AccountBillingExecutionTests(unittest.TestCase):
         self.until(lambda: self.executions.snapshot(handle)['worker_state'] != 'preparing')
         self.assertEqual('prepared', self.executions.snapshot(handle)['worker_state'])
         self.assertEqual('reserved', self.row()['state'])
+        if not admit:
+            return handle, reservation
         permit = self.admit(reservation)
         return handle, permit
 
@@ -95,6 +97,34 @@ class AccountBillingExecutionTests(unittest.TestCase):
 
     def model_invocations(self):
         return [i for i in self.fixture.invocations('claude') if i['argv'][0] == '-p']
+
+    def test_original_preparation_binding_refuses_copies_and_mutation_before_admission(self):
+        handle, reservation = self.prepare(admit=False)
+        job = self.executions._jobs[handle]
+        identity, deadline = job.identity, job.deadline_ns
+        with self.assertRaises(ProbeAdmissionError):
+            self.executions.snapshot(copy(handle))
+        with self.assertRaises(ProbeAdmissionError):
+            self.admit(copy(reservation))
+        for field, value in (('identity', b'{}'), ('deadline_ns', deadline+1),
+                             ('payload', b'{}')):
+            with self.subTest(field=field):
+                original = getattr(job, field)
+                setattr(job, field, value)
+                try:
+                    with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
+                        self.admit(reservation)
+                    self.assertEqual('reserved', self.row()['state'])
+                    self.assertEqual(0, self.ledger._connection.execute(
+                        "SELECT COUNT(*) FROM records WHERE record_type='probe_admission'").fetchone()[0])
+                    self.assertEqual([], self.model_invocations())
+                finally:
+                    setattr(job, field, original)
+        permit = self.admit(reservation)
+        inputs, _ = self.owner._execution(permit)
+        self.assertEqual(identity, inputs.identity)
+        self.assertEqual(deadline, inputs.deadline_ns)
+        self.assertEqual(reservation.deadline, self.row()['deadline_at_ms'])
 
     def test_actual_original_return_commits_records_and_settles_once_with_known_recovery(self):
         handle, permit, supervisor = self.launch()

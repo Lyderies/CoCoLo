@@ -301,6 +301,10 @@ class AccountBillingAdmission:
             identity = max((r for r, _ in identities), key=lambda r: r['observed_at_ms'], default=None)
             if identity is None or not reservation.created <= identity['observed_at_ms'] <= now:
                 raise ProbeAdmissionError()
+            execution_owner = getattr(self, '_execution_owner', None)
+            if (execution_owner is not None
+                    and execution_owner._prepared_identity(reservation) != canonical_json(identity)):
+                raise ProbeAdmissionError('probe_conflict')
             fingerprint = identity['account_fingerprint']
             latest = max((r for r, _ in prepared['billing'] if r['account_fingerprint'] == fingerprint),
                          key=lambda r: r['observed_at_ms'], default=None)
@@ -338,6 +342,9 @@ class AccountBillingAdmission:
                     final = self._commit_reply(row, 'denied', decision['reason_code'], [], result.prepared.rows)
             self._authorize(reservation.context, reservation.snapshot, reservation.authorize)
             self._fresh(reservation, snapshot, appended=appended)
+            if (execution_owner is not None
+                    and execution_owner._prepared_identity(reservation) != canonical_json(identity)):
+                raise ProbeAdmissionError('probe_conflict')
             if ({n: 'present' for n in API_KEY_VARIABLES if os.environ.get(n)} != guard
                     or self._row(reservation.project, reservation.key) != final):
                 raise ProbeAdmissionError('probe_conflict')

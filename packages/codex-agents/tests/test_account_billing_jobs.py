@@ -125,6 +125,56 @@ class AccountBillingJobTests(unittest.TestCase):
         self.assertEqual(result['records'], known['records'])
         self.assertEqual(1, len(self.launches()))
 
+    def test_newer_same_project_identity_before_signature_capture_retires_unoffered_work(self):
+        owner = self.billing._owner
+        capture = owner.prepare
+        originals, replacements = [], []
+
+        def capture_after_new_identity(reservation):
+            handle = self.billing._executions._reservations[reservation]
+            prepared = self.billing._executions._jobs[handle]
+            identity = json.loads(prepared.identity)
+            clock = max(time.time_ns()//1_000_000, identity['observed_at_ms']+1)
+            patch = mock.patch.object(self.ledger, '_clock_ms', return_value=clock)
+            patch.start()
+            self.addCleanup(patch.stop)
+            newer = self.ledger.observe_provider(self.fixture.project_id, 'claude',
+                project_root=self.fixture.project, environ=fixtures.CLEAN)[0]
+            self.assertGreater(newer['observed_at_ms'], identity['observed_at_ms'])
+            self.assertNotEqual(newer['record_id'], identity['record_id'])
+            for field in ('account_fingerprint', 'client_path', 'client_sha256'):
+                self.assertEqual(identity[field], newer[field])
+            originals.append((reservation, reservation.deadline, reservation.deadline_ns))
+            replacements.append(newer)
+            return capture(reservation)
+
+        with (mock.patch.object(owner, 'prepare', side_effect=capture_after_new_identity),
+                mock.patch.object(self.ledger, '_check_active_capacity_locked',
+                                  wraps=self.ledger._check_active_capacity_locked) as capacity,
+                mock.patch.object(self.workers._registry, 'issue',
+                                  wraps=self.workers._registry.issue) as issue):
+            ticket = self.begin()
+            with self.assertRaisesRegex(AccountError, 'probe_conflict'):
+                self.take(ticket)
+        self.assertEqual(1, len(replacements))
+        capacity.assert_not_called()
+        issue.assert_not_called()
+        reservation, deadline, deadline_ns = originals[0]
+        self.assertEqual(deadline, reservation.deadline)
+        self.assertEqual(deadline_ns, reservation.deadline_ns)
+        row = self.ledger._connection.execute(
+            'SELECT state,deadline_at_ms FROM account_billing_probe_requests').fetchone()
+        self.assertEqual(('reserved', deadline), tuple(row))
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM records WHERE record_type='probe_admission'").fetchone()[0])
+        self.assertEqual([], self.launches())
+        self.assertEqual(0, self.workers._charged)
+        self.assertEqual(0, self.claims._intake.snapshot().jobs)
+        self.assertEqual({}, self.billing._jobs)
+        self.assertEqual({}, self.billing._executions._jobs)
+        self.assertEqual({}, owner._pending)
+        self.assertEqual({}, owner._permits)
+
     def test_cancel_before_admission_reaps_preparation_without_spending_bootstrap(self):
         ticket = self.begin()
         self.billing.cancel(ticket)
