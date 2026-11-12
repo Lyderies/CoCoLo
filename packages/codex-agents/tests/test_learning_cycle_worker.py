@@ -374,6 +374,199 @@ class LearningWorkerTests(unittest.TestCase):
                     pool.take(handle)
             self.assertEqual((2, 2), (pool.snapshot()['jobs'], pool.snapshot()['unknown']))
 
+    def test_typed_capture_owner_traps_worker_wire_and_charge_until_take(self):
+        from contextlib import ExitStack
+        import builtins
+        import hashlib
+        import json
+        from codex_agents import learning_cycle_input as inputs
+        from tests.test_learning_cycle_input import typed, wire
+        value = typed([verification_outcome()])
+        expected = wire(value)
+        _, charge = inputs.capture_learning_input(value, operation='select_mining')
+        pool = self.make_pool(limits(input_bytes=2 * charge))
+        owner = threading.current_thread()
+        calls = []
+        def worker_only(original):
+            def guard(*args, **kwargs):
+                if threading.current_thread() is owner:
+                    raise AssertionError('owner codec/hash/IO/thread/process')
+                return original(*args, **kwargs)
+            return guard
+        def run(raw, **options):
+            self.assertIsNot(owner, threading.current_thread())
+            self.assertEqual(expected, raw)
+            self.assertEqual(job.deadline_ns, options['deadline_ns'])
+            self.assertIs(job.cancelled, options['cancelled'])
+            calls.append(raw)
+            return self.complete(raw, **options)
+        with mock.patch.object(execution, '_execute_learning_job', side_effect=run):
+            with ExitStack() as traps:
+                for module, name in ((inputs, 'canonical_json'), (inputs, 'parse_bounded_json'),
+                        (inputs, 'validate_outcome'), (inputs, 'validate_evaluation_case'),
+                        (hashlib, 'sha256'), (json, 'dumps'), (json, 'loads'),
+                        (builtins, 'open'), (execution.subprocess, 'Popen'),
+                        (threading.Thread, 'start'), (threading.Thread, 'join'),
+                        (threading, 'Thread')):
+                    traps.enter_context(mock.patch.object(module, name, worker_only(getattr(module, name))))
+                handle = self.submit(pool, value)
+                job = pool._jobs[handle]
+                self.assertIsNot(value, job.raw)
+                object.__setattr__(value, 'outcomes', ())
+                self.await_state(pool, handle, 'returned')
+                self.assertEqual(1, len(calls))
+                self.assertEqual(charge, pool.snapshot()['input_bytes'])
+                self.assertEqual(workers.WIRE_BYTES_PER_WORKER, pool.snapshot()['active_protocol_bytes'])
+                frame = __import__('sys')._current_frames()[pool._slots[0].thread.ident]
+                while frame.f_code.co_name != '_worker_loop':
+                    frame = frame.f_back
+                self.assertIsNone(frame.f_locals['envelope'])
+                self.assertIsNone(frame.f_locals['result'])
+                self.assertNotIn('raw', frame.f_locals)
+                self.assertEqual('learning_execution_completed', pool.take(handle).reason)
+                self.assertEqual(0, pool.snapshot()['input_bytes'])
+
+    def test_typed_intake_refusal_mutation_and_known_worker_failure_never_launch(self):
+        from codex_agents import learning_cycle_input as inputs
+        from tests.test_learning_cycle_input import entry, typed
+        pool = self.make_pool(limits(input_bytes=8 * 1_048_576))
+        class Subclass(inputs.LearningCycleInput):
+            def __getattribute__(self, name):
+                raise AssertionError('subclass callback')
+        with mock.patch.object(execution, '_execute_learning_job') as run:
+            for value in (Subclass((), ()), inputs.LearningCycleInput([], ()),
+                          typed(as_of_ms=0), inputs.LearningCycleInput((('a', 'd' * 64, b''),), ())):
+                with self.assertRaises(workers.LearningWorkerError):
+                    self.submit(pool, value)
+            self.assertEqual(0, pool.snapshot()['jobs'])
+            record = entry(verification_outcome())
+            for changed in (('different-id', record[1], record[2]),
+                            (record[0], '0' * 64, record[2]),
+                            (record[0], record[1], record[2] + b' ')):
+                handle = self.submit(pool, inputs.LearningCycleInput((changed,), ()))
+                charge = pool.snapshot()['input_bytes']
+                self.await_state(pool, handle, 'returned')
+                self.assertEqual(charge, pool.snapshot()['input_bytes'])
+                result = pool.take(handle)
+                self.assertEqual(('learning_execution_invalid_output', None, 0, True),
+                    (result.reason, result.result, result.roots_reaped, result.no_process_started))
+            handle = self.submit(pool, typed([verification_outcome()]))
+            object.__setattr__(pool._jobs[handle].raw, 'outcomes', [])
+            self.await_state(pool, handle, 'returned')
+            self.assertEqual('learning_execution_invalid_output', pool.take(handle).reason)
+            run.assert_not_called()
+
+    def test_invalid_unicode_invalidation_is_refused_before_helper_launch(self):
+        from codex_agents.learning_cycle_core import select_mining_outcomes
+        from tests.test_learning_cycle_input import typed
+        value = typed(invalidated=('\ud800',))
+        with self.assertRaises(UnicodeEncodeError):
+            select_mining_outcomes([], existing_cases=[], owner_invalidated_run_ids=value.owner_invalidated_run_ids)
+        pool = self.make_pool(limits(input_bytes=8 * 1_048_576))
+        with mock.patch.object(execution, '_execute_learning_job', side_effect=self.complete) as run:
+            handle = self.submit(pool, value)
+            self.await_state(pool, handle, 'returned')
+            result = pool.take(handle)
+            self.assertEqual(('learning_execution_invalid_output', None, 0, True),
+                             (result.reason, result.result, result.roots_reaped, result.no_process_started))
+            run.assert_not_called()
+
+    def test_typed_original_deadline_cancel_and_clock_during_encoding_never_launch(self):
+        from types import SimpleNamespace
+        from codex_agents import learning_cycle_input as inputs
+        from tests.test_learning_cycle_input import typed
+        for mode in ('cancelled', 'expired', 'clock_failure'):
+            pool = self.make_pool(limits(input_bytes=8 * 1_048_576))
+            handle = self.submit(pool, typed([verification_outcome()]), seconds=0.2 if mode == 'expired' else 10)
+            job = pool._jobs[handle]
+            validate = inputs.validate_outcome
+            def interrupt(record):
+                checked = validate(record)
+                if mode == 'cancelled':
+                    job.cancelled.set()
+                elif mode == 'expired':
+                    time.sleep(0.25)
+                return checked
+            original_encode = workers.encode_learning_input
+            def encode(value, **options):
+                self.assertEqual(job.deadline_ns, options['deadline_ns'])
+                self.assertIs(job.cancelled, options['cancelled'])
+                if mode == 'clock_failure':
+                    now = time.monotonic_ns()
+                    ticks = iter((now, now + 1, now))
+                    with mock.patch.object(inputs, 'time', SimpleNamespace(monotonic_ns=lambda: next(ticks))):
+                        return original_encode(value, **options)
+                return original_encode(value, **options)
+            with mock.patch.object(inputs, 'validate_outcome', side_effect=interrupt), \
+                    mock.patch.object(workers, 'encode_learning_input', side_effect=encode), \
+                    mock.patch.object(execution, '_execute_learning_job') as run:
+                self.await_state(pool, handle, 'returned')
+                result = pool.take(handle)
+                self.assertEqual(('learning_execution_' + mode, None, 0, True),
+                    (result.reason, result.result, result.roots_reaped, result.no_process_started))
+                if mode == 'clock_failure':
+                    self.assertIsNone(result.finished_ns)
+                run.assert_not_called()
+
+    def test_typed_overload_queued_stops_and_unknown_keep_exact_charge(self):
+        from codex_agents import learning_cycle_input as inputs
+        from tests.test_learning_cycle_input import typed
+        value = typed([verification_outcome()])
+        _, charge = inputs.capture_learning_input(value, operation='select_mining')
+        with mock.patch.object(execution, '_execute_learning_job') as run:
+            pool = self.make_pool(limits(input_bytes=charge))
+            handle = self.submit(pool, value)
+            with self.assertRaisesRegex(workers.LearningWorkerError, 'learning_pool_overloaded'):
+                self.submit(pool, value)
+            pool.cancel(handle)
+            pool.poll()
+            self.assertEqual(charge, pool.snapshot()['input_bytes'])
+            self.assertEqual('learning_execution_cancelled', pool.take(handle).reason)
+            run.assert_not_called()
+        for mode in ('encode', 'publication'):
+            pool = self.make_pool(limits(input_bytes=charge))
+            slot = pool._slots[0]
+            with mock.patch.object(execution, '_execute_learning_job', side_effect=self.complete) as run:
+                target, name = (workers, 'encode_learning_input') if mode == 'encode' else (slot.outgoing, 'put_nowait')
+                with mock.patch.object(target, name, side_effect=RuntimeError('SYNTHETIC-PRIVATE')):
+                    handle = self.submit(pool, value)
+                    self.await_state(pool, handle, 'unknown')
+                if mode == 'encode':
+                    run.assert_not_called()
+            self.assertIsNone(pool.take(handle))
+            self.assertEqual((1, charge, 1), (pool.snapshot()['jobs'],
+                pool.snapshot()['input_bytes'], pool.snapshot()['unknown']))
+            pool.request_close()
+            pool.poll()
+            self.assertFalse(pool.snapshot()['closed'])
+            self.assertNotIn('SYNTHETIC', repr(pool.snapshot()))
+
+    @unittest.skipUnless(MACOS, 'disposable Darwin typed helper; no native service acceptance')
+    def test_actual_typed_nonempty_selection_and_plan_through_fixed_pool(self):
+        from codex_agents import learning_cycle_input as inputs
+        from codex_agents.learning_contracts import content_digest
+        from codex_agents.learning_cycle_core import plan_learning_cycle
+        from tests.learning_support import heldout_cases
+        from tests.test_learning_cycle_input import typed
+        outcome = verification_outcome('outcome-00')
+        case = heldout_cases(1)[0]
+        pool = self.make_pool(limits(input_bytes=8 * 1_048_576))
+        for operation, clocks in (('select_mining', {}), ('plan', dict(as_of_ms=2, max_age_ms=10))):
+            cases = [] if operation == 'select_mining' else [case]
+            value = typed([outcome], cases, **clocks)
+            _, charge = inputs.capture_learning_input(value, operation=operation)
+            handle = pool.submit(value, operation=operation, binding_digest=BINDING,
+                deadline_ns=time.monotonic_ns() + 10**10)
+            self.await_state(pool, handle, 'returned')
+            self.assertEqual(charge, pool.snapshot()['input_bytes'])
+            result = pool.take(handle)
+            self.assertEqual(('learning_execution_completed', 1, False),
+                (result.reason, result.roots_reaped, result.no_process_started))
+            expected = ({'mining_references': [[outcome['record_id'], content_digest(outcome)]]}
+                if operation == 'select_mining' else plan_learning_cycle([outcome], all_cases=[case], **clocks))
+            self.assertEqual(expected, result.result)
+            self.assertEqual(0, pool.snapshot()['input_bytes'])
+
     @unittest.skipUnless(MACOS, 'disposable Darwin helper policy; no native service acceptance')
     def test_actual_nonempty_helper_result_and_nonblocking_close(self):
         pool = self.make_pool()

@@ -2,7 +2,7 @@
 
 Only trusted runtime startup may bootstrap this pool, before publishing a service.
 Normal methods neither start nor join threads/processes, encode/decode bulk data,
-call SQL, or wait for calculation/cleanup. Inputs are captured immutable bytes.
+call SQL, or wait for calculation/cleanup. Inputs are captured immutable bytes or closed record tuples.
 Queued/returned/unknown jobs retain their count and input charge until an explicit
 take of a confirmed result. Each active or returned slot keeps its static wire
 share. Unknown custody is never replaced or released by elapsed time or close.
@@ -24,6 +24,10 @@ import time
 
 from . import learning_cycle_execution as execution
 from .learning_cycle_process import MAX_INPUT_BYTES, MAX_OUTPUT_BYTES, MAX_STRUCTURE_WEIGHT
+from .learning_cycle_input import (
+    LearningCycleInput, LearningInputError, LearningInputStopped,
+    capture_learning_input, encode_learning_input,
+)
 
 # Charge input/output wire views plus both predecode syntax envelopes before a
 # slot can start. This deliberately over-reserves logical capacity; Python/native
@@ -67,7 +71,8 @@ class LearningWorkerLimits:
 
 @dataclass(repr=False)
 class _Job:
-    raw: bytes
+    raw: bytes | LearningCycleInput
+    charged_bytes: int
     operation: str
     binding_digest: str
     deadline_ns: int
@@ -81,11 +86,12 @@ class _Job:
 @dataclass(frozen=True, repr=False)
 class _Envelope:
     token: object
-    raw: bytes
+    raw: bytes | LearningCycleInput
     operation: str
     binding_digest: str
     deadline_ns: int
     cancelled: threading.Event
+    started_ns: int
 
 
 @dataclass(frozen=True, repr=False)
@@ -107,6 +113,29 @@ class _Slot:
         self.current = self.pending = self.retained = None
 
 
+def _execute_envelope(envelope, poll_ns, cleanup_ns):
+    # Function scope drops captured/encoded temporaries before publication/wait.
+    # Unexpected exceptions retain this frame through the existing UNKNOWN path.
+    raw = envelope.raw
+    if type(raw) is LearningCycleInput:
+        try:
+            raw = encode_learning_input(raw, operation=envelope.operation,
+                binding_digest=envelope.binding_digest, deadline_ns=envelope.deadline_ns,
+                cancelled=envelope.cancelled)
+        except (LearningInputError, LearningInputStopped) as error:
+            suffix = error.suffix if type(error) is LearningInputStopped else 'invalid_output'
+            finished = error.finished_ns
+            if (type(finished) is not int or not envelope.started_ns <= finished <= _MAX_NS):
+                suffix, finished = 'clock_failure', None
+            return execution.LearningExecutionResult('learning_execution_' + suffix,
+                None, finished, 0, True)
+    return execution._execute_learning_job(
+        raw, operation=envelope.operation, binding_digest=envelope.binding_digest,
+        deadline_ns=envelope.deadline_ns, cancelled=envelope.cancelled,
+        poll_ns=poll_ns, cleanup_ns=cleanup_ns,
+    )
+
+
 def _worker_loop(slot, poll_ns, cleanup_ns):
     slot.ready.set()
     while True:
@@ -117,11 +146,7 @@ def _worker_loop(slot, poll_ns, cleanup_ns):
                 return
             continue
         try:
-            result = execution._execute_learning_job(
-                envelope.raw, operation=envelope.operation, binding_digest=envelope.binding_digest,
-                deadline_ns=envelope.deadline_ns, cancelled=envelope.cancelled,
-                poll_ns=poll_ns, cleanup_ns=cleanup_ns,
-            )
+            result = _execute_envelope(envelope, poll_ns, cleanup_ns)
             message = _Complete(envelope.token, result)
             result = None
         except execution.LearningExecutionUnconfirmed as error:
@@ -231,22 +256,30 @@ class LearningWorkerPool:
         self._owner()
         if not self._bootstrapped or self._closing or self._faulted or self._clock_failed:
             raise LearningWorkerError()
-        if (type(raw) is not bytes or not 0 < len(raw) <= MAX_INPUT_BYTES
-                or type(operation) is not str or operation not in {'select_mining', 'plan'}
+        if (type(operation) is not str or operation not in {'select_mining', 'plan'}
                 or type(binding_digest) is not str or len(binding_digest) != 64
                 or any(char not in '0123456789abcdef' for char in binding_digest)
                 or type(deadline_ns) is not int or not 1 <= deadline_ns <= _MAX_NS):
             raise LearningWorkerError('learning_pool_invalid_input')
-        if len(self._jobs) >= self._limits.max_jobs or self._input_bytes + len(raw) > self._limits.input_bytes:
+        if type(raw) is LearningCycleInput:
+            try:
+                raw, charged_bytes = capture_learning_input(raw, operation=operation)
+            except LearningInputError:
+                raise LearningWorkerError('learning_pool_invalid_input') from None
+        elif type(raw) is bytes and 0 < len(raw) <= MAX_INPUT_BYTES:
+            charged_bytes = len(raw)
+        else:
+            raise LearningWorkerError('learning_pool_invalid_input')
+        if len(self._jobs) >= self._limits.max_jobs or self._input_bytes + charged_bytes > self._limits.input_bytes:
             raise LearningWorkerError('learning_pool_overloaded')
         if all(slot.fault.is_set() for slot in self._slots):
             raise LearningWorkerError()
         now = self._now()
         handle = object()
-        job = _Job(raw, operation, binding_digest, deadline_ns, now, threading.Event())
+        job = _Job(raw, charged_bytes, operation, binding_digest, deadline_ns, now, threading.Event())
         try:
             self._jobs[handle] = job
-            self._input_bytes += len(raw)
+            self._input_bytes += charged_bytes
             self._queued.append(handle)
         except BaseException as error:
             self._retain_mutation(handle, job, error)
@@ -357,7 +390,7 @@ class LearningWorkerPool:
                 slot.current, job.slot, job.state = handle, slot, 'running'
                 try:
                     slot.incoming.put_nowait(_Envelope(handle, job.raw, job.operation,
-                        job.binding_digest, job.deadline_ns, job.cancelled))
+                        job.binding_digest, job.deadline_ns, job.cancelled, job.started_ns))
                 except BaseException:
                     job.state = 'unknown'
                     slot.fault.set()
@@ -378,7 +411,7 @@ class LearningWorkerPool:
             if job.slot is not None:
                 job.slot.current = None
             if self._mutation_unknown is None:
-                self._input_bytes -= len(job.raw)
+                self._input_bytes -= job.charged_bytes
             del self._jobs[handle]
         except BaseException as error:
             self._retain_mutation(handle, job, error)
