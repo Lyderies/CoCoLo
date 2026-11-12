@@ -1311,12 +1311,15 @@ class WizardTerminalTests(unittest.TestCase):
             "".join(json.dumps(line) + "\n" for line in lines))
 
     def test_a_codex_session_able_to_write_this_clone_is_warned_about(self) -> None:
-        self.write_codex_session(ROOT.parent, "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b")
+        # A temporary checkout's parent may also hold this test's HOME, which
+        # correctly takes precedence as a different warning. Isolate clone risk.
+        self.assertFalse(self.home.is_relative_to(ROOT))
+        self.write_codex_session(ROOT, "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b")
         self.start(self.base)
         self.expect("Read the warning above")
         self.expect("Up/Down move")
         plain = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", self.screen))
-        self.assertIn(f"A Codex session on 2026-11-01 could write to {ROOT.parent}. Codex was opened on "
+        self.assertIn(f"A Codex session on 2026-11-01 could write to {ROOT}. Codex was opened on "
                       "a folder that holds this setup folder; open Codex on a project folder only.", plain)
         self.assertIn("Open Codex on the project itself: never on a folder that contains a set-up project, "
                       "this setup folder, your home folder, a folder above it or /.", plain)

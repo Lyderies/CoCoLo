@@ -1,4 +1,5 @@
 """Original pre-claim account rows and fake native enrollment, no model calls."""
+from contextlib import closing
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -201,7 +202,39 @@ class HostOpenProvenanceTests(unittest.TestCase):
 
 
 class OriginalVerifierOpenTests(unittest.TestCase):
-    """Real stored verifier-open binding from the existing fake-provider flow."""
+    """Original account-owner history; no native endpoint or CLI readiness proof."""
+
+    def open_fixture(self, ledger, task, route, assigned, orchestration):
+        import cli
+        profile, _ = cli._claude_host_open_checks(
+            ledger, self.native.project_id, 'claude-host-v1', route, self.native.project)
+        return ledger.open_host_run(
+            self.native.project_id, assignment=assigned, task=task, route=route,
+            execution_configuration=route['execution_configuration'],
+            client_version='bridge-v1' if route['dispatch'] == 'bridge' else 'claude-host-v1',
+            orchestration_handle=orchestration['orchestration_handle'], host_profile=profile)
+
+    def original_worker(self):
+        from tests.test_bridge import ACCEPTED, WORKER_AGENT_ID
+        from tests.learning_support import result
+        from codex_agents.learning_store import LearningLedger
+
+        self.native.admit('claude')
+        task = self.native.task()
+        route, assigned, arguments, _ = self.native.lifecycle_inputs(task)
+        self.assertEqual(('claude', 'native'), (route['provider'], route['dispatch']))
+        self.assertTrue(assigned['verification_required'])
+        self.native.cli('validate-assignment', *arguments)
+        with closing(LearningLedger(self.native.state, client_capabilities=self.native.clients)) as ledger:
+            orchestration = ledger.open_orchestration(self.native.project_id, client_version='claude-host-v1')
+            opened = self.open_fixture(ledger, task, route, assigned, orchestration)
+            ledger.bind_host_agent(self.native.project_id, run_handle=opened['run_handle'], agent_id=WORKER_AGENT_ID)
+            recorded = ledger.commit_host_result(
+                self.native.project_id, assignment=assigned, task=task, route=route, result=result(),
+                observation={'run_handle': opened['run_handle'], 'result_attempts': ACCEPTED},
+                execution_configuration=route['execution_configuration'])
+        return {'recorded': recorded, 'orchestration': orchestration}
+
     def setUp(self):
         from tests.test_bridge import VerifierHandoffTests
         from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST, LearningLedger
@@ -211,15 +244,18 @@ class OriginalVerifierOpenTests(unittest.TestCase):
         self.native.setUp()
         self.addCleanup(self.native.doCleanups)
         self.addCleanup(self.native.tearDown)
-        worker = self.native.run_native_worker()
+        # Seed original history through its actual persistence owner. The old
+        # helper uses normal CLI orchestration, which now requires independently
+        # enrolled services. Do not fake those services or bypass admission.
+        worker = self.original_worker()
         self.digest = worker['recorded']['host_outcome_digest']
         self.native.admit('codex')
         self.task = self.native.verifier_task(self.digest)
-        self.route, self.assignment, arguments, route_path = self.native.verifier_inputs(self.task, self.digest)
-        opened = self.native.cli('learning-open-host-run', *arguments, '--route', route_path,
-                                 '--orchestration-handle', worker['orchestration']['orchestration_handle'])
+        self.route, self.assignment, arguments, _ = self.native.verifier_inputs(self.task, self.digest)
+        self.native.cli('validate-assignment', *arguments)
         self.ledger = LearningLedger(self.native.state, client_capabilities=self.native.clients)
         self.addCleanup(self.ledger.close)
+        opened = self.open_fixture(self.ledger, self.task, self.route, self.assignment, worker['orchestration'])
         self.key = self.native.state.digest_key()
         run_id = external_id(self.key, 'run', opened['run_handle'])
         scope = ResultLeaseBinding(self.native.project_id, 'fixture-primary', COLLECTOR_RUNTIME_DIGEST,
