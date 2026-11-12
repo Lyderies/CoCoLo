@@ -400,6 +400,8 @@ class ProjectDriverTests(DriverHarness):
         git(newcomer, 'init', '-q')
         registered = self.cli_for(newcomer, 'learning-register')
         self.assertRegex(registered['project_id'], '^prj_[0-9a-f]{32}$')
+        observed = self.cli_for(newcomer, 'provider-observe', '--provider', 'codex')
+        self.assertEqual('provider_identity', observed['records'][0]['record_type'])
         status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
         self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
         output, errors = process.communicate(timeout=60)

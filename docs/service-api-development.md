@@ -246,7 +246,8 @@ yet. No abandonment outcome record is written to project history.
 Account calls from the driver are retried, for up to ten minutes per call, only
 when the account services are unreachable, with the same request ID; the owner
 then answers it for the first time or returns the reply it already committed. A
-driver test registers a new project while a child runs in another (registration
+driver test registers a new project and observes its provider while a child runs in
+another (registration
 still stops and restarts the collector for maintenance); the run completes, is
 recorded and releases its capacity.
 
