@@ -123,6 +123,7 @@ from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
+    run_control_client,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.project_host_client import ensure_project_host  # noqa: E402
@@ -1040,6 +1041,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_learning_project(learning_orchestration_status)
     learning_orchestration_status.add_argument('--orchestration-handle', required=True)
     learning_orchestration_status.add_argument('--request-id')
+
+    run_status = subparsers.add_parser('learning-run-status',
+        help="read a running child's live status through its project host")
+    run_cancel = subparsers.add_parser('learning-cancel-run',
+        help='request cancellation of a running child; acceptance is not cleanup')
+    for run_control in (run_status, run_cancel):
+        _add_learning_project(run_control)
+        run_control.add_argument('--orchestration-handle', required=True)
+        run_control.add_argument('--run-handle', required=True)
+        run_control.add_argument('--attempt', type=int, default=1)
 
     learning_orchestration_report = subparsers.add_parser(
         "learning-orchestration-report",
@@ -2022,6 +2033,12 @@ def main() -> int:
                 goal_time_used_seconds=getattr(args, 'goal_time_used_seconds', None), status=getattr(args, 'status', None))
             _print_command_report(args, report)
             return 0
+        elif args.command in {'learning-run-status', 'learning-cancel-run'}:
+            report = run_control_client(args.state_root, args.project_root,
+                'project.status' if args.command == 'learning-run-status' else 'project.cancel',
+                args.orchestration_handle, args.run_handle, args.attempt, host_client=_host_client())
+            _print_command_report(args, report)
+            return 0 if report['ready'] else 2
         elif args.command == "learning-orchestration-report":
             ledger, project_id = _learning_ledger(args)
             try:

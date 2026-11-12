@@ -6,11 +6,15 @@ they resolve. Everything else is the product path: the in-process CLI, the
 hosts' enrollment, the run driver and the original owners.
 """
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
 import unittest
 from unittest import mock
 
+from tests.support import ORCHESTRATION_ROOT
 from tests.test_bridge import PARENT_GRANT, CliTestCase, null_filled, result
 
 from codex_agents import client_runtime, collector_runtime, learning_store, project_driver
@@ -222,6 +226,68 @@ class ProjectDriverTests(CliTestCase):
         self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
         self.assertEqual([], [entry for entry in self.stopped_runs if len(entry) == 2 and entry[0] in
                               {'recording_open', 'claiming', 'registering', 'terminal', 'releasing'}])
+
+    def open_run(self):
+        task = self.write('task.json', self.task())
+        route = self.cli('learning-route', '--task', task)
+        assigned = self.assignment_for(route)
+        context = ('--task', task, '--assignment', self.write('assignment.json', assigned),
+                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        route_path = self.write('route.json', route)
+        orchestration = self.cli('learning-open-orchestration')
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration['orchestration_handle'])
+        return context, route_path, orchestration['orchestration_handle'], opened['run_handle']
+
+    def separate_dispatch(self, context, route_path, run_handle):
+        """A second primary process waits on dispatch while this one inspects the run."""
+        env = {k: v for k, v in os.environ.items() if not any(m in k.upper() for m in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
+        for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
+            env.pop(name, None)
+        env['CODEX_THREAD_ID'] = 'driver-primary'
+        process = subprocess.Popen([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'), 'dispatch',
+            '--state-root', str(self.state.root), '--project-root', str(self.project), *context,
+            '--route', route_path, '--run-handle', run_handle], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        return process
+
+    def test_a_running_child_reports_live_status_and_stops_on_cancellation(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        # The child starts, then goes quiet well inside every bound.
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'quiet-child'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+
+        status = self.cli('learning-run-status', *target)
+        self.assertEqual(('attempt', 'running', False), (status['kind'], status['cancellation_state'], status['durable']))
+        self.assertIn(status['health'], {'starting', 'active'})
+        self.assertIsNone(status['stop_reason'])
+        # Another host class cannot inspect or stop this run.
+        os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
+        os.environ.pop('CODEX_THREAD_ID'), os.environ.pop('CODEX_SESSION_ID', None)
+        try:
+            foreign = self.cli('learning-cancel-run', *target, expected=2)
+        finally:
+            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
+                os.environ.pop(name, None)
+            os.environ.update(CODEX_THREAD_ID='tests-thread', CODEX_SESSION_ID='tests-session')
+        self.assertEqual('control_not_authorized', foreign['reason_code'])
+
+        started = time.monotonic()
+        cancelled = self.cli('learning-cancel-run', *target)
+        self.assertEqual(('cancel_requested', True), (cancelled['stop_reason'], cancelled['stop_requested']))
+        self.assertIn(cancelled['cancellation_state'], {'stop_requested', 'cleanup_confirmed'})
+        output, errors = process.communicate(timeout=30)
+        self.assertLess(time.monotonic() - started, 20)  # Long before the child's own 30-second sleep ends.
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        dispatched = json.loads(output)
+        self.assertEqual('cancelled', dispatched['bridge_report']['terminal_state'])
+        settled = self.cli('learning-run-status', *target)
+        self.assertTrue(settled['stop_requested'])
+        self.assertEqual('cancel_requested', settled['stop_reason'])
 
 
 if __name__ == '__main__':

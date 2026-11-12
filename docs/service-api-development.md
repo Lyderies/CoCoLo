@@ -178,6 +178,16 @@ the test process, so the bridge tests' trusted fake clients apply. The legacy
 bridge lifecycle tests still start their hosts as subprocesses, where those fakes
 are not trusted, so they now stop at `dispatch` and need porting to that harness.
 
+`learning-run-status` and `learning-cancel-run` (new primary-host commands, also
+allowed to a Claude primary) read a run's live health, ages and remaining bounds, or
+request its cancellation, through the project host's control endpoint, while
+another primary process is still waiting on `dispatch`. The second driver test runs
+a child that goes quiet, reads `starting`/`active` status during the dispatch, is
+refused cancellation from the other host class, cancels, and sees the separate
+dispatch return `cancelled` within seconds, long before the child's own sleep ends.
+`learning-orchestration-status` is now a primary-host command too; it was
+previously owner-only by omission.
+
 Not done: no retry, cancellation-before-dispatch or abandonment path through the
 driver, no driver state across a host restart (a run opened before a restart is
 refused at dispatch and keeps its account capacity until reconciled), the

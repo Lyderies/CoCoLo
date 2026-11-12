@@ -505,6 +505,29 @@ def _run_driver(contexts, control, operation, run_handle, attempt, inputs_digest
     return value
 
 
+def run_control_client(state_root, project_root, operation, orchestration_handle, run_handle, attempt, *, host_client):
+    """One live status read or cancellation request for a run this host class holds.
+
+    The reply is the project host's own observation: health, ages and remaining
+    bounds, never content. An accepted cancellation is a request, not confirmed
+    cleanup; a lost reply never proves that no stop was requested.
+    """
+    try:
+        state = CollectorPaths(state_root)
+        scope, endpoint, result_endpoint = read_runtime_hint(state, project_root)
+        enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+        client = ControlClient(endpoint, scope, timeout=5)
+        target = ServiceTarget(orchestration_handle, run_handle, attempt)
+        view = client.status(target) if operation == 'project.status' else client.cancel(target)
+    except DispatchError:
+        return {'ready': False, 'reason_code': 'control_unavailable', 'error': 'run control is unavailable'}
+    except Exception as error:
+        reason = getattr(error, 'reason_code', 'control_unavailable')
+        return {'ready': False, 'reason_code': reason if type(reason) is str else 'control_unavailable',
+                'error': 'run control refused'}
+    return {'ready': True, 'observed_at_ns': view.observed_at_ns, **view.result}
+
+
 def open_codex_client(state_root, project_root, orchestration_handle, task, route, assignment, parent_grant, *, host_client):
     """Read original project scope, then open once through the account API.
 
