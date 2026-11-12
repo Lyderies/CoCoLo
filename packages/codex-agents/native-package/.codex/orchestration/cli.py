@@ -121,8 +121,8 @@ from codex_agents.learning_engine import (  # noqa: E402
 from codex_agents.collector_client import CollectorClient  # noqa: E402
 from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
-    RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
-    observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client,
+    RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
+    billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.cli_reports import command_report  # noqa: E402
@@ -949,7 +949,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="for Claude, also run one minimal locked turn to record billing evidence",
     )
-    provider_observe.add_argument('--request-id', help='reuse the exact identity to reconcile an observation reply')
+    provider_observe.add_argument('--request-id', help='reuse the exact identity to recover an observation or billing-probe reply')
     provider_observe.add_argument('--run-handle', help='original opened run for a before/after observation')
     provider_observe.add_argument('--phase', choices=('before', 'after'))
 
@@ -2002,45 +2002,14 @@ def main() -> int:
             if not args.billing_probe:
                 report = observe_provider_client(args.state_root, args.project_root, args.provider,
                     request_id=args.request_id, run_handle=args.run_handle, phase=args.phase)
-                _print_command_report(args, report)
-                return 0
-            if args.request_id is not None or args.run_handle is not None or args.phase is not None:
-                raise RuntimeObservationError('observation_invalid_request')
-            if args.provider != 'claude':
-                raise ContractError("the billing probe is for Claude only")
-            ledger, project_id = _learning_ledger(args)
-            try:
-                observed = ledger.observe_claude_billing(
-                    project_id, project_root=args.project_root.resolve()
-                )
-                probe, records = observed["probe"], observed["records"]
-                # The local client path stays in the ledger and is never printed.
-                report = {
-                    "ready": True,
-                    "records": [
-                        {
-                            **{
-                                key: value for key, value in record.items()
-                                if key != "client_path"
-                            },
-                            # Display only: admission makes its own decision,
-                            # by the same rule, from the ledger.
-                            **(
-                                {"paid_usage_waived_by_attestation": (
-                                    ledger.billing_waived_by_attestation(
-                                        project_id, record
-                                    )
-                                )}
-                                if record.get("record_type") == "provider_billing"
-                                else {}
-                            ),
-                        }
-                        for record in records
-                    ],
-                    **({"probe": probe} if probe is not None else {}),
-                }
-            finally:
-                _close_ledger(ledger)
+            else:
+                if args.run_handle is not None or args.phase is not None:
+                    raise RuntimeBillingProbeError('probe_invalid_request')
+                if args.provider != 'claude':
+                    raise ContractError("the billing probe is for Claude only")
+                report = billing_probe_client(args.state_root, args.project_root, request_id=args.request_id)
+            _print_command_report(args, report)
+            return 0
         elif args.command == "learning-record-billing-attestation":
             ledger, project_id = _learning_ledger(args)
             try:
@@ -3230,6 +3199,11 @@ def main() -> int:
         return 2
     except RuntimeResultError as exc:
         _print({'ready': False, 'error': 'result recording unavailable', 'reason_code': exc.reason_code})
+        return 2
+    except RuntimeBillingProbeError as exc:
+        _print({'ready': False, 'error': 'billing probe unavailable', 'reason_code': exc.reason_code,
+                **({'request_id': exc.request_id} if exc.request_id is not None else {}),
+                **({'hint': BILLING_ATTESTATION_HINT} if exc.reason_code == 'billing_attestation_missing' else {})})
         return 2
     except RuntimeObservationError as exc:
         _print({'ready': False, 'error': 'provider observation unavailable', 'reason_code': exc.reason_code,

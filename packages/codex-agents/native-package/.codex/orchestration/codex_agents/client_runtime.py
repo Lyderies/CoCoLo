@@ -23,7 +23,8 @@ from .history_api import HistoryClient
 from .history_contracts import HISTORY_REASON_CODES, AttemptBinding, HistoryError, _ID, matches
 from .host_result_contracts import HostResultReference
 from .hosts import HOST_CLIENTS, HostClientMismatch
-from .learning_contracts import canonical_json, content_digest, keyed_digest, parse_bounded_json
+from .learning_contracts import ADMISSION_REASON_CODES, canonical_json, content_digest, keyed_digest, parse_bounded_json
+from .billing_probe_contracts import BILLING_PROBE_REASONS, PROBE_COMPLETION_REASONS
 from .open_scope_contracts import open_inputs_digest
 from .orchestration_api import OrchestrationClient, OrchestrationRequest, OrchestrationScope
 from .provider_observation_contracts import ObservationError, ObservationInput
@@ -124,6 +125,42 @@ class RuntimeObservationError(RuntimeError):
         self.reason_code = reason if type(reason) is str and reason in ACCOUNT_REASON_CODES else 'observation_unavailable'
         self.request_id = request_id if matches(request_id, _ACCOUNT_ID) else None
         super().__init__(self.reason_code)
+
+
+class RuntimeBillingProbeError(RuntimeError):
+    def __init__(self, reason, *, request_id=None):
+        allowed = ACCOUNT_REASON_CODES | BILLING_PROBE_REASONS | PROBE_COMPLETION_REASONS | ADMISSION_REASON_CODES
+        self.reason_code = reason if type(reason) is str and reason in allowed else 'probe_unavailable'
+        self.request_id = request_id if matches(request_id, _ACCOUNT_ID) else None
+        super().__init__(self.reason_code)
+
+
+def billing_probe_client(state_root, project_root, *, request_id=None):
+    """One fixed account probe; retain the ID for explicit lost-reply recovery."""
+    identity = 'cli-billing-'+secrets.token_hex(16) if request_id is None else request_id
+    if not matches(identity, _ACCOUNT_ID):
+        raise RuntimeBillingProbeError('probe_invalid_request')
+    if api_keys_present(os.environ):
+        raise RuntimeBillingProbeError('provider_api_key_present', request_id=identity)
+    try:
+        scope, endpoints = _read_runtime_endpoints(CollectorPaths(state_root), project_root,
+                                                   account=True, account_only=True)
+        if len(endpoints) != 3:
+            raise RuntimeBillingProbeError('probe_unavailable', request_id=identity)
+        result = AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=60).billing_probe(
+            request_id=identity)
+    except DispatchError:
+        raise RuntimeBillingProbeError('probe_unavailable', request_id=identity) from None
+    except AccountError as error:
+        raise RuntimeBillingProbeError(error.reason_code, request_id=identity) from None
+    if result['probe'] == 'denied' or result['reason_code'] is not None:
+        raise RuntimeBillingProbeError(result['reason_code'], request_id=identity)
+    return {'ready': True, **result, 'request_id': identity,
+        'probe': 'launched' if result['probe'] == 'completed' else result['probe'],
+        'records': [{**{k: v for k, v in record.items() if k != 'client_path'},
+            **({'paid_usage_waived_by_attestation': result['billing_waivers'][record['record_id']]}
+                if record['record_type'] == 'provider_billing' and 'billing_waivers' in result else {})}
+            for record in result['records']]}
 
 
 def observe_provider_client(state_root, project_root, provider, *, request_id=None, run_handle=None, phase=None):

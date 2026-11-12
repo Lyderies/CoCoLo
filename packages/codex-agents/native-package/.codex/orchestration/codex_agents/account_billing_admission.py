@@ -14,6 +14,7 @@ from .admission_metadata import API_KEY_VARIABLES, evaluate_admission
 from .account_observation import ObservationContext
 from .account_open_admission import open_admission_inputs
 from .billing_probe_schema import assert_billing_probe_schema
+from .billing_probe_contracts import ProbeAdmissionError
 from .claim_admission import PreparedClaimAdmission, admission_signature_rows, same_admission_inputs
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches, valid_integer
 from .learning_contracts import canonical_json, content_digest, parse_bounded_json_value, validate_learning_record
@@ -29,14 +30,6 @@ _FIELDS = ('project_id', 'request_key', 'parameters_digest', 'runtime_digest', '
     'admission_digest', 'references_json')
 
 
-class ProbeAdmissionError(RuntimeError):
-    def __init__(self, reason='probe_unavailable'):
-        self.reason_code = reason if type(reason) is str and reason in {
-            'probe_invalid_request', 'probe_not_authorized', 'probe_unavailable', 'probe_conflict',
-            'probe_full', 'probe_busy', 'probe_not_ready'} else 'probe_unavailable'
-        super().__init__(self.reason_code)
-
-
 @dataclass(frozen=True, repr=False, eq=False)
 class _Reservation:
     project: str
@@ -47,6 +40,7 @@ class _Reservation:
     authorize: object
     created: int
     deadline: int
+    deadline_ns: int
 
 
 @dataclass(frozen=True, repr=False, eq=False)
@@ -87,7 +81,7 @@ class AccountBillingAdmission:
         self._views, self._ledger, self._pool, self._intake = views, ledger, pool, pool._intake
         self._pid, self._key, self._timeout = os.getpid(), ledger.state.digest_key(), timeout_ms
         self._limits = SQLReadLimits(work_limits.max_callbacks, work_limits.max_duration_ms, work_limits.max_value_bytes)
-        self._pending, self._signatures, self._permits, self._execution_inputs = {}, {}, {}, {}
+        self._pending, self._signatures, self._permits, self._execution_inputs, self._reserved_inputs = {}, {}, {}, {}, {}
         ledger._billing_admission_owner = self
 
     def _guard(self):
@@ -185,10 +179,12 @@ class AccountBillingAdmission:
             if (len(self._pending) >= MAX_PENDING_PROBES
                     or sum(p == project for p, _ in self._pending) >= MAX_PENDING_PROJECT_PROBES):
                 raise ProbeAdmissionError('probe_full')
+            created_ns = time.monotonic_ns()
             now = self._now()
             row = dict(zip(_FIELDS, (project, key, parameters, runtime, caller, now, now+self._timeout,
                 'reserved', None, None, None, None)))
-            original = _Reservation(project, key, parameters, context, snapshot, before_commit, now, now+self._timeout)
+            original = _Reservation(project, key, parameters, context, snapshot, before_commit,
+                                    now, now+self._timeout, created_ns+self._timeout*1_000_000)
             self._authorize(context, snapshot, before_commit)
             self._ledger._connection.execute('INSERT INTO account_billing_probe_origins VALUES(?,?,?,?,?)',
                 (project, key, parameters, now, self._origin_seal(row)))
@@ -198,12 +194,23 @@ class AccountBillingAdmission:
             if self._project(project, context) != root or self._row(project, key) != {**row, 'state_seal': self._seal(row)}:
                 raise ProbeAdmissionError('probe_conflict')
         self._pending[(project, key)] = original
+        self._reserved_inputs[original] = (self._reservation_fields(original), context, snapshot, before_commit)
         return original
+
+    @staticmethod
+    def _reservation_fields(reservation):
+        return (reservation.project, reservation.key, reservation.parameters, reservation.created,
+                reservation.deadline, reservation.deadline_ns)
 
     def _original(self, reservation):
         self._guard()
         if (type(reservation) is not _Reservation
                 or self._pending.get((reservation.project, reservation.key)) is not reservation):
+            raise ProbeAdmissionError('probe_not_authorized')
+        captured = self._reserved_inputs.get(reservation)
+        if (captured is None or self._reservation_fields(reservation) != captured[0]
+                or reservation.context is not captured[1] or reservation.snapshot != captured[2]
+                or reservation.authorize is not captured[3]):
             raise ProbeAdmissionError('probe_not_authorized')
         self._authorize(reservation.context, reservation.snapshot, reservation.authorize)
         self._project(reservation.project, reservation.context)
@@ -222,6 +229,23 @@ class AccountBillingAdmission:
         if reservation not in self._signatures:
             self._signatures[reservation] = self._intake.capture_admission(reservation.project, 'claude', self._limits)
         return self._signatures[reservation]
+
+    def abort_reserved(self, reservation):
+        """Drop only original unadmitted memory after its fixed jobs are stopped.
+
+        Durable intent remains reserved and cannot be recreated after this drop.
+        This operation never changes or releases an admitted database row.
+        """
+        self._guard()
+        if (type(reservation) is not _Reservation
+                or self._pending.get((reservation.project, reservation.key)) is not reservation
+                or reservation in self._signatures or reservation in self._permits):
+            raise ProbeAdmissionError('probe_conflict')
+        row = self._row(reservation.project, reservation.key)
+        if row is None or row['state'] != 'reserved':
+            raise ProbeAdmissionError('probe_conflict')
+        self._pending.pop((reservation.project, reservation.key))
+        self._reserved_inputs.pop(reservation)
 
     def _fresh(self, reservation, snapshot, *, appended=None):
         limits = self._intake._limits
@@ -245,7 +269,6 @@ class AccountBillingAdmission:
         return current.captured_at_ms
 
     def admit(self, reservation):
-        started_ns = time.monotonic_ns()
         row = self._original(reservation)
         if row['state'] == 'admitted':
             original = self._permits.get(reservation)
@@ -328,15 +351,43 @@ class AccountBillingAdmission:
                 (original.account_fingerprint, original.admission_record_id, original.admission_digest,
                  original.admitted_at_ms), reservation,
                 replace(snapshot, policy=replace(snapshot.policy)), canonical_json(identity),
-                canonical_json(appended), started_ns+(reservation.deadline-now)*1_000_000)
+                canonical_json(appended), reservation.deadline_ns)
             self._original(reservation)
             return original
         self._pending.pop((reservation.project, reservation.key))
+        self._reserved_inputs.pop(reservation)
         reply = self._reply(final, known=False)
         self._authorize(reservation.context, reservation.snapshot, reservation.authorize)
         if self._row(reservation.project, reservation.key) != final:
             raise ProbeAdmissionError('probe_conflict')
         return reply
+
+    def known_reply(self, project, runtime, caller, identity, context, *, before_commit):
+        """Read a committed original even after a local post-commit fault.
+
+        No pending original is recreated/adopted and no execution is offered.
+        Local unknown custody remains charged independently of this read.
+        """
+        self._guard()
+        if (not matches(project, _PROJECT) or not matches(runtime, _DIGEST) or not matches(caller, _DIGEST)
+                or not matches(identity, _ID) or type(context) is not ObservationContext):
+            raise ProbeAdmissionError('probe_invalid_request')
+        snapshot = context.snapshot()
+        self._authorize(context, snapshot, before_commit)
+        key = keyed(self._key, b'billing-probe-request-v1\0', [project, runtime, caller, identity])
+        with self._ledger._account_transaction():
+            root = self._project(project, context)
+            row = self._row(project, key)
+            if row is None or row['state'] != 'committed':
+                return None
+            parameters = keyed(self._key, b'billing-probe-parameters-v1\0', [runtime, caller, root])
+            if row['parameters_digest'] != parameters:
+                raise ProbeAdmissionError('probe_conflict')
+            reply = self._reply(row, known=True)
+            self._authorize(context, snapshot, before_commit)
+            if self._project(project, context) != root or self._row(project, key) != row:
+                raise ProbeAdmissionError('probe_conflict')
+            return reply
 
     def _execution(self, permit, *, launching=False):
         """Original owner data only. Native launch authority is checked by its adapter."""

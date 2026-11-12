@@ -2,8 +2,8 @@
 
 This module is a persistence-owner component, never a client dependency. Native
 caller enrollment and endpoint identity are unimplemented gates, not a socket,
-UID, role string or the authorization dataclass below. No production listener or
-normal-client migration is enabled here.
+UID, role string or the authorization dataclass below. This component starts no
+production listener; normal API clients remain denied without native enrollment.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ from .account_observation import ObservationContext
 from .provider_observation_contracts import ObservationError, decode_observation_input
 from .observation_failure_contracts import decode_observation_failure
 from .account_observation_failure import record_observation_failure, recheck_observation_failure
+from .billing_probe_contracts import ProbeAdmissionError
 
 # Fixed owner query: do not parse JSON or select variable record values during
 # preliminary quota checks. Foreign-account/provider candidates are charged too.
@@ -682,6 +683,9 @@ class AccountService:
                 raise AccountError('account_invalid_request')
             observation_jobs._owner._guard()
         self._observation_jobs = observation_jobs
+        self._billing_jobs = None if claim_jobs is None else claim_jobs._billing
+        if self._billing_jobs is not None and self._billing_jobs._observations is not observation_jobs:
+            raise AccountError('account_invalid_request')
         self._allow_unleased_reference = allow_unleased_claim_reference
         self._pid = os.getpid()
         self._closed = False
@@ -715,7 +719,46 @@ class AccountService:
         if self._observation_jobs is not None:
             self._observation_jobs.drive()
 
+    def _billing_reply(self, key, result, context, before_publish):
+        project, runtime, caller, identity = key
+        request = AccountRequest(1, 'account.billing_probe', identity, project, runtime, {})
+        labels = {'request_id': identity, 'project_id': project, 'runtime_digest': runtime,
+                  'request_digest': account_request_digest(request)}
+        try:
+            records = result['records']
+            waivers = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
+            raw = self._reply(labels, result={**result, 'billing_waivers': waivers})
+            decode_account_response(raw, request)
+            if before_publish() is not True:
+                raise ProbeAdmissionError('probe_not_authorized')
+            current = self._observation_jobs._owner.billing_waivers(project, records) if records else {}
+            retained = self._billing_jobs._owner.known_reply(*key, context, before_commit=before_publish)
+            if waivers != current or retained != {**result, 'known': True}:
+                raise ProbeAdmissionError('probe_not_authorized')
+            self._provenance_live()
+            with self._front_lock:
+                if self._closed:
+                    raise ProbeAdmissionError('probe_not_authorized')
+                return raw
+        except ProbeAdmissionError as error:
+            return self._reply(labels, reason=error.reason_code)
+        except Exception:
+            return self._reply(labels, reason='probe_unavailable')
+
     def take_claim_reply(self, ticket, *, _ingress=None):
+        if self._billing_jobs is not None and type(ticket) is object and ticket in self._billing_jobs._jobs:
+            reply = self._billing_jobs.take(ticket, _ingress=_ingress)
+            if reply is None:
+                return None
+            project, runtime, caller, identity = reply.key
+            request = AccountRequest(1, 'account.billing_probe', identity, project, runtime, {})
+            labels = {'request_id': identity, 'project_id': project, 'runtime_digest': runtime,
+                      'request_digest': account_request_digest(request)}
+            if reply.reason is not None:
+                return self._reply(labels, reason=reply.reason if reply.reason in {
+                    'probe_invalid_request', 'probe_not_authorized', 'probe_unavailable', 'probe_conflict',
+                    'probe_full', 'probe_busy', 'probe_not_ready'} else 'probe_unavailable')
+            return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish)
         if (self._observation_jobs is not None and type(ticket) is object
                 and ticket in self._observation_jobs._jobs):
             reply = self._observation_jobs.take(ticket, _ingress=_ingress)
@@ -845,8 +888,37 @@ class AccountService:
                     (authorization.source not in {'host', 'project'} or authorization.caller_scope is None
                      or authorization.observation_context is None
                      or (authorization.source == 'project' and observation.run_handle is None)))
+                or (operation == 'account.billing_probe' and (authorization.source != 'host'
+                    or authorization.caller_scope is None or authorization.observation_context is None))
             ):
                 raise AccountError("account_not_authorized")
+            if operation == 'account.billing_probe':
+                if self._billing_jobs is None or not deferred:
+                    raise ProbeAdmissionError()
+                context, caller = authorization.observation_context, authorization.caller_scope
+                expected = context.snapshot()
+
+                def authorize_billing():
+                    self._provenance_live()
+                    fresh = decode_account_request(raw)
+                    current = self._authorizer(fresh, transport_context)
+                    if type(current) is not AccountAuthorization:
+                        raise ProbeAdmissionError('probe_not_authorized')
+                    current.__post_init__()
+                    if (current.source != 'host' or current.project_id != project or current.runtime_digest != runtime
+                            or current.caller_scope != caller or current.request_digest != digest
+                            or account_request_digest(fresh) != digest or operation not in current.allowed_operations
+                            or current.observation_context is not context or context.snapshot() != expected):
+                        raise ProbeAdmissionError('probe_not_authorized')
+                    self._provenance_live()
+                    return True
+
+                key = (project, runtime, caller, identity)
+                known = self._billing_jobs._owner.known_reply(*key, context, before_commit=authorize_billing)
+                if known is not None:
+                    return self._billing_reply(key, known, context, authorize_billing)
+                return self._billing_jobs.submit(project, runtime, caller, identity, context, authorize_billing,
+                                                  _ingress=ingress)
             if operation in {'account.observe_provider', 'account.record_observation_unavailable'}:
                 if self._observation_jobs is None or (operation == 'account.observe_provider' and not deferred):
                     raise ObservationError('observation_unavailable')
@@ -1059,6 +1131,8 @@ class AccountService:
         except OpenError as exc:
             reason = exc.reason_code
         except ObservationError as exc:
+            reason = exc.reason_code
+        except ProbeAdmissionError as exc:
             reason = exc.reason_code
         except Exception:
             reason = "account_unavailable"

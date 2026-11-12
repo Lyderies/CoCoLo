@@ -79,6 +79,10 @@ class AccountIngress:
                 or jobs._ingress_owner is not None or jobs._jobs):
             raise AccountError("account_unavailable")
         self._service, self._jobs = service, jobs
+        self._billing = service._billing_jobs
+        if self._billing is not None and (self._billing._ingress_owner is not None or self._billing._jobs
+                or self._billing._claims is not jobs or self._billing._closing):
+            raise AccountError('account_unavailable')
         self._observations = service._observation_jobs
         if self._observations is not None:
             observation = self._observations
@@ -99,6 +103,8 @@ class AccountIngress:
         self._front_exiting = self._front_stopped = self._pumping = False
         self._thread = threading.Thread(target=self._front, name="account-ingress", daemon=True)
         jobs._ingress_owner = self
+        if self._billing is not None:
+            self._billing._ingress_owner = self
         if self._observations is not None:
             self._observations._ingress_owner = self
 
@@ -330,7 +336,9 @@ class AccountIngress:
                     group = self._groups[ticket]
                     group.remove(token)
                     if not group:
-                        if self._observations is not None and ticket in self._observations._jobs:
+                        if self._billing is not None and ticket in self._billing._jobs:
+                            self._billing.cancel(ticket, _ingress=self)
+                        elif self._observations is not None and ticket in self._observations._jobs:
                             self._observations.cancel(ticket, _ingress=self)
                         else:
                             self._jobs.cancel(ticket, _ingress=self)
@@ -349,6 +357,8 @@ class AccountIngress:
                     if reply not in self._groups:
                         limits = self._jobs._intake._limits
                         maximum = limits.max_projects * limits.max_jobs_per_project
+                        if self._billing is not None:
+                            maximum += self._billing._limits.max_projects*self._billing._limits.jobs_per_project
                         if self._observations is not None:
                             probe_limits = self._observations._limits
                             maximum += probe_limits.max_projects * probe_limits.max_jobs_per_project

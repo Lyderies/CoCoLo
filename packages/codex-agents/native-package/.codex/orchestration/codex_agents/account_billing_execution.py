@@ -20,10 +20,13 @@ from .owned_execution import OwnedExecutionKey, OwnedExecutionRegistry
 
 @dataclass(repr=False)
 class _Execution:
-    permit: object
-    inputs: object
+    reservation: object
+    identity: bytes
+    deadline_ns: int
     payload: bytes
     worker: object
+    permit: object = None
+    inputs: object = None
     ticket: object = None
     state: str = 'preparing'
     cleanup: object = None
@@ -39,7 +42,7 @@ class AccountBillingExecutions:
         if getattr(owner, '_execution_owner', None) is not None:
             raise ProbeAdmissionError()
         self._owner, self._workers, self._registry = owner, workers, registry
-        self._jobs, self._permits = {}, {}
+        self._jobs, self._reservations = {}, {}
         owner._execution_owner = self
 
     def _guard(self):
@@ -54,20 +57,33 @@ class AccountBillingExecutions:
             raise ProbeAdmissionError('probe_not_authorized')
         return self._jobs[handle]
 
-    def prepare(self, permit):
+    def prepare(self, reservation, identity):
+        """Finish private preparation before consuming model admission/capacity."""
         self._guard()
-        inputs, _ = self._owner._execution(permit, launching=True)
-        if permit in self._permits:
-            return self._permits[permit]
-        reservation = inputs.reservation
-        identity = parse_bounded_json_value(inputs.identity, max_bytes=MAX_PROBE_INPUT_BYTES)
+        row = self._owner._original(reservation)
+        identity = validate_learning_record(identity)
+        raw_identity = canonical_json(identity)
+        if (row['state'] != 'reserved' or identity['record_type'] != 'provider_identity'
+                or identity['provider'] != 'claude'
+                or not reservation.created <= identity['observed_at_ms'] <= self._owner._now()):
+            raise ProbeAdmissionError('probe_conflict')
+        actual = self._owner._one('SELECT content,content_digest,source FROM records WHERE project_id=? AND record_id=?',
+                                 (reservation.project, identity['record_id']))
+        if (actual is None or bytes(actual['content']) != raw_identity or actual['source'] != 'provider'
+                or actual['content_digest'] != content_digest(identity)):
+            raise ProbeAdmissionError('probe_conflict')
+        if reservation in self._reservations:
+            handle = self._reservations[reservation]
+            if self._jobs[handle].identity != raw_identity:
+                raise ProbeAdmissionError('probe_conflict')
+            return handle
         payload = probe_payload(reservation.project, reservation.key, reservation.snapshot[1], identity,
-            deadline_ns=inputs.deadline_ns, created_at_ms=reservation.created,
+            deadline_ns=reservation.deadline_ns, created_at_ms=reservation.created,
             language=os.environ.get('LANG') or 'C.UTF-8')
         worker = self._workers.prepare(payload)
         handle = object()
-        self._jobs[handle] = _Execution(permit, inputs, payload, worker)
-        self._permits[permit] = handle
+        self._jobs[handle] = _Execution(reservation, raw_identity, reservation.deadline_ns, payload, worker)
+        self._reservations[reservation] = handle
         return handle
 
     def snapshot(self, handle):
@@ -75,15 +91,33 @@ class AccountBillingExecutions:
         actual = self._workers.snapshot(job.worker)
         return {'state': job.state, 'worker_state': actual['state'], 'reason_code': actual['reason_code']}
 
-    def launch(self, handle):
+    def discard(self, handle):
+        """Cancel only actual unoffered preparation; grant no capacity release."""
+        job = self._job(handle)
+        if job.ticket is not None:
+            raise ProbeAdmissionError('probe_busy')
+        self._workers.discard(job.worker)
+        job.state = 'discarding'
+
+    def retire_discarded(self, handle):
+        job = self._job(handle)
+        if job.ticket is not None or job.state != 'discarding':
+            raise ProbeAdmissionError('probe_busy')
+        self._workers.retire(job.worker)
+        self._jobs.pop(handle)
+        self._reservations.pop(job.reservation)
+
+    def launch(self, handle, permit):
         job = self._job(handle)
         if job.state != 'preparing' or job.ticket is not None:
             raise ProbeAdmissionError('probe_conflict')  # Never offer a second execution.
         prepared = self._workers.prepared(job.worker)
-        inputs, _ = self._owner._execution(job.permit, launching=True)
-        if (inputs is not job.inputs or prepared.inputs_digest != hashlib.sha256(job.payload).hexdigest()
-                or prepared.identity != inputs.identity or prepared.deadline_ns != inputs.deadline_ns):
+        inputs, _ = self._owner._execution(permit, launching=True)
+        if (inputs.reservation is not job.reservation or prepared.inputs_digest != hashlib.sha256(job.payload).hexdigest()
+                or prepared.identity != inputs.identity or prepared.identity != job.identity
+                or prepared.deadline_ns != inputs.deadline_ns or prepared.deadline_ns != job.deadline_ns):
             raise ProbeAdmissionError('probe_conflict')
+        job.permit, job.inputs = permit, inputs
         # Copy metadata; the public preparation object must not own registry keys.
         key = OwnedExecutionKey(prepared.key.project_id, prepared.key.handle_digest,
                                prepared.key.run_id, prepared.key.bridge_run_id)
@@ -172,10 +206,11 @@ class AccountBillingExecutions:
         self._registry.acknowledge_release(job.ticket)
         self._workers.retire(job.worker)
         self._jobs.pop(handle)
-        self._permits.pop(job.permit)
+        self._reservations.pop(reservation)
         owner._execution_inputs.pop(job.permit)
         owner._permits.pop(reservation)
         owner._pending.pop((reservation.project, reservation.key))
+        owner._reserved_inputs.pop(reservation)
         reply = owner._reply(final, known=False)
         owner._authorize(reservation.context, reservation.snapshot, reservation.authorize)
         if owner._row(row['project_id'], row['request_key']) != final:

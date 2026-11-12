@@ -33,6 +33,9 @@ from .provider_observation_contracts import (
 from .observation_failure_contracts import (
     ObservationFailureInput, checked_observation_failure_reply, decode_observation_failure,
 )
+from .billing_probe_contracts import (
+    BILLING_PROBE_REASONS, BillingProbeError, checked_billing_probe_reply, decode_billing_probe_input,
+)
 
 ACCOUNT_PROTOCOL_VERSION = 1
 MAX_ACCOUNT_FRAME_BYTES = 16_384
@@ -44,12 +47,13 @@ ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt",
     "account.run_provenance", "account.open_provenance", 'account.open_host_run', 'account.observe_provider',
     'account.record_observation_unavailable',
+    'account.billing_probe',
 }
 ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
     "account_not_authorized", "account_wrong_owner", "account_unavailable",
     "account_incompatible", "account_project_not_found",
-}) | CLAIM_ERROR_CODES | OPEN_REASON_CODES | OBSERVATION_REASONS
+}) | CLAIM_ERROR_CODES | OPEN_REASON_CODES | OBSERVATION_REASONS | BILLING_PROBE_REASONS
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}")
 _PROJECT = re.compile(r"prj_[0-9a-f]{32}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -105,7 +109,12 @@ def _checked_request(data: object) -> None:
         or not matches(data["runtime_digest"], _DIGEST) or type(data["payload"]) is not dict
     ):
         raise AccountError("account_invalid_request")
-    if data['operation'] in {'account.observe_provider', 'account.record_observation_unavailable'}:
+    if data['operation'] == 'account.billing_probe':
+        try:
+            decode_billing_probe_input(data['payload'])
+        except BillingProbeError:
+            raise AccountError('account_invalid_request') from None
+    elif data['operation'] in {'account.observe_provider', 'account.record_observation_unavailable'}:
         try:
             (decode_observation_input if data['operation'] == 'account.observe_provider' else
              decode_observation_failure)(data['payload'])
@@ -187,7 +196,12 @@ def account_request_digest(request: AccountRequest) -> str:
 def _checked_result(result: object, request: AccountRequest) -> dict:
     if type(result) is not dict:
         raise AccountError("account_invalid_response")
-    if request.operation == 'account.record_observation_unavailable':
+    if request.operation == 'account.billing_probe':
+        try:
+            return checked_billing_probe_reply(result)
+        except BillingProbeError:
+            raise AccountError('account_invalid_response') from None
+    elif request.operation == 'account.record_observation_unavailable':
         try:
             return checked_observation_failure_reply(result, decode_observation_failure(request.payload))
         except ObservationError:
@@ -363,6 +377,16 @@ class AccountClient:
 
     def owner_public_key(self, *, request_id: str | None = None) -> dict:
         return self._read("account.owner_public_key", request_id)
+
+    def billing_probe(self, *, request_id):
+        """One original fixed probe request, never an automatic retry/reprobe."""
+        request = AccountRequest(1, 'account.billing_probe', request_id, self._project, self._runtime, {})
+        raw = encode_account_request(request)
+        try:
+            reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError:
+            raise AccountError('account_unavailable') from None
+        return decode_account_response(reply, request)
 
     def observe_provider(self, provider, *, request_id, run_handle=None, phase=None):
         """One explicit non-spending request; a known reply is historical metadata."""

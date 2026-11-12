@@ -57,8 +57,8 @@ class AccountBillingExecutionTests(unittest.TestCase):
         return self.owner.reserve(self.fixture.project_id, 'a'*64, 'b'*64, 'fixed-probe', self.context,
                                   before_commit=lambda: self.allowed)
 
-    def admit(self):
-        reservation = self.reserve()
+    def admit(self, reservation=None):
+        reservation = self.reserve() if reservation is None else reservation
         signature = self.owner.prepare(reservation)
         self.signatures.offer_next()
         end = time.monotonic()+10
@@ -72,15 +72,19 @@ class AccountBillingExecutionTests(unittest.TestCase):
     def prepare(self, frames=None):
         self.fixture.frames('claude', frames if frames is not None else
             [bridge_fixtures.PROBE_INIT, bridge_fixtures.FAVOURABLE, bridge_fixtures.result_frame('OK')])
-        permit = self.admit()
-        handle = self.executions.prepare(permit)
+        reservation = self.reserve()
+        identity = self.ledger.observe_provider(self.fixture.project_id, 'claude', project_root=self.fixture.project,
+                                                environ=bridge_fixtures.CLEAN)[0]
+        handle = self.executions.prepare(reservation, identity)
         self.until(lambda: self.executions.snapshot(handle)['worker_state'] != 'preparing')
         self.assertEqual('prepared', self.executions.snapshot(handle)['worker_state'])
+        self.assertEqual('reserved', self.row()['state'])
+        permit = self.admit(reservation)
         return handle, permit
 
     def launch(self, frames=None):
         handle, permit = self.prepare(frames)
-        supervisor = self.executions.launch(handle)
+        supervisor = self.executions.launch(handle, permit)
         self.until(lambda: self.executions.snapshot(handle)['worker_state'] in {'returned', 'unknown'})
         self.assertEqual('returned', self.executions.snapshot(handle)['worker_state'])
         self.clock = time.time_ns()//1_000_000
@@ -157,26 +161,26 @@ class AccountBillingExecutionTests(unittest.TestCase):
     def test_duplicate_launch_and_copied_permit_refuse_without_another_model(self):
         handle, permit, _ = self.launch()
         with self.assertRaises(ProbeAdmissionError):
-            self.executions.launch(handle)
+            self.executions.launch(handle, permit)
         with self.assertRaises(ProbeAdmissionError):
-            self.executions.prepare(copy(permit))
+            self.executions.launch(handle, copy(permit))
         self.assertEqual(1, len(self.model_invocations()))
 
     def test_current_permission_revoked_between_preparation_and_offer_cannot_launch(self):
-        handle, _ = self.prepare()
+        handle, permit = self.prepare()
         self.allowed = False
         with self.assertRaisesRegex(ProbeAdmissionError, 'probe_not_authorized'):
-            self.executions.launch(handle)
+            self.executions.launch(handle, permit)
         self.assertEqual([], self.model_invocations())
         self.assertEqual('admitted', self.row()['state'])
 
     def test_current_raw_admission_evidence_changed_before_offer_cannot_launch(self):
-        handle, _ = self.prepare()
+        handle, permit = self.prepare()
         self.clock += 1
         self.ledger.observe_provider(self.fixture.project_id, 'claude', project_root=self.fixture.project,
                                      environ=bridge_fixtures.CLEAN)
         with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
-            self.executions.launch(handle)
+            self.executions.launch(handle, permit)
         self.assertEqual([], self.model_invocations())
         self.assertEqual('admitted', self.row()['state'])
 
@@ -184,7 +188,7 @@ class AccountBillingExecutionTests(unittest.TestCase):
         handle, permit = self.prepare()
         object.__setattr__(permit, 'account_fingerprint', 'f'*64)
         with self.assertRaisesRegex(ProbeAdmissionError, 'probe_not_authorized'):
-            self.executions.launch(handle)
+            self.executions.launch(handle, permit)
         self.assertEqual([], self.model_invocations())
 
     def test_unknown_workspace_removal_holds_both_durable_and_worker_capacity(self):

@@ -77,6 +77,7 @@ class AccountClaimJobs:
         self._signatures: dict[object, object] = {}
         self._started = self._closing = self._faulted = False
         self._ingress_owner = None
+        self._billing = None
 
     def _delivery(self, ingress):
         # A bound transport owns all subscribers to a deduplicated ticket.
@@ -261,6 +262,9 @@ class AccountClaimJobs:
             return
         try:
             for notice in self._pool.poll():
+                if self._billing is not None and self._billing.owns_signature(notice.handle):
+                    self._billing.finish_signature(notice.handle)
+                    continue
                 ticket = self._signatures[notice.handle]
                 job = self._job(ticket)
                 if job.state != "pending":
@@ -292,6 +296,8 @@ class AccountClaimJobs:
                 self._pool.discard(notice.handle)
                 del self._signatures[notice.handle]
                 job.signature_handle = None
+            if self._billing is not None:
+                self._billing.drive()
             if not self._closing:
                 for _ in range(self._pool._limits.max_workers):
                     if self._pool.offer_next() is None:
@@ -345,6 +351,8 @@ class AccountClaimJobs:
         self._guard(allow_faulted=True)
         self._closing = True
         try:
+            if self._billing is not None:
+                self._billing.request_close()
             self._pool.request_close()
         except BaseException:
             self._faulted = True
@@ -362,8 +370,12 @@ class AccountClaimJobs:
             raise ClaimError("claim_unavailable")
         try:
             for notice in self._pool.poll():
-                self._pool.discard(notice.handle)
-            if not self._pool.snapshot()["closed"]:
+                if self._billing is not None and self._billing.owns_signature(notice.handle):
+                    self._billing.finish_signature(notice.handle)
+                else:
+                    self._pool.discard(notice.handle)
+            billing_drained = self._billing is None or self._billing.drained()
+            if not self._pool.snapshot()["closed"] or not billing_drained:
                 return False
             self._jobs.clear()
             self._requests.clear()

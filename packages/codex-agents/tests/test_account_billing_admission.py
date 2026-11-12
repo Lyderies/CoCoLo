@@ -189,6 +189,16 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual(0, len(self.intake._jobs))
         self.assertEqual(original.deadline, self.rows()[0]['deadline_at_ms'])
 
+    def test_mutated_original_native_deadline_or_authorizer_cannot_prepare_signatures(self):
+        for field, value in (('deadline_ns', time.monotonic_ns()+120_000_000_000),
+                             ('authorize', lambda: True)):
+            with self.subTest(field=field):
+                original = self.reserve('mutated-'+field)
+                object.__setattr__(original, field, value)
+                with self.assertRaisesRegex(ProbeAdmissionError, 'probe_not_authorized'):
+                    self.owner.prepare(original)
+        self.assertEqual(0, self.intake.snapshot().jobs)
+
     def test_standalone_backup_preserves_genuine_sealed_admission_and_rejects_missing_request(self):
         from copy import deepcopy
         from codex_agents.learning_contracts import content_digest, validate_learning_record

@@ -82,6 +82,7 @@ class _Job:
     result: dict | None = None
     reason: str | None = None
     cancelled: bool = False
+    billing_parent: tuple | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -110,6 +111,7 @@ class AccountObservationJobs:
         self._slot_rotation = deque(self._slots)
         self._started = self._closing = self._faulted = self._busy = False
         self._ingress_owner = None
+        self._billing_owner = None
         owner._jobs_owner = self
 
     @contextmanager
@@ -169,7 +171,8 @@ class AccountObservationJobs:
         if not self._counts[project]:
             del self._counts[project]
 
-    def submit(self, project, runtime, caller, identity, request, context, before_publish, *, _ingress=None):
+    def submit(self, project, runtime, caller, identity, request, context, before_publish, *, _ingress=None,
+               _billing_parent=None):
         with self._operation():
             self._delivery(_ingress)
             if not self._started or self._closing or self._faulted:
@@ -181,11 +184,20 @@ class AccountObservationJobs:
             request = ObservationInput(**request.payload())
             snapshot = context.snapshot()
             key = (project, runtime, caller, identity)
+            if _billing_parent is not None:
+                from .account_billing_jobs import AccountBillingJobs
+                if (type(_billing_parent) is not tuple or len(_billing_parent) != 2
+                        or type(_billing_parent[0]) is not AccountBillingJobs
+                        or _billing_parent[0] is not self._billing_owner
+                        or _billing_parent[0]._observations is not self
+                        or _billing_parent[1] not in _billing_parent[0]._jobs
+                        or _billing_parent[0]._jobs[_billing_parent[1]].key[:3] != key[:3]):
+                    raise ObservationError('observation_not_authorized')
             if key in self._requests:
                 ticket = self._requests[key]
                 job = self._job(ticket)
                 if (job.request != request or job.context is not context or job.snapshot != snapshot
-                        or job.cancelled or job.state == 'reserved'):
+                        or job.cancelled or job.state == 'reserved' or job.billing_parent != _billing_parent):
                     raise ObservationError('observation_conflict')
                 self._owner._authorize(context, snapshot, before_publish)
                 return ticket
@@ -195,6 +207,7 @@ class AccountObservationJobs:
             ticket = object()
             job = _Job(key, request, context, snapshot, before_publish,
                        time.monotonic_ns() + self._owner._timeout * 1_000_000)
+            job.billing_parent = _billing_parent
             self._jobs[ticket], self._requests[key] = job, ticket
             self._counts[project] = self._counts.get(project, 0) + 1
             try:
@@ -253,7 +266,7 @@ class AccountObservationJobs:
             del self._active[slot]
             self._active_projects.remove(job.key[0])
             if (self._closing or job.cancelled or time.monotonic_ns() >= job.deadline_ns
-                    or (self._ingress_owner is not None and not self._ingress_owner._claim_has_subscribers(ticket))):
+                    or not self._subscribed(ticket, job)):
                 self._owner.abort(job.reservation)
                 self._finish(ticket, job, reason='observation_unavailable')
                 continue
@@ -293,6 +306,16 @@ class AccountObservationJobs:
                 self._active_projects.add(project)
                 offered += 1
                 break
+
+    def _subscribed(self, ticket, job):
+        if job.billing_parent is not None:
+            owner, parent = job.billing_parent
+            if (owner is not self._billing_owner or owner._observations is not self
+                    or parent not in owner._jobs or owner._jobs[parent].observation is not ticket
+                    or owner._jobs[parent].cancelled):
+                return False
+            ticket = parent
+        return self._ingress_owner is None or self._ingress_owner._claim_has_subscribers(ticket)
 
     def drive(self):
         with self._operation():

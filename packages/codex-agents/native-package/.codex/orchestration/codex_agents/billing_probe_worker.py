@@ -140,7 +140,7 @@ def _prepare(payload):
             raise ProbeWorkerError()
         check_backend(os.environ, root)
         client = resolve_client('claude', untrusted=[root])
-        if client[0] is None or client[0] != identity['client_path']:
+        if client != (identity['client_path'], identity['client_sha256']):
             raise ProbeWorkerError()
         started = True
         workspace = bridge.private_workspace('probe-prepared-', claude=True, project_root=root)

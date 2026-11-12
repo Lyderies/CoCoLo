@@ -9,7 +9,8 @@ import sys
 from unittest import mock
 
 _CALLER_ENV = {name: os.environ.get(name) for name in
-              ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_USE_BEDROCK')}
+              ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID',
+               'CLAUDE_CODE_USE_BEDROCK', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY')}
 from tests.support import ORCHESTRATION_ROOT  # noqa: E402 -- capture markers before test bootstrap changes them.
 
 
@@ -45,9 +46,11 @@ def main():
         namespace['main'].__globals__['_require_own_roots'] = lambda args: None
         namespace['main'].__globals__['_learning_ledger'] = forbidden
         namespace['main'].__globals__['CollectorMaintenance'].acquire = forbidden
-        from codex_agents import providers
+        from codex_agents import bridge, providers
         with mock.patch.object(providers, 'observe_codex', new=forbidden), \
-                mock.patch.object(providers, 'observe_claude', new=forbidden):
+                mock.patch.object(providers, 'observe_claude', new=forbidden), \
+                mock.patch.object(bridge, 'claude_billing_probe', new=forbidden), \
+                mock.patch.object(bridge, 'run_child', new=forbidden):
             return namespace['main']()
 
 

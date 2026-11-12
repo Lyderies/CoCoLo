@@ -7971,6 +7971,10 @@ class LearningLedger:
         from .providers import _latest, credits_waived
 
         provider = record.get("provider")
+        if provider != "codex":
+            # The original rule never waives Claude overage. No owner-signature
+            # lookup or second connection is needed to display that fixed fact.
+            return credits_waived(provider, record, None)
         with self._lock:
             attestations = self._provider_records_locked(
                 project_id, "billing_attestation", provider

@@ -270,3 +270,16 @@ class BillingProbeWorkerTests(unittest.TestCase):
         self.assertFalse(prepared.workspace.exists())
         self.pool.retire(handle)
         self.assertEqual(0, self.pool._charged)
+
+    def test_same_client_path_with_changed_binary_digest_refuses_before_preparation(self):
+        from pathlib import Path
+        client = Path(self.identity['client_path'])
+        client.write_bytes(client.read_bytes()+b'\n# changed inert client image\n')
+        payload = workers.probe_payload(self.fixture.project_id, 'd'*64, self.fixture.project,
+            self.identity, deadline_ns=time.monotonic_ns()+10_000_000_000,
+            created_at_ms=time.time_ns()//1_000_000)
+        handle = self.pool.prepare(payload)
+        self.until(lambda: self.pool.snapshot(handle)['state'] != 'preparing')
+        self.assertEqual('failed', self.pool.snapshot(handle)['state'])
+        self.assertFalse(any(i['argv'][0] == '-p' for i in self.fixture.invocations('claude')))
+        self.pool.retire(handle)
