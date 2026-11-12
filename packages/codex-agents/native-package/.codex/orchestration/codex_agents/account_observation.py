@@ -222,6 +222,22 @@ class AccountObservationOwner:
         return checked_observation_reply({**request.payload(), 'run_id': row['run_id'],
             'observed_at_ms': row['observed_at_ms'], 'known': known, 'records': records}, request)
 
+    def billing_waivers(self, project, records):
+        """Current display projection from the same owner rule admission uses."""
+        self._guard()
+        self._project(project)
+        if type(records) is not list or not 1 <= len(records) <= 8:
+            raise ObservationError('observation_invalid_response')
+        result = {}
+        for record in records:
+            if record.get('record_type') == 'provider_billing':
+                waived = self._read(lambda: self._ledger.billing_waived_by_attestation(project, record))
+                if type(waived) is not bool:
+                    raise ObservationError('observation_unavailable')
+                result[record['record_id']] = waived
+        self._guard()
+        return result
+
     def reserve(self, project, runtime, caller, identity, request, context, before_commit):
         self._guard()
         if (not matches(project, _PROJECT) or not matches(runtime, _DIGEST) or not matches(caller, _DIGEST)

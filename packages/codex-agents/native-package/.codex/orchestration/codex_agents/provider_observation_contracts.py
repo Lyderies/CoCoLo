@@ -47,7 +47,8 @@ def decode_observation_input(value):
 def checked_observation_reply(value, request):
     try:
         if (type(request) is not ObservationInput or type(value) is not dict
-                or value.keys() != {'provider', 'run_handle', 'phase', 'run_id', 'observed_at_ms', 'known', 'records'}
+                or value.keys() not in ({'provider', 'run_handle', 'phase', 'run_id', 'observed_at_ms', 'known', 'records'},
+                    {'provider', 'run_handle', 'phase', 'run_id', 'observed_at_ms', 'known', 'records', 'billing_waivers'})
                 or any(value[name] != getattr(request, name) for name in ('provider', 'run_handle', 'phase'))
                 or type(value['known']) is not bool or not valid_integer(value['observed_at_ms'])
                 or (value['run_id'] is not None and not matches(value['run_id'], _ID))
@@ -65,6 +66,12 @@ def checked_observation_reply(value, request):
                         {key: item for key, item in checked.items() if key != 'record_id'})):
                 raise ValueError()
             identities += checked['record_type'] == 'provider_identity'
+        if 'billing_waivers' in value:
+            waivers = value['billing_waivers']
+            billing = {r['record_id'] for r in value['records'] if r['record_type'] == 'provider_billing'}
+            if (type(waivers) is not dict or waivers.keys() != billing
+                    or any(type(v) is not bool for v in waivers.values())):
+                raise ValueError()
         if identities != 1 or len(canonical_json(value)) > MAX_OBSERVATION_REPLY_BYTES:
             raise ValueError()
     except (ContractError, KeyError, TypeError, ValueError, RecursionError):

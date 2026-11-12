@@ -4,6 +4,46 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; these source components do not activate native services.
 
+## Normal provider-observation client (uninstalled source)
+
+The normal `provider-observe` command sends one `account.observe_provider`
+request through the existing asynchronous account service. It supports both
+providers and primary hosts. The CLI opens no ledger, runs no local provider
+probe, starts no collector and has no persistence fallback. It requires the
+account endpoint in routing-hint schema2; project dispatch/result sockets need
+not be available. The hint and its scope remain routing metadata, not native
+caller or endpoint authentication.
+
+`--request-id` explicitly reconciles an uncertain reply. A generated ID is
+included in both success and failure reports; malformed IDs are rejected before
+I/O and are not echoed. There is no automatic retry or replacement probe. The
+original account owner retains request identity, timestamps, bounded metadata
+and current-authorization checks. Optional `--run-handle` and `--phase` name an
+already opened original run; they create no run, launch claim or execution.
+The client strips local `client_path` values from its public record projection.
+The account response supplies a closed `billing_waivers` map for the returned
+billing records. The original owner computes it under its existing read budget
+using the same owner-verified attestation rule admission uses and checks it again
+after encoding/current authorization. The CLI preserves the existing
+`paid_usage_waived_by_attestation` display field. A known observation can display
+a changed current waiver without refreshing its original timestamp, provider
+record, privacy window or launch observation. This display never grants admission.
+
+Claude's `--billing-probe` remains a separate legacy owner operation. It launches
+a real minimal turn after admission and account-wide cooldown/reuse checks;
+the non-spending observation API cannot replace it. New observation request/run
+flags are refused on that path. Its admission, bounded worker and durable-reply
+API migration remain required before release activation.
+
+Fresh guarded CLI tests use actual account ingress, the original writer and
+fixed workers with inert provider tools. They cover absent project sockets,
+both providers/hosts, explicit known replies, a lost committed reply, conflicting
+identity, default denial and cross-project progress while one probe is held.
+Owner-signed credit waivers are checked on original and known replies; a waiver
+revoked during reply encoding withholds that response without another probe.
+The fixture's native contexts remain synthetic. These tests do not establish
+real admitted-child concurrency, native enrollment or installed release readiness.
+
 ## Normal Codex result-recording client (uninstalled source)
 
 For a trusted Codex run, `learning-record-host-result` now requires `--route`

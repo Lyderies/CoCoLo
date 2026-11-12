@@ -12,7 +12,7 @@ import stat
 import threading
 
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
-from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError
+from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError, _ID as _ACCOUNT_ID
 from .account_open_contracts import AccountOpenInput, OpenError
 from .collector_paths import CollectorPaths, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
 from .control_api import ControlClient, ControlScope
@@ -26,6 +26,7 @@ from .hosts import HOST_CLIENTS, HostClientMismatch
 from .learning_contracts import canonical_json, content_digest, keyed_digest, parse_bounded_json
 from .open_scope_contracts import open_inputs_digest
 from .orchestration_api import OrchestrationClient, OrchestrationRequest, OrchestrationScope
+from .provider_observation_contracts import ObservationError, ObservationInput
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .result_read_api import ResultReadClient
 from .service_protocol import ServiceTarget
@@ -38,7 +39,7 @@ def runtime_hint_path(state, project_root):
     return state.root / 'client-runtimes' / (keyed_digest(state.digest_key(), str(root)) + '.json')
 
 
-def _read_runtime_endpoints(state, project_root, *, account=False):
+def _read_runtime_endpoints(state, project_root, *, account=False, account_only=False):
     descriptor = None
     try:
         root = _canonical_project_root(project_root)
@@ -81,9 +82,9 @@ def _read_runtime_endpoints(state, project_root, *, account=False):
             endpoint = Path(endpoint)
             if not endpoint.is_relative_to(state.root):
                 raise ValueError()
-            if name == 'account_endpoint' and not account:
+            if (name == 'account_endpoint' and not account) or (account_only and name != 'account_endpoint'):
                 endpoints.append(endpoint)
-                continue  # An admitted dispatch must not depend on account socket availability.
+                continue  # Only endpoints used by this operation must be live.
             _assert_no_symlink_components(endpoint)
             actual = endpoint.lstat()
             if (not stat.S_ISSOCK(actual.st_mode) or actual.st_nlink != 1 or stat.S_IMODE(actual.st_mode) != 0o600
@@ -116,6 +117,39 @@ class RuntimeOrchestrationError(RuntimeError):
         self.request_id = request_id if matches(request_id, _ID) else None
         self.expected_sequence = expected_sequence
         super().__init__(self.reason_code)
+
+
+class RuntimeObservationError(RuntimeError):
+    def __init__(self, reason, *, request_id=None):
+        self.reason_code = reason if type(reason) is str and reason in ACCOUNT_REASON_CODES else 'observation_unavailable'
+        self.request_id = request_id if matches(request_id, _ACCOUNT_ID) else None
+        super().__init__(self.reason_code)
+
+
+def observe_provider_client(state_root, project_root, provider, *, request_id=None, run_handle=None, phase=None):
+    """One non-spending account request; no local probe, persistence or retry."""
+    identity = 'cli-observe-'+secrets.token_hex(16) if request_id is None else request_id
+    if not matches(identity, _ACCOUNT_ID):
+        raise RuntimeObservationError('observation_invalid_request')
+    try:
+        request = ObservationInput(provider, run_handle, phase)
+        scope, endpoints = _read_runtime_endpoints(CollectorPaths(state_root), project_root,
+                                                   account=True, account_only=True)
+        if len(endpoints) != 3:
+            raise RuntimeObservationError('observation_unavailable', request_id=identity)
+        result = AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=60).observe_provider(
+            request.provider, request_id=identity, run_handle=request.run_handle, phase=request.phase)
+    except DispatchError:
+        raise RuntimeObservationError('observation_unavailable', request_id=identity) from None
+    except (AccountError, ObservationError) as error:
+        raise RuntimeObservationError(error.reason_code, request_id=identity) from None
+    # Provider identity may include its local executable path in the owner
+    # journal. The existing CLI projection must never print that path.
+    return {'ready': True, **result, 'request_id': identity,
+            'records': [{**{key: value for key, value in record.items() if key != 'client_path'},
+                         **({'paid_usage_waived_by_attestation': result['billing_waivers'][record['record_id']]}
+                            if record['record_type'] == 'provider_billing' and 'billing_waivers' in result else {})}
+                        for record in result['records']]}
 
 
 class RuntimeResultError(RuntimeError):

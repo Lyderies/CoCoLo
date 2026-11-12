@@ -728,9 +728,12 @@ class AccountService:
             if reply.reason is not None:
                 return self._reply(labels, reason=reply.reason)
             try:
-                raw = self._reply(labels, result=reply.result)
+                waivers = self._observation_jobs._owner.billing_waivers(project, reply.result['records'])
+                raw = self._reply(labels, result={**reply.result, 'billing_waivers': waivers})
                 decode_account_response(raw, request)
                 if reply.before_publish() is not True:
+                    raise ObservationError('observation_not_authorized')
+                if waivers != self._observation_jobs._owner.billing_waivers(project, reply.result['records']):
                     raise ObservationError('observation_not_authorized')
                 self._provenance_live()
                 with self._front_lock:

@@ -45,7 +45,10 @@ def main():
         namespace['main'].__globals__['_require_own_roots'] = lambda args: None
         namespace['main'].__globals__['_learning_ledger'] = forbidden
         namespace['main'].__globals__['CollectorMaintenance'].acquire = forbidden
-        return namespace['main']()
+        from codex_agents import providers
+        with mock.patch.object(providers, 'observe_codex', new=forbidden), \
+                mock.patch.object(providers, 'observe_claude', new=forbidden):
+            return namespace['main']()
 
 
 if __name__ == '__main__':
