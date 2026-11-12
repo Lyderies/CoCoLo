@@ -4,7 +4,20 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; these source components do not activate native services.
 
-## Original billing-probe admission (uninstalled source)
+## Bounded source inventory
+
+`python3 -B packages/codex-agents/scripts/audit_service_ownership.py check --full --compact`
+scans every runtime Python module and every declared client root without executing
+the inspected code. The call-site ceiling is 32,768: the completed billing API source
+contains 22,364 distinct calls, exceeding the original 20,000 ceiling. The source-byte,
+AST-node/depth, import, module and 4 MiB report limits remain in force. Input above
+the call ceiling is refused before metadata collection. Full-report tests independently
+count every AST call and compare the module/root inventory, preserving coverage.
+
+A completed inventory is not an ownership pass. The current report still rejects
+CLI/bridge persistence dependencies; native activation and C19 acceptance remain open.
+
+## Billing-probe API and original execution (uninstalled source)
 
 Account schema13 preserves sealed billing-probe origins and request states through
 verified forward migration, project backup and isolated restoration. An admitted
@@ -17,9 +30,13 @@ intake is bounded to64requests and8per project; retained origins are capped at40
 per project. These are finite metadata reservations, not Python heap measurements.
 
 Context objects, callbacks and sealed metadata provide no native caller proof.
-The next integration connects the fixed model worker, original process/tree and
-watchdog custody, confirmed completion, account API and normal CLI billing-probe
-path. Admission alone cannot launch a model or release an admitted reservation.
+The normal CLI now sends one fixed `account.billing_probe` request. Fair project
+phases connect fresh identity observation, private preparation before admission,
+the original signature pool, one model worker and actual process/tree/watchdog
+cleanup to atomic metadata completion. Explicit request IDs recover retained
+committed replies after lost responses or local retirement faults without another
+probe. Unknown local execution custody stays charged. Admission metadata alone
+cannot launch a model or release an admitted reservation.
 Production activation and independent release acceptance remain gated.
 
 ## Original Codex preparation (uninstalled source)
@@ -113,11 +130,13 @@ after encoding/current authorization. The CLI preserves the existing
 a changed current waiver without refreshing its original timestamp, provider
 record, privacy window or launch observation. This display never grants admission.
 
-Claude's `--billing-probe` remains a separate legacy owner operation. It launches
-a real minimal turn after admission and account-wide cooldown/reuse checks;
-the non-spending observation API cannot replace it. New observation request/run
-flags are refused on that path. Its admission, bounded worker and durable-reply
-API migration remain required before release activation.
+Claude's `--billing-probe` uses its distinct admitted account API operation. It
+launches a minimal turn after signature/admission and account-wide cooldown/reuse
+checks; non-spending observation cannot replace it. `--request-id` recovers the
+original reply, while run/phase flags are refused. The CLI opens no database,
+starts no collector and runs no local model/provider probe. Failed probes retain
+restrictive evidence without refreshing clean billing. Native enrollment,
+containment and installed real-provider validation remain activation gates.
 
 Fresh guarded CLI tests use actual account ingress, the original writer and
 fixed workers with inert provider tools. They cover absent project sockets,

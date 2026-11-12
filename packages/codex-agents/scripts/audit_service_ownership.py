@@ -46,7 +46,10 @@ MAX_TOTAL_BYTES = 8 * MAX_SOURCE_BYTES
 MAX_AST_NODES = 1_000_000
 MAX_AST_DEPTH = 128
 MAX_DIRECTORY_DEPTH = 64
-MAX_CALLS = 20_000
+# Full 0.3.0 runtime inventory exceeds the original 20,000 call sites. Keep a
+# finite source-size ceiling; byte/node/import/report budgets independently cap
+# parsing and retained metadata. A successful inventory still fails unsafe roots.
+MAX_CALLS = 32_768
 MAX_IMPORTS = 8_192
 MAX_REPORT_BYTES = 4 * MAX_SOURCE_BYTES
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")

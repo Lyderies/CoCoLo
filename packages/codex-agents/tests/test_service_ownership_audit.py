@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -99,6 +100,13 @@ class OwnershipMemoryTests(unittest.TestCase):
                 self.check({"client.py": source * 2, "later.py": "x=1\n"})
             self.assertEqual(1, parse.call_count)
             scanner.assert_not_called()
+
+    def test_configured_call_ceiling_refuses_before_collecting_metadata(self):
+        source = 'f()\n'*(audit.MAX_CALLS+1)
+        with mock.patch.object(audit, 'Scanner') as scanner, \
+                self.assertRaisesRegex(audit.AuditError, 'audit_source_limit'):
+            self.check({'client.py': source})
+        scanner.assert_not_called()
 
     def test_pure_client_graph_is_not_confused_by_string_literals(self):
         report = self.check({
@@ -328,6 +336,11 @@ class OwnershipFileTests(unittest.TestCase):
         self.assertIn("modules", report)
         self.assertIn("cli", report["modules"])
         self.assertGreater(report["counts"]["all_ast_calls"], 0)
+        sources = audit.load_sources(audit.SOURCE_ROOT)
+        self.assertEqual(set(sources), {module['path'] for module in report['modules'].values()})
+        self.assertEqual(set(audit.DEFAULT_CLIENT_ROOTS), {client['root'] for client in report['clients']})
+        self.assertEqual(sum(isinstance(node, ast.Call) for source in sources.values()
+                             for node in ast.walk(ast.parse(source))), report['counts']['all_ast_calls'])
         self.assertLessEqual(len(result.stdout), audit.MAX_REPORT_BYTES)
         self.assertEqual(1, result.stdout.count(b"\n"))
 
