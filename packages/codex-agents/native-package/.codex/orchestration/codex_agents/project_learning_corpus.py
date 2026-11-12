@@ -36,8 +36,13 @@ _RECORD_TYPES = frozenset({
     "canary_report", "grader_calibration", "owner_grant", "promotion", "learning_export",
     "verification_binding", "host_run_profile", "dispatch_intent", "dispatch_result",
     "observation_unavailable", "provider_usage", "execution_provenance", "host_result_admission",
+    # Keep the complete original project partition, including historical
+    # account-owned evidence. These are inert source-image bytes: importing
+    # them never grants account authority or replaces the live account owner.
+    "provider_identity", "provider_headroom", "provider_billing", "billing_attestation",
+    "admission_decision", "claim_denial_settlement", "host_open_provenance", "probe_admission",
 })
-_SIGNED_RECORD_TYPES = frozenset({"feedback", "grader_calibration", "qa_evidence"})
+_SIGNED_RECORD_TYPES = frozenset({"feedback", "grader_calibration", "qa_evidence", "billing_attestation"})
 _ENTRY_FIELDS = frozenset({
     "content", "source", "source_sequence", "observed_at_ms", "ingested_at_ms", "expires_at_ms", "late",
 })

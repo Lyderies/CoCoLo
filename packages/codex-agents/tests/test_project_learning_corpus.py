@@ -286,7 +286,7 @@ class LearningCorpusUpgradeTests(unittest.TestCase):
             connection.close()
             store = ProjectHistory(directory, PROJECT, allow_schema_upgrade=True)
             try:
-                self.assertEqual(12, store._connection.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual(13, store._connection.execute("PRAGMA user_version").fetchone()[0])
                 self.assertEqual((PROJECT, 18, 1), tuple(store._connection.execute("SELECT * FROM history_identity").fetchone()))
                 self.assertEqual(original, tuple(store._connection.execute("SELECT * FROM records").fetchone()))
                 self.assertEqual(canonical_json(event), store.record(event["record_id"]).content)
@@ -296,6 +296,68 @@ class LearningCorpusUpgradeTests(unittest.TestCase):
 
 
 class SignedLegacyLearningStagingTests(unittest.TestCase):
+    def test_current_and_legacy_signed_formal_qa_keep_exact_bytes_without_activation(self):
+        from tests import test_learning_engine as engine_fixtures
+        from codex_agents.learning_engine import build_verified_qa_records
+        from codex_agents.learning_contracts import content_digest
+
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:
+            root = Path(temporary)
+            private_key, public_key = engine_fixtures.generate_test_owner_key(root)
+            allowed = root / 'allowed-signers'
+            key_type, key_data = public_key.split()[:2]
+            allowed.write_text(f'codex-agents-owner {key_type} {key_data}\n')
+            allowed.chmod(0o600)
+            authority = OwnerGrantAuthority(allowed)
+            positive, _ = build_verified_qa_records(**engine_fixtures.verified_qa_inputs())
+            inputs = engine_fixtures.verified_qa_inputs()
+            inputs['check_report']['deterministic_checks'][0]['passed'] = False
+            negative, _ = build_verified_qa_records(**inputs)
+            # Preserve the supported historical body without adding modern axes.
+            negative = {k: v for k, v in negative.items()
+                        if k not in {'record_id', 'execution_state', 'semantic_verdict'}}
+            negative['record_id'] = 'qa_evidence:' + content_digest(negative)
+            records, signatures = [], []
+            for index, qa in enumerate((positive, negative), 1):
+                records.append(ProjectLearningCorpusTests.entry(
+                    qa, index * 100, source='verifier', observed=qa['observed_at_ms'],
+                    ingested=qa['observed_at_ms'] + 1))
+                path = engine_fixtures.sign_owner_payload(
+                    private_key, authority.qa_attestation_payload(PROJECT, qa), 'formal-' + str(index))
+                signature = path.read_bytes()
+                self.assertTrue(authority.verify_qa_attestation(PROJECT, qa, signature))
+                signatures.append({'subject_record_id': qa['record_id'], 'signature': signature,
+                                   'observed_at_ms': qa['observed_at_ms'] + 2})
+            digest = corpus.chunk_digest(records, signatures)
+            manifest = {'schema_version': 1, 'scope': 'learning-record-staging-v1', 'project_id': PROJECT,
+                        'source_identity_digest': 'd' * 64, 'key_domain_digest': 'e' * 64,
+                        'record_count': 2, 'attestation_count': 2,
+                        'total_bytes': sum(len(r['content']) for r in records)
+                                       + sum(len(r['signature']) for r in signatures),
+                        'chain_digest': corpus.next_chain_digest(corpus.EMPTY_CHAIN_DIGEST, digest)}
+            directory = root / 'formal-history'
+            directory.mkdir(mode=0o700)
+            store = ProjectHistory(directory, PROJECT, allow_schema_upgrade=True)
+            try:
+                store.begin_learning_import('formal', manifest, now_ms=1000, before_commit=lambda: None)
+                store.stage_learning_import_chunk('formal', 0, records, signatures,
+                                                  now_ms=1001, before_commit=lambda: None)
+                receipt = store.finish_learning_import('formal', now_ms=1002, before_commit=lambda: None)
+                self.assertIs(False, receipt['learning_ready'])
+            finally:
+                store.close()
+            store = ProjectHistory(directory, PROJECT, allow_schema_upgrade=True)
+            try:
+                self.assertEqual(records, list(store.learning_import_records('formal')))
+                self.assertEqual(signatures, list(store.learning_import_attestations('formal')))
+                self.assertEqual(0, store._connection.execute('SELECT COUNT(*) FROM project_operational_qa').fetchone()[0])
+                for qa, row in zip((positive, negative), signatures):
+                    self.assertTrue(authority.verify_qa_attestation(PROJECT, qa, row['signature']))
+                    with self.assertRaisesRegex(HistoryError, '^history_not_found$'):
+                        store.record(qa['record_id'])
+            finally:
+                store.close()
+
     def test_actual_signed_owner_feedback_and_all_selected_record_bytes_survive_closed_source_copy(self):
         fixture = legacy.LearningStoreTests()
         fixture.setUp()
@@ -315,11 +377,15 @@ class SignedLegacyLearningStagingTests(unittest.TestCase):
                       for row in fixture.ledger._connection.execute(
                           "SELECT * FROM owner_attestations WHERE project_id=?", (fixture.project_a_id,),
                       ) if row["subject_record_id"] in identifiers]
-        self.assertEqual(1, len(signatures))
+        self.assertEqual(2, len(signatures))
         authority = OwnerGrantAuthority(fixture.state.owner_allowed_signers())
-        feedback = next(json.loads(row["content"]) for row in records
-                        if json.loads(row["content"])["record_id"] == signatures[0]["subject_record_id"])
-        self.assertTrue(authority.verify_owner_record(fixture.project_a_id, feedback, signatures[0]["signature"]))
+        signed_records = {json.loads(row["content"])["record_id"]: json.loads(row["content"]) for row in records}
+        self.assertEqual({"feedback", "billing_attestation"},
+                         {signed_records[row["subject_record_id"]]["record_type"] for row in signatures})
+        feedback = next(record for record in signed_records.values() if record["record_type"] == "feedback")
+        feedback_signature = next(row["signature"] for row in signatures
+                                  if row["subject_record_id"] == feedback["record_id"])
+        self.assertTrue(authority.verify_owner_record(fixture.project_a_id, feedback, feedback_signature))
         fixture.ledger.close()
         directory = fixture.state_root.parent / "target-history"
         directory.mkdir(mode=0o700)
@@ -338,5 +404,7 @@ class SignedLegacyLearningStagingTests(unittest.TestCase):
         copied_signatures = list(target.learning_import_attestations("signed-source"))
         self.assertEqual(records, copied)
         self.assertEqual(signatures, copied_signatures)
-        self.assertTrue(authority.verify_owner_record(fixture.project_a_id, feedback, copied_signatures[0]["signature"]))
+        copied_feedback_signature = next(row["signature"] for row in copied_signatures
+                                        if row["subject_record_id"] == feedback["record_id"])
+        self.assertTrue(authority.verify_owner_record(fixture.project_a_id, feedback, copied_feedback_signature))
         self.assertIs(False, receipt["learning_ready"])

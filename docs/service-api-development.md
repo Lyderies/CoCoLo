@@ -4,6 +4,26 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; these source components do not activate native services.
 
+## Historical learning corpus staging (uninstalled source)
+
+The drained migration owner can stage original records, ingestion metadata and
+owner-attestation bytes in project history. Schema13 adds separate companion
+staging for original operational-QA rows, which the legacy ledger keeps outside
+the records table. Each companion manifest binds the finished record import,
+source identity and key domain. Operational QA retains its original canonical
+body, acceptance metadata and timestamps; it acquires no invented source sequence.
+Signed formal `qa_evidence` remains in the record and attestation import.
+Historical account records and billing-attestation signatures also remain in
+the staged source image. They confer no authority on the live account service.
+
+Only an explicit owner upgrade can migrate an existing schema1–12 history.
+Normal startup refuses that upgrade. Staging provides bounded chunks, durable
+replay and paged reads; every receipt reports `learning_ready: false`.
+Shape checks and copied QA decisions do not authenticate original execution or
+check-receipt provenance. A verified source image, complete dependencies, the
+legacy writer drain and retirement, compatible key custody and explicit activation
+remain necessary before any learning cycle can use the imported corpus.
+
 ## Bounded source inventory
 
 `python3 -B packages/codex-agents/scripts/audit_service_ownership.py check --full --compact`

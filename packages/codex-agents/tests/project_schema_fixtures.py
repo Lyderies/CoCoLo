@@ -4,8 +4,18 @@ from dataclasses import replace
 from codex_agents.claim_storage import lease_state_seal
 
 
+def legacy_learning_qa_layout(store):
+    """Remove only empty schema13 QA staging tables for an older fixture."""
+    for name in ('project_learning_qa_chunks', 'project_learning_qa_records',
+                 'project_learning_qa_imports'):
+        if store._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0]:
+            raise AssertionError('legacy fixture contains staged operational QA')
+        store._connection.execute('DROP TABLE ' + name)
+
+
 def legacy_learning_layout(store):
-    """Remove v12 derived index and empty v11 staging tables for an older fixture."""
+    """Remove derived index and empty learning staging for an older fixture."""
+    legacy_learning_qa_layout(store)
     store._connection.execute("DROP INDEX records_learning_outcomes")
     for name in ("project_learning_import_chunks", "project_learning_attestations",
                  "project_learning_records", "project_learning_imports"):

@@ -38,6 +38,7 @@ from .orchestration_schema import ORCHESTRATION_SCHEMA, ORCHESTRATION_COLUMNS
 from .project_qa_checks import CHECK_SCHEMA, CHECK_COLUMNS
 from .project_qa_commit import QA_SCHEMA, QA_COLUMNS
 from .project_learning_corpus import LEARNING_SCHEMA, LEARNING_COLUMNS
+from .project_learning_qa import QA_SCHEMA as LEARNING_QA_SCHEMA, QA_COLUMNS as LEARNING_QA_COLUMNS
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
     keyed_digest, parse_bounded_json, validate_execution_configuration, validate_learning_record,
@@ -49,7 +50,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 12
+_SCHEMA_VERSION = 13
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -143,8 +144,10 @@ _SCHEMA_V9 = _SCHEMA_V8.replace('state_digest TEXT NOT NULL,',
 _SCHEMA_V10 = _SCHEMA_V8.replace('state_digest TEXT NOT NULL,',
                             'state_digest TEXT NOT NULL, cleanup_reservation_digest TEXT,') + CLEANUP_SCHEMA + ACK_SCHEMA
 _SCHEMA_V11 = _SCHEMA_V10 + LEARNING_SCHEMA
-_SCHEMA = _SCHEMA_V11 + LEARNING_OUTCOME_INDEX
+_SCHEMA_V12 = _SCHEMA_V11 + LEARNING_OUTCOME_INDEX
+_SCHEMA = _SCHEMA_V12 + LEARNING_QA_SCHEMA
 _COLUMNS = {
+    **LEARNING_QA_COLUMNS,
     **LEARNING_COLUMNS,
     **ACK_COLUMNS,
     **CLEANUP_COLUMNS,
@@ -388,17 +391,18 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11} and application == _APPLICATION_ID
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
                                                5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8,
-                                               9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11}[version])):
+                                               9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11,
+                                               12: _SCHEMA_V12}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*LEARNING_QA_COLUMNS, *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
                                                  or (name == 'project_cleanup_reservations' and version == 9)) else columns)
@@ -418,7 +422,9 @@ class ProjectHistory:
                 elif version == 9:
                     connection.execute('ALTER TABLE project_cleanup_reservations ADD COLUMN account_release_digest TEXT')
                 for statement in ((CLEANUP_SCHEMA if version < 9 else '') + (ACK_SCHEMA if version < 10 else '')
-                                  + (LEARNING_SCHEMA if version < 11 else '') + LEARNING_OUTCOME_INDEX).split(';'):
+                                  + (LEARNING_SCHEMA if version < 11 else '')
+                                  + (LEARNING_OUTCOME_INDEX if version < 12 else '')
+                                  + LEARNING_QA_SCHEMA).split(';'):
                     if statement.strip():
                         connection.execute(statement)
                 connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
@@ -1162,6 +1168,26 @@ class ProjectHistory:
     def learning_import_attestations(self, import_id, *, after_subject_record_id="", limit=32):
         from .project_learning_corpus import import_attestations
         return import_attestations(self, import_id, after_subject_record_id=after_subject_record_id, limit=limit)
+
+    @_operation
+    def begin_learning_qa_import(self, import_id, manifest, *, now_ms, before_commit):
+        from .project_learning_qa import begin_qa_import
+        return begin_qa_import(self, import_id, manifest, now_ms=now_ms, before_commit=before_commit)
+
+    @_operation
+    def stage_learning_qa_import_chunk(self, import_id, index, rows, *, now_ms, before_commit):
+        from .project_learning_qa import stage_qa_chunk
+        return stage_qa_chunk(self, import_id, index, rows, now_ms=now_ms, before_commit=before_commit)
+
+    @_operation
+    def finish_learning_qa_import(self, import_id, *, now_ms, before_commit):
+        from .project_learning_qa import finish_qa_import
+        return finish_qa_import(self, import_id, now_ms=now_ms, before_commit=before_commit)
+
+    @_operation
+    def learning_import_qa(self, import_id, *, after_qa_id="", limit=32):
+        from .project_learning_qa import import_qa_rows
+        return import_qa_rows(self, import_id, after_qa_id=after_qa_id, limit=limit)
 
     @_operation
     def learning_outcome_revision(self):

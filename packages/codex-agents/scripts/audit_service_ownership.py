@@ -35,6 +35,7 @@ PERSISTENCE_MODULES = frozenset({
     "codex_agents.project_open_scope",
     "codex_agents.project_learning_corpus",
     "codex_agents.project_learning_identity",
+    "codex_agents.project_learning_qa",
 })
 SELECTED_METHODS = frozenset({"append", "_append_checked_locked", "_append_locked", "commit_owner_record"})
 KEY_METHODS = frozenset({"keyed_digest", "external_id", "digest_key"})
