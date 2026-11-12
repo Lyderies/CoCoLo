@@ -115,7 +115,7 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         if time.monotonic() - checked[0] >= 1:
             checked[0] = time.monotonic()
             # Stop when idle, or when the state under this host has been removed.
-            return host.withdrawn() or host.idle_ns() >= idle_stop_ns
+            return host.withdrawn() or host.exhausted() or host.idle_ns() >= idle_stop_ns
         return False
 
     try:

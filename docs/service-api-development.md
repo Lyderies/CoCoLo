@@ -207,6 +207,12 @@ refused status and cancellation of that run. These tests use the bridge tests'
 fake clients; real-provider cadence, real two-project installs and both Claude
 child paths (C and D) remain to be proved.
 
+A released run's dispatch payload is retired, keeping its tombstone so the same
+submit can never launch again, and the run leaves the driver's table. A host holds
+at most 16 runs and 64 dispatch slots over its lifetime; once either is used up and
+no run is in progress, the host ends itself and the next command starts a fresh
+one. That recycling is not yet covered by a test.
+
 Not done: no retry, cancellation-before-dispatch or abandonment path through the
 driver, no driver state across a host restart (a run opened before a restart is
 refused at dispatch and keeps its account capacity until reconciled), the

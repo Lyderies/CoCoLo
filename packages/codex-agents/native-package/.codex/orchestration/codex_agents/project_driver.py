@@ -47,6 +47,7 @@ from .service_transport import install_enrollment
 from .terminal_delivery import TerminalSubmissionInput
 
 MAX_RUNS = 16
+DISPATCH_SLOTS = 64  # Lifetime dispatch slots of one host, the dispatch service's maximum.
 # Local custody of a released run waits for its primary to record the result,
 # or this long; dispatch status and the result read need that custody.
 RECORD_GRACE_SECONDS = 3_600
@@ -110,7 +111,8 @@ class RunDriver:
         self._preparation = runtime.bind_preparation(
             PreparationLimits(1, MAX_PREPARATION_BYTES, MAX_PREPARATION_EXPORT_BYTES),
             authorizer=lambda context: any(run.preparation is context for run in self._runs.values()))
-        self._dispatch = runtime.bind_dispatch(max_requests=64, steps_per_cycle=1, authorizer=self._authorize_dispatch)
+        self._dispatch = runtime.bind_dispatch(max_requests=DISPATCH_SLOTS, steps_per_cycle=1,
+                                               authorizer=self._authorize_dispatch)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='project-driver-account')
         self._owner_name = 'project-driver-%d-%d' % (os.getpid(), id(self))
         install_enrollment(self._preamble, owner=self._owner_name)
@@ -305,6 +307,8 @@ class RunDriver:
                 for connection, _ in run.waiters:
                     self._reply(connection, self._view(run))
                 run.waiters = []
+            if run.state == 'released' and not run.waiters:
+                del self._runs[run.key]  # Recorded and released; nothing here is owed to it.
             else:
                 now = self._clock()
                 for connection, deadline in [w for w in run.waiters if now >= w[1]]:
@@ -494,6 +498,11 @@ class RunDriver:
             if state in {'cleaned', 'unknown'}:
                 if state == 'cleaned':
                     self._preparation.retire(run.prepared)
+                try:
+                    # Its tombstone keeps the slot, so the same submit can never launch again.
+                    self._dispatch.retire_released(run.context)
+                except Exception:
+                    pass
                 run.state = 'released'
 
     @staticmethod
@@ -502,6 +511,10 @@ class RunDriver:
 
     def busy(self):
         return any(run.state not in {'registered', 'failed', 'released'} for run in self._runs.values())
+
+    def exhausted(self):
+        """No room for another run in this host's lifetime; a fresh host has it all."""
+        return not self.busy() and (len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS)
 
     def close(self):
         if self._closed:

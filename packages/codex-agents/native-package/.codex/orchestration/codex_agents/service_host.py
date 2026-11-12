@@ -487,6 +487,10 @@ class ProjectServiceHost:
         except (OSError, TypeError):
             return True
 
+    def exhausted(self):
+        self._owner()
+        return self._driver is not None and self._driver.exhausted()
+
     def idle_ns(self):
         """Time since the last enrolled connection, or 0 while any run is held."""
         self._owner()
