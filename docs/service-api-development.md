@@ -82,11 +82,42 @@ and stops waiting as soon as that process serves or exits. A dead host's leftove
 hint, sockets and capability are replaced by the next start. Endpoints published
 without a host lock, as the older process fixtures do, are used as hinted.
 
+### Account services in the collector process
+
+`learning-serve` now hands over to the separate entry `collector_host.py`, so the
+CLI no longer imports the collector or account owners for it. The thread that opens
+the ledger runs `account_host.AccountServiceHost`: the existing account service,
+claim, observation and billing jobs and account ingress, behind an `EnrolledFrontend`
+at `<state>/rt/account/a.sock`. The collector thread keeps serving hooks; both use
+the ledger's existing lock. If any account component refuses to start, the
+collector still serves hooks and account clients report unavailable. A shutdown
+request releases the ledger within a few seconds (tested).
+
+Account enrollment uses role `account`, a state-wide key that is replaced on every
+collector start, and the same proof of write. The preamble also signs the project
+root the client acts for. The owner admits a request only when that root is
+registered to the requested project, only for health, project, owner-key,
+capacity-status, provider-observation, observation-failure and billing-probe
+operations, and with a caller scope derived from the host class and project.
+Owner-only operations, launch claims and host opens are not offered.
+
+`learning-status` and `provider-observe` start the collector if it is down, as the
+lifecycle commands start a project host. They find the account through the project
+hint when one exists, and otherwise through the collector's registry lookup and
+the fixed account endpoint. `tests/test_account_host.py` drives the unmodified CLI
+against these processes: owner-key status, refusal for another project's root or an
+owner-only operation, refusal without the proof of write, and prompt shutdown.
+
+Lifecycle replies again carry the goal part of the legacy `usage` report
+(`goal_total_tokens`, `goal_time_used_seconds`, `goal_usage_source`). Per-run usage
+totals are still not reported. An open with a provider API key in the environment
+is refused with the legacy `provider_api_key_present` admission reason.
+
 ### What is and is not covered
 
-Only the orchestration lifecycle is authorized (`orchestration.*`). History,
-result-read, control and dispatch authorizers still default to denial. There is no
-account-service host or per-run driver yet. A project host stops on a signal, after
+Project hosts authorize only the orchestration lifecycle (`orchestration.*`);
+history, result-read, control and dispatch authorizers still default to denial, so
+a Codex host open stops at `history_not_authorized`. There is no per-run driver yet. A project host stops on a signal, after
 fifteen idle minutes with no run held, or when its hint or lock file is removed;
 there is no drain command or status command for it yet, and a host that fails
 leaves no diagnostic because its output is discarded.

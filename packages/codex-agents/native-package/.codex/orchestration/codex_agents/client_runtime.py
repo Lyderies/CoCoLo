@@ -24,7 +24,7 @@ from .dispatch_api import DISPATCH_REASONS, DispatchClient, DispatchError
 from .history_api import HistoryClient
 from .history_contracts import HISTORY_REASON_CODES, AttemptBinding, HistoryError, _ID, matches
 from .host_result_contracts import HostResultReference
-from .hosts import HOST_CLIENTS, HostClientMismatch
+from .hosts import HOST_CLIENTS, HostClientMismatch, HostClientUnknown, detect_host_client
 from .learning_contracts import ADMISSION_REASON_CODES, canonical_json, content_digest, keyed_digest, parse_bounded_json
 from .billing_probe_contracts import BILLING_PROBE_REASONS, PROBE_COMPLETION_REASONS
 from .open_scope_contracts import open_inputs_digest
@@ -32,9 +32,14 @@ from .orchestration_api import OrchestrationClient, OrchestrationRequest, Orches
 from .provider_observation_contracts import ObservationError, ObservationInput
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .result_read_api import ResultReadClient
-from .service_enrollment import EnrollmentError, enrollment_preamble, proof_directory, read_capability
+from .service_enrollment import (
+    EnrollmentError, account_endpoint_path, enrollment_preamble, proof_directory, read_capability,
+)
 from .service_protocol import ServiceTarget
 from .service_transport import install_enrollment
+
+
+ACCOUNT_GENERATION = 1  # account_host.GENERATION; that module is a persistence owner.
 
 
 def runtime_hint_path(state, project_root):
@@ -109,31 +114,70 @@ def read_runtime_hint(state, project_root):
     return scope, endpoints[0], endpoints[1]
 
 
-def enroll_host_client(state, project_root, scope, endpoints, host_client):
-    """Enroll this checked CLI process for the hinted project endpoints.
+def enroll_clients(state, project_root, scope, endpoints=(), *, account=None, host_client=None):
+    """Enroll this checked CLI process for the hinted endpoints it is about to use.
 
-    The capability is read once from the owner-only state root, and each request
-    leaves a single-use proof file beside its endpoint. Without both, a
-    production host refuses the request; there is no database fallback.
+    Each key is read once from the owner-only state root, and each request leaves
+    a single-use proof file beside its endpoint. The account preamble also names
+    this project's root, which the account owner matches to the registered
+    project. A process with no host class, or a missing key, stays unenrolled
+    for that endpoint and its host refuses; there is no database fallback.
     """
-    try:
-        key = read_capability(state, project_root, 'host')
-    except EnrollmentError:
-        install_enrollment(None)
-        return False
-    enrolled = frozenset(Path(endpoint) for endpoint in endpoints)
+    if host_client is None:
+        try:
+            host_client = detect_host_client(os.environ)
+        except HostClientUnknown:
+            host_client = None
+    preambles = {}
+    if host_client is not None:
+        try:
+            host_key = read_capability(state, project_root, 'host') if endpoints else None
+        except EnrollmentError:
+            host_key = None
+        if host_key is not None:
+            for endpoint in endpoints:
+                preambles[Path(endpoint)] = ('host', host_key, scope.supervisor_generation, None)
+        if account is not None:
+            try:
+                account_key = read_capability(state, None, 'account')
+                root = str(_canonical_project_root(Path(project_root)))
+            except (EnrollmentError, StateError, OSError):
+                account_key = None
+            if account_key is not None:
+                preambles[Path(account)] = ('account', account_key, ACCOUNT_GENERATION, root)
 
     def preamble(socket_path, message):
-        if Path(socket_path) not in enrolled:
+        entry = preambles.get(Path(socket_path))
+        if entry is None:
             return None
+        role, key, generation, subject = entry
         try:
-            return enrollment_preamble(key, 'host', host_client, scope.supervisor_generation, message,
-                                       proof_directory(socket_path))
+            return enrollment_preamble(key, role, host_client, generation, message, proof_directory(socket_path),
+                                       subject=subject)
         except EnrollmentError:
             raise OSError() from None
 
-    install_enrollment(preamble)
-    return True
+    install_enrollment(preamble if preambles else None)
+    return bool(preambles)
+
+
+def _account_target(state, project_root):
+    """The account endpoint and this project's identifier, with or without a project host.
+
+    A published project hint names both. Without one, the identifier comes from
+    the collector's registry lookup and the endpoint is the fixed account path.
+    """
+    try:
+        scope, endpoints = _read_runtime_endpoints(state, project_root, account=True, account_only=True)
+        if len(endpoints) == 3:
+            return scope.project_id, endpoints[2]
+    except DispatchError:
+        pass
+    try:
+        project_id = CollectorClient(state.socket, timeout=2).project(_canonical_project_root(Path(project_root)))
+    except (CollectorError, StateError, OSError):
+        raise DispatchError('dispatch_unavailable') from None
+    return project_id, account_endpoint_path(state)
 
 
 def _status_ingestion_unavailable():
@@ -222,10 +266,9 @@ def status_client(state_root, project_root):
         report.update(reason_code='status_collector_unavailable', error='Collector status is unavailable.')
     owner_ready = False
     try:
-        scope, endpoints = _read_runtime_endpoints(state, project_root, account=True, account_only=True)
-        if len(endpoints) != 3:
-            raise DispatchError('dispatch_unavailable')
-        owner = AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=1).owner_key()
+        project_id, endpoint = _account_target(state, project_root)
+        enroll_clients(state, project_root, None, account=endpoint)
+        owner = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=1).owner_key()
         report['owner_key'] = {name: owner[name] for name in ('state', 'fingerprint', 'replacements', 'last_replaced_at_ms')}
         owner_ready = True
         if not collector_ready and report['ingestion']['registered_project_state'] == 'unavailable':
@@ -278,11 +321,10 @@ def billing_probe_client(state_root, project_root, *, request_id=None):
     if api_keys_present(os.environ):
         raise RuntimeBillingProbeError('provider_api_key_present', request_id=identity)
     try:
-        scope, endpoints = _read_runtime_endpoints(CollectorPaths(state_root), project_root,
-                                                   account=True, account_only=True)
-        if len(endpoints) != 3:
-            raise RuntimeBillingProbeError('probe_unavailable', request_id=identity)
-        result = AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=60).billing_probe(
+        state = CollectorPaths(state_root)
+        project_id, endpoint = _account_target(state, project_root)
+        enroll_clients(state, project_root, None, account=endpoint)
+        result = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=60).billing_probe(
             request_id=identity)
     except DispatchError:
         raise RuntimeBillingProbeError('probe_unavailable', request_id=identity) from None
@@ -305,11 +347,10 @@ def observe_provider_client(state_root, project_root, provider, *, request_id=No
         raise RuntimeObservationError('observation_invalid_request')
     try:
         request = ObservationInput(provider, run_handle, phase)
-        scope, endpoints = _read_runtime_endpoints(CollectorPaths(state_root), project_root,
-                                                   account=True, account_only=True)
-        if len(endpoints) != 3:
-            raise RuntimeObservationError('observation_unavailable', request_id=identity)
-        result = AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=60).observe_provider(
+        state = CollectorPaths(state_root)
+        project_id, endpoint = _account_target(state, project_root)
+        enroll_clients(state, project_root, None, account=endpoint)
+        result = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=60).observe_provider(
             request.provider, request_id=identity, run_handle=request.run_handle, phase=request.phase)
     except DispatchError:
         raise RuntimeObservationError('observation_unavailable', request_id=identity) from None
@@ -344,7 +385,9 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
         if not 0 < len(submitted) <= MAX_RESULT_BODY_BYTES:
             raise HistoryError('history_invalid_input')
         inputs = open_inputs_digest(assignment, task, route, parent_grant)
-        scope, endpoint, result_endpoint = read_runtime_hint(CollectorPaths(state_root), project_root)
+        state = CollectorPaths(state_root)
+        scope, endpoint, result_endpoint = read_runtime_hint(state, project_root)
+        enroll_clients(state, project_root, scope, (endpoint, result_endpoint), host_client=host_client)
         view = DispatchClient(endpoint, result_endpoint, scope, timeout=10).call('dispatch.status',
             observation.get('run_handle'), assignment.get('attempt'), inputs)
         if view['state'] != 'published':
@@ -386,6 +429,13 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
         raise RuntimeResultError('result_client_unavailable') from None
 
 
+def _goal_usage(snapshot):
+    """The goal part of the legacy report; per-run totals come only from recorded runs."""
+    tokens, seconds = snapshot['goal_tokens_used'], snapshot['goal_time_used_seconds']
+    return {'goal_total_tokens': tokens, 'goal_time_used_seconds': seconds,
+            'goal_usage_source': 'unavailable' if tokens is None and seconds is None else 'host_reported'}
+
+
 def orchestration_client(state_root, project_root, operation, *, host_client, orchestration_handle=None,
                          request_id=None, expected_sequence=None, goal_tokens_used=None, goal_time_used_seconds=None,
                          status=None):
@@ -397,7 +447,7 @@ def orchestration_client(state_root, project_root, operation, *, host_client, or
     try:
         state = CollectorPaths(state_root)
         scope, control, endpoint = read_runtime_hint(state, project_root)
-        enroll_host_client(state, project_root, scope, (control, endpoint), host_client)
+        enroll_clients(state, project_root, scope, (control, endpoint), host_client=host_client)
         actor = OrchestrationScope(**vars(scope))
         client = OrchestrationClient(endpoint, actor, timeout=10)
         if operation == 'orchestration.open':
@@ -410,7 +460,7 @@ def orchestration_client(state_root, project_root, operation, *, host_client, or
             if snapshot['client_version'] != host_client:
                 raise HostClientMismatch('host_client_mismatch')
             if operation == 'orchestration.status':
-                return {'ready': True, **snapshot, **current, 'request_id': identity}
+                return {'ready': True, **snapshot, **current, 'usage': _goal_usage(snapshot), 'request_id': identity}
             payload['expected_sequence'] = snapshot['sequence'] if expected_sequence is None else expected_sequence
             if operation in {'orchestration.checkpoint', 'orchestration.close'}:
                 payload.update(goal_tokens_used=goal_tokens_used, goal_time_used_seconds=goal_time_used_seconds)
@@ -427,7 +477,7 @@ def orchestration_client(state_root, project_root, operation, *, host_client, or
     except (HistoryError, HostClientMismatch) as error:
         raise RuntimeOrchestrationError(error.reason_code, request_id=identity,
                                        expected_sequence=captured_sequence) from None
-    return {'ready': True, **snapshot, **result, 'request_id': identity,
+    return {'ready': True, **snapshot, **result, 'usage': _goal_usage(snapshot), 'request_id': identity,
             **({'expected_sequence': captured_sequence} if captured_sequence is not None else {})}
 
 
@@ -444,9 +494,11 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
             or api_keys_present(os.environ)):
         raise RuntimeOpenError('open_not_authorized')
     try:
-        scope, endpoints = _read_runtime_endpoints(CollectorPaths(state_root), project_root, account=True)
+        state = CollectorPaths(state_root)
+        scope, endpoints = _read_runtime_endpoints(state, project_root, account=True)
         if len(endpoints) != 3:
             raise RuntimeOpenError('open_unavailable')
+        enroll_clients(state, project_root, scope, endpoints[:2], account=endpoints[2], host_client=host_client)
         prospective = OrchestrationScope(**vars(scope))
         digest = open_inputs_digest(assignment, task, route, parent_grant)
         project_scope = HistoryClient(endpoints[1], scope.project_id, scope.runtime_digest, timeout=10).original_open_scope(
@@ -473,6 +525,7 @@ def dispatch_codex_client(state_root, project_root, run_handle, task, route, ass
         raise DispatchError('dispatch_not_authorized')
     state = CollectorPaths(state_root)
     scope, endpoint, result_endpoint = read_runtime_hint(state, project_root)
+    enroll_clients(state, project_root, scope, (endpoint, result_endpoint))
     client = DispatchClient(endpoint, result_endpoint, scope, timeout=2)
     seconds, _ = effective_dispatch_limits(route, assignment)
     old = {}

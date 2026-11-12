@@ -26,17 +26,21 @@ from .hosts import HOST_CLIENTS
 from .learning_contracts import canonical_json, keyed_digest, parse_bounded_json
 
 ENROLLMENT_VERSION = 1
-ROLES = frozenset({'host'})
+# A host credential is per project; the account credential is per state root and
+# names the project root it acts for, checked by the account owner.
+ROLES = frozenset({'host', 'account'})
+MAX_SUBJECT_BYTES = 4_096
 PROOF_DIRECTORY = 'proofs'
 MAX_PROOFS = 4_096
 KEY_BYTES = 32
-MAX_PREAMBLE_BYTES = 512
+MAX_PREAMBLE_BYTES = 8_192
 MAX_WINDOW_MS = 120_000
 MAX_NONCES = 65_536
 REASON_CODES = frozenset({
     'enrollment_invalid', 'enrollment_unavailable', 'enrollment_stale', 'enrollment_replayed', 'enrollment_overloaded',
 })
-_FIELDS = ('enrollment_version', 'role', 'host_client', 'generation', 'issued_at_ms', 'nonce', 'request_digest')
+_FIELDS = ('enrollment_version', 'role', 'host_client', 'generation', 'issued_at_ms', 'nonce', 'request_digest',
+           'subject')
 _HEX = frozenset('0123456789abcdef')
 
 
@@ -54,10 +58,18 @@ def _integer(value, *, minimum=0, maximum=2**63 - 1):
     return type(value) is int and minimum <= value <= maximum
 
 
+def _subject(value):
+    return value is None or (type(value) is str and 0 < len(value.encode()) <= MAX_SUBJECT_BYTES
+                             and '\0' not in value and Path(value).is_absolute())
+
+
 def capability_path(state, project_root, role):
-    if type(state) is not CollectorPaths or role not in ROLES:
+    """A project's host key, or with no project the state root's account key."""
+    if type(state) is not CollectorPaths or role not in ROLES or (project_root is None) != (role == 'account'):
         raise EnrollmentError('enrollment_invalid')
     try:
+        if project_root is None:
+            return state.root / 'client-runtimes' / 'account.cap'
         root = _canonical_project_root(Path(project_root))
         return state.root / 'client-runtimes' / (keyed_digest(state.digest_key(), str(root)) + '.' + role + '.cap')
     except (StateError, OSError, ValueError):
@@ -128,6 +140,11 @@ def read_capability(state, project_root, role):
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def account_endpoint_path(state):
+    """The account services' fixed endpoint under the state root."""
+    return state.root / 'rt' / 'account' / 'a.sock'
 
 
 def proof_directory(endpoint):
@@ -204,13 +221,15 @@ def request_digest(message):
     return hashlib.sha256(message).hexdigest()
 
 
-def enrollment_preamble(key, role, host_client, generation, message, proofs, *, now_ms=None, nonce=None):
+def enrollment_preamble(key, role, host_client, generation, message, proofs, *, subject=None, now_ms=None, nonce=None):
     """Client side: prove write access, then name exactly this request frame once."""
     fields = {'enrollment_version': ENROLLMENT_VERSION, 'role': role, 'host_client': host_client,
               'generation': generation, 'issued_at_ms': time.time_ns() // 1_000_000 if now_ms is None else now_ms,
-              'nonce': secrets.token_hex(16) if nonce is None else nonce, 'request_digest': request_digest(message)}
+              'nonce': secrets.token_hex(16) if nonce is None else nonce, 'request_digest': request_digest(message),
+              'subject': subject}
     if (type(key) is not bytes or len(key) != KEY_BYTES or role not in ROLES or host_client not in HOST_CLIENTS
-            or not _integer(generation, minimum=1) or not _integer(fields['issued_at_ms']) or not _hex(fields['nonce'], 32)):
+            or not _integer(generation, minimum=1) or not _integer(fields['issued_at_ms']) or not _hex(fields['nonce'], 32)
+            or not _subject(subject) or (subject is None) != (role == 'host')):
         raise EnrollmentError('enrollment_invalid')
     line = canonical_json({**fields, 'mac': _mac(key, fields)})
     if len(line) + 1 > MAX_PREAMBLE_BYTES or b'\n' in line or not isinstance(proofs, Path):
@@ -226,6 +245,7 @@ class Enrolled:
     host_client: str
     generation: int
     request_digest: str
+    subject: str | None = None
 
 
 class EnrollmentVerifier:
@@ -254,6 +274,7 @@ class EnrollmentVerifier:
                 or type(value['enrollment_version']) is not int
                 or type(value['role']) is not str or type(value['host_client']) is not str
                 or value['host_client'] not in HOST_CLIENTS or not _integer(value['generation'], minimum=1)
+                or not _subject(value['subject'])
                 or not _integer(value['issued_at_ms']) or not _hex(value['nonce'], 32)
                 or not _hex(value['request_digest'], 64) or not _hex(value['mac'], 64)
                 or canonical_json(value) != line):
@@ -287,4 +308,5 @@ class EnrollmentVerifier:
         # The MAC shows the key was read; only this file shows the sender can
         # write the state root. A nonce without its proof stays spent.
         _consume_proof(self._proofs, value['nonce'])
-        return Enrolled(value['role'], value['host_client'], value['generation'], value['request_digest'])
+        return Enrolled(value['role'], value['host_client'], value['generation'], value['request_digest'],
+                        value['subject'])

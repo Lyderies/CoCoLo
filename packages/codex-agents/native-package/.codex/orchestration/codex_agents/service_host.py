@@ -31,11 +31,10 @@ from .orchestration_service import OrchestrationAuthorization
 from .project_runtime import ProjectRuntime, ProjectRuntimeLimits
 from .service_enrollment import (
     MAX_NONCES, MAX_PREAMBLE_BYTES, MAX_WINDOW_MS, Enrolled, EnrollmentError, EnrollmentVerifier,
-    issue_capability, prepare_proof_directory, proof_directory, prune_proofs, revoke_capability,
+    account_endpoint_path, issue_capability, prepare_proof_directory, proof_directory, prune_proofs, revoke_capability,
 )
 
 MAX_SOCKET_PATH_BYTES = 100  # Below the smallest supported sun_path, including its terminator.
-ACCOUNT_ENDPOINT_NAME = 'account.sock'
 _KINDS = ('control', 'project')
 
 
@@ -352,7 +351,7 @@ class ProjectServiceHost:
             'project_root_digest': keyed_digest(self._state.digest_key(), str(self._project_root)),
             'scope': self._scope.as_data(), 'dispatch_endpoint': str(self._endpoints['control']),
             'result_endpoint': str(self._endpoints['project'])}
-        account = self._state.root / ACCOUNT_ENDPOINT_NAME
+        account = account_endpoint_path(self._state)
         try:
             # Name the account endpoint only while one exists; it is a hint either way.
             if stat.S_ISSOCK(account.lstat().st_mode):

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -27,6 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state-root", type=Path)
     parser.add_argument("--project-root", required=True, type=Path)
     args = parser.parse_args(argv)
+    os.chdir("/")  # Hold no working directory open for as long as the host lives.
     try:
         state = CollectorPaths(args.state_root)
         require_authorized_collector_runtime(state)

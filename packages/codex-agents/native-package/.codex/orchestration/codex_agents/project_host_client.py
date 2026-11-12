@@ -6,7 +6,6 @@ Imports no persistence owner: the host runs as its own process from
 import fcntl
 import os
 from pathlib import Path
-import subprocess
 import sys
 import time
 
@@ -77,16 +76,18 @@ def ensure_project_host(state_root, orchestration_root, project_root, *, timeout
 
 
 def _start(state, entry, root, serving, timeout):
-    process = subprocess.Popen(
+    # A detached service outlives this client, so no Popen object is kept to be
+    # collected while it runs. Python opens no other descriptor as inheritable.
+    actions = [(os.POSIX_SPAWN_OPEN, fd, os.devnull, os.O_RDWR, 0) for fd in (0, 1, 2)]
+    pid = os.posix_spawn(sys.executable,
         [sys.executable, *PYTHON_ISOLATION_FLAGS, str(entry), '--state-root', str(state.root), '--project-root', str(root)],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd='/', close_fds=True,
         # No inherited environment, as for the collector.
-        env={'PATH': os.defpath, 'xcrun_nocache': '1'}, start_new_session=True)
+        {'PATH': os.defpath, 'xcrun_nocache': '1'}, file_actions=actions, setsid=True)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if serving():
             return True
-        if process.poll() is not None:
+        if os.waitpid(pid, os.WNOHANG)[0] == pid:
             return serving()  # It refused or lost the race to another starter.
         time.sleep(0.02)
     return False

@@ -126,6 +126,8 @@ from codex_agents.client_runtime import (  # noqa: E402
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.project_host_client import ensure_project_host  # noqa: E402
+from codex_agents.admission_metadata import api_keys_present  # noqa: E402
+from codex_agents.host_paths import PYTHON_ISOLATION_FLAGS  # noqa: E402
 from codex_agents.cli_reports import command_report  # noqa: E402
 from codex_agents.collector_contracts import (  # noqa: E402
     CollectorError,
@@ -136,7 +138,6 @@ from codex_agents.collector_contracts import (  # noqa: E402
 from codex_agents.collector_runtime import validate_collector_runtime  # noqa: E402
 from codex_agents.learning_store import (  # noqa: E402
     CollectorMaintenance,
-    CollectorServer,
     LearningLedger,
     LearningState,
     LedgerError,
@@ -391,6 +392,18 @@ def _with_codex_hint(command: str, report: dict) -> dict:
     ):
         return {**report, "hint": CODEX_SANDBOX_HINT}
     return report
+
+
+def _start_collector_quietly(args: argparse.Namespace) -> None:
+    """Best effort: a client that still finds no collector reports it unavailable.
+
+    A failed start never stops the command itself from reporting what it can see.
+    """
+    try:
+        ensure_collector(CollectorPaths(args.state_root), ORCHESTRATION_ROOT / "cli.py",
+                         project_root=args.project_root)
+    except Exception:
+        pass
 
 
 def _resolved(path: Path) -> Path:
@@ -1675,21 +1688,15 @@ def main() -> int:
                 "state_moved": str(moved_aside) if moved_aside is not None else None,
             }
         elif args.command == "learning-serve":
+            # The collector and the account services run from their own entry,
+            # so this client imports none of the account persistence owners.
             state = LearningState(args.state_root, create=False)
             require_authorized_collector_runtime(state)
-            ledger = LearningLedger(state)
-            server = CollectorServer(ledger)
-            try:
-                server.start()
-                while not server.wait(0.5):
-                    pass
-            except KeyboardInterrupt:
-                pass
-            finally:
-                server.stop()
-                _close_ledger(ledger)
-            report = {"ready": True, "stopped": True}
+            sys.stdout.flush()
+            os.execv(sys.executable, [sys.executable, *PYTHON_ISOLATION_FLAGS,
+                                      str(ORCHESTRATION_ROOT / "collector_host.py"), "--state-root", str(state.root)])
         elif args.command == "learning-status":
+            _start_collector_quietly(args)
             report = status_client(args.state_root, args.project_root)
             if report.get('reason_code') == 'status_collector_transport_unavailable':
                 _COLLECTOR_UNREACHED = True
@@ -1819,6 +1826,9 @@ def main() -> int:
                     check_backend(os.environ, args.project_root.resolve())
                 if args.fallback_receipt is not None:
                     raise ContractError('bridged open never uses a fallback receipt')
+                if api_keys_present(os.environ):
+                    # The same admission refusal the account owner would give, before any request.
+                    raise AdmissionDenied('provider_api_key_present')
                 report = open_codex_client(args.state_root, args.project_root, args.orchestration_handle,
                     task, supplied_route, assignment, parent_grant, host_client=host)
                 _print_command_report(args, report)
@@ -1955,6 +1965,7 @@ def main() -> int:
                 return 2
             report = completed_dispatch
         elif args.command == "provider-observe":
+            _start_collector_quietly(args)
             if not args.billing_probe:
                 report = observe_provider_client(args.state_root, args.project_root, args.provider,
                     request_id=args.request_id, run_handle=args.run_handle, phase=args.phase)
