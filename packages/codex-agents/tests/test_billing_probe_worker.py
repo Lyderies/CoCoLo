@@ -168,6 +168,55 @@ class BillingProbeWorkerTests(unittest.TestCase):
                             for r in records))
         self.assertFalse(any(r['record_type'] == 'provider_billing' for r in records))
 
+    def test_stream_read_failure_keeps_observed_restriction_after_actual_cleanup(self):
+        warning = {**fixtures.FAVOURABLE, 'rate_limit_info': {
+            **fixtures.FAVOURABLE['rate_limit_info'], 'status': 'allowed_warning', 'utilization': .9}}
+        original_read, original_classify = bridge.os.read, bridge.claude_rate_limit_records
+        armed, injected, event_descriptor = False, False, None
+
+        def classify(info, **arguments):
+            nonlocal armed
+            result = original_classify(info, **arguments)
+            if (info == warning['rate_limit_info'] and not injected
+                    and threading.current_thread() is self.pool._slots[0].thread):
+                armed = True
+            return result
+
+        def read(descriptor, *arguments):
+            nonlocal armed, injected, event_descriptor
+            if (armed and descriptor == event_descriptor
+                    and threading.current_thread() is self.pool._slots[0].thread):
+                armed, injected = False, True
+                raise OSError('PRIVATE-STREAM-FAILURE')
+            chunk = original_read(descriptor, *arguments)
+            if (b'"rate_limit_event"' in chunk
+                    and threading.current_thread() is self.pool._slots[0].thread):
+                event_descriptor = descriptor
+            return chunk
+
+        with mock.patch.object(bridge, 'claude_rate_limit_records', new=classify), \
+                mock.patch.object(bridge.os, 'read', new=read):
+            handle, prepared, ticket, supervisor = self.launch([
+                fixtures.PROBE_INIT, fixtures.FAVOURABLE, warning,
+                {'sleep': .1}, fixtures.result_frame('OK'),
+            ])
+            packet = self.returned(handle)
+        self.assertTrue(injected)
+        self.assertTrue(packet.workspace_removed)
+        self.assertFalse(prepared.workspace.exists())
+        self.assertTrue(supervisor.snapshot()['cleanup_confirmed'])
+        self.assertTrue(supervisor.snapshot()['worker_returned'])
+        self.registry.retain_cleanup(ticket, self.pool, handle, consumer=threading.current_thread())
+        self.registry.acknowledge_release(ticket)
+        self.pool.retire(handle)
+        self.assertEqual(0, self.pool._charged)
+        self.assertEqual('probe_incomplete', packet.reason_code)
+        value = json.loads(packet.body)
+        self.assertTrue(any(r['record_type'] == 'provider_headroom' and r['status'] == 'allowed_warning'
+                            for r in value['records']))
+        self.assertFalse(any(r['record_type'] == 'provider_billing' for r in value['records']))
+        self.assertNotIn('PRIVATE-STREAM-FAILURE', packet.body.decode())
+
     def test_paid_usage_stops_before_another_frame_and_preserves_its_restriction(self):
         start = time.monotonic()
         handle, _, _, supervisor = self.launch([fixtures.PROBE_INIT, fixtures.OVERAGE,

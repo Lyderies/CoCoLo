@@ -1654,8 +1654,13 @@ def _run_claude_billing_probe(arguments, *, environment, cwd, deadline_seconds, 
                     "tool_use", "tool_result", "server_tool_use"} for item in content):
                 raise _Abort("probe_tool_not_allowed")
 
-    outcome = run_child(arguments, environment=environment, cwd=cwd,
-        deadline_seconds=deadline_seconds, on_frame=on_frame, _execution=execution)
+    try:
+        outcome = run_child(arguments, environment=environment, cwd=cwd,
+            deadline_seconds=deadline_seconds, on_frame=on_frame, _execution=execution)
+    except BaseException:
+        # run_child still owns actual cleanup. Retaining an observed restriction
+        # grants neither a successful probe nor confirmed execution release.
+        return state["infos"], "probe_process_failed"
     reason = outcome["abort"]
     if reason is None:
         if outcome["returncode"] != 0:
