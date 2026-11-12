@@ -90,6 +90,8 @@ from .contracts import (
     validate_task,
 )
 from .learning_contracts import (
+    PRODUCER_AUTHORITY as PRODUCER_AUTHORITY,
+    PROVIDER_OBSERVATION_TYPES as PROVIDER_OBSERVATION_TYPES,
     DISPATCH_RESULT_SCHEMA_VERSION,
     MAX_RECORD_BYTES,
     RECORD_TYPES,
@@ -168,31 +170,12 @@ MAX_PENDING_OPERATIONAL_CHECKS = 256
 # never needs more.
 MAX_WORKER_RESULT_BYTES = MAX_RESULT_BODY_BYTES
 INGESTION_FRESH_MS = 30 * 60 * 1000
-PRODUCER_AUTHORITY = {
-    "hook": {"event"},
-    "app_server": {"event"},
-    "host": {"event", "learning_export"},
-    "evaluator": {
-        "outcome", "evaluation_case", "evaluation_assignment", "evaluation_trial", "candidate",
-        "comparison", "canary_report",
-    },
-    "verifier": {"outcome", "qa_evidence", "evidence_review"},
-    "owner": {
-        "feedback", "owner_grant", "grader_calibration", "billing_attestation",
-    },
-    "lifecycle": {"promotion"},
-}
 # Runs opened with this client are bridged: only `dispatch` may run their child.
 BRIDGE_CLIENT_VERSION = "bridge-v1"
 # Billing evidence younger than this is reused instead of probing again.
 PROBE_REUSE_SECONDS = 300
 # A launched probe reserves its account for this long, whatever it returned.
 PROBE_COOLDOWN_SECONDS = 300
-# Only ledger methods that run the observation themselves may write these.
-PROVIDER_OBSERVATION_TYPES = {
-    "provider_identity", "provider_headroom", "provider_billing",
-    "observation_unavailable", "provider_usage",
-}
 # A run keeps only rate-limit events more restrictive than those it already
 # recorded, so this cap is reached only by a stream that keeps escalating.
 MAX_RUN_RATE_LIMIT_RECORDS = 64

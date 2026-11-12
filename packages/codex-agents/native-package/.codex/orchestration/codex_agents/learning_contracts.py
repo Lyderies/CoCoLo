@@ -19,6 +19,26 @@ from typing import Any, Callable
 from .contracts import ContractError, RESULT_DIAGNOSTIC_REASON_CODES, RESULT_VALIDATION_REASON_CODES
 
 
+PRODUCER_AUTHORITY = {
+    "hook": {"event"},
+    "app_server": {"event"},
+    "host": {"event", "learning_export"},
+    "evaluator": {
+        "outcome", "evaluation_case", "evaluation_assignment", "evaluation_trial", "candidate",
+        "comparison", "canary_report",
+    },
+    "verifier": {"outcome", "qa_evidence", "evidence_review"},
+    "owner": {
+        "feedback", "owner_grant", "grader_calibration", "billing_attestation",
+    },
+    "lifecycle": {"promotion"},
+}
+# Only ledger methods that run the observation themselves may write these.
+PROVIDER_OBSERVATION_TYPES = {
+    "provider_identity", "provider_headroom", "provider_billing",
+    "observation_unavailable", "provider_usage",
+}
+
 SCHEMA_VERSION = 1
 MAX_RECORD_BYTES = 65_536
 MAX_OUTCOME_EVIDENCE_DIGESTS = 64
