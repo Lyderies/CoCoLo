@@ -6,6 +6,7 @@ disables the protected-entry and own-roots checks, so those are not exercised;
 `test_project_service_startup` drives the unmodified CLI.
 """
 from dataclasses import asdict
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,8 +27,8 @@ from codex_agents.learning_contracts import canonical_json
 from codex_agents.orchestration_api import OrchestrationRequest, OrchestrationScope, encode_orchestration_request
 from codex_agents.history_contracts import HistoryError
 from codex_agents.service_enrollment import (
-    EnrollmentError, EnrollmentVerifier, capability_path, enrollment_preamble, prepare_proof_directory,
-    proof_directory, read_capability,
+    EnrollmentError, EnrollmentVerifier, _mac, capability_path, enrollment_preamble, prepare_proof_directory,
+    proof_directory, read_capability, withdraw_proof,
 )
 from codex_agents.service_host import EnrolledFrontend, ServiceHostLimits
 
@@ -402,6 +403,54 @@ class EnrolledFrontendTests(unittest.TestCase):
         self.frontend.close()
         self.assertIsNone(self.frontend.context(token))
         self.assertFalse((self.root/'p.sock').exists())
+
+
+class EnrollmentProofTests(unittest.TestCase):
+    """The verifier alone: what a reader of the key can and cannot do with a writer's proof."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(self.temp.cleanup)
+        self.proofs = Path(self.temp.name) / 'proofs'
+        prepare_proof_directory(self.proofs)
+        self.key = b'k' * 32
+
+    def verifier(self, **options):
+        return EnrollmentVerifier(self.key, 'host', 1, self.proofs, **options)
+
+    def test_a_reader_cannot_spend_a_writers_unused_proof_on_another_request(self):
+        verifier = self.verifier()
+        intended = enrollment_preamble(self.key, 'host', 'codex-host-v1', 1, b'{"intended":1}', self.proofs,
+                                       nonce='a' * 32)
+        # A key reader sees the nonce and signs a different request or host class with it,
+        # but cannot write a proof of its own.
+        forged = json.loads(intended)
+        for field, value in (('request_digest', 'f' * 64), ('host_client', 'claude-host-v1')):
+            with self.subTest(field=field):
+                changed = {**forged, field: value}
+                changed.pop('mac')
+                line = canonical_json({**changed, 'mac': _mac(self.key, changed)})
+                with self.assertRaises(EnrollmentError) as refused:
+                    verifier.verify(line)
+                self.assertEqual('enrollment_invalid', refused.exception.reason_code)
+                self.assertTrue((self.proofs / ('a' * 32)).exists())  # Untouched for its writer.
+        self.assertEqual(hashlib.sha256(b'{"intended":1}').hexdigest(), verifier.verify(intended).request_digest)
+        self.assertFalse((self.proofs / ('a' * 32)).exists())
+
+    def test_preambles_without_proofs_spend_no_replay_slots(self):
+        verifier = self.verifier(max_nonces=2)
+        for index in range(5):
+            line = enrollment_preamble(self.key, 'host', 'codex-host-v1', 1, b'{"x":%d}' % index, self.proofs,
+                                       nonce='%032x' % index)
+            withdraw_proof(self.proofs, line)
+            with self.assertRaises(EnrollmentError) as refused:
+                verifier.verify(line)
+            self.assertEqual('enrollment_invalid', refused.exception.reason_code)
+        valid = enrollment_preamble(self.key, 'host', 'codex-host-v1', 1, b'{"valid":1}', self.proofs)
+        self.assertEqual('host', verifier.verify(valid).role)
+        with self.assertRaises(EnrollmentError) as replayed:
+            verifier.verify(valid)
+        self.assertEqual('enrollment_replayed', replayed.exception.reason_code)
 
 
 if __name__ == '__main__':

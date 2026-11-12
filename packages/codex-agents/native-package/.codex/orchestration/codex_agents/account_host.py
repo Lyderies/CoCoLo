@@ -37,8 +37,8 @@ from .signature_worker_pool import SignatureWorkerLimits
 from .sql_read_budget import SQLReadLimits
 
 SECOND = 1_000_000_000
-# What an enrolled primary may ask the account owner. Owner-only operations and
-# launch claims are never offered here. A host open must carry its originals.
+# What an enrolled primary may ask the account owner. Owner-only operations are
+# never offered. A host open must carry its originals; a claim, the run's lease.
 HOST_OPERATIONS = frozenset({
     'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
     'account.observe_provider', 'account.record_observation_unavailable', 'account.billing_probe',

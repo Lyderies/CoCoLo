@@ -42,11 +42,15 @@ from .orchestration_api import OrchestrationScope
 from .prepared_dispatch import DispatchAuthorization, PreparedDispatchContext
 from .result_contracts import LEASE_SCOPE_FIELDS, ResultLeaseBinding
 from .run_provenance import RunProvenanceInput
-from .service_enrollment import account_endpoint_path, enrollment_preamble, proof_directory, read_capability
+from .service_enrollment import (
+    account_endpoint_path, enrollment_preamble, proof_directory, read_capability, withdraw_proof,
+)
 from .service_transport import install_enrollment
 from .terminal_delivery import TerminalSubmissionInput
 
 MAX_RUNS = 16
+MAX_INTAKE = 32  # Driver connections whose one line has not yet arrived.
+INTAKE_SECONDS = 2.0  # Absolute time for that line.
 DISPATCH_SLOTS = 64  # Lifetime dispatch slots of one host, the dispatch service's maximum.
 # Local custody of a released run waits for its primary to record the result,
 # or this long; dispatch status and the result read need that custody.
@@ -93,6 +97,7 @@ class _Run:
     future: object = None
     waiters: list = field(default_factory=list)
     dispatch_tokens: dict = field(default_factory=dict)
+    submit_token: tuple | None = None
     result_admitted: bool = False
     released_at: float | None = None
 
@@ -105,7 +110,7 @@ class RunDriver:
     def __init__(self, state, project_root, bundle_root, scope, runtime, *, clock=time.monotonic):
         self._state, self._root, self._bundle = state, Path(project_root), Path(bundle_root)
         self._scope, self._runtime, self._clock = scope, runtime, clock
-        self._runs, self._closed = {}, False
+        self._runs, self._closed, self._intake = {}, False, []
         self._call = _Call()
         self._account = account_endpoint_path(state)
         self._preparation = runtime.bind_preparation(
@@ -123,9 +128,10 @@ class RunDriver:
         call = self._call
         if Path(socket_path) != self._account or call.role is None:
             return None
-        key = read_capability(self._state, None, 'account')
-        return enrollment_preamble(key, call.role, call.host_client, 1, message, proof_directory(socket_path),
+        key, proofs = read_capability(self._state, None, 'account'), proof_directory(socket_path)
+        line = enrollment_preamble(key, call.role, call.host_client, 1, message, proofs,
                                    subject=str(self._root), context=call.context)
+        return line, lambda: withdraw_proof(proofs, line)
 
     def _account_call(self, run, role, method, *args, custody=None, **options):
         project, host = run.scope.project_id, run.host_client
@@ -148,21 +154,48 @@ class RunDriver:
 
     # Requests from the enrolled CLI on the driver endpoint.
     def handle(self, connection, enrolled):
-        """Read one bounded line from an attached connection; reply now or when the run settles."""
+        """Take an attached connection; its one line is read later, without waiting on it."""
+        if len(self._intake) >= MAX_INTAKE or enrolled.role != 'host':
+            connection.close()
+            return
         try:
-            connection.settimeout(1)
-            raw = bytearray()
-            while b'\n' not in raw:
-                chunk = connection.recv(MAX_REQUEST_BYTES + 1 - len(raw))
-                if not chunk or len(raw) + len(chunk) > MAX_REQUEST_BYTES:
-                    raise ValueError()
-                raw.extend(chunk)
-            line, rest = bytes(raw).split(b'\n', 1)
+            connection.setblocking(False)
+        except OSError:
+            connection.close()
+            return
+        self._intake.append([connection, enrolled, bytearray(), self._clock() + INTAKE_SECONDS])
+
+    def _read_intake(self):
+        """Owner step: read what has arrived, never block, and drop late or oversized senders."""
+        now, remaining = self._clock(), []
+        for item in self._intake:
+            connection, enrolled, raw, deadline = item
+            try:
+                while b'\n' not in raw:
+                    chunk = connection.recv(MAX_REQUEST_BYTES + 1 - len(raw))
+                    if not chunk or len(raw) + len(chunk) > MAX_REQUEST_BYTES:
+                        raise ValueError()
+                    raw.extend(chunk)
+            except (BlockingIOError, InterruptedError):
+                if now >= deadline:
+                    connection.close()  # Bytes trickled in slowly never extend the deadline.
+                else:
+                    remaining.append(item)
+                continue
+            except Exception:
+                connection.close()
+                continue
+            self._request(connection, enrolled, bytes(raw))
+        self._intake = remaining
+
+    def _request(self, connection, enrolled, raw):
+        try:
+            line, rest = raw.split(b'\n', 1)
             if rest or hashlib.sha256(line).hexdigest() != enrolled.request_digest:
                 raise ValueError()
             request = json.loads(line)
             if (type(request) is not dict or request.keys() != {'protocol', 'operation', 'run_handle', 'attempt', 'inputs_digest'}
-                    or request['protocol'] != 1 or request['operation'] not in {'run.register', 'run.prepare'}
+                    or request['protocol'] != 1 or request['operation'] not in {'run.register', 'run.prepare', 'run.recorded'}
                     or not matches(request['run_handle'], _ID) or type(request['attempt']) is not int
                     or not matches(request['inputs_digest'], _DIGEST)):
                 raise ValueError()
@@ -173,20 +206,39 @@ class RunDriver:
         key = (request['run_handle'], request['attempt'])
         try:
             if request['operation'] == 'run.register':
-                self._register(key, request['inputs_digest'], context)
+                self._register(key, request['inputs_digest'], context, enrolled.host_client)
+            elif request['operation'] == 'run.prepare':
+                self._prepare(key, request['inputs_digest'], context, enrolled.host_client)
             else:
-                self._prepare(key, request['inputs_digest'], context)
+                self._recorded(key, request['inputs_digest'], enrolled.host_client)
         except HistoryError as error:
             self._reply(connection, {'state': 'refused', 'reason_code': error.reason_code})
             return
         run = self._runs[key]
-        if request['operation'] == 'run.register' or run.state in _AFTER or run.state == 'failed':
+        if request['operation'] != 'run.prepare' or run.state in _AFTER or run.state == 'failed':
             self._reply(connection, self._view(run))
         else:
             run.waiters.append((connection, self._clock() + WAIT_SECONDS))
 
-    def _register(self, key, inputs_digest, value):
-        if value.keys() != _REGISTER_FIELDS or value['purpose'] != 'register' or value['host_client'] not in HOST_CLIENTS:
+    def _recorded(self, key, inputs_digest, host_client):
+        """The opening primary reports its result admitted; custody may then retire.
+
+        Only after its own successful admission does the CLI say so. A false
+        report can only shorten custody of that host class's own released run.
+        """
+        run = self._runs.get(key)
+        if run is None:
+            raise HistoryError('history_orchestration_unavailable')
+        if run.host_client != host_client:
+            raise HistoryError('history_not_authorized')
+        if run.inputs_digest != inputs_digest:
+            raise HistoryError('history_conflict')
+        run.result_admitted = True
+
+    def _register(self, key, inputs_digest, value, host_client):
+        # The host class is the enrolled one; the context may only repeat it.
+        if (value.keys() != _REGISTER_FIELDS or value['purpose'] != 'register' or host_client not in HOST_CLIENTS
+                or value['host_client'] != host_client):
             raise HistoryError('history_invalid_input')
         if open_inputs_digest(value['assignment'], value['task'], value['route'], value['parent_grant']) != inputs_digest:
             raise HistoryError('history_conflict')
@@ -194,6 +246,8 @@ class RunDriver:
             raise HistoryError('history_conflict')
         known = self._runs.get(key)
         if known is not None:
+            if known.host_client != host_client:
+                raise HistoryError('history_not_authorized')
             if known.inputs_digest != inputs_digest or known.run_id != value['run_id']:
                 raise HistoryError('history_conflict')
             return
@@ -202,12 +256,14 @@ class RunDriver:
         prospective = OpenScopeContext(self._scope, value['orchestration_handle'], value['assignment'], value['task'],
                                        value['route'], value['parent_grant'])
         prospective.snapshot()
-        self._runs[key] = _Run(key, self._scope, value['host_client'], prospective, value['run_id'], inputs_digest)
+        self._runs[key] = _Run(key, self._scope, host_client, prospective, value['run_id'], inputs_digest)
 
-    def _prepare(self, key, inputs_digest, value):
+    def _prepare(self, key, inputs_digest, value, host_client):
         run = self._runs.get(key)
         if run is None:
             raise HistoryError('history_orchestration_unavailable')
+        if run.host_client != host_client:
+            raise HistoryError('history_not_authorized')  # Only the host class that opened it.
         if run.inputs_digest != inputs_digest:
             raise HistoryError('history_conflict')
         if run.state != 'registered':
@@ -231,9 +287,10 @@ class RunDriver:
 
     @staticmethod
     def _reply(connection, value):
+        """One small reply without waiting: a peer not reading it simply loses it."""
         try:
-            connection.settimeout(2)
-            connection.sendall(canonical_json({'protocol': 1, **value}) + b'\n')
+            connection.setblocking(False)
+            connection.send(canonical_json({'protocol': 1, **value}) + b'\n')
         except OSError:
             pass
         finally:
@@ -254,14 +311,19 @@ class RunDriver:
         if run is None or run.context is None or run.state not in _AFTER - {'released'}:
             return None
         digest = dispatch_request_digest(request)
-        if run.dispatch_tokens.get(token) != digest:
+        # The submit's own token is pinned for as long as the driver holds the run;
+        # status tokens are short-lived and bounded, and never displace it.
+        if run.submit_token != (token, digest) and run.dispatch_tokens.get(token) != digest:
             enrolled = None if self._enrolled is None else self._enrolled(token)
             if (enrolled is None or enrolled.role != 'host' or digest != enrolled.request_digest
                     or run.host_client != enrolled.host_client):
                 return None
-            if len(run.dispatch_tokens) >= 256:
-                run.dispatch_tokens.pop(next(iter(run.dispatch_tokens)))
-            run.dispatch_tokens[token] = digest
+            if request.operation == 'dispatch.submit' and run.submit_token is None:
+                run.submit_token = (token, digest)
+            else:
+                if len(run.dispatch_tokens) >= 256:
+                    run.dispatch_tokens.pop(next(iter(run.dispatch_tokens)))
+                run.dispatch_tokens[token] = digest
         return DispatchAuthorization(self._control_scope(), digest, run.context,
                                      frozenset({'dispatch.submit', 'dispatch.status'}))
 
@@ -278,7 +340,6 @@ class RunDriver:
         run = self._runs[(binding.run_handle, binding.attempt)]
         capability = load_client_capabilities(
             self._bundle / '.codex' / 'orchestration' / 'config' / 'learning-clients.json')['bridge-v1']
-        run.result_admitted = True
         original = run.prospective
         return HostResultContext(run.binding, original.assignment, original.task, original.route, capability)
 
@@ -297,6 +358,7 @@ class RunDriver:
     def step(self):
         if self._closed:
             return
+        self._read_intake()
         for run in list(self._runs.values()):
             try:
                 self._advance(run)
@@ -521,6 +583,9 @@ class RunDriver:
             return
         self._closed = True
         install_enrollment(None, owner=self._owner_name)
+        for connection, *_ in self._intake:
+            connection.close()
+        self._intake = []
         for run in self._runs.values():
             for connection, _ in run.waiters:
                 connection.close()

@@ -20,13 +20,18 @@ is written to be shared with the account host.
 
 Enrollment has two parts, defined in `service_enrollment`:
 
-- **Proof of write.** For every request the client creates an empty single-use file,
-  named by a fresh nonce, in the host's owner-only `proofs` directory beside the
-  socket. The host accepts a preamble only if that file exists, is an owner-made
-  regular file with one link, and removes it as it accepts. Only a process that can
-  write the state root can do this. That is the same set of processes that could
-  write the ledger in 0.2.x. A sandboxed session that can read the state root, and
-  therefore the capability file, still cannot enroll.
+- **Proof of write.** For every request the client creates a single-use file, named
+  by a fresh nonce, in the host's owner-only `proofs` directory beside the socket.
+  Its first line is the writer's binding: every signed field of the preamble,
+  including the request digest, role, host class, subject and context digest; any
+  context follows. The host accepts a preamble only if that file exists, is an
+  owner-made regular file with one link, and its binding equals the preamble
+  exactly; it removes the file as it accepts, and only then records the nonce. Only
+  a process that can write the state root can make a proof, which is the set of
+  processes that could write the ledger in 0.2.x. A session that can only read the
+  state root, and therefore the key, can sign a preamble but cannot spend another
+  writer's unused proof on a different request: the binding would not match. A
+  client withdraws its proof when the request is never delivered.
 - **Capability.** A random 32-byte key in an owner-only file, replaced on every host
   start. The client sends one preamble line ahead of its request: role, host class,
   host generation, issue time, the nonce and the request's SHA-256, under an HMAC of
@@ -36,8 +41,8 @@ Enrollment has two parts, defined in `service_enrollment`:
 The verified connection is attached with an opaque token. The role, host class and
 request digest stay in the host. On the project endpoint the ingress authorizer
 admits only the exact request the preamble named, again before each reply is sent.
-The control endpoint enrolls connections the same way but has no authorizer yet, so
-it grants nothing; its future authorizer must add the same exact-request check.
+The control endpoint enrolls connections the same way; its status, cancellation and
+dispatch authorizers check the exact request digest too (see the run driver below).
 A preamble that is replayed, altered, for another generation or request, or issued
 outside the freshness window is closed without a reply. The window tolerates clock
 difference in both directions, so a timestamp slightly in the future is accepted.
@@ -96,10 +101,9 @@ request releases the ledger within a few seconds (tested).
 Account enrollment uses role `account`, a state-wide key that is replaced on every
 collector start, and the same proof of write. The preamble also signs the project
 root the client acts for. The owner admits a request only when that root is
-registered to the requested project, only for health, project, owner-key,
-capacity-status, provider-observation, observation-failure and billing-probe
-operations, and with a caller scope derived from the host class and project.
-Owner-only operations, launch claims and host opens are not offered.
+registered to the requested project, with a caller scope derived from the host class
+and project. The operations each role gets are listed under the run driver below;
+owner-only operations are never offered to either role.
 
 `learning-status` and `provider-observe` start the collector if it is down, as the
 lifecycle commands start a project host. They find the account through the project
@@ -117,8 +121,9 @@ is refused with the legacy `provider_api_key_present` admission reason.
 
 A preamble may also sign the SHA-256 of a bounded context (at most 256 KiB) that the
 client writes into the request's single-use proof file. The owner reads the file
-once, checks the digest and removes it, so the context reaches only the request it
-was signed for, and only from a process that can write the state root. This is how
+once, checks it against the writer's binding and the signed digest, and removes it,
+so the context reaches only the request its writer named, and only from a process
+that can write the state root. This is how
 the trusted CLI hands an owner the protected originals that the 0.2.x CLI passed to
 the ledger directly; it is not process identity.
 
@@ -213,6 +218,19 @@ at most 16 runs and 64 dispatch slots over its lifetime; once either is used up 
 no run is in progress, the host ends itself and the next command starts a fresh
 one. That recycling is not yet covered by a test.
 
+A second independent review (3a00b8f..3e97d65, Codex reviewer with a Claude
+verifier) found, and this branch then fixed: proofs that held only context and so
+could be spent by a key reader on another request (now bound to the writer's full
+request); nonces recorded before the proof was checked; the driver reading its
+socket while blocking the owner thread (now non-blocking with a two-second absolute
+deadline); driver registration and preparation not checking the enrolled host
+class; status polling able to evict a running dispatch's submit token (now
+pinned); result admission marked at authorization rather than after commit (the
+CLI now reports `run.recorded` after a successful admission); the never-freed run
+table; and stale documentation. Operational QA recorded the pair as not accepted
+because the verifier corrected and extended the findings. The fixes have not been
+reviewed again.
+
 Not done: no retry, cancellation-before-dispatch or abandonment path through the
 driver, no driver state across a host restart (a run opened before a restart is
 refused at dispatch and keeps its account capacity until reconciled), the
@@ -221,9 +239,25 @@ the legacy ledger.
 
 ### What is and is not covered
 
-Project hosts authorize only the orchestration lifecycle (`orchestration.*`);
-history, result-read, control and dispatch authorizers still default to denial, so
-a Codex host open stops at `history_not_authorized`. There is no per-run driver yet. A project host stops on a signal, after
+Operation and role matrix. Project host, role `host` (per-project key): the
+orchestration lifecycle; `history.open_scope` with originals in context;
+`history.read_record`; `history.admit_host_result` for a run the driver holds for
+that host class; result reads, status, cancellation and dispatch for such runs; and
+the run driver's `run.register`, `run.prepare` and `run.recorded`. Account owner,
+role `account` (state-wide key, signed project root): health, project, owner-key
+status, capacity status, provider observation and failure recording, billing probe,
+`open_host_run` with originals and project proof, and `claim_launch` with the run's
+lease and sealed evidence. Role `project` (same key): health, run observations and
+failure recording, open and run provenance, registration, terminal submission,
+capacity release and denial closure, each with the run's lease and sealed evidence.
+
+Host class is a consistency label, as in 0.2.x (`hosts.py`), not an authority
+boundary between writers: record reads are not limited by host class, and run
+registration is first-come, so one state-root writer can block another's
+registration (the account run then stays open until reconciled). Neither is
+reachable by a session that can only read the state root.
+
+A project host stops on a signal, after
 fifteen idle minutes with no run held, or when its hint or lock file is removed;
 there is no drain command or status command for it yet, and a host that fails
 leaves no diagnostic because its output is discarded.

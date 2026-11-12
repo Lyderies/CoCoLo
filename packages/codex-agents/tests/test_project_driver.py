@@ -9,6 +9,7 @@ import contextlib
 import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -327,6 +328,45 @@ class ProjectDriverTests(DriverHarness):
         settled = self.cli('learning-run-status', *target)
         self.assertTrue(settled['stop_requested'])
         self.assertEqual('cancel_requested', settled['stop_reason'])
+
+    def test_only_the_opening_host_class_can_prepare_and_dispatch_its_run(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        with mock.patch.dict(os.environ):
+            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
+                os.environ.pop(name, None)
+            if self.primary == 'claude':
+                os.environ['CODEX_THREAD_ID'] = 'other-primary'
+            else:
+                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
+            foreign = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('host_client_mismatch', foreign['reason_code'])
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
+        # Nothing was claimed for the refused host; the owner can still run it once.
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        self.assertEqual(1, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
+
+    def test_a_slow_enrolled_driver_sender_cannot_stall_the_host(self):
+        from codex_agents.client_runtime import read_runtime_hint
+        from codex_agents.service_enrollment import enrollment_preamble, proof_directory, read_capability
+
+        _, control, _ = read_runtime_hint(self.paths, self.project)
+        driver = control.parent / 'run.sock'
+        frame = b'{"attempt":1,"inputs_digest":"' + b'0' * 64 + b'","operation":"run.prepare","protocol":1,"run_handle":"hrn_x"}'
+        line = enrollment_preamble(read_capability(self.paths, self.project, 'host'), 'host', 'codex-host-v1', 1, frame,
+                                   proof_directory(driver), context=b'{}')
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as slow:
+            slow.connect(str(driver))
+            slow.sendall(line + b'\n' + frame[:10])  # Enrolled, then the request trickles in.
+            started = time.monotonic()
+            opened = self.cli('learning-open-orchestration')
+            self.assertEqual('active', opened['status'])
+            self.assertLess(time.monotonic() - started, 2)
+            slow.sendall(frame[10:20])
+            slow.settimeout(5)
+            self.assertEqual(b'', slow.recv(1))  # Dropped at its absolute deadline, unanswered.
 
 
 class ClaudePrimaryDriverTests(ProjectDriverTests):

@@ -34,7 +34,7 @@ from .provider_observation_contracts import ObservationError, ObservationInput
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .result_read_api import ResultReadClient
 from .service_enrollment import (
-    EnrollmentError, account_endpoint_path, enrollment_preamble, proof_directory, read_capability,
+    EnrollmentError, account_endpoint_path, enrollment_preamble, proof_directory, read_capability, withdraw_proof,
 )
 from .service_protocol import ServiceTarget
 from .service_transport import exchange_frame, install_enrollment
@@ -155,11 +155,13 @@ def enroll_clients(state, project_root, scope, endpoints=(), *, account=None, ho
         if entry is None:
             return None
         role, key, generation, subject = entry
+        proofs = proof_directory(socket_path)
         try:
-            return enrollment_preamble(key, role, host_client, generation, message, proof_directory(socket_path),
+            line = enrollment_preamble(key, role, host_client, generation, message, proofs,
                                        subject=subject, context=contexts.pop(Path(socket_path), None))
         except EnrollmentError:
             raise OSError() from None
+        return line, lambda: withdraw_proof(proofs, line)
 
     install_enrollment(preamble if preambles else None)
     return contexts
@@ -425,6 +427,15 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
                     or entry['record']['run_id'] != binding.run_id):
                 raise HistoryError('history_conflict')
             records[kind] = entry['record']
+        try:
+            # Tell the project host the result is admitted, so it may retire the run's custody.
+            contexts = enroll_clients(state, project_root, scope, (endpoint, Path(endpoint).parent / 'run.sock'),
+                                      host_client=host_client)
+            if (Path(endpoint).parent / 'run.sock').exists():
+                _run_driver(contexts, endpoint, 'run.recorded', binding.run_handle, binding.attempt, inputs, {},
+                            timeout=5)
+        except Exception:
+            pass  # The host keeps custody for its grace period instead.
         return {'ready': True, **admitted, **records,
                 'host_outcome_digest': admitted['admission']['host_outcome_digest'], 'capacity_state': 'retained'}
     except (DispatchError, HistoryError, HostClientMismatch) as error:
@@ -612,6 +623,8 @@ def dispatch_codex_client(state_root, project_root, run_handle, task, route, ass
             raise DispatchError('dispatch_unavailable') from None
         if prepared['state'] == 'ready':
             break
+        if prepared['state'] == 'refused' and prepared['reason_code'] == 'history_not_authorized':
+            raise HostClientMismatch('host_client_mismatch')
         if prepared['state'] in {'failed', 'refused'} or time.monotonic() >= deadline:
             raise DispatchError('dispatch_unavailable')
     old = {}

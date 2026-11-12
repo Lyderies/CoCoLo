@@ -205,14 +205,22 @@ def _create_proof(directory, nonce, context=b''):
             os.close(descriptor)
 
 
-def _consume_proof(directory, nonce, context_digest):
-    """One owner-made regular file per nonce, read once and removed as it is accepted.
+def _proof_binding(fields):
+    """The writer's own statement of the request a proof is for, MAC fields only."""
+    return canonical_json({name: fields[name] for name in _FIELDS})
 
-    Its bytes are the request's protected context, which must match the digest
-    the preamble signed; a proof without a signed context must be empty.
+
+def _consume_proof(directory, value):
+    """Read one owner-made proof once, remove it, and return the context it carries.
+
+    The proof holds the writer's binding (every signed field of its preamble) on
+    its first line, then the context. A reader of the key can sign a preamble but
+    cannot write a proof, so the preamble must match the binding exactly: a proof
+    can never be spent on a request, subject or role its writer did not name.
     """
-    path = directory / nonce
+    path = directory / value['nonce']
     descriptor = None
+    limit = MAX_CONTEXT_BYTES + MAX_PREAMBLE_BYTES
     try:
         expected = path.lstat()
         if not getattr(os, 'O_NOFOLLOW', 0) or not getattr(os, 'O_NONBLOCK', 0):
@@ -221,28 +229,44 @@ def _consume_proof(directory, nonce, context_digest):
         info = os.fstat(descriptor)
         if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600
                 or (hasattr(os, 'getuid') and info.st_uid != os.getuid())
-                or (expected.st_dev, expected.st_ino) != (info.st_dev, info.st_ino)
-                or info.st_size > MAX_CONTEXT_BYTES or (context_digest is None and info.st_size != 0)):
+                or (expected.st_dev, expected.st_ino) != (info.st_dev, info.st_ino) or info.st_size > limit):
             raise OSError()
         chunks, total = [], 0
-        while total <= MAX_CONTEXT_BYTES:
-            chunk = os.read(descriptor, min(65_536, MAX_CONTEXT_BYTES + 1 - total))
+        while total <= limit:
+            chunk = os.read(descriptor, min(65_536, limit + 1 - total))
             if not chunk:
                 break
             chunks.append(chunk)
             total += len(chunk)
-        context = b''.join(chunks)
+        raw = b''.join(chunks)
+        binding, separator, context = raw.partition(b'\n')
+        if (len(raw) > limit or separator != b'\n'
+                or not hmac.compare_digest(binding, _proof_binding(value))):
+            raise OSError()
         path.unlink()
     except OSError:
         raise EnrollmentError('enrollment_invalid') from None
     finally:
         if descriptor is not None:
             os.close(descriptor)
-    if context_digest is None:
+    if value['context_digest'] is None:
+        if context:
+            raise EnrollmentError('enrollment_invalid')
         return None
-    if len(context) > MAX_CONTEXT_BYTES or not hmac.compare_digest(hashlib.sha256(context).hexdigest(), context_digest):
+    if (len(context) > MAX_CONTEXT_BYTES
+            or not hmac.compare_digest(hashlib.sha256(context).hexdigest(), value['context_digest'])):
         raise EnrollmentError('enrollment_invalid')
     return context
+
+
+def withdraw_proof(proofs, line):
+    """Client side: remove the proof for a preamble that was never delivered."""
+    try:
+        nonce = parse_bounded_json(line, max_bytes=MAX_PREAMBLE_BYTES)['nonce']
+        if _hex(nonce, 32):
+            (proofs / nonce).unlink()
+    except Exception:
+        pass  # Already consumed, or never created: nothing is left to spend.
 
 
 def _mac(key, fields):
@@ -275,7 +299,7 @@ def enrollment_preamble(key, role, host_client, generation, message, proofs, *, 
     line = canonical_json({**fields, 'mac': _mac(key, fields)})
     if len(line) + 1 > MAX_PREAMBLE_BYTES or b'\n' in line or not isinstance(proofs, Path):
         raise EnrollmentError('enrollment_invalid')
-    _create_proof(proofs, fields['nonce'], b'' if context is None else context)
+    _create_proof(proofs, fields['nonce'], _proof_binding(fields) + b'\n' + (b'' if context is None else context))
     return line
 
 
@@ -348,10 +372,11 @@ class EnrollmentVerifier:
                 raise EnrollmentError('enrollment_replayed')
             if len(self._seen) >= self._max_nonces:
                 raise EnrollmentError('enrollment_overloaded')
+            # The MAC shows the key was read; only the proof, written with this
+            # exact binding, shows the sender can write the state root. Consuming
+            # it is the claim, so a preamble without its proof spends no slot.
+            context = _consume_proof(self._proofs, value)
             # Retained for twice the window, so a clock step cannot reopen it.
             self._seen[value['nonce']] = max(now, value['issued_at_ms'])
-        # The MAC shows the key was read; only this file shows the sender can
-        # write the state root. A nonce without its proof stays spent.
-        context = _consume_proof(self._proofs, value['nonce'], value['context_digest'])
         return Enrolled(value['role'], value['host_client'], value['generation'], value['request_digest'],
                         value['subject'], context)

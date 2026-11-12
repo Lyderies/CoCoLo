@@ -49,11 +49,22 @@ def install_enrollment(provider, *, owner: str = "client") -> None:
 
 
 def _preamble(socket_path, message):
+    """The first enrolled owner's (preamble, withdraw) for this endpoint, or (None, None).
+
+    A provider may return the preamble alone, or with a callable that withdraws
+    its single-use proof if the request is never delivered.
+    """
     for provider in tuple(_ENROLLMENTS.values()):
-        line = provider(socket_path, message)
-        if line is not None:
-            return line
-    return None
+        value = provider(socket_path, message)
+        if value is None:
+            continue
+        if type(value) is tuple:
+            line, withdraw = value
+            if withdraw is not None and not callable(withdraw):
+                raise ValueError()
+            return line, withdraw
+        return value, None
+    return None, None
 
 
 def exchange_frame(
@@ -90,15 +101,22 @@ def exchange_frame(
 
     reason = None
     response = b""
+    withdraw = None
     try:
-        preamble = _preamble(socket_path, message)
+        preamble, withdraw = _preamble(socket_path, message)
         if preamble is not None and (type(preamble) is not bytes or not preamble or b"\n" in preamble):
             raise ValueError()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(remaining())
-            client.connect(str(socket_path))
-            client.settimeout(remaining())
-            client.sendall((b"" if preamble is None else preamble + b"\n") + message + b"\n")
+            try:
+                client.connect(str(socket_path))
+                client.settimeout(remaining())
+                client.sendall((b"" if preamble is None else preamble + b"\n") + message + b"\n")
+            except BaseException:
+                # Not delivered: leave no proof behind for anyone else to spend.
+                if withdraw is not None:
+                    withdraw()
+                raise
             raw = bytearray()
             while b"\n" not in raw:
                 client.settimeout(remaining())
