@@ -49,6 +49,13 @@ markers, never set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, and never pass `--ba
      `result`. Never dispatch a handle twice or retry a fenced outcome. A `dispatch`
      that fails after launch leaves no result to record: pause the orchestration,
      classify that run abandoned (`host_confirmed_gone`), and resume.
+     While `dispatch` waits, another command can run
+     `learning-run-status --orchestration-handle <orc> --run-handle <handle>` for the
+     child's health (`starting`, `active`, `quiet`, `stale`, then `stopping` or
+     `terminal`), or `learning-cancel-run` with the same arguments to stop it.
+     A cancellation reply is a request, not confirmed cleanup; `dispatch` then returns
+     the fenced `cancelled` result, which you record like any other. The host also
+     stops a child that stays silent too long (`work_silence`); never retry it.
 6. **Validate and record.** For a native child, run `validate-result` on its result,
    allowing at most one structural repair with the returned receipt. A
    `duplicate_criterion` repair merges entries: one entry per criterion, every finding

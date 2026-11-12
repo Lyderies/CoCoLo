@@ -112,6 +112,13 @@ says `dispatch: native`, stop and report it.
    A failure after launch without a usable report leaves no result to record:
    pause the orchestration, confirm the child is gone, classify that run abandoned
    (`host_confirmed_gone`), and resume. Never reconstruct a missing result.
+   While `dispatch` waits, a second protected command can run `cli.py
+   learning-run-status --orchestration-handle <orc> --run-handle <handle>` for the
+   child's health (`starting`, `active`, `quiet`, `stale`, then `stopping` or
+   `terminal`), or `cli.py learning-cancel-run` with the same arguments to stop it.
+   A cancellation reply is a request, not confirmed cleanup; `dispatch` then returns
+   the fenced `cancelled` result, which you record unchanged. The host also stops a
+   child that stays silent too long (`work_silence`); never retry or redispatch it.
    Put everything the
    child needs in the assignment's objective, context and owned paths: it sees only
    the exported files, never this conversation.
