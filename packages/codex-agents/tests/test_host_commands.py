@@ -498,6 +498,36 @@ def _quoted(value: str) -> str:
 class ProtectedCopyTests(unittest.TestCase):
     """The rule runs an owner-only copy of the installed runtime, bound to its project."""
 
+    def test_runtime_integrity_check_does_not_load_persistence_owners(self) -> None:
+        program = '''
+import importlib.abc
+from pathlib import Path
+import sys
+
+class RefusePersistence(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in {"sqlite3", "codex_agents.learning_store"}:
+            raise AssertionError("runtime validation loaded persistence: " + fullname)
+
+sys.meta_path.insert(0, RefusePersistence())
+from codex_agents import host_commands
+host_commands._validate_runtime(Path(sys.argv[2]))
+assert "sqlite3" not in sys.modules
+assert "codex_agents.learning_store" not in sys.modules
+'''
+        completed = subprocess.run(
+            [sys.executable, "-I", "-B", "-c",
+             "import sys; sys.path.insert(0, sys.argv[1]); exec(sys.argv[3])",
+             str(ORCHESTRATION_ROOT), str(self.project / CLI_RELATIVE), program],
+            text=True, capture_output=True, timeout=30,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
+
+    def test_owner_reexports_the_same_runtime_integrity_validator(self) -> None:
+        from codex_agents import collector_runtime, learning_store
+
+        self.assertIs(collector_runtime.validate_collector_runtime, learning_store.validate_collector_runtime)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
         self.addCleanup(self.temporary.cleanup)

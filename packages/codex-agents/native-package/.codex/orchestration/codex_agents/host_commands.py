@@ -957,7 +957,8 @@ def _validate_runtime(cli: Path) -> None:
     `runtime-releases.json` records for its version).
     """
 
-    from .learning_store import CollectorAuthorizationError, validate_collector_runtime
+    from .collector_contracts import CollectorAuthorizationError
+    from .collector_runtime import validate_collector_runtime
 
     try:
         validate_collector_runtime(cli)

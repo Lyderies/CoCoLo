@@ -131,6 +131,7 @@ from codex_agents.collector_contracts import (  # noqa: E402
     CollectorRestartError,
     CollectorVersionError,
 )
+from codex_agents.collector_runtime import validate_collector_runtime  # noqa: E402
 from codex_agents.learning_store import (  # noqa: E402
     CollectorMaintenance,
     CollectorServer,
@@ -147,7 +148,6 @@ from codex_agents.learning_store import (  # noqa: E402
     migrate_legacy_state,
     registered_project_roots,
     require_authorized_collector_runtime,
-    validate_collector_runtime,
 )
 from codex_agents.hosts import (  # noqa: E402
     CLAUDE_HOST_CLIENT,

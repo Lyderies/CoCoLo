@@ -34,6 +34,7 @@ from .collector_paths import (
     default_state_root as default_state_root,
 )
 from .collector_runtime import (
+    validate_collector_runtime as validate_collector_runtime,
     CLIENT_HEALTH_CODES as CLIENT_HEALTH_CODES,
     COLLECTOR_AUTHORIZATION_SCHEMA_VERSION as COLLECTOR_AUTHORIZATION_SCHEMA_VERSION,
     HOOK_INGEST_REASON_CODES as HOOK_INGEST_REASON_CODES,
@@ -126,7 +127,6 @@ from .owner_key_contracts import (
     _ssh_key_parts as _ssh_key_parts,
 )
 from .result_contracts import MAX_RESULT_BODY_BYTES
-from .runtime_files import ORCHESTRATION_PREFIX, RUNTIME_FILES, runtime_digest
 from .sql_read_budget import SQLReadConnection
 from .account_claim_contracts import (
     CLAIM_DENIAL_CODES, MAX_CLAIM_INTEGER, ClaimError, LaunchClaimInput,
@@ -1615,69 +1615,6 @@ def registered_project_roots() -> list[Path]:
     ]
 
 
-def validate_collector_runtime(cli_path: Path) -> dict[str, str | int]:
-    """Validate the complete installed package and return its collector identity."""
-
-    from .learning_engine import _installed_managed_files, _read_managed_bytes
-
-    try:
-        if cli_path.is_symlink():
-            raise ContractError("installed collector entry point is invalid")
-        resolved_cli = cli_path.resolve(strict=True)
-        bundle_root = resolved_cli.parents[2]
-        expected_cli = bundle_root / ".codex" / "orchestration" / "cli.py"
-        if resolved_cli != expected_cli:
-            raise ContractError("installed collector entry point is invalid")
-        paths, contents = _installed_managed_files(bundle_root)
-        manifest_relative = ".codex/orchestration/install-manifest.json"
-        manifest_path = bundle_root / manifest_relative
-        if manifest_path.is_symlink():
-            raise ContractError("installed package manifest is invalid")
-        if manifest_path.exists():
-            manifest = json.loads(
-                _read_managed_bytes(bundle_root, manifest_relative)
-            )
-            version = manifest.get("version") if isinstance(manifest, dict) else None
-        else:
-            version_path = bundle_root / "VERSION"
-            descriptor = os.open(
-                version_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            )
-            try:
-                info = os.fstat(descriptor)
-                if not stat.S_ISREG(info.st_mode):
-                    raise ContractError("package VERSION is invalid")
-                version = os.read(descriptor, 33).decode("ascii").strip()
-            finally:
-                os.close(descriptor)
-        if _version_tuple(version) is None:
-            raise ContractError("package VERSION is invalid")
-        # The runtime is this package's own file set, never whatever else the
-        # manifest lists: an extra module there is not runtime, and the digest
-        # covers every runtime file, configuration and schemas included.
-        if any(ORCHESTRATION_PREFIX + relative not in contents for relative in RUNTIME_FILES):
-            raise ContractError("installed collector runtime is incomplete")
-        digest = runtime_digest(
-            {relative: contents[ORCHESTRATION_PREFIX + relative] for relative in RUNTIME_FILES}
-        )
-        if version != PACKAGE_VERSION or digest != COLLECTOR_RUNTIME_DIGEST:
-            raise ContractError("installed collector identity is inconsistent")
-        return {
-            "schema_version": COLLECTOR_AUTHORIZATION_SCHEMA_VERSION,
-            "runtime_version": version,
-            "runtime_digest": digest,
-        }
-    except (
-        ContractError,
-        OSError,
-        UnicodeError,
-        json.JSONDecodeError,
-        IndexError,
-    ) as exc:
-        raise CollectorAuthorizationError(
-            "installed package integrity validation failed",
-            code="runtime_integrity_invalid",
-        ) from exc
 
 
 
