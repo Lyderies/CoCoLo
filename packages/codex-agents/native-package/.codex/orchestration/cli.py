@@ -123,7 +123,7 @@ from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
-    run_control_client,
+    run_control_client, bridged_run_owner,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.project_host_client import ensure_project_host  # noqa: E402
@@ -405,6 +405,15 @@ def _start_collector_quietly(args: argparse.Namespace) -> None:
                          project_root=args.project_root)
     except Exception:
         pass
+
+
+def _refuse_bridged_run(args: argparse.Namespace, run_handle: str, refusal: str) -> None:
+    """A run the project host drives is not changed through the legacy ledger."""
+    owner = bridged_run_owner(args.state_root, args.project_root, run_handle, host_client=_host_client())
+    if owner == 'other':
+        raise HostClientMismatch("host_client_mismatch")
+    if owner == 'owned':
+        raise LedgerError(refusal)
 
 
 def _resolved(path: Path) -> Path:
@@ -2051,6 +2060,7 @@ def main() -> int:
             finally:
                 _close_ledger(ledger)
         elif args.command == "learning-bind-host-agent":
+            _refuse_bridged_run(args, args.run_handle, "a bridged run binds only its dispatched child")
             ledger, project_id = _learning_ledger(args)
             try:
                 _require_host_owner(
@@ -2067,6 +2077,7 @@ def main() -> int:
             finally:
                 _close_ledger(ledger)
         elif args.command == "learning-observe-host-run":
+            _refuse_bridged_run(args, args.run_handle, "a bridged run is observed by its project host")
             ledger, project_id = _learning_ledger(args)
             try:
                 _require_host_owner(
@@ -2083,6 +2094,8 @@ def main() -> int:
             finally:
                 _close_ledger(ledger)
         elif args.command == "learning-classify-host-run-abandoned":
+            _refuse_bridged_run(args, args.run_handle,
+                                "a bridged run is settled by its project host; abandonment there is not available yet")
             ledger, project_id = _learning_ledger(args)
             try:
                 _require_host_owner(
@@ -2158,6 +2171,7 @@ def main() -> int:
             assignment = _json_input(args.assignment)
             if trusted_host and provider_for_model(assignment.get('model')) == 'codex':
                 if args.route is None:
+                    _refuse_bridged_run(args, observation['run_handle'], "a bridged run must be dispatched before its result")
                     raise RuntimeResultError('history_invalid_input')
                 if args.evaluation_assignment_digest is not None or args.fallback_receipt is not None:
                     raise RuntimeResultError('history_invalid_input')

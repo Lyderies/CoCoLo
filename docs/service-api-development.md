@@ -231,6 +231,13 @@ table; and stale documentation. Operational QA recorded the pair as not accepted
 because the verifier corrected and extended the findings. The fixes have not been
 reviewed again.
 
+Commands that know only a run handle (`learning-bind-host-agent`,
+`learning-observe-host-run`, `learning-classify-host-run-abandoned`, and a Codex
+record without its route) first ask the project host which host class holds the
+run (`run.describe`). The other host class gets `host_client_mismatch`; the owner
+gets the legacy bridged-run refusal instead of a legacy-ledger error. Abandoning a
+host-driven run is therefore refused, not yet supported.
+
 Not done: no retry, cancellation-before-dispatch or abandonment path through the
 driver, no driver state across a host restart (a run opened before a restart is
 refused at dispatch and keeps its account capacity until reconciled), the

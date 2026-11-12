@@ -539,6 +539,27 @@ def run_control_client(state_root, project_root, operation, orchestration_handle
     return {'ready': True, 'observed_at_ns': view.observed_at_ns, **view.result}
 
 
+def bridged_run_owner(state_root, project_root, run_handle, *, host_client):
+    """'owned' or 'other' when this project's host holds the bridged run, else None.
+
+    Commands that know only a run handle use it to refuse a run the host drives:
+    the other host class gets the lifecycle mismatch, the owner a fixed refusal.
+    """
+    try:
+        state = CollectorPaths(state_root)
+        scope, control, result = read_runtime_hint(state, project_root)
+        driver = Path(control).parent / 'run.sock'
+        if not driver.exists():
+            return None
+        contexts = enroll_clients(state, project_root, scope, (control, driver), host_client=host_client)
+        reply = _run_driver(contexts, control, 'run.describe', run_handle, 1, '0' * 64, {}, timeout=5)
+    except Exception:
+        return None
+    if reply['state'] == 'refused':
+        return 'other' if reply['reason_code'] == 'history_not_authorized' else None
+    return 'owned'
+
+
 def open_codex_client(state_root, project_root, orchestration_handle, task, route, assignment, parent_grant, *, host_client):
     """Read original project scope, then open once through the account API.
 

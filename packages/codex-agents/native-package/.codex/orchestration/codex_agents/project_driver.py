@@ -195,7 +195,7 @@ class RunDriver:
                 raise ValueError()
             request = json.loads(line)
             if (type(request) is not dict or request.keys() != {'protocol', 'operation', 'run_handle', 'attempt', 'inputs_digest'}
-                    or request['protocol'] != 1 or request['operation'] not in {'run.register', 'run.prepare', 'run.recorded'}
+                    or request['protocol'] != 1 or request['operation'] not in {'run.register', 'run.prepare', 'run.recorded', 'run.describe'}
                     or not matches(request['run_handle'], _ID) or type(request['attempt']) is not int
                     or not matches(request['inputs_digest'], _DIGEST)):
                 raise ValueError()
@@ -204,6 +204,16 @@ class RunDriver:
             connection.close()
             return
         key = (request['run_handle'], request['attempt'])
+        if request['operation'] == 'run.describe':
+            # Which host class holds a run, for commands that only know its handle.
+            held = [run for run in self._runs.values() if run.key[0] == request['run_handle']]
+            if not held:
+                self._reply(connection, {'state': 'refused', 'reason_code': 'history_orchestration_unavailable'})
+            elif held[0].host_client != enrolled.host_client:
+                self._reply(connection, {'state': 'refused', 'reason_code': 'history_not_authorized'})
+            else:
+                self._reply(connection, self._view(held[0]))
+            return
         try:
             if request['operation'] == 'run.register':
                 self._register(key, request['inputs_digest'], context, enrolled.host_client)
