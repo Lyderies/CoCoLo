@@ -235,8 +235,13 @@ Commands that know only a run handle (`learning-bind-host-agent`,
 `learning-observe-host-run`, `learning-classify-host-run-abandoned`, and a Codex
 record without its route) first ask the project host which host class holds the
 run (`run.describe`). The other host class gets `host_client_mismatch`; the owner
-gets the legacy bridged-run refusal instead of a legacy-ledger error. Abandoning a
-host-driven run is therefore refused, not yet supported.
+gets the legacy bridged-run refusal instead of a legacy-ledger error.
+`learning-classify-host-run-abandoned` on a host-driven run asks the host to drop
+it (`run.abandon`). That succeeds only for a run that never took a lease (still
+registered, or failed before leasing), which holds no account capacity and no
+project custody; its report says `capacity_state: never_claimed`. A leased or
+claimed run is refused: settling it needs a reconciliation path that does not exist
+yet. No abandonment outcome record is written to project history.
 
 Not done: no retry, cancellation-before-dispatch or abandonment path through the
 driver, no driver state across a host restart (a run opened before a restart is

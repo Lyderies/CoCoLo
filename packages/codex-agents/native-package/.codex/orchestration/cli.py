@@ -123,7 +123,7 @@ from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
-    run_control_client, bridged_run_owner,
+    run_control_client, bridged_run_owner, abandon_bridged_run,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.project_host_client import ensure_project_host  # noqa: E402
@@ -2094,8 +2094,14 @@ def main() -> int:
             finally:
                 _close_ledger(ledger)
         elif args.command == "learning-classify-host-run-abandoned":
-            _refuse_bridged_run(args, args.run_handle,
-                                "a bridged run is settled by its project host; abandonment there is not available yet")
+            owner = bridged_run_owner(args.state_root, args.project_root, args.run_handle, host_client=_host_client())
+            if owner == 'other':
+                raise HostClientMismatch("host_client_mismatch")
+            if owner == 'owned':
+                report = abandon_bridged_run(args.state_root, args.project_root, args.run_handle, args.reason,
+                                             host_client=_host_client())
+                _print_command_report(args, report)
+                return 0 if report['ready'] else 2
             ledger, project_id = _learning_ledger(args)
             try:
                 _require_host_owner(

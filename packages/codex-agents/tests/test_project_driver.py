@@ -368,6 +368,24 @@ class ProjectDriverTests(DriverHarness):
             slow.settimeout(5)
             self.assertEqual(b'', slow.recv(1))  # Dropped at its absolute deadline, unanswered.
 
+    def test_an_undispatched_run_is_abandoned_only_by_its_host_class_and_never_launches(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        with mock.patch.dict(os.environ):
+            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
+                os.environ.pop(name, None)
+            if self.primary == 'claude':
+                os.environ['CODEX_THREAD_ID'] = 'other-primary'
+            else:
+                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
+            foreign = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                               '--reason', 'owner_cancelled', expected=2)
+        self.assertEqual('host_client_mismatch', foreign['reason_code'])
+        abandoned = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                             '--reason', 'owner_cancelled')
+        self.assertEqual(('abandoned', 'never_claimed'), (abandoned['classification'], abandoned['capacity_state']))
+        self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
+
 
 class ClaudePrimaryDriverTests(ProjectDriverTests):
     """Path B: a Claude primary bridges the same Codex child through the same host."""

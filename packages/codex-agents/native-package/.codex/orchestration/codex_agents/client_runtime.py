@@ -560,6 +560,22 @@ def bridged_run_owner(state_root, project_root, run_handle, *, host_client):
     return 'owned'
 
 
+def abandon_bridged_run(state_root, project_root, run_handle, reason, *, host_client):
+    """Drop a host-driven run that never took a lease; anything later is refused."""
+    state = CollectorPaths(state_root)
+    scope, control, _ = read_runtime_hint(state, project_root)
+    contexts = enroll_clients(state, project_root, scope, (control, Path(control).parent / 'run.sock'),
+                              host_client=host_client)
+    reply = _run_driver(contexts, control, 'run.abandon', run_handle, 1, '0' * 64, {}, timeout=5)
+    if reply['state'] == 'refused' and reply['reason_code'] == 'history_not_authorized':
+        raise HostClientMismatch('host_client_mismatch')
+    if reply['reason_code'] != 'run_abandoned':
+        return {'ready': False, 'error': 'only a run that never took a lease can be abandoned here',
+                'reason_code': reply['reason_code'] or 'history_conflict'}
+    return {'ready': True, 'run_handle': run_handle, 'classification': 'abandoned', 'reason': reason,
+            'settled_by': 'project_host', 'capacity_state': 'never_claimed'}
+
+
 def open_codex_client(state_root, project_root, orchestration_handle, task, route, assignment, parent_grant, *, host_client):
     """Read original project scope, then open once through the account API.
 

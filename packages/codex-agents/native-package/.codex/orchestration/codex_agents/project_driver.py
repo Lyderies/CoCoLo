@@ -59,7 +59,7 @@ MAX_REQUEST_BYTES = 4_096
 WAIT_SECONDS = 5.0
 ACCOUNT_TIMEOUT_SECONDS = 60
 REASON_CODES = frozenset({
-    'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable',
+    'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable', 'run_abandoned',
 })
 _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 'assignment', 'task', 'route',
                     'parent_grant'}
@@ -195,7 +195,7 @@ class RunDriver:
                 raise ValueError()
             request = json.loads(line)
             if (type(request) is not dict or request.keys() != {'protocol', 'operation', 'run_handle', 'attempt', 'inputs_digest'}
-                    or request['protocol'] != 1 or request['operation'] not in {'run.register', 'run.prepare', 'run.recorded', 'run.describe'}
+                    or request['protocol'] != 1 or request['operation'] not in {'run.register', 'run.prepare', 'run.recorded', 'run.describe', 'run.abandon'}
                     or not matches(request['run_handle'], _ID) or type(request['attempt']) is not int
                     or not matches(request['inputs_digest'], _DIGEST)):
                 raise ValueError()
@@ -204,15 +204,28 @@ class RunDriver:
             connection.close()
             return
         key = (request['run_handle'], request['attempt'])
-        if request['operation'] == 'run.describe':
-            # Which host class holds a run, for commands that only know its handle.
+        if request['operation'] in {'run.describe', 'run.abandon'}:
+            # Commands that know only a run handle: which host class holds it, or
+            # dropping one that never took a lease.
             held = [run for run in self._runs.values() if run.key[0] == request['run_handle']]
             if not held:
                 self._reply(connection, {'state': 'refused', 'reason_code': 'history_orchestration_unavailable'})
             elif held[0].host_client != enrolled.host_client:
                 self._reply(connection, {'state': 'refused', 'reason_code': 'history_not_authorized'})
-            else:
+            elif request['operation'] == 'run.describe':
                 self._reply(connection, self._view(held[0]))
+            elif held[0].lease is not None or held[0].state not in {'registered', 'failed'} or held[0].future is not None:
+                # A leased or claimed run holds custody and maybe capacity; that needs reconciliation.
+                self._reply(connection, {'state': 'refused', 'reason_code': 'history_conflict'})
+            else:
+                run = held[0]
+                if run.prepared is not None:
+                    try:
+                        self._preparation.discard(run.prepared)
+                    except Exception:
+                        pass
+                del self._runs[run.key]
+                self._reply(connection, {'state': 'failed', 'reason_code': 'run_abandoned'})
             return
         try:
             if request['operation'] == 'run.register':
