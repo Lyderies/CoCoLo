@@ -20,7 +20,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import threading
+from threading import local
 import time
 
 from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountClient, AccountError, AccountRequest, account_request_digest
@@ -96,7 +96,7 @@ class _Run:
     released_at: float | None = None
 
 
-class _Call(threading.local):
+class _Call(local):
     role = host_client = context = None
 
 
