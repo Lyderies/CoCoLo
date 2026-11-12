@@ -286,7 +286,7 @@ class LearningCorpusUpgradeTests(unittest.TestCase):
             connection.close()
             store = ProjectHistory(directory, PROJECT, allow_schema_upgrade=True)
             try:
-                self.assertEqual(14, store._connection.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual(15, store._connection.execute("PRAGMA user_version").fetchone()[0])
                 self.assertEqual((PROJECT, 18, 1), tuple(store._connection.execute("SELECT * FROM history_identity").fetchone()))
                 self.assertEqual(original, tuple(store._connection.execute("SELECT * FROM records").fetchone()))
                 self.assertEqual(canonical_json(event), store.record(event["record_id"]).content)

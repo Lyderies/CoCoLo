@@ -35,6 +35,26 @@ remain necessary before any learning cycle can use the imported corpus.
 
 ## Complete registered source rows (uninstalled offline owner)
 
+The offline `learning_source_transfer.stage_source` coordinator now obtains the
+image from the actual existing legacy owner and checks the destination owner's
+existing key domain. It stages original record bytes, signatures and QA through
+their existing bounded import operations. Schema15 also retains the complete
+original 30-table canonical body in immutable 64KiB chunks, including central
+run/check/host/open/launch metadata absent from those three learning subsets.
+The archive is bounded to128MiB per original import, sharing the existing two
+import slots. Exact replay and restart retain original bytes and receipts;
+incomplete or corrupt images cannot be inferred empty or complete.
+
+The coordinator rechecks the original full source before finishing the image.
+Target writes are short transactions; no transaction contains source file/key
+I/O, another store transaction or external work. Interruption or a changed source
+leaves only inactive staging for exact recovery. The original writer and private
+files remain in place. This is neither a live learning snapshot nor a successful
+cutover, native enrollment, original execution/check authentication or retained
+artifact verification. Every receipt still has `learning_ready: false`; no normal
+client endpoint exposes the coordinator or archive. Ordinary startup refuses
+schema1..14 upgrades; only the explicit offline owner may perform an exact upgrade.
+
 The existing legacy persistence owner can compare a registered schema13 backup
 against every current row of its original 30-table project partition, including
 run, host, check, launch and account-open custody. It excludes only that backup's
