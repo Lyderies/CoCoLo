@@ -12,6 +12,7 @@ import time
 
 from .bridge_liveness import BridgeLivenessOwner
 from .codex_worker import CodexWorkerLimits, CodexWorkerPool
+from .codex_preparation import CodexPreparationLane
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
 from .control_loop import ControlLoop, ControlLoopLimits
 from .control_service import ControlService
@@ -67,7 +68,7 @@ class ProjectRuntime:
                                    ('liveness', 'control', 'workers', 'requests', 'ingress')})
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._closed = self._running = False
-        self.control = self.loop = self.owner = self.pool = self.persistence = self.ingress = self.dispatch = None
+        self.control = self.loop = self.owner = self.pool = self.persistence = self.ingress = self.dispatch = self.preparation = None
         try:
             self.monitor = ProjectMonitor(SupervisorScope(**scope.as_data()), limits.liveness,
                 max_tracked_attempts=limits.max_tracked_attempts, clock_ns=clock_ns)
@@ -112,11 +113,21 @@ class ProjectRuntime:
         self.dispatch = service
         return service
 
+    def bind_preparation(self, limits, *, authorizer=None):
+        self._owner()
+        if self.preparation is not None:
+            raise HistoryError('history_conflict')
+        self.preparation = CodexPreparationLane(OrchestrationScope(**vars(self.monitor.scope())), self.pool,
+                                               limits, authorizer=authorizer)
+        return self.preparation
+
     def run_once(self):
         self._owner()
         self._running = True
         try:
             self.owner.run_once()
+            if self.preparation is not None:
+                self.preparation.drive()
             if self.dispatch is not None:
                 # Original owner operations must run outside owner.run_once().
                 self.dispatch.drive()
@@ -130,10 +141,10 @@ class ProjectRuntime:
             return
         self._closed = True
         failure = None
-        for component in (self.ingress, self.pool, self.persistence, self.control, self.loop):
+        for component in (self.ingress, self.pool, self.preparation, self.persistence, self.control, self.loop):
             if component is not None:
                 try:
-                    component.close()
+                    component.request_close(abandon_bound=True) if component is self.preparation else component.close()
                 except BaseException as error:
                     if failure is None or (isinstance(failure, Exception) and not isinstance(error, Exception)):
                         failure = error
@@ -144,5 +155,6 @@ class ProjectRuntime:
         """Observe owned thread exit only, not physical cleanup or account release."""
         self._owner(closing=True)
         return (self._closed and (self.ingress is None or not self.ingress._thread.is_alive())
+            and (self.preparation is None or self.preparation.threads_stopped())
             and (self.persistence is None or not self.persistence._writer.is_alive())
             and (self.pool is None or all(not slot.thread.is_alive() for slot in self.pool._slots)))

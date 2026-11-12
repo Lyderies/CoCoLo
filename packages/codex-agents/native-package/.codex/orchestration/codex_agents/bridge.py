@@ -989,6 +989,10 @@ def place_worker_result(export: Path, worker_result: dict[str, Any]) -> str:
     relative to the export.
     """
 
+    from .learning_contracts import canonical_json
+    encoded = canonical_json(worker_result)
+    if len(encoded) > MAX_RESULT_BODY_BYTES:
+        raise BridgeRefused("verifier input exceeds its byte limit")
     directory = export / RESERVED_INPUT_DIRECTORY
     try:
         os.mkdir(directory, 0o700)
@@ -999,7 +1003,7 @@ def place_worker_result(export: Path, worker_result: dict[str, Any]) -> str:
     except OSError as exc:
         raise BridgeRefused("verifier input could not be placed") from exc
     with os.fdopen(descriptor, "wb") as handle:
-        handle.write(json.dumps(worker_result, indent=2, sort_keys=True).encode("utf-8"))
+        handle.write(encoded)
         os.fchmod(handle.fileno(), 0o400)
     return VERIFIER_WORKER_RESULT_PATH
 
@@ -1332,6 +1336,15 @@ def _event_label(value: Any) -> str:
     return value if value in CODEX_DENIED_ITEM_LABELS else "unknown"
 
 
+def codex_schemas(schema: bytes) -> tuple[dict[str, Any], bytes]:
+    """Use the same schema parse/conversion before readiness and execution."""
+    try:
+        original_schema = json.loads(schema)
+    except ValueError as exc:
+        raise BridgeRefused("result schema is invalid") from exc
+    return original_schema, json.dumps(strict_output_schema(original_schema), sort_keys=True).encode()
+
+
 def run_codex(
     *,
     ledger: Any,
@@ -1349,13 +1362,10 @@ def run_codex(
     _execution: ExecutionTicket | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     model = route["model"]
-    try:
-        original_schema = json.loads(schema)
-    except ValueError as exc:
-        raise BridgeRefused("result schema is invalid") from exc
+    original_schema, strict_schema = codex_schemas(schema)
     schema_path = _private_file(
         control / "result.schema.json",
-        json.dumps(strict_output_schema(original_schema), sort_keys=True).encode(),
+        strict_schema,
     )
     last_message = control / "last-message.json"
     arguments = [
@@ -2060,7 +2070,7 @@ def _codex_role_prompt(bundle_root: Path, route: dict[str, Any]) -> str:
     ):
         raise BridgeRefused("route agent is invalid")
     try:
-        agent_bytes = _read_managed_bytes(bundle_root, relative)
+        agent_bytes = _read_managed_bytes(bundle_root, relative, max_bytes=1_048_576)
         agent = tomllib.loads(agent_bytes.decode("utf-8"))
     except (ContractError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise BridgeRefused("installed Codex agent is unavailable") from exc

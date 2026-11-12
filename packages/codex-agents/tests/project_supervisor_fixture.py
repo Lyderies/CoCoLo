@@ -4,7 +4,7 @@ The parent supplies disposable test metadata through stdin and two inherited
 socketpairs. No provider, account SQLite, listener or native credentials here.
 """
 from copy import copy
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import asdict
 import json
 import os
@@ -75,6 +75,16 @@ def main():
         pool = CodexWorkerPool(registry, CodexWorkerLimits(1, 16 * 1_048_576))
     root = Path(data["root"])
     key = bytes.fromhex(data["fixture_key"])
+    preparation_stack = ExitStack()
+    if data.get('actual_preparation', False):
+        from codex_agents import bridge
+        from tests.learning_support import trusted_tools
+        preparation_stack.enter_context(trusted_tools(Path(data['tools'])))
+        preparation_stack.enter_context(mock.patch.object(bridge, 'WORKSPACE_PARENT', str(root/'prepare-base')))
+        preparation_stack.enter_context(mock.patch.object(bridge, 'temp_roots', new=lambda: set()))
+        preparation_stack.enter_context(mock.patch.object(bridge, 'CODEX_MANAGED_PATHS',
+            {'darwin': (str(root/'absent-managed.toml'),), 'linux': (str(root/'absent-managed.toml'),)}))
+        preparation_stack.enter_context(mock.patch.object(bridge, 'CODEX_SYSTEM_DIRECTORY', str(root/'absent-system')))
 
     def open_history():
         managed = data.get('with_provenance', False)
@@ -234,12 +244,27 @@ def main():
                 listener.setblocking(False)
                 listeners.append((listener, kind))
 
-        payload = json.dumps({"task": data["task"], "route": data["route"], "assignment": data["assignment"],
-                              "parent_grant": PARENT_GRANT, "schema": RESULT_SCHEMA.decode(),
-                              "export": str(root / "export"), "control": str(root / "control"),
-                              "executable": str(root / "inert-exec"), "environ": {"PATH": os.defpath},
-                              "role_prompt": "Read the inert fixture only.", "worker_result_path": None}).encode()
-        worker = pool.prepare(payload)
+        preparation_handle = prepared_inputs = None
+        if data.get('actual_preparation', False):
+            from codex_agents.codex_preparation import (MAX_PREPARATION_BYTES, MAX_PREPARATION_EXPORT_BYTES,
+                PreparationContext, PreparationLimits, preparation_payload)
+            from codex_agents.open_scope_contracts import OpenScopeContext
+            original_preparation = PreparationContext(preparation_payload(OpenScopeContext.from_snapshot(data['prospective']),
+                Path(data['project_root']), Path(data['bundle_root']), {'PATH': os.defpath},
+                expected_export_commit=data['expected_export_commit']))
+            preparation = runtime.bind_preparation(PreparationLimits(1, MAX_PREPARATION_BYTES, MAX_PREPARATION_EXPORT_BYTES),
+                authorizer=lambda context: context is original_preparation)
+            preparation_handle = preparation.submit(original_preparation)
+            until(lambda: preparation.snapshot(preparation_handle)['state'] in {'ready', 'failed', 'unknown', 'cleaned'})
+            prepared_inputs = preparation.prepared(preparation_handle)
+            worker = prepared_inputs.worker
+        else:
+            payload = json.dumps({"task": data["task"], "route": data["route"], "assignment": data["assignment"],
+                                  "parent_grant": PARENT_GRANT, "schema": RESULT_SCHEMA.decode(),
+                                  "export": str(root / "export"), "control": str(root / "control"),
+                                  "executable": str(root / "inert-exec"), "environ": {"PATH": os.defpath},
+                                  "role_prompt": "Read the inert fixture only.", "worker_result_path": None}).encode()
+            worker = pool.prepare(payload)
         if managed_open:
             # Actual local resources and original inputs exist before account
             # admission. This fixture message is not native enrollment proof.
@@ -247,7 +272,9 @@ def main():
             if data.get('client_open', False):
                 start_ingress()
                 endpoints = {'dispatch_endpoint': str(root/'d.sock'), 'result_endpoint': str(root/'r.sock')}
-            emit(stage='prepared', tickets=len(registry._issued), launched=(root/'launches').exists(), **endpoints)
+            actual = ({} if prepared_inputs is None else {'export_info': prepared_inputs.export_info,
+                'client_identity': prepared_inputs.client_identity})
+            emit(stage='prepared', tickets=len(registry._issued), launched=(root/'launches').exists(), **endpoints, **actual)
             lease_scope = ResultLeaseBinding(**next_message()['scope'])
             if any(getattr(lease_scope, name) != value for name, value in asdict(scope).items()):
                 raise RuntimeError('fixture_foreign_original_open')
@@ -373,7 +400,8 @@ def main():
         if data.get('client_dispatch', False):
             from codex_agents.prepared_dispatch import DispatchAuthorization, PreparedDispatchContext, PreparedDispatchService
             from codex_agents.dispatch_api import dispatch_request_digest
-            prepared = PreparedDispatchContext(binding, handle, worker, lane.prepared_inputs_digest(handle), (0, '0'*40, 'a'*64))
+            export_info = (0, '0'*40, 'a'*64) if prepared_inputs is None else prepared_inputs.export_info
+            prepared = PreparedDispatchContext(binding, handle, worker, lane.prepared_inputs_digest(handle), export_info)
             def authorize_dispatch(request, context):
                 if context is CONTEXT:
                     return DispatchAuthorization(control_scope, dispatch_request_digest(request), prepared,
@@ -418,8 +446,22 @@ def main():
                 raise RuntimeError('fixture_dispatch_retired_early')
             if job.pending is not retained:
                 raise RuntimeError('fixture_dispatch_dropped_original_on_refusal')
+            if prepared_inputs is not None:
+                from codex_agents.codex_preparation import PreparationError
+                try:
+                    preparation.discard(preparation_handle)
+                except PreparationError as error:
+                    if error.reason_code != 'preparation_busy':
+                        raise
+                else:
+                    raise RuntimeError('fixture_original_export_dropped_before_worker_retirement')
+                if not prepared_inputs.workspace.exists():
+                    raise RuntimeError('fixture_original_export_missing_before_worker_retirement')
             retirement_refusals.append(stage)
         refuses_dispatch_retirement('running')
+        preparation_closed_while_bound = prepared_inputs is not None and data.get('await_release', False)
+        if preparation_closed_while_bound:
+            preparation.request_close()
         emit(stage="started", pid=os.getpid(), registry_pid=registry._pid, deadline_ns=grant.deadline_ns)
         until(lambda: pool.snapshot(worker)["returned"])
         selected = owner.result(binding, pool, worker)
@@ -614,6 +656,17 @@ def main():
             lane.retire(handle)
             refuses_dispatch_retirement('persistence_retired')
             owner.retire(binding, pool, worker)
+            preparation_cleanup = {}
+            if prepared_inputs is not None:
+                preparation.discard(preparation_handle)
+                until(lambda: preparation.snapshot(preparation_handle)['state'] in {'cleaned', 'unknown'})
+                if preparation.snapshot(preparation_handle)['state'] != 'cleaned':
+                    raise RuntimeError('fixture_original_export_cleanup_unconfirmed')
+                preparation.retire(preparation_handle)
+                until(preparation.threads_stopped)
+                preparation_cleanup = {'original_export_removed': not prepared_inputs.workspace.exists(),
+                    'preparation_closed_while_bound': preparation_closed_while_bound,
+                    'preparation_cleanup_thread_stopped': preparation.threads_stopped()}
             dispatch_retirement = {}
             if dispatcher is not None:
                 from codex_agents.dispatch_api import DispatchError
@@ -636,7 +689,7 @@ def main():
             emit(stage='release_received', local_execution_released=registry._issued[ticket].state == 'released',
                  local_persistence_retired=handle not in lane._jobs,
                  local_worker_retired=worker not in pool._jobs, release_ack=account_reply.hex(),
-                 release_custody_loss_rolled_back=release_race_checked == [True], **dispatch_retirement)
+                 release_custody_loss_rolled_back=release_race_checked == [True], **dispatch_retirement, **preparation_cleanup)
         if data.get('client_dispatch', False) and next_message() != {'client_done': True}:
             raise RuntimeError('fixture_client_not_finished')
         if data.get('lose_result_reply', False):
@@ -679,6 +732,7 @@ def main():
                 loop.close()
             if service is not None:
                 service.close()
+        preparation_stack.close()
 
 
 

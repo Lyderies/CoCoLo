@@ -163,3 +163,15 @@ class PreparedDispatchTests(unittest.TestCase):
         self.assertEqual('unknown', job.state)
         self.assertEqual(1, len(service._jobs))
         self.assert_unlaunched()
+
+    def test_status_can_read_a_pinned_original_without_changing_submit_identity(self):
+        service = self.service(authorizer=self.authorize)
+        pinned = self.request(expected_export_commit=self.context.export_info[1])
+        first = self.call(service, pinned)
+        status = self.call(service, self.request('dispatch.status'))
+        self.assertEqual({**first, 'known': True}, status)
+        with self.assertRaisesRegex(DispatchError, 'dispatch_conflict'):
+            self.call(service, self.request())
+        with self.assertRaisesRegex(DispatchError, 'dispatch_conflict'):
+            self.call(service, self.request('dispatch.status', expected_export_commit='f'*40))
+        self.assert_unlaunched()

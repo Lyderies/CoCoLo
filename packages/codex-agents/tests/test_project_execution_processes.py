@@ -107,7 +107,7 @@ class ProjectExecutionProcessTests(unittest.TestCase):
     def start(self, scope, request, history, name, *, with_provenance=False, lose_consumption_reply=False,
               lose_open_reply=False, crash_cleanup=False, await_release=False, client_dispatch=False,
               hold_result_publish=False, hold_result_read=False, client_open=False, product_runtime=False,
-              client_result=False, lose_result_reply=False):
+              client_result=False, lose_result_reply=False, actual_preparation=False):
         original = self.original_context(scope, history) if self.managed_original_open else None
         root = (self.bridge.state.root if client_dispatch else Path(self.bridge.temporary.name)) / name
         root.mkdir(mode=0o700)
@@ -124,6 +124,25 @@ print(json.dumps({"type":"turn.started"}), flush=True)
 time.sleep(30)
 ''')
         executable.chmod(0o700)
+        if actual_preparation:
+            (root/'prepare-base').mkdir(mode=0o700)
+            # One inert fixture client serves metadata/help and the
+            # actual slow child. Preparation resolves this same original file.
+            wrapper = self.bridge.tools/'codex'
+            wrapper.write_text('#!'+sys.executable+'\n'+f'''
+import json, os, sys, time
+from pathlib import Path
+if sys.argv[1:2] == ['exec'] and '-m' in sys.argv:
+    root = Path({str(root)!r})
+    (root/'launches').write_text('launch\\n')
+    print(json.dumps({{"type":"thread.started","thread_id":"thread_fixture"}}), flush=True)
+    print(json.dumps({{"type":"turn.started"}}), flush=True)
+    time.sleep(30)
+else:
+    os.execv(sys.executable, [sys.executable, {str(self.bridge.tools/'fake_child.py')!r},
+        {str(self.bridge.tools)!r}, 'codex', *sys.argv[1:]])
+''')
+            wrapper.chmod(0o700)
         pairs = [socket.socketpair() for _ in range(2)]
         environment = dict(os.environ)
         for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWS_BEARER_TOKEN_BEDROCK"):
@@ -151,10 +170,14 @@ time.sleep(30)
                           'await_release': await_release, 'client_dispatch': client_dispatch,
                           'client_open': client_open,
                           'product_runtime': product_runtime,
+                          'actual_preparation': actual_preparation, 'project_root': str(self.bridge.project),
+                          'bundle_root': str(self.bridge.bundle), 'tools': str(self.bridge.tools),
+                          'expected_export_commit': (subprocess.check_output(['git', 'rev-parse', 'HEAD'],
+                              cwd=self.bridge.project, text=True).strip() if actual_preparation else None),
                           'client_result': client_result, 'client_capability': self.bridge.clients['bridge-v1'],
                           'lose_result_reply': lose_result_reply,
                           'primary_client': getattr(self, 'primary_client', 'codex-host-v1'),
-                          'prospective': original.prospective.snapshot()[1] if client_open else None,
+                          'prospective': original.prospective.snapshot()[1] if client_open or actual_preparation else None,
                           'hold_result_publish': hold_result_publish, 'hold_result_read': hold_result_read})
         if self.managed_original_open:
             prepared = self.read(child, 'prepared')
@@ -165,7 +188,11 @@ time.sleep(30)
                 opened = self.open_prepared_client(child, original)
                 scope, request = self.open_prepared(child, original, opened=opened)
             else:
-                self.assertEqual({'stage': 'prepared', 'tickets': 0, 'launched': False}, prepared)
+                if actual_preparation:
+                    self.assertEqual({'stage', 'tickets', 'launched', 'export_info', 'client_identity'}, prepared.keys())
+                    child['prepared'] = prepared
+                else:
+                    self.assertEqual({'stage': 'prepared', 'tickets': 0, 'launched': False}, prepared)
                 scope, request = self.open_prepared(child, original)
             child['scope'] = scope
             self.contexts[context]['scope'] = scope

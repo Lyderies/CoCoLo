@@ -152,8 +152,8 @@ class PreparedDispatchService:
                                 request.inputs_digest, request.expected_export_commit)
                 self._jobs[key] = job
                 self._rotation.append(key)
-            if (job.context is not context or job.snapshot != context.snapshot()
-                    or (job.inputs, job.expected_commit) != (request.inputs_digest, request.expected_export_commit)):
+            if (job.context is not context or job.snapshot != context.snapshot() or job.inputs != request.inputs_digest
+                    or (request.operation == 'dispatch.submit' and job.expected_commit != request.expected_export_commit)):
                 raise DispatchError('dispatch_conflict')
             reply = dispatch_reply(request, result=self._view(job, known=known))
             decode_dispatch_response(reply, request)

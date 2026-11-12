@@ -49,11 +49,11 @@ class DispatchClientRuntimeTests(unittest.TestCase):
             if process.stderr is not None:
                 process.stderr.close()
 
-    def start(self, *, hold_result_publish=False, hold_result_read=False, await_release=False):
+    def start(self, *, hold_result_publish=False, hold_result_read=False, await_release=False, actual_preparation=False):
         child = self.fixture.start(self.fixture.fixture.scope, self.fixture.fixture.request,
             self.fixture.fixture.directory, 'rpc', with_provenance=True, client_dispatch=True,
             hold_result_publish=hold_result_publish, hold_result_read=hold_result_read, await_release=await_release,
-            product_runtime=True)
+            product_runtime=True, actual_preparation=actual_preparation)
         self.assertFalse(child['dispatch_ready']['launched'])
         self.assertEqual(0, child['dispatch_ready']['tickets'])
         return child
@@ -86,7 +86,7 @@ class DispatchClientRuntimeTests(unittest.TestCase):
         self.fixture.send(child, {'client_done': True})
         self.assertEqual(0, child['process'].wait(timeout=10))
 
-    def launch_cli(self, child, *, install_hint=True, host='codex'):
+    def launch_cli(self, child, *, install_hint=True, host='codex', expected_export_commit=None):
         ready, scope = child['dispatch_ready'], self.control_scope(child)
         state = CollectorPaths(self.bridge.state.root)
         project_root = self.bridge.project
@@ -112,6 +112,7 @@ class DispatchClientRuntimeTests(unittest.TestCase):
             environment.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='fixture-dispatch-primary')
         process = subprocess.Popen([sys.executable, '-B', '-m', 'tests.dispatch_cli_fixture', 'dispatch',
             '--project-root', str(project_root), '--state-root', str(state.root), '--run-handle', child['scope'].run_handle,
+            *([] if expected_export_commit is None else ['--expected-export-commit', expected_export_commit]),
             *arguments], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
         self.clients.append(process)
         return process
@@ -154,7 +155,7 @@ class DispatchClientRuntimeTests(unittest.TestCase):
         child['process'].wait(timeout=10)
 
     def test_actual_account_release_retires_dispatch_payload_and_replay_cannot_launch(self):
-        child = self.start(await_release=True)
+        child = self.start(await_release=True, actual_preparation=True)
         process = self.launch_cli(child)
         self.fixture.read(child, 'started')
         self.fixture.control(child, 'project.cancel')
@@ -178,6 +179,9 @@ class DispatchClientRuntimeTests(unittest.TestCase):
         self.assertTrue(retired['local_execution_released'])
         self.assertTrue(retired['local_persistence_retired'])
         self.assertTrue(retired['local_worker_retired'])
+        self.assertTrue(retired['original_export_removed'])
+        self.assertTrue(retired['preparation_closed_while_bound'])
+        self.assertTrue(retired['preparation_cleanup_thread_stopped'])
         self.assertTrue(retired['dispatch_payload_dropped'])
         self.assertEqual(1, retired['dispatch_lifetime_slots'])
         self.assertEqual(['running', 'published', 'acknowledged', 'cleanup_ready', 'account_reply_only',

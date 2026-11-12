@@ -4,6 +4,72 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; these source components do not activate native services.
 
+## Original Codex preparation (uninstalled source)
+
+Trusted startup can bind one `CodexPreparationLane` to the product runtime's
+original worker pool. It prestarts a fixed number of preparation threads and
+reserves explicit serialized-input/result and export-content bytes for every
+accepted job before intake. Either byte budget can limit intake while another
+prestarted worker remains idle. Reservations stay charged through cancellation,
+unknown cleanup and physical removal until explicit retirement. `capacity()`
+reports these reservations and their configured limits. These are bounded
+serialized buffers and exported file contents, not Python RSS or filesystem
+quota: filesystem metadata and trusted provider scratch are outside this accounting.
+The existing provider-option helper bounds stdout to 256 KiB through a pipe and
+uses its original absolute timeout; it creates no output spool file. Native
+scratch containment remains an activation gate. There is no unbounded waiting
+queue. The controller accepts
+only immutable original bytes and a server-held context; its authorizer defaults
+to denial and is rechecked before and after original worker reservation. JSON,
+Git, provider-option queries, role/schema reads and file deletion run off the
+control and persistence threads. These contexts and callback results establish
+no native identity or current root/environment/permission authority.
+
+Preparation validates the prospective scope and read-only assignment, reads the
+routed role whose bytes match the configuration, resolves the actual installed
+client, creates an owner-only workspace and exports the actual committed Git
+blobs. It retains the real file count, pinned commit and manifest digest. The
+client must support the existing required isolation options, and its resolved
+path/hash must remain unchanged across preparation. Account admission and the
+launch boundary must still independently establish current reviewed-client,
+account, policy and native authority. Preparation creates no run, claim, ticket
+or model launch.
+
+A verifier's original worker reference, terminal and retained result are read
+through fixed project APIs and checked against the original assignment before
+placing the private reserved input file. Request-supplied replacement results
+are not accepted. The resulting execution payload is reserved in the same
+original Codex worker pool before the frontend may expose account-open readiness.
+Only that trusted frontend can connect the prepared original to admission;
+this component activates no listener, enrollment or routing-hint publisher.
+
+Cancellation of a preparation stays charged until its actual worker returns and
+removal is confirmed. A failed/unknown removal cannot recycle its slot. Once
+the original execution is bound, preparation cannot discard its workspace while
+the original worker remains retained. After genuine account release and original
+worker retirement, cleanup runs asynchronously and is confirmed before local
+preparation capacity retires. Graceful preparation close keeps cleanup available
+for bound executions until original-worker retirement and explicit discard.
+Whole-runtime shutdown closes the original pool first and quarantines unresolved
+bound exports as unknown, retaining their reservations. A dead cleanup worker
+cannot accept a new cleanup request. Shutdown never joins on the controller, treats
+thread exit separately from cleanup, and retains unresolved execution custody.
+
+Fresh guarded CLI workflows under both primary hosts now use this actual export
+and original worker before open, dispatch and result admission. The inert client
+is independently resolved by preparation, and reports retain real export pins.
+The account-release process test refuses early export removal at all nine
+pre-retirement stages. Held-export and failed-removal tests cover control progress
+and conservative capacity. Provider executables and native enrollment in these
+tests remain synthetic; installed real-client and native authority proofs remain
+mandatory.
+
+`dispatch.status` can read the original pinned submission without restating its
+optional preflight pin. It cannot change that pin or inputs, and a wrong explicit
+pin still refuses. Repeating `dispatch.submit` must preserve the exact original
+pin. This allows result admission to inspect a pinned execution without creating
+another submission or weakening the original export check.
+
 ## Normal provider-observation client (uninstalled source)
 
 The normal `provider-observe` command sends one `account.observe_provider`

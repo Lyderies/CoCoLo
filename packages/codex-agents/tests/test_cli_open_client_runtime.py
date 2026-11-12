@@ -13,6 +13,7 @@ from tests import test_dispatch_client_runtime as dispatch_fixtures
 from tests.test_bridge import PARENT_GRANT
 
 from codex_agents.account_api import decode_account_response, encode_account_request
+from codex_agents import bridge, providers
 from codex_agents.account_ingress import AccountIngress, AccountIngressLimits
 from codex_agents.client_runtime import runtime_hint_path
 from codex_agents.collector_paths import CollectorPaths
@@ -220,9 +221,12 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
         child = self.fixture.start(self.fixture.fixture.scope, self.fixture.fixture.request,
             self.fixture.fixture.directory, 'open-rpc', with_provenance=True, client_dispatch=True, client_open=True,
             product_runtime=True, client_result=getattr(self, 'record_results', False),
-            lose_result_reply=getattr(self, 'record_results', False))
+            lose_result_reply=getattr(self, 'record_results', False), actual_preparation=True)
         self.assertEqual(self.opened['run_handle'], child['scope'].run_handle)
         self.assertEqual(0, child['dispatch_ready']['tickets'])
+        manifest = bridge.committed_export_manifest(self.bridge.project, ['source.txt'])
+        self.assertEqual([manifest['file_count'], manifest['commit'], manifest['manifest_digest']], child['prepared']['export_info'])
+        self.assertEqual(list(providers.resolve_client('codex', untrusted=[self.bridge.project])), child['prepared']['client_identity'])
         if getattr(self, 'record_results', False):
             code, missing = self.invoke_record(child, {'result': {}})
             self.assertEqual((2, 'dispatch_not_found'), (code, missing['reason_code']))
@@ -231,7 +235,7 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
         # native enrollment remain synthetic; no crash/recovery proof claimed.
         self.listener.close()
         self.account_path.unlink()
-        process = self.launch_cli(child, install_hint=False, host=parent_host)
+        process = self.launch_cli(child, install_hint=False, host=parent_host, expected_export_commit=manifest['commit'])
         self.fixture.read(child, 'started')
         self.listener = self.listen_account()
         self.fixture.control(child, 'project.cancel')
@@ -241,6 +245,8 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
         dispatched = json.loads(output)
         self.assertTrue(dispatched['ready'])
         self.assertEqual('cancelled', dispatched['result']['execution_state'])
+        self.assertEqual((manifest['file_count'], manifest['commit'], manifest['manifest_digest']),
+            tuple(dispatched['bridge_report'][name] for name in ('export_file_count', 'export_commit', 'export_manifest_digest')))
         self.assertEqual(['launch'], done['launches'])
         self.assertEqual(1, done['ticket_count'])
         if getattr(self, 'record_results', False):

@@ -85,9 +85,12 @@ def _read_managed_bytes(
     relative: str,
     *,
     allowed_roots: frozenset[str] = frozenset({".agents", ".codex"}),
+    max_bytes: int | None = None,
 ) -> bytes:
     """Read one package file through no-follow descriptors."""
 
+    if max_bytes is not None and (type(max_bytes) is not int or not 1 <= max_bytes <= 32*1_048_576):
+        raise ContractError("installed artifact read limit is invalid")
     path = Path(relative)
     if (
         path.is_absolute()
@@ -107,15 +110,20 @@ def _read_managed_bytes(
             os.close(descriptor)
             descriptor = next_descriptor
         file_descriptor = os.open(
-            path.parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=descriptor
+            path.parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor
         )
         try:
             file_stat = os.fstat(file_descriptor)
             if not stat.S_ISREG(file_stat.st_mode):
                 raise ContractError("installed package path is not a regular file")
+            if max_bytes is not None and file_stat.st_size > max_bytes:
+                raise ContractError("installed execution artifact exceeds its read limit")
             with os.fdopen(file_descriptor, "rb") as handle:
                 file_descriptor = -1
-                return handle.read()
+                data = handle.read() if max_bytes is None else handle.read(max_bytes+1)
+                if max_bytes is not None and len(data) > max_bytes:
+                    raise ContractError("installed execution artifact exceeds its read limit")
+                return data
         finally:
             if file_descriptor >= 0:
                 os.close(file_descriptor)
