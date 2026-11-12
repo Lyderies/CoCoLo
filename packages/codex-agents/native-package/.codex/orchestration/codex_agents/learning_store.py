@@ -78,6 +78,7 @@ from .collector_contracts import (
     _version_tuple,
 )
 from .contracts import (
+    LedgerError as LedgerError,
     HOST_OUTCOME_DIGEST,
     RESULT_VALIDATION_REASON_CODES,
     ContractError,
@@ -265,10 +266,6 @@ def empty_ingestion_snapshot(*, registered: bool) -> dict[str, Any]:
 
 class OwnerSignerNotConfigured(StateError):
     """The checked signer file is empty; other unsafe states stay distinct."""
-
-
-class LedgerError(RuntimeError):
-    """Raised for controlled ledger failures without echoing record content."""
 
 
 class ProjectNotRegisteredError(LedgerError):

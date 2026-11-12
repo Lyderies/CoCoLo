@@ -7,6 +7,10 @@ import re
 from typing import Any
 
 
+class LedgerError(RuntimeError):
+    """Controlled owner/API failures without exposing persisted record content."""
+
+
 TASK_FAMILIES = {
     "inventory",
     "research",

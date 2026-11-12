@@ -33,6 +33,7 @@ from .contracts import (
     effective_dispatch_limits,
     RESULT_VALIDATION_REASON_CODES,
     ContractError,
+    LedgerError,
     ResultContractError,
     legacy_result_status,
     result_axes,
@@ -1162,8 +1163,6 @@ def run_claude(
     worker_result_path: str | None = None,
     _execution: ExecutionTicket | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    from .learning_store import LedgerError
-
     model = route["model"]
     settings = _private_file(
         control / "settings.json", json.dumps(claude_settings(model)).encode()
@@ -2007,8 +2006,6 @@ def _record_unavailable(
     reason_code: str,
     report: dict[str, Any],
 ) -> None:
-    from .learning_store import LedgerError
-
     try:
         ledger.record_observation_unavailable(
             project_id, run_handle=run_handle, provider=provider, phase=phase,
@@ -2030,8 +2027,6 @@ def _record_usage(
     report: dict[str, Any],
 ) -> None:
     """Persist the run's client-observed usage, or that it was unavailable."""
-
-    from .learning_store import LedgerError
 
     usage = report.get("usage")
     if not isinstance(usage, dict):
