@@ -96,6 +96,7 @@ from codex_agents.learning_contracts import (  # noqa: E402
     load_released_candidate_digests,
     parse_bounded_json,
     parse_bounded_json_value,
+    provider_for_model,
     validate_learning_record,
 )
 from codex_agents.learning_engine import (  # noqa: E402
@@ -120,7 +121,8 @@ from codex_agents.learning_engine import (  # noqa: E402
 from codex_agents.collector_client import CollectorClient  # noqa: E402
 from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
-    RuntimeOpenError, RuntimeOrchestrationError, dispatch_codex_client, open_codex_client, orchestration_client,
+    RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client, open_codex_client,
+    orchestration_client, record_codex_result_client,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.cli_reports import command_report  # noqa: E402
@@ -907,6 +909,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_assignment_context(learning_host_result, allow_policy_override=False)
     learning_host_result.add_argument("--result", required=True)
     learning_host_result.add_argument("--observation", required=True)
+    learning_host_result.add_argument('--route', help='original Codex route used by open and dispatch')
     learning_host_result.add_argument("--evaluation-assignment-digest")
     learning_host_result.add_argument("--trial-id")
     learning_host_result.add_argument(
@@ -2192,6 +2195,21 @@ def main() -> int:
                 raise ContractError(
                     "evaluation assignment digest and trial id must appear together"
                 )
+            assignment = _json_input(args.assignment)
+            if trusted_host and provider_for_model(assignment.get('model')) == 'codex':
+                if args.route is None:
+                    raise RuntimeResultError('history_invalid_input')
+                if args.evaluation_assignment_digest is not None or args.fallback_receipt is not None:
+                    raise RuntimeResultError('history_invalid_input')
+                route = _json_input(args.route)
+                parent_grant = _json_input(args.parent_grant)
+                assignment = validate_assignment(assignment, task=task, route=route, parent_grant=parent_grant)
+                report = record_codex_result_client(args.state_root, args.project_root, task, route, assignment,
+                    parent_grant, result, observation, host_client=host)
+                _print_command_report(args, report)
+                return 0
+            if args.route is not None:
+                raise RuntimeResultError('history_invalid_input')
             ledger, project_id = _learning_ledger(args)
             try:
                 if trusted_host:
@@ -3207,6 +3225,9 @@ def main() -> int:
         _print({'ready': False, 'error': 'orchestration operation unavailable', 'reason_code': exc.reason_code,
                 **({'request_id': exc.request_id} if exc.request_id is not None else {}),
                 **({'expected_sequence': exc.expected_sequence} if exc.expected_sequence is not None else {})})
+        return 2
+    except RuntimeResultError as exc:
+        _print({'ready': False, 'error': 'result recording unavailable', 'reason_code': exc.reason_code})
         return 2
     except BridgeRefused as exc:
         # Refusal messages are fixed strings; they never carry prompts or paths.

@@ -86,7 +86,8 @@ def main():
             # Explicit deterministic fake enrollment, never native authority.
             opened = OrchestrationRequest(1, 'orchestration.open', 'fixture-open', OrchestrationScope(**asdict(scope)), {})
             with mock.patch('codex_agents.orchestration_store.secrets.token_hex', return_value=lease_scope.orchestration_handle[4:]):
-                OrchestrationOwner(store).apply(opened, client_version='codex-host-v1', before_commit=lambda: None)
+                OrchestrationOwner(store).apply(opened, client_version=data.get('primary_client', 'codex-host-v1'),
+                                               before_commit=lambda: None)
         return store
 
     lane = None
@@ -95,6 +96,20 @@ def main():
     publication = threading.Event()
     publication_entered = threading.Event()
     publication_patch = None
+    admission_patch = None
+    admitted_replies = []
+    if data.get('lose_result_reply', False):
+        original_admit = ProjectHistory.admit_host_result
+        def admit_then_lose_reply(*args, **kwargs):
+            reply = original_admit(*args, **kwargs)
+            if admitted_replies and reply != admitted_replies[0]:
+                raise RuntimeError('fixture_changed_original_host_outcome')
+            admitted_replies.append(reply)
+            if len(admitted_replies) == 1:
+                raise OSError('PRIVATE-LOST-HOST-OUTCOME-REPLY')
+            return reply
+        admission_patch = mock.patch.object(ProjectHistory, 'admit_host_result', new=admit_then_lose_reply)
+        admission_patch.start()
     if data.get('hold_result_publish', False) or data.get('hold_result_read', False):
         method = 'read_result' if data.get('hold_result_read', False) else 'publish_result'
         original = getattr(ProjectHistory, method)
@@ -117,17 +132,35 @@ def main():
                 if context is CONTEXT and request.binding == binding:
                     return ResultReadAuthorization(binding, request.result_digest, result_read_request_digest(request))
             api_options = {'request_limits': ProjectRequestLimits(4, 10*SECOND), 'result_authorizer': authorize_result}
-            if data.get('client_open', False):
+            if data.get('client_open', False) or data.get('client_result', False):
                 from codex_agents.history_api import history_request_digest
                 from codex_agents.history_service import HistoryAuthorization
+                from codex_agents.host_result_contracts import HostResultContext
                 from codex_agents.open_scope_contracts import OpenScopeContext
-                prospective = OpenScopeContext.from_snapshot(data['prospective'])
+                prospective = (OpenScopeContext.from_snapshot(data['prospective'])
+                               if data.get('client_open', False) else None)
                 def authorize_history(request, context):
                     if context is CONTEXT:
+                        operations = {'history.open_scope'} if prospective is not None else set()
+                        original_result = None
+                        if data.get('client_result', False):
+                            operations |= {'history.admit_host_result', 'history.read_record'}
+                            if request.operation != 'history.open_scope':
+                                original_result = HostResultContext(binding, data['assignment'], data['task'],
+                                                                    data['route'], data['client_capability'])
                         return HistoryAuthorization(request.project_id, request.runtime_digest,
-                            history_request_digest(request), 'host', frozenset({'history.open_scope'}),
+                            history_request_digest(request), 'host', frozenset(operations), original_result,
                             open_scope_context=prospective)
                 api_options['history_authorizer'] = authorize_history
+            if data.get('client_result', False):
+                from codex_agents.orchestration_api import orchestration_request_digest
+                from codex_agents.orchestration_service import OrchestrationAuthorization
+                def authorize_orchestration(request, context):
+                    if context is CONTEXT:
+                        return OrchestrationAuthorization(OrchestrationScope(**asdict(scope)),
+                            orchestration_request_digest(request), data.get('primary_client', 'codex-host-v1'),
+                            frozenset({'orchestration.status'}))
+                api_options['orchestration_authorizer'] = authorize_orchestration
         if data.get('product_runtime', False):
             from codex_agents.project_runtime import ProjectRuntime, ProjectRuntimeLimits
             from codex_agents.project_ingress import ProjectIngressLimits
@@ -137,7 +170,8 @@ def main():
                 api_options['request_limits'], ProjectIngressLimits(4, 4, 10*SECOND, 1_000_000))
             runtime = ProjectRuntime(OrchestrationScope(**asdict(scope)), open_history, limits,
                 control_authorizer=authorize, ingress_authorizer=lambda raw, context, phase: context is CONTEXT,
-                history_authorizer=api_options.get('history_authorizer'), result_authorizer=api_options['result_authorizer'])
+                history_authorizer=api_options.get('history_authorizer'), result_authorizer=api_options['result_authorizer'],
+                orchestration_authorizer=api_options.get('orchestration_authorizer'))
             monitor, service, loop, owner, pool, lane, ingress = (runtime.monitor, runtime.control, runtime.loop,
                 runtime.owner, runtime.pool, runtime.persistence, runtime.ingress)
             registry = pool._registry
@@ -605,10 +639,15 @@ def main():
                  release_custody_loss_rolled_back=release_race_checked == [True], **dispatch_retirement)
         if data.get('client_dispatch', False) and next_message() != {'client_done': True}:
             raise RuntimeError('fixture_client_not_finished')
+        if data.get('lose_result_reply', False):
+            emit(stage='result_reconciled', attempts=len(admitted_replies),
+                 identical=bool(admitted_replies) and all(v == admitted_replies[0] for v in admitted_replies))
     finally:
         publication.set()
         if publication_patch is not None:
             publication_patch.stop()
+        if admission_patch is not None:
+            admission_patch.stop()
         for listener, _ in listeners:
             listener.close()
         if runtime is not None:

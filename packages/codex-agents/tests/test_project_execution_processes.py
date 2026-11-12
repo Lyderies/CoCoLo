@@ -106,7 +106,8 @@ class ProjectExecutionProcessTests(unittest.TestCase):
 
     def start(self, scope, request, history, name, *, with_provenance=False, lose_consumption_reply=False,
               lose_open_reply=False, crash_cleanup=False, await_release=False, client_dispatch=False,
-              hold_result_publish=False, hold_result_read=False, client_open=False, product_runtime=False):
+              hold_result_publish=False, hold_result_read=False, client_open=False, product_runtime=False,
+              client_result=False, lose_result_reply=False):
         original = self.original_context(scope, history) if self.managed_original_open else None
         root = (self.bridge.state.root if client_dispatch else Path(self.bridge.temporary.name)) / name
         root.mkdir(mode=0o700)
@@ -150,6 +151,9 @@ time.sleep(30)
                           'await_release': await_release, 'client_dispatch': client_dispatch,
                           'client_open': client_open,
                           'product_runtime': product_runtime,
+                          'client_result': client_result, 'client_capability': self.bridge.clients['bridge-v1'],
+                          'lose_result_reply': lose_result_reply,
+                          'primary_client': getattr(self, 'primary_client', 'codex-host-v1'),
                           'prospective': original.prospective.snapshot()[1] if client_open else None,
                           'hold_result_publish': hold_result_publish, 'hold_result_read': hold_result_read})
         if self.managed_original_open:

@@ -4,6 +4,36 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; these source components do not activate native services.
 
+## Normal Codex result-recording client (uninstalled source)
+
+For a trusted Codex run, `learning-record-host-result` now requires `--route`
+with the same original route used by open and dispatch. It reads one
+`dispatch.status` using the original assignment/task/route/parent digest; it
+never submits or launches an execution. Missing runtime, route or published
+terminal refuses without a ledger or collector fallback. Claude and legacy
+telemetry recording still require migration.
+
+The client checks current orchestration host-marker consistency, reads the
+original terminal and result through bounded APIs, and rejects changed result
+content, inputs, run scope or terminal-state observations. It accepts exactly
+one structurally accepted result attempt, with no repair receipt. Only a
+`HostResultReference` crosses the `history.admit_host_result` mutation boundary.
+The original writer independently checks current authorization, protected
+original inputs, actual consumed grant, durable terminal, original body and
+expiry, and derives the event and unaccepted outcome itself. Client labels,
+host markers and a matching digest supply no native authority.
+
+The returned event/outcome records and commit metadata are read back from that
+same project history, with the authoritative host outcome digest. No learning
+cycle, verifier acceptance, account completion, capacity release or new timing
+window is invented. Fresh guarded CLI tests cover both primary hosts opening,
+dispatching one inert Codex child and recording its original terminal. Changed
+inputs/body/state and wrong host markers refuse. Explicit retries after a lost
+committed admission reply preserve the original receipt and outcome without
+another launch. These tests use synthetic native enrollment; production keeper
+preparation, remaining clients, recovery after dispatch retirement/body expiry
+and the full real-provider/release gates remain open.
+
 ## Project runtime and lifecycle clients (uninstalled source)
 
 `ProjectRuntime` assembles the original project monitor, control loop, bridge
@@ -47,8 +77,8 @@ and original writer, including a lost committed reply, explicit reconciliation,
 wrong-host refusal and terminal-state preservation. Existing inert worker,
 writer-stall, cancellation and original account-release process fixtures also
 use this composition. Their enrollment is synthetic. Production native bootstrap,
-original preparation/claim/completion, full run-statistics reporting and result-
-recording client migration remain incomplete. These tests do not accept live
+original preparation/claim/completion, full run-statistics reporting and the
+remaining client migration remain incomplete. These tests do not accept live
 provider, native identity, containment or concurrent-project release criteria.
 
 ## Normal Codex host-open client (uninstalled source)
@@ -77,8 +107,8 @@ account socket to remain present. These files remain routing hints only. The
 production keeper must prepare the actual export and local worker, establish
 the original contexts, and complete claim/registration/consumption independently
 before dispatch. Its native bootstrap, current root/environment/permission and
-held publication/containment proofs still gate activation. Result-recording and
-full orchestration-statistics CLI migration also remain incomplete.
+held publication/containment proofs still gate activation. Full orchestration-
+statistics and remaining provider/client migration also remain incomplete.
 
 The disposable process tests cover both primary-host variants. They prepare an
 inert worker first, then use fresh CLIs with SQL/file-access and collector-takeover traps against actual project

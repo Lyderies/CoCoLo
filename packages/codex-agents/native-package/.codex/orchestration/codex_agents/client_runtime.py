@@ -18,13 +18,16 @@ from .collector_paths import CollectorPaths, _assert_no_symlink_components, _can
 from .control_api import ControlClient, ControlScope
 from .contracts import effective_dispatch_bounds, effective_dispatch_limits
 from .admission_metadata import api_keys_present
-from .dispatch_api import DispatchClient, DispatchError
+from .dispatch_api import DISPATCH_REASONS, DispatchClient, DispatchError
 from .history_api import HistoryClient
-from .history_contracts import HISTORY_REASON_CODES, HistoryError, _ID, matches
+from .history_contracts import HISTORY_REASON_CODES, AttemptBinding, HistoryError, _ID, matches
+from .host_result_contracts import HostResultReference
 from .hosts import HOST_CLIENTS, HostClientMismatch
-from .learning_contracts import content_digest, keyed_digest, parse_bounded_json
+from .learning_contracts import canonical_json, content_digest, keyed_digest, parse_bounded_json
 from .open_scope_contracts import open_inputs_digest
 from .orchestration_api import OrchestrationClient, OrchestrationRequest, OrchestrationScope
+from .result_contracts import MAX_RESULT_BODY_BYTES
+from .result_read_api import ResultReadClient
 from .service_protocol import ServiceTarget
 
 
@@ -113,6 +116,68 @@ class RuntimeOrchestrationError(RuntimeError):
         self.request_id = request_id if matches(request_id, _ID) else None
         self.expected_sequence = expected_sequence
         super().__init__(self.reason_code)
+
+
+class RuntimeResultError(RuntimeError):
+    def __init__(self, reason):
+        allowed = HISTORY_REASON_CODES | DISPATCH_REASONS | {'result_client_unavailable', 'host_client_mismatch'}
+        self.reason_code = reason if type(reason) is str and reason in allowed else 'result_client_unavailable'
+        super().__init__(self.reason_code)
+
+
+def record_codex_result_client(state_root, project_root, task, route, assignment, parent_grant, result, observation,
+                               *, host_client):
+    """Admit only the original published terminal; never transmit a replacement body."""
+    try:
+        if (type(route) is not dict or route.get('provider') != 'codex' or route.get('dispatch') != 'bridge'
+                or type(observation) is not dict
+                or observation.keys() - {'run_handle', 'result_attempts', 'terminal_state'}
+                or observation.get('result_attempts') != [{'status': 'accepted', 'reason_code': None, 'receipt_id': None}]):
+            raise HistoryError('history_invalid_input')
+        submitted = canonical_json(result)
+        if not 0 < len(submitted) <= MAX_RESULT_BODY_BYTES:
+            raise HistoryError('history_invalid_input')
+        inputs = open_inputs_digest(assignment, task, route, parent_grant)
+        scope, endpoint, result_endpoint = read_runtime_hint(CollectorPaths(state_root), project_root)
+        view = DispatchClient(endpoint, result_endpoint, scope, timeout=10).call('dispatch.status',
+            observation.get('run_handle'), assignment.get('attempt'), inputs)
+        if view['state'] != 'published':
+            raise HistoryError('history_result_not_ready')
+        binding = AttemptBinding(**view['binding'])
+        current = OrchestrationClient(result_endpoint, OrchestrationScope(**vars(scope)), timeout=10).call(
+            'orchestration.status', {'orchestration_handle': binding.orchestration_handle})
+        if current['current']['snapshot']['client_version'] != host_client:
+            raise HostClientMismatch('host_client_mismatch')
+        delivery = view['delivery']
+        reference = HostResultReference(binding, delivery['record_id'], delivery['record_content_digest'], delivery['result_digest'])
+        history = HistoryClient(result_endpoint, scope.project_id, scope.runtime_digest, timeout=10)
+        terminal = history.read_record(reference.terminal_record_id)
+        record, metadata = terminal['record'], terminal['metadata']
+        if (metadata['source'] != 'host' or metadata['content_digest'] != reference.terminal_content_digest
+                or record['result_digest'] != reference.result_digest
+                or record['bridge_run_id'] != binding.claim_id
+                or observation.get('terminal_state') != record['terminal_state']):
+            raise HistoryError('history_conflict')
+        body = ResultReadClient(result_endpoint, timeout=10).read_result(binding, reference.result_digest)
+        if submitted != canonical_json(parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)):
+            raise HistoryError('history_conflict')
+        # Only this durable reference crosses the mutation boundary. The writer
+        # rechecks original inputs, result, current authority and expiry itself.
+        admitted = history.admit_host_result(reference)
+        records = {}
+        for kind in ('event', 'outcome'):
+            commit = admitted[kind+'_commit']
+            entry = history.read_record(commit['record_id'])
+            if (entry['metadata'] != commit or entry['record']['record_type'] != kind
+                    or entry['record']['run_id'] != binding.run_id):
+                raise HistoryError('history_conflict')
+            records[kind] = entry['record']
+        return {'ready': True, **admitted, **records,
+                'host_outcome_digest': admitted['admission']['host_outcome_digest'], 'capacity_state': 'retained'}
+    except (DispatchError, HistoryError, HostClientMismatch) as error:
+        raise RuntimeResultError(error.reason_code) from None
+    except Exception:
+        raise RuntimeResultError('result_client_unavailable') from None
 
 
 def orchestration_client(state_root, project_root, operation, *, host_client, orchestration_handle=None,

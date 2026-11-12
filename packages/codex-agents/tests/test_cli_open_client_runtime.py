@@ -157,15 +157,76 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
         self.opened = first
         return {name: value for name, value in first.items() if name not in {'ready', 'read_containment'}}
 
+    def invoke_record(self, child, dispatched, *, body=None, route=True, host=None, terminal='cancelled', inputs=None):
+        values = {'task': self.bridge.task(), 'route': self.base.fixture.route,
+            'assignment': self.base.fixture.assignment, 'parent-grant': PARENT_GRANT,
+            'result': dispatched['result'] if body is None else body,
+            'observation': {'run_handle': child['scope'].run_handle, 'terminal_state': terminal,
+                'result_attempts': [{'status': 'accepted', 'reason_code': None, 'receipt_id': None}]}}
+        values.update(inputs or {})
+        if not route:
+            del values['route']
+        args = []
+        for flag, value in values.items():
+            path = self.bridge.state.root/('record-'+flag+'.json')
+            path.write_bytes(canonical_json(value))
+            args.extend(['--'+flag, str(path)])
+        env = {k: v for k, v in os.environ.items() if not any(s in k.upper() for s in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
+        for marker in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_SESSION_ID', 'CODEX_THREAD_ID'):
+            env.pop(marker, None)
+        if (host or self.parent_host) == 'codex':
+            env['CODEX_THREAD_ID'] = 'fixture-result-primary'
+        else:
+            env.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='fixture-result-primary')
+        process = subprocess.Popen([sys.executable, '-B', '-m', 'tests.dispatch_cli_fixture', 'learning-record-host-result',
+            '--project-root', str(self.bridge.project), '--state-root', str(self.bridge.state.root), *args],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        self.clients.append(process)
+        self.wait_api(lambda: process.poll() is not None)
+        output, errors = process.communicate(timeout=2)
+        self.assertEqual(b'', errors)
+        return process.returncode, json.loads(output)
+
+    def record_original_result(self, child, dispatched):
+        before = self.fixture.ledger._connection.execute('SELECT COUNT(*) FROM account_open_receipts').fetchone()[0]
+        wrong_body = dict(dispatched['result'], summary='PRIVATE-CHANGED-RESULT-CANARY')
+        changed_assignment = dict(self.base.fixture.assignment, objective='Different original objective')
+        for options, reason in (({'route': False}, 'history_invalid_input'),
+                ({'body': wrong_body}, 'history_conflict'), ({'terminal': None}, 'history_conflict'),
+                ({'host': 'claude' if self.parent_host == 'codex' else 'codex'}, 'host_client_mismatch'),
+                ({'inputs': {'assignment': changed_assignment}}, 'dispatch_conflict')):
+            code, refused = self.invoke_record(child, dispatched, **options)
+            self.assertEqual(2, code, refused)
+            self.assertEqual(reason, refused['reason_code'])
+            self.assertNotIn('PRIVATE-CHANGED-RESULT-CANARY', json.dumps(refused))
+        code, lost = self.invoke_record(child, dispatched)
+        self.assertEqual(2, code, lost)
+        self.assertEqual('history_service_unavailable', lost['reason_code'])
+        code, recorded = self.invoke_record(child, dispatched)
+        self.assertEqual(0, code, recorded)
+        self.assertTrue(recorded['ready'])
+        self.assertEqual(recorded['host_outcome_digest'], recorded['outcome_commit']['content_digest'])
+        self.assertEqual('retained', recorded['capacity_state'])
+        self.assertFalse(recorded['outcome']['accepted'])
+        code, known = self.invoke_record(child, dispatched)
+        self.assertEqual((0, recorded), (code, known))
+        self.assertEqual(before, self.fixture.ledger._connection.execute('SELECT COUNT(*) FROM account_open_receipts').fetchone()[0])
+        self.assertEqual(['launch'], (child['root']/'launches').read_text().splitlines())
+
     def run_original_workflow(self, parent_host):
         self.parent_host = parent_host
         self.fixture.primary_client = parent_host+'-host-v1'
         self.fixture.open_prepared_client = self.open_prepared_client
         child = self.fixture.start(self.fixture.fixture.scope, self.fixture.fixture.request,
             self.fixture.fixture.directory, 'open-rpc', with_provenance=True, client_dispatch=True, client_open=True,
-            product_runtime=True)
+            product_runtime=True, client_result=getattr(self, 'record_results', False),
+            lose_result_reply=getattr(self, 'record_results', False))
         self.assertEqual(self.opened['run_handle'], child['scope'].run_handle)
         self.assertEqual(0, child['dispatch_ready']['tickets'])
+        if getattr(self, 'record_results', False):
+            code, missing = self.invoke_record(child, {'result': {}})
+            self.assertEqual((2, 'dispatch_not_found'), (code, missing['reason_code']))
+            self.assertFalse((child['root']/'launches').exists())
         # Only the account routing socket disappears. Original services and
         # native enrollment remain synthetic; no crash/recovery proof claimed.
         self.listener.close()
@@ -182,11 +243,24 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
         self.assertEqual('cancelled', dispatched['result']['execution_state'])
         self.assertEqual(['launch'], done['launches'])
         self.assertEqual(1, done['ticket_count'])
+        if getattr(self, 'record_results', False):
+            self.record_original_result(child, dispatched)
         self.fixture.send(child, {'client_done': True})
+        if getattr(self, 'record_results', False):
+            reconciled = self.fixture.read(child, 'result_reconciled')
+            self.assertEqual((3, True), (reconciled['attempts'], reconciled['identical']))
         self.assertEqual(0, child['process'].wait(timeout=10))
 
     def test_codex_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover(self):
         self.run_original_workflow('codex')
+
+    def test_codex_primary_records_exact_original_terminal_through_project_api(self):
+        self.record_results = True
+        self.run_original_workflow('codex')
+
+    def test_claude_primary_records_exact_original_codex_terminal_through_project_api(self):
+        self.record_results = True
+        self.run_original_workflow('claude')
 
     def test_claude_primary_fresh_open_and_dispatch_use_original_apis_without_database_or_collector_takeover(self):
         self.run_original_workflow('claude')
