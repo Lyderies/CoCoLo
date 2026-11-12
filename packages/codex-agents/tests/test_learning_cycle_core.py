@@ -17,8 +17,11 @@ from tests.learning_support import (
 
 from codex_agents.contracts import ContractError
 from codex_agents.learning_contracts import canonical_json, content_digest, keyed_digest
-from codex_agents.learning_engine import generate_candidate, mine_evaluation_case, review_evaluation_case
+from codex_agents.learning_engine import mine_evaluation_case, review_evaluation_case
 from codex_agents.learning_store import DEFAULT_RETENTION_MS, LedgerError
+from codex_agents.project_history import ProjectHistory
+from codex_agents.project_learning_identity import LEARNING_KEY_DOMAIN, MAX_CASE_PREPARATION
+from codex_agents.result_contracts import ResultCapacity
 from codex_agents import learning_cycle_core as core
 
 
@@ -143,24 +146,42 @@ class LearningCycleLegacyParityTests(unittest.TestCase):
         outcomes, cases = records("outcome"), records("evaluation_case")
         invalidated = ledger._owner_invalidated_run_ids_locked(project_id)
         existing = {item["candidate_digest"] for item in records("candidate")}
+        directory = self.fixture.state_root.parent / ("project-parity-" + str(self.calls))
+        directory.mkdir(mode=0o700)
+        project_owner = ProjectHistory(
+            directory, project_id, result_key=self.fixture.state.digest_key(),
+            result_capacity=ResultCapacity(1, 1_048_576, 120_000, 120_000),
+        )
+        self.addCleanup(project_owner.close)
+        references = {}
+        for outcome in outcomes:
+            # Explicit synthetic owner-copy fixture, not a generic verified-write API.
+            raw = canonical_json(outcome)
+            checked = project_owner._checked_record(raw, "verifier", as_of_ms)
+            with project_owner._transaction():
+                entry = project_owner._append_locked(checked, raw, "verifier", as_of_ms)
+            references[entry.content_digest] = (entry.record_id, entry.content_digest)
+        domain = keyed_digest(
+            self.fixture.state.digest_key(), LEARNING_KEY_DOMAIN + project_id.encode("ascii"),
+        )
         new_cases = []
-        for outcome in core.select_mining_outcomes(
+        mining = core.select_mining_outcomes(
             outcomes, existing_cases=cases, owner_invalidated_run_ids=invalidated,
-        ):
-            criteria = {key: outcome[key] for key in (
-                "deterministic_pass", "security_pass", "required_criteria_total",
-                "required_criteria_passed",
-            )}
-            new_cases.append(mine_evaluation_case(
-                digest_key=self.fixture.state.digest_key(), outcome=outcome,
-                fixture_digest=outcome["fixture_digest"], criteria_digest=content_digest(criteria),
-                lineage_digest=keyed_digest(self.fixture.state.digest_key(), outcome["run_id"]),
+        )
+        for offset in range(0, len(mining), MAX_CASE_PREPARATION):
+            batch = mining[offset:offset + MAX_CASE_PREPARATION]
+            new_cases.extend(project_owner.prepare_learning_case_records(
+                [references[content_digest(outcome)] for outcome in batch], expected_domain_digest=domain,
             ))
         plan = core.plan_learning_cycle(
             outcomes, all_cases=cases + new_cases, owner_invalidated_run_ids=invalidated,
             as_of_ms=as_of_ms, max_age_ms=max_age_ms,
         )
         self.planned_spec_counts.append(len(plan["candidate_specs"]))
+        prepared_candidates = [project_owner.prepare_learning_candidate_record(
+            canonical_json(spec), [references[digest] for digest in spec["evidence_digests"]],
+            expected_domain_digest=domain,
+        ) for spec in plan["candidate_specs"]]
         proposed = []
         appended = list(new_cases)
         connection.execute("SAVEPOINT core_parity_prediction")
@@ -170,8 +191,7 @@ class LearningCycleLegacyParityTests(unittest.TestCase):
                 ledger._append_checked_locked(
                     project_id, case, producer="evaluator", timestamp=as_of_ms,
                 )
-            for spec in plan["candidate_specs"]:
-                record = generate_candidate(digest_key=self.fixture.state.digest_key(), **spec)
+            for record in prepared_candidates:
                 if record["candidate_digest"] in existing:
                     continue
                 try:

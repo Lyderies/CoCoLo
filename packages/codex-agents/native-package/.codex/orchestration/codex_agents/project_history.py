@@ -1156,6 +1156,21 @@ class ProjectHistory:
         from .project_learning_corpus import import_attestations
         return import_attestations(self, import_id, after_subject_record_id=after_subject_record_id, limit=limit)
 
+    @_operation
+    def learning_key_domain_digest(self):
+        from .project_learning_identity import key_domain_digest
+        return key_domain_digest(self)
+
+    @_operation
+    def prepare_learning_case_records(self, references, *, expected_domain_digest):
+        from .project_learning_identity import prepare_cases
+        return prepare_cases(self, references, expected_domain_digest=expected_domain_digest)
+
+    @_operation
+    def prepare_learning_candidate_record(self, spec, references, *, expected_domain_digest):
+        from .project_learning_identity import prepare_candidate
+        return prepare_candidate(self, spec, references, expected_domain_digest=expected_domain_digest)
+
     def _execution_provenance(self, grant):
         identity = self._execution_provenance_id(grant)
         try:
