@@ -32,7 +32,9 @@ from .orchestration_api import OrchestrationClient, OrchestrationRequest, Orches
 from .provider_observation_contracts import ObservationError, ObservationInput
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .result_read_api import ResultReadClient
+from .service_enrollment import EnrollmentError, enrollment_preamble, read_capability
 from .service_protocol import ServiceTarget
+from .service_transport import install_enrollment
 
 
 def runtime_hint_path(state, project_root):
@@ -105,6 +107,32 @@ def _read_runtime_endpoints(state, project_root, *, account=False, account_only=
 def read_runtime_hint(state, project_root):
     scope, endpoints = _read_runtime_endpoints(state, project_root)
     return scope, endpoints[0], endpoints[1]
+
+
+def enroll_host_client(state, project_root, scope, endpoints, host_client):
+    """Enroll this checked CLI process for the hinted project endpoints.
+
+    The capability is read once from the owner-only state root. Without one the
+    process stays unenrolled and a production host refuses its requests; there
+    is no other path to the service and no database fallback.
+    """
+    try:
+        key = read_capability(state, project_root, 'host')
+    except EnrollmentError:
+        install_enrollment(None)
+        return False
+    enrolled = frozenset(Path(endpoint) for endpoint in endpoints)
+
+    def preamble(socket_path, message):
+        if Path(socket_path) not in enrolled:
+            return None
+        try:
+            return enrollment_preamble(key, 'host', host_client, scope.supervisor_generation, message)
+        except EnrollmentError:
+            raise OSError() from None
+
+    install_enrollment(preamble)
+    return True
 
 
 def _status_ingestion_unavailable():
@@ -366,7 +394,9 @@ def orchestration_client(state_root, project_root, operation, *, host_client, or
         raise RuntimeOrchestrationError('history_invalid_request')
     captured_sequence = None
     try:
-        scope, _, endpoint = read_runtime_hint(CollectorPaths(state_root), project_root)
+        state = CollectorPaths(state_root)
+        scope, control, endpoint = read_runtime_hint(state, project_root)
+        enroll_host_client(state, project_root, scope, (control, endpoint), host_client)
         actor = OrchestrationScope(**vars(scope))
         client = OrchestrationClient(endpoint, actor, timeout=10)
         if operation == 'orchestration.open':

@@ -27,6 +27,23 @@ class ServiceTransportError(RuntimeError):
         super().__init__(reason_code)
 
 
+_ENROLLMENT = None
+
+
+def install_enrollment(provider) -> None:
+    """Set this process's enrollment: ``provider(socket_path, message)`` returns
+    the one-line preamble for an enrolled endpoint, or None for any other.
+
+    Only the checked CLI entry installs one. The preamble is sent once, ahead of
+    the request it names; this module still authenticates nothing by itself.
+    """
+
+    global _ENROLLMENT
+    if provider is not None and not callable(provider):
+        raise ServiceTransportError("invalid_request")
+    _ENROLLMENT = provider
+
+
 def exchange_frame(
     socket_path: Path,
     message: bytes,
@@ -62,11 +79,14 @@ def exchange_frame(
     reason = None
     response = b""
     try:
+        preamble = None if _ENROLLMENT is None else _ENROLLMENT(socket_path, message)
+        if preamble is not None and (type(preamble) is not bytes or not preamble or b"\n" in preamble):
+            raise ValueError()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(remaining())
             client.connect(str(socket_path))
             client.settimeout(remaining())
-            client.sendall(message + b"\n")
+            client.sendall((b"" if preamble is None else preamble + b"\n") + message + b"\n")
             raw = bytearray()
             while b"\n" not in raw:
                 client.settimeout(remaining())

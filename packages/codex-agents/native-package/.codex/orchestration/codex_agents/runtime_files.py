@@ -147,6 +147,8 @@ RUNTIME_FILES = (
     "codex_agents/routing.py",
     "codex_agents/run_provenance.py",
     "codex_agents/runtime_files.py",
+    "codex_agents/service_enrollment.py",
+    "codex_agents/service_host.py",
     "codex_agents/service_protocol.py",
     "codex_agents/service_queue.py",
     "codex_agents/service_transport.py",

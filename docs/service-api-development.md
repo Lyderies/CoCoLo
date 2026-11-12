@@ -4,6 +4,50 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; these source components do not activate native services.
 
+## Project service host and capability enrollment (uninstalled source, candidate)
+
+`service_host.ProjectServiceHost` is the first production process frontend for the
+project runtime. It takes the project's exclusive history writer through
+`ProjectRuntime`, binds the control and project sockets in a short owner-only
+directory under the state root, issues one host capability, publishes the routing
+hint atomically and runs the owner loop. A second host for the same project
+refuses before it touches the first host's sockets, hint or capability. Closing
+withdraws the hint and capability before intake and the runtime stop.
+
+`service_enrollment` defines the capability. It is a random 32-byte key in an
+owner-only file, replaced on every host start. A client sends one preamble line
+ahead of its request: role, host class, host generation, issue time, a nonce and
+the request's SHA-256, under an HMAC of that key. The host reads exactly that line,
+verifies it and attaches the connection with an opaque token. The role, host class
+and request digest stay in the host. The ingress authorizer admits only the exact
+request the preamble named, again before each reply is sent. Replayed, expired,
+postdated, altered, other-generation and other-request preambles are dropped before
+any owner work. Unenrolled connections are bounded in number and by an absolute
+deadline that partial bytes cannot extend.
+
+This is the same authority as 0.2.x, where anything able to open the ledger in the
+state root could write it. A capability does not identify a process and is no
+defence against another unsandboxed program of the same user. What it adds is a
+closed role, the host class stated under the key instead of chosen by the server,
+single use, freshness, exact-request binding and death at restart. With the host
+class carried by enrollment, the project owner now refuses the other host class
+itself (`history_not_authorized`) before the CLI's own `host_client_mismatch`
+comparison is reached.
+
+Only the orchestration lifecycle is authorized so far (`orchestration.*`). History,
+result-read, control and dispatch authorizers still default to denial, and there is
+no account-service host, per-run driver, trusted startup command or supervised
+restart yet. `tests/test_service_host.py` drives a fresh guarded CLI and raw clients
+against the host process with no synthetic context. Known gap found by those tests:
+an orchestration's stored scope includes the supervisor generation, so a host
+restarted with a new generation cannot read orchestrations opened under the old
+one. Restart continuity for orchestrations needs its own design and tests.
+
+Whether this candidate is the release's enrollment boundary is an open owner
+decision, and it needs the independent IPC security review either way. It selects
+nothing in `native-caller-enrollment-design.md`, whose stricter gates remain as
+written until that decision.
+
 ## Historical learning corpus staging (uninstalled source)
 
 The drained migration owner can stage original records, ingestion metadata and
