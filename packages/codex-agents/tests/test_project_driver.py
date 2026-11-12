@@ -38,9 +38,17 @@ SECOND = 1_000_000_000
 class DriverHarness(CliTestCase):
     """In-process collector, account and project hosts; the CLI and run driver are the product."""
     liveness = None  # The installed provisional policy unless a test narrows it.
+    primary = 'codex'  # Which primary host class drives the CLI.
 
     def setUp(self):
         super().setUp()
+        if self.primary == 'claude':
+            patcher = mock.patch.dict(os.environ)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+            os.environ.pop('CODEX_THREAD_ID', None)
+            os.environ.pop('CODEX_SESSION_ID', None)
+            os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='claude-primary')
         self.admit('codex')
         self.ledger.close()
         self.paths = CollectorPaths(self.state.root)
@@ -229,9 +237,12 @@ class DriverHarness(CliTestCase):
     def separate_dispatch(self, context, route_path, run_handle, project=None):
         """A second primary process waits on dispatch while this one inspects the run."""
         env = {k: v for k, v in os.environ.items() if not any(m in k.upper() for m in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
-        for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
+        for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
             env.pop(name, None)
-        env['CODEX_THREAD_ID'] = 'driver-primary'
+        if self.primary == 'claude':
+            env.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='claude-primary')
+        else:
+            env['CODEX_THREAD_ID'] = 'driver-primary'
         process = subprocess.Popen([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'), 'dispatch',
             '--state-root', str(self.state.root), '--project-root', str(project or self.project), *context,
             '--route', route_path, '--run-handle', run_handle], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
@@ -294,14 +305,14 @@ class ProjectDriverTests(DriverHarness):
         self.assertIn(status['health'], {'starting', 'active'})
         self.assertIsNone(status['stop_reason'])
         # Another host class cannot inspect or stop this run.
-        os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
-        os.environ.pop('CODEX_THREAD_ID'), os.environ.pop('CODEX_SESSION_ID', None)
-        try:
-            foreign = self.cli('learning-cancel-run', *target, expected=2)
-        finally:
-            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
+        with mock.patch.dict(os.environ):
+            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
                 os.environ.pop(name, None)
-            os.environ.update(CODEX_THREAD_ID='tests-thread', CODEX_SESSION_ID='tests-session')
+            if self.primary == 'claude':
+                os.environ['CODEX_THREAD_ID'] = 'other-primary'
+            else:
+                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
+            foreign = self.cli('learning-cancel-run', *target, expected=2)
         self.assertEqual('control_not_authorized', foreign['reason_code'])
 
         started = time.monotonic()
@@ -316,6 +327,11 @@ class ProjectDriverTests(DriverHarness):
         settled = self.cli('learning-run-status', *target)
         self.assertTrue(settled['stop_requested'])
         self.assertEqual('cancel_requested', settled['stop_reason'])
+
+
+class ClaudePrimaryDriverTests(ProjectDriverTests):
+    """Path B: a Claude primary bridges the same Codex child through the same host."""
+    primary = 'claude'
 
 
 class SilenceCutoffTests(DriverHarness):

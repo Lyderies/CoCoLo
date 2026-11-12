@@ -200,8 +200,12 @@ sharing the collector and account service. Both projects dispatch children that
 run at the same time. Each project can read its own run's status and cannot read
 the other's. Cancelling project A's run returns A's dispatch as `cancelled` while
 B's child keeps running with no stop requested, until B is cancelled separately.
-These tests use the bridge tests' fake clients; real-provider cadence, real
-two-project installs and both Claude paths remain to be proved.
+The lifecycle, status and cancellation tests run for both primary host classes:
+a Codex primary (path A's primary side) and a Claude primary (path B), each
+bridging a Codex child through the same project host; the other host class is
+refused status and cancellation of that run. These tests use the bridge tests'
+fake clients; real-provider cadence, real two-project installs and both Claude
+child paths (C and D) remain to be proved.
 
 Not done: no retry, cancellation-before-dispatch or abandonment path through the
 driver, no driver state across a host restart (a run opened before a restart is
