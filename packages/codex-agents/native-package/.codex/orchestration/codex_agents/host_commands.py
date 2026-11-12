@@ -983,7 +983,7 @@ def install_runtime_copy(
     created owner-only through no-follow descriptors.
     """
 
-    from .learning_store import COLLECTOR_RUNTIME_DIGEST, PACKAGE_VERSION
+    from .collector_client import COLLECTOR_RUNTIME_DIGEST, PACKAGE_VERSION
 
     root, cli = project_cli(project_root)
     codex_home(environ)

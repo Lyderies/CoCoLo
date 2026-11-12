@@ -31,6 +31,10 @@ class CollectorError(RuntimeError):
         self.code = code
 
 
+class CollectorTransportError(CollectorError):
+    """The local exchange failed; a server-supplied reason cannot create this type."""
+
+
 class CollectorVersionError(CollectorError):
     """Raised when a healthy collector runs a different package build."""
 

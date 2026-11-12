@@ -16,11 +16,13 @@ from .collector_contracts import (
     MAX_REQUEST_BYTES,
     CollectorBuildConflictError,
     CollectorError,
+    CollectorTransportError,
     CollectorNewerVersionError,
     CollectorUpgradeRequired,
     _version_tuple,
 )
 from .learning_contracts import canonical_json
+from .learning_adapters import HOOK_EVENTS
 from .runtime_files import RUNTIME_FILES, runtime_digest
 from .service_transport import ServiceTransportError, exchange_frame
 
@@ -58,6 +60,55 @@ COLLECTOR_RUNTIME_DIGEST = _collector_runtime_digest()
 PACKAGE_VERSION = _package_version()
 
 
+HOOK_EVENT_CODES = tuple(value[0] for value in HOOK_EVENTS.values())
+
+
+def empty_ingestion_snapshot(*, registered: bool) -> dict[str, Any]:
+    """Return the closed aggregate shape without exposing project or record identity."""
+
+    return {
+        "registered_project_state": "active" if registered else "unregistered",
+        "ingestion_state": "active" if registered else "inactive",
+        "accepted_hook_event_count": 0,
+        "last_accepted_hook_event_at_ms": None,
+        "rejected_hook_event_count": 0,
+        "last_rejected_hook_event_at_ms": None,
+        "freshness": {
+            "state": (
+                "awaiting_hook_review_or_first_event" if registered else "unregistered"
+            ),
+            "age_ms": None,
+            "message": (
+                "No events since the hooks were installed; open /hooks on the main checkout."
+                if registered else "Project is not registered."
+            ),
+        },
+        "hook_event_counts": {code: 0 for code in HOOK_EVENT_CODES},
+        "coverage": {
+            "root_lifecycle": True,
+            "child_lifecycle": True,
+            "tool_lifecycle": True,
+            "root_usage": False,
+            "child_usage": False,
+        },
+        "managed_lifecycle": {
+            "orchestrations_active": 0,
+            "orchestrations_paused": 0,
+            "orchestrations_closed": 0,
+            "host_runs_opened": 0,
+            "host_runs_terminal": 0,
+            "host_runs_pending": 0,
+            "host_runs_abandoned": 0,
+            "native_agent_bindings": 0,
+            "operational_qa_passed": 0,
+            "operational_qa_failed": 0,
+            "host_usage_complete": 0,
+            "host_usage_unknown": 0,
+        },
+    }
+
+
+
 class CollectorClient:
     """Bounded, fail-fast client used by hook and App Server adapters."""
 
@@ -79,7 +130,7 @@ class CollectorClient:
         if reason == "response_too_large":
             raise CollectorError("collector response is oversized")
         if reason is not None:
-            raise CollectorError("collector is unavailable", code="transport_unavailable")
+            raise CollectorTransportError("collector is unavailable", code="transport_unavailable")
         invalid_response = False
         try:
             response = json.loads(raw)

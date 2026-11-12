@@ -11,10 +11,12 @@ import secrets
 import stat
 import threading
 
-from .collector_client import COLLECTOR_RUNTIME_DIGEST
-from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError, _ID as _ACCOUNT_ID
+from .collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient, empty_ingestion_snapshot
+from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError, integer as account_integer, _ID as _ACCOUNT_ID
 from .account_open_contracts import AccountOpenInput, OpenError
-from .collector_paths import CollectorPaths, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
+from .collector_paths import CollectorPaths, StateError, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
+from .collector_contracts import CollectorError, CollectorTransportError
+from .collector_runtime import client_health_snapshot
 from .control_api import ControlClient, ControlScope
 from .contracts import effective_dispatch_bounds, effective_dispatch_limits
 from .admission_metadata import api_keys_present
@@ -103,6 +105,110 @@ def _read_runtime_endpoints(state, project_root, *, account=False, account_only=
 def read_runtime_hint(state, project_root):
     scope, endpoints = _read_runtime_endpoints(state, project_root)
     return scope, endpoints[0], endpoints[1]
+
+
+def _status_ingestion_unavailable():
+    value = empty_ingestion_snapshot(registered=False)
+    value.update(registered_project_state='unavailable', ingestion_state='unavailable',
+                 freshness={'state': 'unavailable', 'age_ms': None,
+                            'message': 'Hook delivery is unknown while the collector is unavailable.'})
+    return value
+
+
+def _status_collector_fields(health):
+    """Closed display metadata only; a health view grants no execution authority."""
+    template = empty_ingestion_snapshot(registered=False)
+    ingestion = health['ingestion']
+    if (type(ingestion) is not dict or ingestion.keys() != template.keys()
+            or ingestion['registered_project_state'] not in {'active', 'unregistered'}
+            or ingestion['ingestion_state'] != ('active' if ingestion['registered_project_state'] == 'active' else 'inactive')
+            or not account_integer(health['started_at_ms']) or not account_integer(health['schema_version'])):
+        raise ValueError()
+    for name in ('accepted_hook_event_count', 'rejected_hook_event_count'):
+        if not account_integer(ingestion[name]):
+            raise ValueError()
+    for name in ('last_accepted_hook_event_at_ms', 'last_rejected_hook_event_at_ms'):
+        if ingestion[name] is not None and not account_integer(ingestion[name]):
+            raise ValueError()
+    for name in ('hook_event_counts', 'managed_lifecycle', 'coverage'):
+        values = ingestion[name]
+        if type(values) is not dict or values.keys() != template[name].keys():
+            raise ValueError()
+        if any((type(v) is not bool if name == 'coverage' else not account_integer(v)) for v in values.values()):
+            raise ValueError()
+    freshness = ingestion['freshness']
+    messages = {
+        'unregistered': 'Project is not registered.',
+        'awaiting_hook_review_or_first_event': 'No events since the hooks were installed; open /hooks on the main checkout.',
+        'fresh': 'Hooks are delivering events.',
+        'idle': 'Hooks have delivered events; no recent activity.',
+    }
+    if (type(freshness) is not dict or freshness.keys() != {'state', 'age_ms', 'message'}
+            or type(freshness['state']) is not str or freshness['state'] not in messages
+            or freshness['message'] != messages[freshness['state']]
+            or (freshness['state'] in {'fresh', 'idle'} and not account_integer(freshness['age_ms']))
+            or (freshness['state'] not in {'fresh', 'idle'} and freshness['age_ms'] is not None)):
+        raise ValueError()
+    attestations = health['provider_attestations']
+    if (type(attestations) is not dict or attestations.keys() != {'codex', 'claude'}
+            or any(type(v) is not dict or v.keys() != {'state'} or v['state'] not in
+                   {'present', 'missing', 'identity_missing'} for v in attestations.values())):
+        raise ValueError()
+    counters = health.get('collector_health', {})
+    if (type(counters) is not dict or counters.keys() - {'admission_rejected', 'queue_full', 'collector_error', 'conflict'}
+            or any(type(v) is not dict or v.keys() != {'count', 'updated_at_ms'}
+                   or any(not account_integer(n) for n in v.values()) for v in counters.values())):
+        raise ValueError()
+    return {'collector_schema_version': health['schema_version'],
+            'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
+            'started_at_ms': health['started_at_ms'], 'collector_health': counters,
+            'ingestion': ingestion, 'provider_attestations': attestations}
+
+
+def status_client(state_root, project_root):
+    """Observe existing collector/account APIs once each; never start or open a DB."""
+    report = {'ready': False, 'active': False, 'client_failures': {},
+              'ingestion': _status_ingestion_unavailable(),
+              'provider_attestations': {p: {'state': 'unavailable'} for p in ('codex', 'claude')},
+              'owner_key': {'state': 'unavailable', 'fingerprint': None,
+                            'replacements': None, 'last_replaced_at_ms': None}}
+    try:
+        state = CollectorPaths(state_root)
+        report['client_failures'] = client_health_snapshot(state, project_root)
+    except (StateError, OSError, ValueError):
+        return report | {'reason_code': 'status_runtime_unavailable', 'error': 'Status services are unavailable.'}
+    collector_ready = False
+    try:
+        report.update(_status_collector_fields(CollectorClient(state.socket, timeout=1).health(project_root)))
+        report['active'] = collector_ready = True
+    except CollectorError as error:
+        reason = ('status_collector_transport_unavailable' if isinstance(error, CollectorTransportError)
+                  else 'status_collector_unavailable')
+        report.update(reason_code=reason, error='Collector status is unavailable.')
+        if error.code == 'project_unregistered':
+            report['ingestion'] = empty_ingestion_snapshot(registered=False)
+    except OSError:
+        report.update(reason_code='status_collector_transport_unavailable', error='Collector status is unavailable.')
+    except (KeyError, TypeError, ValueError):
+        report.update(reason_code='status_collector_unavailable', error='Collector status is unavailable.')
+    owner_ready = False
+    try:
+        scope, endpoints = _read_runtime_endpoints(state, project_root, account=True, account_only=True)
+        if len(endpoints) != 3:
+            raise DispatchError('dispatch_unavailable')
+        owner = AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=1).owner_key()
+        report['owner_key'] = {name: owner[name] for name in ('state', 'fingerprint', 'replacements', 'last_replaced_at_ms')}
+        owner_ready = True
+        if not collector_ready and report['ingestion']['registered_project_state'] == 'unavailable':
+            report['ingestion']['registered_project_state'] = 'active'
+    except AccountError as error:
+        report['account_reason_code'] = error.reason_code
+    except (DispatchError, StateError, OSError, ValueError):
+        pass
+    if not owner_ready and collector_ready:
+        report.update(reason_code='status_account_unavailable', error='Account status is unavailable.')
+    report['ready'] = collector_ready and owner_ready
+    return report
 
 
 class RuntimeOpenError(RuntimeError):

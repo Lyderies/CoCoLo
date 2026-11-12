@@ -24,6 +24,30 @@ check-receipt provenance. A verified source image, complete dependencies, the
 legacy writer drain and retirement, compatible key custody and explicit activation
 remain necessary before any learning cycle can use the imported corpus.
 
+## Status metadata client (uninstalled source)
+
+`learning-status` observes the existing collector and account APIs. Owner-key
+history is read by the original account owner through `account.owner_key`; the
+CLI opens no database, initializes no state and starts no collector. Status needs
+only the account endpoint in runtime-hint schema2, so absent dispatch and result
+sockets do not prevent this observation. Routing hints still supply no native
+caller or endpoint authentication.
+
+Healthy reports retain their existing fields. If one API is unavailable, the
+report retains the other API's observed metadata and marks missing owner-key
+information unavailable, including an unknown replacement count. Account errors
+retain their closed reason code. Collector display metadata is validated before
+printing. A typed local transport failure can produce the existing Codex command
+hint; a server-supplied rejection cannot claim that local transport observation.
+Client failure counters have a 64 KiB read limit.
+
+Fresh CLI processes exercise actual disposable collector/account owners with
+database access and process startup forbidden. They cover healthy and partial
+failure reports, account denial, missing hints, cross-project rejection and
+malformed metadata without raw-content disclosure. Native enrollment, supervised
+startup/recovery of unavailable services and installed validation remain required
+before activation. The complete CLI still has other legacy persistence clients.
+
 ## Bounded source inventory
 
 `python3 -B packages/codex-agents/scripts/audit_service_ownership.py check --full --compact`

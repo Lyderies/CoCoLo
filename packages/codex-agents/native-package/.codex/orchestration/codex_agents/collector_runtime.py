@@ -215,7 +215,8 @@ def _client_health_data(state: CollectorPaths) -> dict[str, Any]:
         raise StateError("client health path is unsafe")
     _check_owner_mode(state.client_health, directory=False)
     try:
-        raw = state.client_health.read_bytes()
+        with state.client_health.open('rb') as stream:
+            raw = stream.read(65_537)
         if len(raw) > 65_536:
             raise StateError("client health state is invalid")
         value = json.loads(raw)

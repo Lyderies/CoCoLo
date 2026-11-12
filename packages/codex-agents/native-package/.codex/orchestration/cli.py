@@ -122,12 +122,13 @@ from codex_agents.collector_client import CollectorClient  # noqa: E402
 from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
-    billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client,
+    billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.cli_reports import command_report  # noqa: E402
 from codex_agents.collector_contracts import (  # noqa: E402
     CollectorError,
+    CollectorTransportError,
     CollectorRestartError,
     CollectorVersionError,
 )
@@ -141,9 +142,7 @@ from codex_agents.learning_store import (  # noqa: E402
     StateError,
     authorize_collector_runtime,
     client_health_clear,
-    client_health_snapshot,
     default_state_root,
-    empty_ingestion_snapshot,
     ensure_collector,
     migrate_legacy_state,
     registered_project_roots,
@@ -364,7 +363,7 @@ def _note_collector_failure(exc: BaseException) -> None:
     """
 
     global _COLLECTOR_UNREACHED
-    if isinstance(exc, OSError) or (
+    if isinstance(exc, (OSError, CollectorTransportError)) or (
         isinstance(exc, CollectorError)
         and exc.code is None
         and not isinstance(exc, CollectorVersionError)
@@ -1690,54 +1689,10 @@ def main() -> int:
                 _close_ledger(ledger)
             report = {"ready": True, "stopped": True}
         elif args.command == "learning-status":
-            with _collector_contact():
-                state = LearningState(args.state_root, create=False)
-            try:
-                with _collector_contact():
-                    ensure_collector(
-                        state,
-                        ORCHESTRATION_ROOT / "cli.py",
-                        project_root=args.project_root,
-                    )
-                    # Status verifies owner signatures using admission's lookup. Give
-                    # that read more time than the short hook-delivery socket timeout.
-                    health = CollectorClient(state.socket, timeout=5.0).health(args.project_root)
-                client_failures = client_health_snapshot(state, args.project_root)
-                report = {
-                    "ready": True,
-                    "active": True,
-                    "collector_schema_version": health["schema_version"],
-                    "collector_runtime_version": health["runtime_version"],
-                    "collector_runtime_digest": health["runtime_digest"],
-                    "started_at_ms": health["started_at_ms"],
-                    "collector_health": health.get("collector_health", {}),
-                    "client_failures": client_failures,
-                    "ingestion": health["ingestion"],
-                    "provider_attestations": health["provider_attestations"],
-                    "owner_key": state.owner_key_report(),
-                }
-            except CollectorError as exc:
-                client_failures = client_health_snapshot(state, args.project_root)
-                ingestion = empty_ingestion_snapshot(
-                    registered=exc.code != "project_unregistered"
-                )
-                if exc.code != "project_unregistered":
-                    ingestion["ingestion_state"] = "unavailable"
-                    ingestion["freshness"] = {
-                        "state": "unavailable", "age_ms": None,
-                        "message": "Hook delivery is unknown while the collector is unavailable.",
-                    }
-                report = _with_codex_hint(args.command, {
-                    "ready": False,
-                    "active": False,
-                    "error": "collector or project registration is unavailable",
-                    "provider_attestations": {
-                        provider: {"state": "unavailable"} for provider in ("codex", "claude")
-                    },
-                    "client_failures": client_failures,
-                    "ingestion": ingestion,
-                    "owner_key": state.owner_key_report(),
-                })
+            report = status_client(args.state_root, args.project_root)
+            if report.get('reason_code') == 'status_collector_transport_unavailable':
+                _COLLECTOR_UNREACHED = True
+                report = _with_codex_hint(args.command, report)
         elif args.command == "learning-backup-project":
             if args.expires_in_seconds < 60:
                 raise ContractError("backup expiry must be at least 60 seconds")
