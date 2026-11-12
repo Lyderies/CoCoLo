@@ -101,7 +101,9 @@ class ProjectCleanupReservationTests(unittest.TestCase):
         self.assertEqual(1, self.count())
 
     def test_real_v8_layout_upgrade_preserves_legacy_wire_seal_and_does_not_reserve_cleanup(self):
+        from tests.project_schema_fixtures import legacy_learning_layout
         lease = self.base.reserve()
+        legacy_learning_layout(self.store)
         legacy = replace(lease, cleanup_reservation_digest=None)
         self.store._connection.execute('DELETE FROM project_cleanup_reservations')
         self.store._connection.execute('UPDATE result_leases SET cleanup_reservation_digest=NULL,state_digest=?',

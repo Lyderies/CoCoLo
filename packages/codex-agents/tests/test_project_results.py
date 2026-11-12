@@ -726,7 +726,7 @@ class ResultSchemaMigrationTests(unittest.TestCase):
                 self.assertEqual(content, store.record(record["record_id"]).content)
                 self.assertEqual((7, 3), tuple(store._connection.execute(
                     "SELECT next_source_sequence,next_delivery_sequence FROM history_identity").fetchone()))
-                self.assertEqual(11, store._connection.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual(12, store._connection.execute("PRAGMA user_version").fetchone()[0])
                 self.assertEqual(0, store._connection.execute("SELECT COUNT(*) FROM result_reservations").fetchone()[0])
                 delivery, = store.pending_terminals()
                 self.assertEqual((target, 2, record["record_id"], record["result_digest"]),
@@ -799,7 +799,7 @@ Cut(Path(sys.argv[1]),sys.argv[2],allow_schema_upgrade=True)
                 connection.close()
             store = ProjectHistory(directory, PROJECT_A, allow_schema_upgrade=True)
             try:
-                self.assertEqual(11, store._connection.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual(12, store._connection.execute("PRAGMA user_version").fetchone()[0])
                 self.assertEqual((7, 3), tuple(store._connection.execute(
                     "SELECT next_source_sequence,next_delivery_sequence FROM history_identity").fetchone()))
             finally:

@@ -49,13 +49,17 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 11
+_SCHEMA_VERSION = 12
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
 MAX_DELIVERY_PAGE_BYTES = 16_384
 MAX_BINDING_BYTES = 4096
 MAX_HISTORY_ROW_BYTES = 2 * MAX_RECORD_BYTES
+MAX_LEARNING_PAGE_BYTES = 262_144
+LEARNING_OUTCOME_INDEX = """
+CREATE INDEX records_learning_outcomes ON records(project_id,source_sequence) WHERE record_type='outcome';
+"""
 _SCHEMA_V1 = """
 CREATE TABLE history_identity(
  project_id TEXT PRIMARY KEY, next_source_sequence INTEGER NOT NULL,
@@ -138,7 +142,8 @@ _SCHEMA_V9 = _SCHEMA_V8.replace('state_digest TEXT NOT NULL,',
                             'state_digest TEXT NOT NULL, cleanup_reservation_digest TEXT,') + CLEANUP_SCHEMA_V9
 _SCHEMA_V10 = _SCHEMA_V8.replace('state_digest TEXT NOT NULL,',
                             'state_digest TEXT NOT NULL, cleanup_reservation_digest TEXT,') + CLEANUP_SCHEMA + ACK_SCHEMA
-_SCHEMA = _SCHEMA_V10 + LEARNING_SCHEMA
+_SCHEMA_V11 = _SCHEMA_V10 + LEARNING_SCHEMA
+_SCHEMA = _SCHEMA_V11 + LEARNING_OUTCOME_INDEX
 _COLUMNS = {
     **LEARNING_COLUMNS,
     **ACK_COLUMNS,
@@ -383,17 +388,17 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10} and application == _APPLICATION_ID
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11} and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
                                                5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8,
-                                               9: _SCHEMA_V9, 10: _SCHEMA_V10}[version])):
+                                               9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*LEARNING_COLUMNS, *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
                                                  or (name == 'project_cleanup_reservations' and version == 9)) else columns)
@@ -413,7 +418,7 @@ class ProjectHistory:
                 elif version == 9:
                     connection.execute('ALTER TABLE project_cleanup_reservations ADD COLUMN account_release_digest TEXT')
                 for statement in ((CLEANUP_SCHEMA if version < 9 else '') + (ACK_SCHEMA if version < 10 else '')
-                                  + LEARNING_SCHEMA).split(';'):
+                                  + (LEARNING_SCHEMA if version < 11 else '') + LEARNING_OUTCOME_INDEX).split(';'):
                     if statement.strip():
                         connection.execute(statement)
                 connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
@@ -1157,6 +1162,71 @@ class ProjectHistory:
     def learning_import_attestations(self, import_id, *, after_subject_record_id="", limit=32):
         from .project_learning_corpus import import_attestations
         return import_attestations(self, import_id, after_subject_record_id=after_subject_record_id, limit=limit)
+
+    @_operation
+    def learning_outcome_revision(self):
+        """Revision of immutable local outcomes only, never a complete corpus.
+
+        No record API updates/deletes existing rows. Unrelated activity and exact
+        replay cannot change this indexed high-water mark; a new outcome does.
+        Feedback, formal QA, imports and migration authority require their own
+        coherent checks before an available cycle/finalization. This read grants
+        no provenance, eligibility or corpus-activation authority.
+        """
+        row = self._connection.execute(
+            "SELECT source_sequence FROM records INDEXED BY records_learning_outcomes "
+            "WHERE project_id=? AND record_type='outcome' ORDER BY source_sequence DESC LIMIT 1",
+            (self.project_id,),
+        ).fetchone()
+        if row is None:
+            return 0
+        if not valid_integer(row[0], minimum=1, maximum=MAX_SEQUENCE - 1):
+            raise HistoryError('history_incompatible')
+        return row[0]
+
+    @_operation
+    def learning_outcome_page(self, expected_revision, *, after_sequence=0, limit=32):
+        """Bounded raw (sequence, ID, digest, bytes) tuples for a fixed worker.
+
+        The worker validates canonical contents and metadata/digest binding. No
+        JSON/hash/codec runs on this writer, and no transaction spans pages or
+        calculation. This local view neither adopts staging nor proves missing
+        legacy data empty. INDEXED BY refuses a missing index instead of scanning.
+        """
+        if (not valid_integer(expected_revision, maximum=MAX_SEQUENCE - 1)
+                or not valid_integer(after_sequence, maximum=expected_revision)
+                or not valid_integer(limit, minimum=1, maximum=32)):
+            raise HistoryError('history_invalid_input')
+        if self._connection.in_transaction:
+            raise HistoryError('history_result_unavailable')
+        if self.learning_outcome_revision() != expected_revision:
+            raise HistoryError('history_conflict')
+        cursor = self._connection.execute(
+            "SELECT source_sequence,CASE WHEN typeof(record_id)='text' THEN substr(record_id,1,161) END AS identity,"
+            "CASE WHEN typeof(content_digest)='text' THEN substr(content_digest,1,65) END AS digest,"
+            "CASE WHEN typeof(content)='blob' THEN CASE WHEN length(content) BETWEEN 1 AND ? THEN content END END AS raw "
+            "FROM records INDEXED BY records_learning_outcomes WHERE project_id=? AND record_type='outcome' "
+            "AND source_sequence>? AND source_sequence<=? ORDER BY source_sequence LIMIT ?",
+            (MAX_RECORD_BYTES, self.project_id, after_sequence, expected_revision, limit),
+        )
+        result, size, previous = [], 0, after_sequence
+        try:
+            for row in cursor:
+                sequence, identity, digest, raw = row
+                if (not valid_integer(sequence, minimum=previous + 1, maximum=expected_revision)
+                        or not matches(identity, _ID) or not matches(digest, _DIGEST)
+                        or type(raw) is not bytes or not 0 < len(raw) <= MAX_RECORD_BYTES):
+                    raise HistoryError('history_incompatible')
+                if size + len(raw) > MAX_LEARNING_PAGE_BYTES:
+                    break
+                result.append((sequence, identity, digest, raw))
+                size += len(raw)
+                previous = sequence
+        finally:
+            cursor.close()
+        if self.learning_outcome_revision() != expected_revision:
+            raise HistoryError('history_conflict')
+        return tuple(result)
 
     @_operation
     def learning_key_domain_digest(self):

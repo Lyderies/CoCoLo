@@ -5,7 +5,8 @@ from codex_agents.claim_storage import lease_state_seal
 
 
 def legacy_learning_layout(store):
-    """Remove only empty v11 staging tables when constructing an older fixture."""
+    """Remove v12 derived index and empty v11 staging tables for an older fixture."""
+    store._connection.execute("DROP INDEX records_learning_outcomes")
     for name in ("project_learning_import_chunks", "project_learning_attestations",
                  "project_learning_records", "project_learning_imports"):
         if store._connection.execute("SELECT COUNT(*) FROM " + name).fetchone()[0]:
