@@ -40,10 +40,10 @@ IDLE_STOP_NS = 900 * SECOND
 ORCHESTRATIONS = OrchestrationLimits(256, 4_096)
 
 
-def runtime_limits():
+def runtime_limits(liveness=LIVENESS):
     requests = ProjectRequestLimits(16, 10 * SECOND)
     return ProjectRuntimeLimits(MAX_ACTIVE_ATTEMPTS, MAX_ACTIVE_ATTEMPTS,
-        MAX_ACTIVE_ATTEMPTS * MAX_PERSISTENCE_ENTRY_BYTES + requests.retained_bytes, LIVENESS,
+        MAX_ACTIVE_ATTEMPTS * MAX_PERSISTENCE_ENTRY_BYTES + requests.retained_bytes, liveness,
         ControlLoopLimits(16, 8, 10 * SECOND, 1_000_000), CodexWorkerLimits(MAX_ACTIVE_ATTEMPTS, 64 * 1_048_576),
         requests, ProjectIngressLimits(16, 8, 10 * SECOND, 1_000_000))
 
@@ -72,7 +72,8 @@ def _owned_directory(path):
     _check_owner_mode(path, directory=True)
 
 
-def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None):
+def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None,
+                  liveness=LIVENESS):
     """Run the host until a signal, idleness or withdrawal; return a closed report."""
     from .project_history import ProjectHistory
 
@@ -98,7 +99,7 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
     try:
         # The installed package this host runs from is the bundle a child is prepared from.
         host = ProjectServiceHost(state, root, supervisor_scope(state, project_id), open_history,
-                                  runtime_limits(), host_limits(),
+                                  runtime_limits(liveness), host_limits(),
                                   bundle_root=Path(__file__).resolve().parents[3] if bundle_root is None else Path(bundle_root))
     except HistoryError as error:
         return {'ready': False, 'reason_code': error.reason_code}

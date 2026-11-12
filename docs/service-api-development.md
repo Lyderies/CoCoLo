@@ -188,6 +188,13 @@ dispatch return `cancelled` within seconds, long before the child's own sleep en
 `learning-orchestration-status` is now a primary-host command too; it was
 previously owner-only by omission.
 
+The host enforces the silence cutoff on its own. `serve_project` takes the liveness
+policy as trusted startup input (the installed default is still the provisional
+3/2/5/10-minute policy); a third driver test starts the host with a shortened
+policy, runs a child that goes silent, polls status, and sees the separate dispatch
+return `timed_out` with stop reason `work_silence`, after `quiet` and `stale` were
+reported, without anyone asking for a stop.
+
 Not done: no retry, cancellation-before-dispatch or abandonment path through the
 driver, no driver state across a host restart (a run opened before a restart is
 refused at dispatch and keeps its account capacity until reconciled), the

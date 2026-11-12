@@ -24,11 +24,17 @@ from codex_agents.collector_contracts import CollectorError
 from codex_agents.client_runtime import runtime_hint_path
 from codex_agents.collector_paths import CollectorPaths
 from codex_agents.learning_store import CollectorServer, LearningLedger
+from codex_agents.liveness_clock import LivenessLimits
 from codex_agents.project_service import serve_project
 from codex_agents.service_enrollment import capability_path
 
+SECOND = 1_000_000_000
 
-class ProjectDriverTests(CliTestCase):
+
+class DriverHarness(CliTestCase):
+    """In-process collector, account and project hosts; the CLI and run driver are the product."""
+    liveness = None  # The installed provisional policy unless a test narrows it.
+
     def setUp(self):
         super().setUp()
         self.admit('codex')
@@ -173,7 +179,8 @@ class ProjectDriverTests(CliTestCase):
 
     def project_host(self):
         try:
-            report = serve_project(self.state.root, self.project, stopped=self.stop.is_set, bundle_root=self.bundle)
+            report = serve_project(self.state.root, self.project, stopped=self.stop.is_set, bundle_root=self.bundle,
+                                   **({} if self.liveness is None else {'liveness': self.liveness}))
             if not report.get('ready'):
                 self.failures.append('project host refused: %r' % (report,))
         except BaseException as error:
@@ -188,6 +195,32 @@ class ProjectDriverTests(CliTestCase):
         workers = {'account-observation', 'signature-fixed-worker', 'codex-agents-collector', 'account-ingress'}
         self.assertEqual([], [t.name for t in threading.enumerate() if t.name in workers and t.is_alive()])
 
+    def open_run(self):
+        task = self.write('task.json', self.task())
+        route = self.cli('learning-route', '--task', task)
+        assigned = self.assignment_for(route)
+        context = ('--task', task, '--assignment', self.write('assignment.json', assigned),
+                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        route_path = self.write('route.json', route)
+        orchestration = self.cli('learning-open-orchestration')
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration['orchestration_handle'])
+        return context, route_path, orchestration['orchestration_handle'], opened['run_handle']
+
+    def separate_dispatch(self, context, route_path, run_handle):
+        """A second primary process waits on dispatch while this one inspects the run."""
+        env = {k: v for k, v in os.environ.items() if not any(m in k.upper() for m in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
+        for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
+            env.pop(name, None)
+        env['CODEX_THREAD_ID'] = 'driver-primary'
+        process = subprocess.Popen([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'), 'dispatch',
+            '--state-root', str(self.state.root), '--project-root', str(self.project), *context,
+            '--route', route_path, '--run-handle', run_handle], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        return process
+
+
+class ProjectDriverTests(DriverHarness):
     def test_the_host_prepares_claims_dispatches_and_releases_a_bridged_codex_run(self):
         task = self.write('task.json', self.task())
         route = self.cli('learning-route', '--task', task)
@@ -227,30 +260,6 @@ class ProjectDriverTests(CliTestCase):
         self.assertEqual([], [entry for entry in self.stopped_runs if len(entry) == 2 and entry[0] in
                               {'recording_open', 'claiming', 'registering', 'terminal', 'releasing'}])
 
-    def open_run(self):
-        task = self.write('task.json', self.task())
-        route = self.cli('learning-route', '--task', task)
-        assigned = self.assignment_for(route)
-        context = ('--task', task, '--assignment', self.write('assignment.json', assigned),
-                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
-        route_path = self.write('route.json', route)
-        orchestration = self.cli('learning-open-orchestration')
-        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
-                          '--orchestration-handle', orchestration['orchestration_handle'])
-        return context, route_path, orchestration['orchestration_handle'], opened['run_handle']
-
-    def separate_dispatch(self, context, route_path, run_handle):
-        """A second primary process waits on dispatch while this one inspects the run."""
-        env = {k: v for k, v in os.environ.items() if not any(m in k.upper() for m in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
-        for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
-            env.pop(name, None)
-        env['CODEX_THREAD_ID'] = 'driver-primary'
-        process = subprocess.Popen([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'), 'dispatch',
-            '--state-root', str(self.state.root), '--project-root', str(self.project), *context,
-            '--route', route_path, '--run-handle', run_handle], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-        self.addCleanup(lambda: process.poll() is None and process.kill())
-        return process
-
     def test_a_running_child_reports_live_status_and_stops_on_cancellation(self):
         context, route_path, orchestration, run_handle = self.open_run()
         # The child starts, then goes quiet well inside every bound.
@@ -288,6 +297,35 @@ class ProjectDriverTests(CliTestCase):
         settled = self.cli('learning-run-status', *target)
         self.assertTrue(settled['stop_requested'])
         self.assertEqual('cancel_requested', settled['stop_reason'])
+
+
+class SilenceCutoffTests(DriverHarness):
+    # Trusted startup policy, shortened so the silence cutoff happens within the test.
+    liveness = LivenessLimits(5 * SECOND, SECOND, 2 * SECOND, 3 * SECOND)
+
+    def test_the_host_stops_a_silent_child_without_any_request(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'silent-child'},
+                              {'type': 'turn.started'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        started = time.monotonic()
+        process = self.separate_dispatch(context, route_path, run_handle)
+        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+        seen = set()
+        while process.poll() is None and time.monotonic() - started < 25:
+            status = self.cli('learning-run-status', *target)
+            seen.add(status['health'])
+            time.sleep(.2)
+        output, errors = process.communicate(timeout=30)
+        self.assertLess(time.monotonic() - started, 20)  # Cut off by silence, not by the child's own end.
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        dispatched = json.loads(output)
+        self.assertEqual('timed_out', dispatched['bridge_report']['terminal_state'])
+        final = self.cli('learning-run-status', *target)
+        self.assertEqual('work_silence', final['stop_reason'])
+        self.assertTrue({'quiet', 'stale'} & seen, seen)
 
 
 if __name__ == '__main__':
