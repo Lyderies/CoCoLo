@@ -113,6 +113,32 @@ Lifecycle replies again carry the goal part of the legacy `usage` report
 totals are still not reported. An open with a provider API key in the environment
 is refused with the legacy `provider_api_key_present` admission reason.
 
+### Protected originals with a request, and the host open
+
+A preamble may also sign the SHA-256 of a bounded context (at most 256 KiB) that the
+client writes into the request's single-use proof file. The owner reads the file
+once, checks the digest and removes it, so the context reaches only the request it
+was signed for, and only from a process that can write the state root. This is how
+the trusted CLI hands an owner the protected originals that the 0.2.x CLI passed to
+the ledger directly; it is not process identity.
+
+`learning-open-host-run` for a bridged Codex route now runs end to end through the
+real hosts. The CLI starts the project host, sends `history.open_scope` with the
+task, route, assignment and parent grant as context, and the project host's history
+authorizer admits only that operation and builds the open-scope context from them.
+The CLI then sends `account.open_host_run` with the originals and the returned
+project proof; the account owner rebuilds the open context, checks the proof binds
+those exact originals, and runs the existing signature, validation and admission
+pipeline. The report keeps the legacy `admission`, `status` and
+`observation_started_at_ms` fields, and a denial prints the legacy admission error.
+A wrong-host lifecycle command again reports `host_client_mismatch`.
+
+What still stops a run: `dispatch` (no production per-run driver: preparation,
+lease, claim, registration, grant consumption and the dispatch authorizer), and the
+commands that still use the legacy ledger, such as `learning-bind-host-agent`,
+abandonment, the Claude native result path, verification and QA. The bridge
+lifecycle tests now fail at those points instead of at the first lifecycle call.
+
 ### What is and is not covered
 
 Project hosts authorize only the orchestration lifecycle (`orchestration.*`);

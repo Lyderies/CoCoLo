@@ -168,10 +168,10 @@ class ServiceHostTests(unittest.TestCase):
         self.assertEqual((2, 10), (checkpoint['sequence'], checkpoint['goal_tokens_used']))
         paused = self.cli('learning-pause-orchestration', *target, '--request-id', 'original-pause')
         self.assertEqual(('paused', 3), (paused['status'], paused['sequence']))
-        # The owner itself refuses the other host class once enrollment carries it. The CLI reads
-        # status first, which answers not-authorized; a direct mutation answers conflict (see below).
+        # The owner itself refuses the other host class once enrollment carries it; the CLI keeps the
+        # documented lifecycle reason. A direct mutation answers conflict (see below).
         wrong = self.cli('learning-resume-orchestration', *target, '--request-id', 'wrong-host', host='claude', expected=2)
-        self.assertEqual('history_not_authorized', wrong['reason_code'])
+        self.assertEqual('host_client_mismatch', wrong['reason_code'])
         resumed = self.cli('learning-resume-orchestration', *target, '--request-id', 'original-resume')
         self.assertEqual(('active', 4), (resumed['status'], resumed['sequence']))
         closed = self.cli('learning-close-orchestration', *target, '--status', 'completed',
@@ -261,7 +261,7 @@ class ServiceHostTests(unittest.TestCase):
         self.start(generation=2)
         orphaned = self.cli('learning-orchestration-status', '--orchestration-handle', opened['orchestration_handle'],
                             expected=2)
-        self.assertEqual('history_not_authorized', orphaned['reason_code'])
+        self.assertEqual('host_client_mismatch', orphaned['reason_code'])  # Reported as such; the cause is the generation.
 
     def test_restart_replaces_the_capability_and_keeps_history(self):
         first, ready = self.start()

@@ -18,13 +18,14 @@ from .account_billing_jobs import AccountBillingJobs, BillingJobLimits
 from .account_claim_jobs import AccountClaimJobs
 from .account_ingress import AccountIngress, AccountIngressLimits
 from .account_observation import AccountObservationOwner, ObservationContext
+from .account_open_contracts import MAX_ACCOUNT_OPEN_CONTEXT_BYTES, AccountOpenContext, OpenOwnerLimits
 from .account_observation_jobs import AccountObservationJobs, ObservationJobLimits
 from .account_service import AccountAuthorization, AccountOwnerViews, AccountService
 from .billing_probe_worker import PROBE_SLOT_BYTES, BillingProbeWorkers, ProbeWorkerLimits
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
 from .collector_paths import CollectorPaths, _assert_no_symlink_components, _check_owner_mode
 from .history_contracts import HistoryError
-from .learning_contracts import keyed_digest
+from .learning_contracts import keyed_digest, parse_bounded_json
 from .owned_execution import OwnedExecutionRegistry
 from .service_enrollment import (
     EnrollmentVerifier, account_endpoint_path, issue_capability, prepare_proof_directory, proof_directory, revoke_capability,
@@ -35,11 +36,12 @@ from .signature_worker_pool import SignatureWorkerLimits
 from .sql_read_budget import SQLReadLimits
 
 SECOND = 1_000_000_000
-# What an enrolled primary may ask the account owner. Owner keys, claims for a
-# launch and host opens need their own protected inputs and are not offered yet.
+# What an enrolled primary may ask the account owner. Owner-only operations and
+# launch claims are never offered here. A host open must carry its originals.
 HOST_OPERATIONS = frozenset({
     'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
     'account.observe_provider', 'account.record_observation_unavailable', 'account.billing_probe',
+    'account.open_host_run',
 })
 GENERATION = 1
 
@@ -66,7 +68,8 @@ class AccountServiceHost:
             self._views = AccountOwnerViews(ledger)
             limits = SQLReadLimits(100_000, 1_000, 2 * 1_048_576)
             self._claims = AccountClaimJobs(self._views, SignatureIntakeLimits(8, 2, 512, 262_144, 4),
-                SignatureWorkerLimits(2, 4 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000), limits)
+                SignatureWorkerLimits(2, 4 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000), limits,
+                open_limits=OpenOwnerLimits(4, 256, MAX_ACCOUNT_OPEN_CONTEXT_BYTES))
             self._observations = AccountObservationJobs(AccountObservationOwner(self._views, limits),
                                                         ObservationJobLimits(16, 2, 2, 2))
             self._workers = BillingProbeWorkers(OwnedExecutionRegistry(), ProbeWorkerLimits(1, PROBE_SLOT_BYTES))
@@ -125,8 +128,28 @@ class AccountServiceHost:
             context = self._contexts[token] = ObservationContext(root)
         caller = keyed_digest(self._state.digest_key(), 'account-caller\0' + entry.enrolled.host_client
                               + '\0' + request.project_id)
+        opening = None
+        if request.operation == 'account.open_host_run':
+            opening = self._open_context(entry.enrolled.context)
+            if opening is None:
+                return None
         return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
-                                    'host', HOST_OPERATIONS, caller, observation_context=context)
+                                    'host', HOST_OPERATIONS, caller, observation_context=context, open_context=opening)
+
+    @staticmethod
+    def _open_context(raw):
+        """Originals and the project's open-scope proof, as the enrolled client sent them."""
+        if raw is None:
+            return None
+        try:
+            value = parse_bounded_json(raw, max_bytes=MAX_ACCOUNT_OPEN_CONTEXT_BYTES + 64)
+            if value.keys() != {'purpose', 'prospective', 'project_scope'} or value['purpose'] != 'open':
+                return None
+            opening = AccountOpenContext.from_snapshot(value)
+            opening.snapshot()  # The proof must bind exactly these originals.
+            return opening
+        except Exception:
+            return None
 
     def serve_once(self):
         self._owner()

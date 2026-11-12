@@ -1821,6 +1821,7 @@ def main() -> int:
             validate_assignment(assignment, task=task, route=supplied_route,
                                 parent_grant=parent_grant)
             if supplied_route.get('provider') == 'codex':
+                ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)
                 host = _host_client()  # Consistency only; native identity is independently checked.
                 if host == CLAUDE_HOST_CLIENT:
                     check_backend(os.environ, args.project_root.resolve())
@@ -1831,8 +1832,10 @@ def main() -> int:
                     raise AdmissionDenied('provider_api_key_present')
                 report = open_codex_client(args.state_root, args.project_root, args.orchestration_handle,
                     task, supplied_route, assignment, parent_grant, host_client=host)
+                if report['state'] == 'denied':
+                    raise AdmissionDenied(report['reason_code'])
                 _print_command_report(args, report)
-                return 0 if report['ready'] else 2
+                return 0
             ledger, project_id = _learning_ledger(args)
             try:
                 host = _require_host_owner(

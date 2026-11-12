@@ -30,6 +30,8 @@ ENROLLMENT_VERSION = 1
 # names the project root it acts for, checked by the account owner.
 ROLES = frozenset({'host', 'account'})
 MAX_SUBJECT_BYTES = 4_096
+# Protected originals a trusted client hands the owner for exactly one request.
+MAX_CONTEXT_BYTES = 262_144
 PROOF_DIRECTORY = 'proofs'
 MAX_PROOFS = 4_096
 KEY_BYTES = 32
@@ -40,7 +42,7 @@ REASON_CODES = frozenset({
     'enrollment_invalid', 'enrollment_unavailable', 'enrollment_stale', 'enrollment_replayed', 'enrollment_overloaded',
 })
 _FIELDS = ('enrollment_version', 'role', 'host_client', 'generation', 'issued_at_ms', 'nonce', 'request_digest',
-           'subject')
+           'subject', 'context_digest')
 _HEX = frozenset('0123456789abcdef')
 
 
@@ -184,13 +186,16 @@ def prune_proofs(directory, *, older_than_seconds, now=None):
         pass
 
 
-def _create_proof(directory, nonce):
+def _create_proof(directory, nonce, context=b''):
     descriptor = None
     try:
         _assert_no_symlink_components(directory)
         _check_owner_mode(directory, directory=True)
         descriptor = os.open(directory / nonce, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
         os.fchmod(descriptor, 0o600)
+        view = memoryview(context)
+        while view:
+            view = view[os.write(descriptor, view):]
     except (StateError, OSError):
         raise EnrollmentError('enrollment_unavailable') from None
     finally:
@@ -198,17 +203,44 @@ def _create_proof(directory, nonce):
             os.close(descriptor)
 
 
-def _consume_proof(directory, nonce):
-    """One owner-made regular file per nonce, removed as it is accepted."""
+def _consume_proof(directory, nonce, context_digest):
+    """One owner-made regular file per nonce, read once and removed as it is accepted.
+
+    Its bytes are the request's protected context, which must match the digest
+    the preamble signed; a proof without a signed context must be empty.
+    """
     path = directory / nonce
+    descriptor = None
     try:
-        info = path.lstat()
-        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != 0
-                or (hasattr(os, 'getuid') and info.st_uid != os.getuid())):
+        expected = path.lstat()
+        if not getattr(os, 'O_NOFOLLOW', 0) or not getattr(os, 'O_NONBLOCK', 0):
             raise OSError()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600
+                or (hasattr(os, 'getuid') and info.st_uid != os.getuid())
+                or (expected.st_dev, expected.st_ino) != (info.st_dev, info.st_ino)
+                or info.st_size > MAX_CONTEXT_BYTES or (context_digest is None and info.st_size != 0)):
+            raise OSError()
+        chunks, total = [], 0
+        while total <= MAX_CONTEXT_BYTES:
+            chunk = os.read(descriptor, min(65_536, MAX_CONTEXT_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        context = b''.join(chunks)
         path.unlink()
     except OSError:
         raise EnrollmentError('enrollment_invalid') from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if context_digest is None:
+        return None
+    if len(context) > MAX_CONTEXT_BYTES or not hmac.compare_digest(hashlib.sha256(context).hexdigest(), context_digest):
+        raise EnrollmentError('enrollment_invalid')
+    return context
 
 
 def _mac(key, fields):
@@ -221,12 +253,19 @@ def request_digest(message):
     return hashlib.sha256(message).hexdigest()
 
 
-def enrollment_preamble(key, role, host_client, generation, message, proofs, *, subject=None, now_ms=None, nonce=None):
-    """Client side: prove write access, then name exactly this request frame once."""
+def enrollment_preamble(key, role, host_client, generation, message, proofs, *, subject=None, context=None,
+                        now_ms=None, nonce=None):
+    """Client side: prove write access, then name exactly this request frame once.
+
+    ``context`` is optional protected input for the owner, carried in the proof
+    file and bound to this request by its signed digest.
+    """
+    if context is not None and (type(context) is not bytes or not 0 < len(context) <= MAX_CONTEXT_BYTES):
+        raise EnrollmentError('enrollment_invalid')
     fields = {'enrollment_version': ENROLLMENT_VERSION, 'role': role, 'host_client': host_client,
               'generation': generation, 'issued_at_ms': time.time_ns() // 1_000_000 if now_ms is None else now_ms,
               'nonce': secrets.token_hex(16) if nonce is None else nonce, 'request_digest': request_digest(message),
-              'subject': subject}
+              'subject': subject, 'context_digest': None if context is None else hashlib.sha256(context).hexdigest()}
     if (type(key) is not bytes or len(key) != KEY_BYTES or role not in ROLES or host_client not in HOST_CLIENTS
             or not _integer(generation, minimum=1) or not _integer(fields['issued_at_ms']) or not _hex(fields['nonce'], 32)
             or not _subject(subject) or (subject is None) != (role == 'host')):
@@ -234,7 +273,7 @@ def enrollment_preamble(key, role, host_client, generation, message, proofs, *, 
     line = canonical_json({**fields, 'mac': _mac(key, fields)})
     if len(line) + 1 > MAX_PREAMBLE_BYTES or b'\n' in line or not isinstance(proofs, Path):
         raise EnrollmentError('enrollment_invalid')
-    _create_proof(proofs, fields['nonce'])
+    _create_proof(proofs, fields['nonce'], b'' if context is None else context)
     return line
 
 
@@ -246,6 +285,7 @@ class Enrolled:
     generation: int
     request_digest: str
     subject: str | None = None
+    context: bytes | None = None
 
 
 class EnrollmentVerifier:
@@ -275,6 +315,7 @@ class EnrollmentVerifier:
                 or type(value['role']) is not str or type(value['host_client']) is not str
                 or value['host_client'] not in HOST_CLIENTS or not _integer(value['generation'], minimum=1)
                 or not _subject(value['subject'])
+                or (value['context_digest'] is not None and not _hex(value['context_digest'], 64))
                 or not _integer(value['issued_at_ms']) or not _hex(value['nonce'], 32)
                 or not _hex(value['request_digest'], 64) or not _hex(value['mac'], 64)
                 or canonical_json(value) != line):
@@ -307,6 +348,6 @@ class EnrollmentVerifier:
             self._seen[value['nonce']] = max(now, value['issued_at_ms'])
         # The MAC shows the key was read; only this file shows the sender can
         # write the state root. A nonce without its proof stays spent.
-        _consume_proof(self._proofs, value['nonce'])
+        context = _consume_proof(self._proofs, value['nonce'], value['context_digest'])
         return Enrolled(value['role'], value['host_client'], value['generation'], value['request_digest'],
-                        value['subject'])
+                        value['subject'], context)

@@ -122,13 +122,16 @@ def enroll_clients(state, project_root, scope, endpoints=(), *, account=None, ho
     this project's root, which the account owner matches to the registered
     project. A process with no host class, or a missing key, stays unenrolled
     for that endpoint and its host refuses; there is no database fallback.
+
+    Returns a mapping from endpoint to the protected context for its next
+    request; each entry is used once.
     """
     if host_client is None:
         try:
             host_client = detect_host_client(os.environ)
         except HostClientUnknown:
             host_client = None
-    preambles = {}
+    preambles, contexts = {}, {}
     if host_client is not None:
         try:
             host_key = read_capability(state, project_root, 'host') if endpoints else None
@@ -153,12 +156,12 @@ def enroll_clients(state, project_root, scope, endpoints=(), *, account=None, ho
         role, key, generation, subject = entry
         try:
             return enrollment_preamble(key, role, host_client, generation, message, proof_directory(socket_path),
-                                       subject=subject)
+                                       subject=subject, context=contexts.pop(Path(socket_path), None))
         except EnrollmentError:
             raise OSError() from None
 
     install_enrollment(preamble if preambles else None)
-    return bool(preambles)
+    return contexts
 
 
 def _account_target(state, project_root):
@@ -454,8 +457,15 @@ def orchestration_client(state_root, project_root, operation, *, host_client, or
             payload = {}
         else:
             payload = {'orchestration_handle': orchestration_handle}
-            current = client.call('orchestration.status', payload,
-                request_id=identity if operation == 'orchestration.status' else 'orc-read-'+content_digest({'request': identity}))
+            try:
+                current = client.call('orchestration.status', payload,
+                    request_id=identity if operation == 'orchestration.status' else 'orc-read-'+content_digest({'request': identity}))
+            except HistoryError as error:
+                # An enrolled read of an existing orchestration is refused only when
+                # another host class owns it: keep the documented lifecycle reason.
+                if error.reason_code == 'history_not_authorized':
+                    raise HostClientMismatch('host_client_mismatch') from None
+                raise
             snapshot = current['current']['snapshot']
             if snapshot['client_version'] != host_client:
                 raise HostClientMismatch('host_client_mismatch')
@@ -498,14 +508,21 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
         scope, endpoints = _read_runtime_endpoints(state, project_root, account=True)
         if len(endpoints) != 3:
             raise RuntimeOpenError('open_unavailable')
-        enroll_clients(state, project_root, scope, endpoints[:2], account=endpoints[2], host_client=host_client)
+        contexts = enroll_clients(state, project_root, scope, endpoints[:2], account=endpoints[2], host_client=host_client)
         prospective = OrchestrationScope(**vars(scope))
         digest = open_inputs_digest(assignment, task, route, parent_grant)
+        originals = {'assignment': assignment, 'task': task, 'route': route, 'parent_grant': parent_grant}
+        # The trusted CLI hands each owner the originals for exactly this request.
+        contexts[endpoints[1]] = canonical_json({'purpose': 'open', 'orchestration_handle': orchestration_handle,
+                                                 **originals})
         project_scope = HistoryClient(endpoints[1], scope.project_id, scope.runtime_digest, timeout=10).original_open_scope(
             prospective, orchestration_handle, digest)
         if project_scope['facts']['client_version'] != host_client:
             raise HostClientMismatch('host_client_mismatch')
         opening = AccountOpenInput(prospective, orchestration_handle, digest)
+        contexts[endpoints[2]] = canonical_json({'purpose': 'open', 'project_scope': project_scope,
+            'prospective': {'scope': prospective.as_data(), 'orchestration_handle': orchestration_handle,
+                            **originals, 'worker': None}})
         identity = 'cli-open-' + content_digest(opening.payload())
         reply = AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=10).open_host_run(
             opening, request_id=identity)
@@ -513,7 +530,11 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
         raise RuntimeOpenError('open_unavailable') from None
     except (AccountError, HistoryError, OpenError) as error:
         raise RuntimeOpenError(error.reason_code) from None
-    return {'ready': reply['state'] == 'opened', **reply, 'read_containment': 'advisory'}
+    opened = reply['state'] == 'opened'
+    # The legacy open report's fields, projected from the account receipt.
+    return {'ready': opened, **reply, 'admission': 'admitted' if opened else 'denied',
+            'status': 'started' if opened else 'denied',
+            'observation_started_at_ms': reply['recorded_at_ms'] if opened else None, 'read_containment': 'advisory'}
 
 
 def dispatch_codex_client(state_root, project_root, run_handle, task, route, assignment, parent_grant, *, expected_export_commit=None):

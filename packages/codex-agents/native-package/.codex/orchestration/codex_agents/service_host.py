@@ -28,6 +28,11 @@ from .history_contracts import HistoryError, valid_integer
 from .learning_contracts import canonical_json, keyed_digest
 from .orchestration_api import ORCHESTRATION_OPERATIONS, OrchestrationScope, orchestration_request_digest
 from .orchestration_service import OrchestrationAuthorization
+from .history_api import history_request_digest
+from .history_service import HistoryAuthorization
+from .learning_contracts import parse_bounded_json
+from .open_scope_contracts import OpenScopeContext
+from .service_enrollment import MAX_CONTEXT_BYTES
 from .project_runtime import ProjectRuntime, ProjectRuntimeLimits
 from .service_enrollment import (
     MAX_NONCES, MAX_PREAMBLE_BYTES, MAX_WINDOW_MS, Enrolled, EnrollmentError, EnrollmentVerifier,
@@ -295,7 +300,7 @@ class ProjectServiceHost:
             # second host refuses here, before it can touch another host's files.
             self._runtime = ProjectRuntime(self._scope, open_history, runtime_limits,
                 orchestration_authorizer=self._authorize_orchestration, ingress_authorizer=self._authorize_ingress,
-                clock_ns=clock_ns)
+                history_authorizer=self._authorize_history, clock_ns=clock_ns)
             for path in (directory.parent, directory, self._hint.parent):
                 path.mkdir(mode=0o700, exist_ok=True)
                 _assert_no_symlink_components(path)
@@ -373,6 +378,26 @@ class ProjectServiceHost:
             return None
         return OrchestrationAuthorization(self._scope, orchestration_request_digest(request),
                                           entry.enrolled.host_client, ORCHESTRATION_OPERATIONS)
+
+    def _authorize_history(self, request, token):
+        """Open scope only, from the originals the enrolled client sent with this request."""
+        entry = self._frontend.context(token) if self._frontend is not None else None
+        if (entry is None or entry.kind != 'project' or entry.enrolled.role != 'host'
+                or request.operation != 'history.open_scope' or entry.enrolled.context is None):
+            return None
+        try:
+            original = parse_bounded_json(entry.enrolled.context, max_bytes=MAX_CONTEXT_BYTES)
+            if (original.keys() != {'purpose', 'orchestration_handle', 'assignment', 'task', 'route', 'parent_grant'}
+                    or original['purpose'] != 'open'
+                    or original['orchestration_handle'] != request.payload.get('orchestration_handle')):
+                return None
+            prospective = OpenScopeContext(self._scope, original['orchestration_handle'], original['assignment'],
+                                           original['task'], original['route'], original['parent_grant'])
+            prospective.snapshot()
+        except Exception:
+            return None
+        return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
+                                    frozenset({'history.open_scope'}), open_scope_context=prospective)
 
     def serve_once(self):
         self._owner()
