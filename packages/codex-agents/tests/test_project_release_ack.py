@@ -5,6 +5,7 @@ import unittest
 
 import tests.support  # noqa: F401
 from tests import test_result_leases as fixtures
+from tests.project_schema_fixtures import legacy_learning_layout
 from codex_agents.history_contracts import HistoryError
 from codex_agents.project_history import ProjectHistory
 
@@ -17,6 +18,7 @@ class ProjectReleaseAckSchemaTests(unittest.TestCase):
 
     def old_nine(self):
         self.original = self.base.reserve()
+        legacy_learning_layout(self.base.store)
         db = self.base.store._connection
         db.execute('DROP TABLE project_cleanup_acknowledgements')
         db.execute('ALTER TABLE project_cleanup_reservations DROP COLUMN account_release_digest')
@@ -34,7 +36,7 @@ class ProjectReleaseAckSchemaTests(unittest.TestCase):
         self.assertEqual(digest,hashlib.sha256(path.read_bytes()).hexdigest())
         self.base.fixture.store = self.base.fixture.open(allow_schema_upgrade=True)
         db = self.base.store._connection
-        self.assertEqual(10,db.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(11,db.execute('PRAGMA user_version').fetchone()[0])
         for name, rows in self.before.items():
             after = [tuple(r) for r in db.execute('SELECT * FROM '+name)]
             self.assertEqual([(*r,None) for r in rows] if name=='project_cleanup_reservations' else rows, after)
