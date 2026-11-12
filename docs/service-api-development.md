@@ -195,6 +195,14 @@ policy, runs a child that goes silent, polls status, and sees the separate dispa
 return `timed_out` with stop reason `work_silence`, after `quiet` and `stale` were
 reported, without anyone asking for a stop.
 
+A fourth driver test registers and admits a second project with its own host,
+sharing the collector and account service. Both projects dispatch children that
+run at the same time. Each project can read its own run's status and cannot read
+the other's. Cancelling project A's run returns A's dispatch as `cancelled` while
+B's child keeps running with no stop requested, until B is cancelled separately.
+These tests use the bridge tests' fake clients; real-provider cadence, real
+two-project installs and both Claude paths remain to be proved.
+
 Not done: no retry, cancellation-before-dispatch or abandonment path through the
 driver, no driver state across a host restart (a run opened before a restart is
 refused at dispatch and keeps its account capacity until reconciled), the

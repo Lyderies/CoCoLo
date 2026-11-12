@@ -5,6 +5,8 @@ this process, so the fake provider clients the bridge tests trust are the ones
 they resolve. Everything else is the product path: the in-process CLI, the
 hosts' enrollment, the run driver and the original owners.
 """
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -12,10 +14,12 @@ import sys
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT
-from tests.test_bridge import PARENT_GRANT, CliTestCase, null_filled, result
+from tests.learning_support import attest_provider
+from tests.test_bridge import CLEAN, PARENT_GRANT, CliTestCase, cli, git, null_filled, result
 
 from codex_agents import client_runtime, collector_runtime, learning_store, project_driver
 from codex_agents.account_host import AccountServiceHost
@@ -115,12 +119,10 @@ class DriverHarness(CliTestCase):
         patcher = mock.patch.object(project_driver.RunDriver, '_advance', driver_advance)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.threads = [threading.Thread(target=self.collector, name='test-collector'),
-                        threading.Thread(target=self.project_host, name='test-project-host')]
+        self.threads = [threading.Thread(target=self.collector, name='test-collector')]
         self.threads[0].start()
         self.wait_for(lambda: capability_path(self.paths, None, 'account').exists())
-        self.threads[1].start()
-        self.wait_for(lambda: runtime_hint_path(self.paths, self.project).exists())
+        self.start_project_host(self.project)
 
     def tearDown(self):
         # Before the base class removes the state these services own.
@@ -177,14 +179,29 @@ class DriverHarness(CliTestCase):
         except BaseException as error:  # Surface a service failure in the test thread.
             self.failures.append(repr(error))
 
-    def project_host(self):
-        try:
-            report = serve_project(self.state.root, self.project, stopped=self.stop.is_set, bundle_root=self.bundle,
-                                   **({} if self.liveness is None else {'liveness': self.liveness}))
-            if not report.get('ready'):
-                self.failures.append('project host refused: %r' % (report,))
-        except BaseException as error:
-            self.failures.append(repr(error))
+    def start_project_host(self, project):
+        def serve():
+            try:
+                report = serve_project(self.state.root, project, stopped=self.stop.is_set, bundle_root=self.bundle,
+                                       **({} if self.liveness is None else {'liveness': self.liveness}))
+                if not report.get('ready'):
+                    self.failures.append('project host refused: %r' % (report,))
+            except BaseException as error:
+                self.failures.append(repr(error))
+
+        thread = threading.Thread(target=serve, name='test-project-host-' + project.name)
+        self.threads.append(thread)
+        thread.start()
+        self.wait_for(lambda: runtime_hint_path(self.paths, project).exists())
+
+    def cli_for(self, project, command, *arguments, expected=0):
+        stdout = io.StringIO()
+        argv = ['cli.py', command, '--state-root', str(self.state.root), '--project-root', str(project), *arguments]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(cli, 'BUNDLE_ROOT', self.bundle), \
+                contextlib.redirect_stdout(stdout):
+            code = cli.main()
+        self.assertEqual(expected, code, stdout.getvalue())
+        return json.loads(stdout.getvalue())
 
     def stop_services(self):
         self.stop.set()
@@ -195,26 +212,28 @@ class DriverHarness(CliTestCase):
         workers = {'account-observation', 'signature-fixed-worker', 'codex-agents-collector', 'account-ingress'}
         self.assertEqual([], [t.name for t in threading.enumerate() if t.name in workers and t.is_alive()])
 
-    def open_run(self):
-        task = self.write('task.json', self.task())
-        route = self.cli('learning-route', '--task', task)
+    def open_run(self, project=None):
+        project = project or self.project
+        name = project.name + '-'
+        task = self.write(name + 'task.json', self.task())
+        route = self.cli_for(project, 'learning-route', '--task', task)
         assigned = self.assignment_for(route)
-        context = ('--task', task, '--assignment', self.write('assignment.json', assigned),
-                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
-        route_path = self.write('route.json', route)
-        orchestration = self.cli('learning-open-orchestration')
-        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
-                          '--orchestration-handle', orchestration['orchestration_handle'])
+        context = ('--task', task, '--assignment', self.write(name + 'assignment.json', assigned),
+                   '--parent-grant', self.write(name + 'grant.json', PARENT_GRANT))
+        route_path = self.write(name + 'route.json', route)
+        orchestration = self.cli_for(project, 'learning-open-orchestration')
+        opened = self.cli_for(project, 'learning-open-host-run', *context, '--route', route_path,
+                              '--orchestration-handle', orchestration['orchestration_handle'])
         return context, route_path, orchestration['orchestration_handle'], opened['run_handle']
 
-    def separate_dispatch(self, context, route_path, run_handle):
+    def separate_dispatch(self, context, route_path, run_handle, project=None):
         """A second primary process waits on dispatch while this one inspects the run."""
         env = {k: v for k, v in os.environ.items() if not any(m in k.upper() for m in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
         for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
             env.pop(name, None)
         env['CODEX_THREAD_ID'] = 'driver-primary'
         process = subprocess.Popen([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'), 'dispatch',
-            '--state-root', str(self.state.root), '--project-root', str(self.project), *context,
+            '--state-root', str(self.state.root), '--project-root', str(project or self.project), *context,
             '--route', route_path, '--run-handle', run_handle], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self.addCleanup(lambda: process.poll() is None and process.kill())
         return process
@@ -326,6 +345,55 @@ class SilenceCutoffTests(DriverHarness):
         final = self.cli('learning-run-status', *target)
         self.assertEqual('work_silence', final['stop_reason'])
         self.assertTrue({'quiet', 'stale'} & seen, seen)
+
+
+class TwoProjectTests(DriverHarness):
+    def admit(self, provider):
+        # A second registered, admitted project with its own host, sharing the account.
+        self.second = Path(self.temporary.name) / 'second'
+        self.second.mkdir()
+        (self.second / 'source.txt').write_text('second marker\n')
+        git(self.second, 'init', '-q')
+        git(self.second, 'config', 'user.email', 'tests@example.invalid')
+        git(self.second, 'config', 'user.name', 'Bridge Tests')
+        git(self.second, 'add', '.')
+        git(self.second, 'commit', '-qm', 'second')
+        fingerprint = super().admit(provider)
+        second = self.ledger.register_project(self.second, now_ms=1)
+        identity = self.ledger.observe_provider(second, provider, project_root=self.tools, environ=CLEAN)[0]
+        attest_provider(self.ledger, second, self.owner_key, provider, identity['account_fingerprint'])
+        return fingerprint
+
+    def test_two_projects_run_children_at_once_and_cancelling_one_leaves_the_other(self):
+        self.start_project_host(self.second)
+        first = self.open_run(self.project)
+        second = self.open_run(self.second)
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'overlapping-child'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        processes = [self.separate_dispatch(first[0], first[1], first[3], self.project),
+                     self.separate_dispatch(second[0], second[1], second[3], self.second)]
+        self.wait_for(lambda: len([i for i in self.invocations('codex') if 'exec' in i['argv']]) == 2, seconds=40)
+        targets = [('--orchestration-handle', run[2], '--run-handle', run[3]) for run in (first, second)]
+        for project, target in zip((self.project, self.second), targets):
+            status = self.cli_for(project, 'learning-run-status', *target)
+            self.assertEqual('running', status['cancellation_state'])
+        # Neither project can see the other's run.
+        foreign = self.cli_for(self.second, 'learning-run-status', *targets[0], expected=2)
+        self.assertIn(foreign['reason_code'], {'control_not_authorized', 'control_attempt_not_found', 'control_wrong_scope'})
+
+        cancelled = self.cli_for(self.project, 'learning-cancel-run', *targets[0])
+        self.assertEqual('cancel_requested', cancelled['stop_reason'])
+        output, errors = processes[0].communicate(timeout=30)
+        self.assertEqual(0, processes[0].returncode, (output + errors).decode(errors='replace'))
+        self.assertEqual('cancelled', json.loads(output)['bridge_report']['terminal_state'])
+        # The other project's child is still running, untouched.
+        self.assertIsNone(processes[1].poll())
+        other = self.cli_for(self.second, 'learning-run-status', *targets[1])
+        self.assertEqual(('running', None), (other['cancellation_state'], other['stop_reason']))
+        self.cli_for(self.second, 'learning-cancel-run', *targets[1])
+        output, errors = processes[1].communicate(timeout=30)
+        self.assertEqual(0, processes[1].returncode, (output + errors).decode(errors='replace'))
 
 
 if __name__ == '__main__':
