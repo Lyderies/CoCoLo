@@ -1,11 +1,18 @@
 # Native caller enrollment for local services
 
-Status: proposed design and proof order. No production issuer, enrollment adapter,
-listener or authority change is enabled by this document. The current account and
-history authorization adapters continue to default to denial.
+Status: not selected for 0.3.0. Owner decision, 2026-11-13: 0.3.0 keeps the 0.2.x
+trust level for service callers and uses the capability enrollment described in
+[the service API status](service-api-development.md#project-service-host-and-capability-enrollment-uninstalled-source-candidate).
+Proof of the actual native primary process, as explored below, is a possible future
+feature. Gates NE1 to NE8 are not 0.3.0 release gates. The independent security
+review of the enrollment and host code is still required.
 
-This addresses the caller-authentication gate for the 0.3.0 project/account APIs.
-It does not complete storage migration, native Claude control or release validation.
+The rest of this document is kept as the record of that exploration. Where it says
+a readable key or MAC cannot be used, it is describing the stronger native-identity
+goal, which the capability does not claim to meet. The retained protected-entry
+checks, role separation, custody rules for descriptors and the revocation table
+remain useful input for the capability design and its review.
+
 Write-capable children remain outside 0.3.0.
 
 ## Existing checks and the missing boundary

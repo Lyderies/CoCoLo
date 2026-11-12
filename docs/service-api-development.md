@@ -43,10 +43,11 @@ an orchestration's stored scope includes the supervisor generation, so a host
 restarted with a new generation cannot read orchestrations opened under the old
 one. Restart continuity for orchestrations needs its own design and tests.
 
-Whether this candidate is the release's enrollment boundary is an open owner
-decision, and it needs the independent IPC security review either way. It selects
-nothing in `native-caller-enrollment-design.md`, whose stricter gates remain as
-written until that decision.
+Owner decision, 2026-11-13: this is the 0.3.0 enrollment boundary. The release keeps
+the 0.2.x trust level; proof of the actual primary process, explored in
+`native-caller-enrollment-design.md`, is a possible future feature and its NE gates
+do not apply to this release. The independent IPC security review is still
+required before this code is accepted.
 
 ## Historical learning corpus staging (uninstalled source)
 
