@@ -1,4 +1,4 @@
-"""Exact schema12 to13 migration; existing staged authority stays unavailable."""
+"""Exact schema12 upgrades preserve staged data without granting authority."""
 from contextlib import closing
 import sqlite3
 import unittest
@@ -20,21 +20,27 @@ class LearningQACorpusUpgradeTests(unittest.TestCase):
         self.summary = self.base.store.finish_learning_import(
             'import-1', now_ms=120, before_commit=lambda: None)
         connection = self.base.store._connection
-        # Build the exact previous layout, never delete data to make it fit.
-        for name in ('project_learning_qa_chunks', 'project_learning_qa_records',
-                     'project_learning_qa_imports'):
-            if connection.execute('SELECT name FROM sqlite_master WHERE name=?', (name,)).fetchone():
-                self.assertEqual(0, connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])
-                connection.execute('DROP TABLE ' + name)
-        connection.execute('PRAGMA user_version=12')
+        # Construct a separate exact old image. Keep the current source image
+        # intact, including membership metadata that did not exist in schema12.
         self.original = {name: [tuple(row) for row in connection.execute('SELECT * FROM ' + name)]
                          for name in ('history_identity', 'project_learning_imports',
                                       'project_learning_records', 'project_learning_attestations',
                                       'project_learning_import_chunks')}
-        self.schema = connection.execute(
-            'SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name').fetchall()
-        self.schema = [tuple(row) for row in self.schema]
         self.base.store.close()
+        directory = self.base.directory.parent / 'schema12-history'
+        directory.mkdir(mode=0o700)
+        database = directory / 'history.sqlite3'
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.executescript(project_history._SCHEMA_V12)
+            for name, rows in self.original.items():
+                for row in rows:
+                    connection.execute('INSERT INTO ' + name + ' VALUES(' + ','.join('?' for _ in row) + ')', row)
+            connection.execute(f'PRAGMA application_id={project_history._APPLICATION_ID}')
+            connection.execute('PRAGMA user_version=12')
+            self.schema = connection.execute(
+                'SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name').fetchall()
+        database.chmod(0o600)
+        self.base.directory = directory
 
     def read_original(self, connection):
         for name, rows in self.original.items():
@@ -71,7 +77,7 @@ class LearningQACorpusUpgradeTests(unittest.TestCase):
             self.read_original(connection)
         store = ProjectHistory(self.base.directory, fixtures.PROJECT, allow_schema_upgrade=True)
         try:
-            self.assertEqual(13, store._connection.execute('PRAGMA user_version').fetchone()[0])
+            self.assertEqual(14, store._connection.execute('PRAGMA user_version').fetchone()[0])
             self.read_original(store._connection)
             self.assertEqual(self.summary, store.finish_learning_import(
                 'import-1', now_ms=999, before_commit=lambda: None))

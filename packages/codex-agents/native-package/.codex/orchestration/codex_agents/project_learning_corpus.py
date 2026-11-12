@@ -193,10 +193,14 @@ def _authorization(before_commit):
 
 
 def _row(history, import_id):
-    row = history._connection.execute(
+    cursor = history._connection.execute(
         "SELECT * FROM project_learning_imports WHERE project_id=? AND import_id=?",
         (history.project_id, import_id),
-    ).fetchone()
+    )
+    try:
+        row = cursor.fetchone()
+    finally:
+        cursor.close()
     if row is None:
         raise HistoryError("history_not_found")
     try:
@@ -281,6 +285,8 @@ def stage_chunk(history, import_id, index, records, attestations, *, now_ms, bef
                         "record_count", "attestation_count", "total_bytes", "chain_digest")))
                     or value.get("learning_ready") is not False):
                 raise HistoryError("history_incompatible")
+            from .project_learning_chunks import record_chunk_membership
+            record_chunk_membership(history, import_id, index, records, attestations, digest)
             _authorization(before_commit)
             return value
         if row["state"] != "staging" or row["next_chunk"] != index or now_ms < row["updated_at_ms"]:
@@ -318,6 +324,8 @@ def stage_chunk(history, import_id, index, records, attestations, *, now_ms, bef
                    "chunk_digest": digest, **counts, "chain_digest": chain, "learning_ready": False}
         history._connection.execute("INSERT INTO project_learning_import_chunks VALUES(?,?,?,?,?)",
             (history.project_id, import_id, index, digest, canonical_json(receipt)))
+        from .project_learning_chunks import record_chunk_membership
+        record_chunk_membership(history, import_id, index, records, attestations, digest)
         _authorization(before_commit)
         return receipt
 

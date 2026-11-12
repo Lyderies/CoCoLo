@@ -16,7 +16,16 @@ Signed formal `qa_evidence` remains in the record and attestation import.
 Historical account records and billing-attestation signatures also remain in
 the staged source image. They confer no authority on the live account service.
 
-Only an explicit owner upgrade can migrate an existing schema1–12 history.
+Schema14 also retains each original record chunk's membership and signature order.
+The owner can reconstruct one bounded chunk and recompute its original digest
+after reopening the image. Existing record and signature bytes, metadata, receipts,
+counts, timestamps and chain remain unchanged. An older image without membership
+returns `history_learning_incomplete` until the exact original source chunk is
+replayed and matched against its stored companions. Reads never infer or backfill
+missing membership. Backfill occurs within the original authorized transaction,
+and revocation rolls it back. These integrity hashes grant no source authority.
+
+Only an explicit owner upgrade can migrate an existing schema1–13 history.
 Normal startup refuses that upgrade. Staging provides bounded chunks, durable
 replay and paged reads; every receipt reports `learning_ready: false`.
 Shape checks and copied QA decisions do not authenticate original execution or
@@ -59,7 +68,7 @@ the call ceiling is refused before metadata collection. Full-report tests indepe
 count every AST call and compare the module/root inventory, preserving coverage.
 
 A completed inventory is not an ownership pass. The current report still rejects
-CLI/bridge persistence dependencies; native activation and C19 acceptance remain open.
+CLI persistence dependencies; native activation and C19 acceptance remain open.
 
 ## Billing-probe API and original execution (uninstalled source)
 

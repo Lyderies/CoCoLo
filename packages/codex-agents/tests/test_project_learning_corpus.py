@@ -286,7 +286,7 @@ class LearningCorpusUpgradeTests(unittest.TestCase):
             connection.close()
             store = ProjectHistory(directory, PROJECT, allow_schema_upgrade=True)
             try:
-                self.assertEqual(13, store._connection.execute("PRAGMA user_version").fetchone()[0])
+                self.assertEqual(14, store._connection.execute("PRAGMA user_version").fetchone()[0])
                 self.assertEqual((PROJECT, 18, 1), tuple(store._connection.execute("SELECT * FROM history_identity").fetchone()))
                 self.assertEqual(original, tuple(store._connection.execute("SELECT * FROM records").fetchone()))
                 self.assertEqual(canonical_json(event), store.record(event["record_id"]).content)
@@ -377,6 +377,8 @@ class SignedLegacyLearningStagingTests(unittest.TestCase):
                       for row in fixture.ledger._connection.execute(
                           "SELECT * FROM owner_attestations WHERE project_id=?", (fixture.project_a_id,),
                       ) if row["subject_record_id"] in identifiers]
+        signatures.sort(key=lambda row: row['subject_record_id'], reverse=True)
+        self.assertNotEqual(signatures, sorted(signatures, key=lambda row: row['subject_record_id']))
         self.assertEqual(2, len(signatures))
         authority = OwnerGrantAuthority(fixture.state.owner_allowed_signers())
         signed_records = {json.loads(row["content"])["record_id"]: json.loads(row["content"]) for row in records}
@@ -398,12 +400,22 @@ class SignedLegacyLearningStagingTests(unittest.TestCase):
                     "total_bytes": sum(len(row["content"]) for row in records) + sum(len(row["signature"]) for row in signatures),
                     "chain_digest": corpus.next_chain_digest(corpus.EMPTY_CHAIN_DIGEST, digest)}
         target.begin_learning_import("signed-source", manifest, now_ms=1000, before_commit=lambda: None)
-        target.stage_learning_import_chunk("signed-source", 0, records, signatures, now_ms=1001, before_commit=lambda: None)
+        chunk_receipt = target.stage_learning_import_chunk("signed-source", 0, records, signatures,
+                                                          now_ms=1001, before_commit=lambda: None)
         receipt = target.finish_learning_import("signed-source", now_ms=1002, before_commit=lambda: None)
+        target.close()
+        target = ProjectHistory(directory, fixture.project_a_id, allow_schema_upgrade=True)
+        self.addCleanup(target.close)
         copied = list(target.learning_import_records("signed-source"))
         copied_signatures = list(target.learning_import_attestations("signed-source"))
         self.assertEqual(records, copied)
-        self.assertEqual(signatures, copied_signatures)
+        self.assertEqual(sorted(signatures, key=lambda row: row['subject_record_id']), copied_signatures)
+        original_chunk = target.learning_import_chunk('signed-source', 0)
+        self.assertEqual(tuple(records), original_chunk['records'])
+        self.assertEqual(tuple(signatures), original_chunk['attestations'])
+        self.assertEqual(chunk_receipt, original_chunk['receipt'])
+        self.assertEqual(chunk_receipt['chunk_digest'], corpus.chunk_digest(
+            list(original_chunk['records']), list(original_chunk['attestations'])))
         copied_feedback_signature = next(row["signature"] for row in copied_signatures
                                         if row["subject_record_id"] == feedback["record_id"])
         self.assertTrue(authority.verify_owner_record(fixture.project_a_id, feedback, copied_feedback_signature))

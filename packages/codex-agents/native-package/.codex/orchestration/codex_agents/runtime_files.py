@@ -120,6 +120,7 @@ RUNTIME_FILES = (
     "codex_agents/project_history.py",
     "codex_agents/project_host_open.py",
     "codex_agents/project_ingress.py",
+    "codex_agents/project_learning_chunks.py",
     "codex_agents/project_learning_corpus.py",
     "codex_agents/project_learning_identity.py",
     "codex_agents/project_learning_qa.py",

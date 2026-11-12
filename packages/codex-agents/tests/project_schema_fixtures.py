@@ -4,8 +4,17 @@ from dataclasses import replace
 from codex_agents.claim_storage import lease_state_seal
 
 
+def legacy_learning_chunk_layout(store):
+    """Remove only empty schema14 membership metadata for an older fixture."""
+    name = 'project_learning_chunk_memberships'
+    if store._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0]:
+        raise AssertionError('legacy fixture contains original chunk membership')
+    store._connection.execute('DROP TABLE ' + name)
+
+
 def legacy_learning_qa_layout(store):
     """Remove only empty schema13 QA staging tables for an older fixture."""
+    legacy_learning_chunk_layout(store)
     for name in ('project_learning_qa_chunks', 'project_learning_qa_records',
                  'project_learning_qa_imports'):
         if store._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0]:
