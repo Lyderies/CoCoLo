@@ -143,7 +143,7 @@ class SignatureInputOwnerTests(unittest.TestCase):
         self.assertFalse(self.ledger._connection.in_transaction)
         self.assertEqual((), self.capture(project=self.projects[1]).rows)
         self.assertEqual({"account.health", "account.project", "account.owner_key", "account.owner_public_key",
-                          "account.open_host_run", "account.claim_launch", "account.capacity_status", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable"},
+                          "account.open_host_run", "account.claim_launch", "account.capacity_status", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable", "account.billing_probe"},
                          ACCOUNT_OPERATIONS)
 
     def test_inputs_are_immutable_hidden_and_never_a_prepared_signature_proof(self):
