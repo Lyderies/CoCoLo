@@ -9657,6 +9657,21 @@ class LearningLedger:
                 raise
             return path
 
+    def _capture_learning_source_image(
+        self, project_id: str, file_id: str, *, expected_domain_digest: str, work_limits,
+    ) -> dict[str, Any]:
+        """Explicit offline-owner source rows; no native or activation authority.
+
+        Normal clients have no endpoint for this operation. The checker reuses
+        this existing owner/key and requires its explicit offline intent and
+        recorded drain checks; it never opens or takes over another live store.
+        Complete provenance, retained files and durable writer retirement still
+        precede use of the staged corpus.
+        """
+        from .learning_source_image import capture_source_image
+        return capture_source_image(self, project_id, file_id,
+                                    expected_domain_digest=expected_domain_digest, work_limits=work_limits)
+
     def verify_sanitized_backup(
         self, project_id: str, *, file_id: str
     ) -> dict[str, Any]:

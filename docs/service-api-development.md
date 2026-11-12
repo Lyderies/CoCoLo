@@ -33,6 +33,28 @@ check-receipt provenance. A verified source image, complete dependencies, the
 legacy writer drain and retirement, compatible key custody and explicit activation
 remain necessary before any learning cycle can use the imported corpus.
 
+## Complete registered source rows (uninstalled offline owner)
+
+The existing legacy persistence owner can compare a registered schema13 backup
+against every current row of its original 30-table project partition, including
+run, host, check, launch and account-open custody. It excludes only that backup's
+own registration. An image can remain a valid historical backup after the source
+changes; it then refuses this current-source comparison.
+
+This internal operation requires explicit offline-owner intent, its actual
+connection ownership and writer custody, and no recorded pending executions or
+active collector/readers. It checks the registered private file and the existing
+key domain, with fixed primary-key pages and cooperative SQL budgets. It creates
+no key and exposes no normal client endpoint. The returned original body and
+counts remain inert, with `learning_ready: false`. Its stable keyed identity binds
+the full row image to the existing owner and key domain.
+
+These checks supply no native caller or orphan-cleanup proof. Original execution
+and check provenance, retained private file verification, a recoverable writer
+cutover and retirement, complete coherent learning inputs and explicit activation
+remain required. Neither a copied QA decision nor an image digest supplies that
+authority. No source rows or private evidence are removed by comparison.
+
 ## Status metadata client (uninstalled source)
 
 `learning-status` observes the existing collector and account APIs. Owner-key

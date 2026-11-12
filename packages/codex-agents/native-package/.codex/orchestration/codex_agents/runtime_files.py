@@ -102,6 +102,7 @@ RUNTIME_FILES = (
     "codex_agents/learning_cycle_process.py",
     "codex_agents/learning_cycle_worker.py",
     "codex_agents/learning_engine.py",
+    "codex_agents/learning_source_image.py",
     "codex_agents/learning_store.py",
     "codex_agents/liveness_clock.py",
     "codex_agents/observation_failure_contracts.py",

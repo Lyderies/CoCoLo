@@ -37,6 +37,7 @@ PERSISTENCE_MODULES = frozenset({
     "codex_agents.project_learning_identity",
     "codex_agents.project_learning_qa",
     "codex_agents.project_learning_chunks",
+    "codex_agents.learning_source_image",
 })
 SELECTED_METHODS = frozenset({"append", "_append_checked_locked", "_append_locked", "commit_owner_record"})
 KEY_METHODS = frozenset({"keyed_digest", "external_id", "digest_key"})
@@ -44,7 +45,7 @@ SQL_METHODS = frozenset({
     "execute", "executemany", "executescript", "cursor", "fetchone", "fetchmany",
     "fetchall", "commit", "rollback", "set_trace_callback",
 })
-# The complete runtime now has 129 Python modules. Keep a finite inventory
+# The complete runtime now has 133 Python modules. Keep a finite inventory
 # ceiling while retaining the existing total byte/AST/call/report budgets and
 # every client root. A larger inventory never changes conformance findings.
 MAX_MODULES = 256
@@ -58,7 +59,10 @@ MAX_DIRECTORY_DEPTH = 64
 # parsing and retained metadata. A successful inventory still fails unsafe roots.
 MAX_CALLS = 32_768
 MAX_IMPORTS = 8_192
-MAX_REPORT_BYTES = 4 * MAX_SOURCE_BYTES
+# The complete 133-module compact inventory needs 4,197,945 output bytes,
+# exceeding 4 MiB. Retain every call and all nine client roots in a finite
+# 5 MiB report envelope; findings and the other source/AST/call caps stay intact.
+MAX_REPORT_BYTES = 5 * MAX_SOURCE_BYTES
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
 _COMMAND = re.compile(r"[a-z][a-z0-9-]{0,79}")
 REASONS = frozenset({"audit_invalid_path", "audit_invalid_source", "audit_source_limit", "audit_unsafe_source"})
