@@ -20,7 +20,7 @@ from .learning_contracts import (
     candidate_base_digest, canonical_json, content_digest,
     validate_evaluation_case, validate_outcome,
 )
-from .learning_engine import analyze_outcomes
+from .learning_analysis import analyze_outcomes
 
 MAX_OUTCOMES = 10_000
 MAX_CASES = 20_000

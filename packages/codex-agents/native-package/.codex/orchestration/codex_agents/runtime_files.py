@@ -94,6 +94,7 @@ RUNTIME_FILES = (
     "codex_agents/host_result_contracts.py",
     "codex_agents/hosts.py",
     "codex_agents/learning_adapters.py",
+    "codex_agents/learning_analysis.py",
     "codex_agents/learning_contracts.py",
     "codex_agents/learning_cycle_core.py",
     "codex_agents/learning_engine.py",
