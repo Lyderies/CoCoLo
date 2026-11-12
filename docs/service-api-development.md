@@ -6,48 +6,113 @@ still use the installed 0.8.12 implementation; these source components do not ac
 
 ## Project service host and capability enrollment (uninstalled source, candidate)
 
-`service_host.ProjectServiceHost` is the first production process frontend for the
-project runtime. It takes the project's exclusive history writer through
-`ProjectRuntime`, binds the control and project sockets in a short owner-only
-directory under the state root, issues one host capability, publishes the routing
-hint atomically and runs the owner loop. A second host for the same project
-refuses before it touches the first host's sockets, hint or capability. Closing
-withdraws the hint and capability before intake and the runtime stop.
+`service_host.ProjectServiceHost` is the production process frontend for the project
+runtime. It takes the project's exclusive history writer through `ProjectRuntime`,
+then an exclusive lock keyed by the project root, so neither a second host for the
+same history nor one handed a different history can touch the first host's files.
+It binds the control and project sockets in a short owner-only directory under the
+state root, issues one host capability, publishes the routing hint atomically and
+runs the owner loop. Closing withdraws the hint and capability before intake and
+the runtime stop. `EnrolledFrontend` holds the listeners and the enrollment step and
+is written to be shared with the account host.
 
-`service_enrollment` defines the capability. It is a random 32-byte key in an
-owner-only file, replaced on every host start. A client sends one preamble line
-ahead of its request: role, host class, host generation, issue time, a nonce and
-the request's SHA-256, under an HMAC of that key. The host reads exactly that line,
-verifies it and attaches the connection with an opaque token. The role, host class
-and request digest stay in the host. The ingress authorizer admits only the exact
-request the preamble named, again before each reply is sent. Replayed, expired,
-postdated, altered, other-generation and other-request preambles are dropped before
-any owner work. Unenrolled connections are bounded in number and by an absolute
-deadline that partial bytes cannot extend.
+### Enrollment
 
-This is the same authority as 0.2.x, where anything able to open the ledger in the
-state root could write it. A capability does not identify a process and is no
-defence against another unsandboxed program of the same user. What it adds is a
-closed role, the host class stated under the key instead of chosen by the server,
-single use, freshness, exact-request binding and death at restart. With the host
-class carried by enrollment, the project owner now refuses the other host class
-itself (`history_not_authorized`) before the CLI's own `host_client_mismatch`
+Enrollment has two parts, defined in `service_enrollment`:
+
+- **Proof of write.** For every request the client creates an empty single-use file,
+  named by a fresh nonce, in the host's owner-only `proofs` directory beside the
+  socket. The host accepts a preamble only if that file exists, is an owner-made
+  regular file with one link, and removes it as it accepts. Only a process that can
+  write the state root can do this. That is the same set of processes that could
+  write the ledger in 0.2.x. A sandboxed session that can read the state root, and
+  therefore the capability file, still cannot enroll.
+- **Capability.** A random 32-byte key in an owner-only file, replaced on every host
+  start. The client sends one preamble line ahead of its request: role, host class,
+  host generation, issue time, the nonce and the request's SHA-256, under an HMAC of
+  the key. The host reads exactly that line and verifies it before anything else is
+  decided.
+
+The verified connection is attached with an opaque token. The role, host class and
+request digest stay in the host. On the project endpoint the ingress authorizer
+admits only the exact request the preamble named, again before each reply is sent.
+The control endpoint enrolls connections the same way but has no authorizer yet, so
+it grants nothing; its future authorizer must add the same exact-request check.
+A preamble that is replayed, altered, for another generation or request, or issued
+outside the freshness window is closed without a reply. The window tolerates clock
+difference in both directions, so a timestamp slightly in the future is accepted.
+
+Neither part identifies a process, and neither defends against another unsandboxed
+program of the same user. With the host class carried by enrollment, the project
+owner refuses the other host class itself: `history_not_authorized` for status and
+known-request reads, `history_conflict` for a new mutation. The CLI reads status
+first, so it reports `history_not_authorized` before its own `host_client_mismatch`
 comparison is reached.
 
-Only the orchestration lifecycle is authorized so far (`orchestration.*`). History,
-result-read, control and dispatch authorizers still default to denial, and there is
-no account-service host, per-run driver, trusted startup command or supervised
-restart yet. `tests/test_service_host.py` drives a fresh guarded CLI and raw clients
-against the host process with no synthetic context. Known gap found by those tests:
-an orchestration's stored scope includes the supervisor generation, so a host
-restarted with a new generation cannot read orchestrations opened under the old
-one. Restart continuity for orchestrations needs its own design and tests.
+### Bounds
+
+Each listener has its own budget of unenrolled connections and an absolute
+enrollment deadline that neither partial bytes nor a late-completed line can pass.
+The listener served first rotates. A context is released as soon as its service
+closes the connection, so finished exchanges do not hold slots. Unclaimed proof
+files are pruned. A flood of unenrolled connections on one listener can still delay
+new enrollments on that same listener until its deadline frees slots; it cannot
+affect another listener, enrolled exchanges or the runtime step.
+
+### Startup
+
+`project_service.serve_project` is the trusted startup, run by the separate entry
+script `project_host.py` as a detached process. That script is not part of the CLI,
+so the CLI's client code imports no persistence owner for it. It refuses unless the
+installed runtime is the owner-authorized one, starts the collector if it is down,
+asks it for the registered project's identifier (new read-only collector operation
+`project`; an unregistered root is never registered by it), opens that project's
+history under
+`<state>/projects/<project id>/` and serves until SIGTERM or SIGINT. The supervisor
+scope is derived durably from the project, so a restart keeps it and the
+orchestrations stay addressable; what a restart replaces is the capability.
+The limits in that module are provisional installed policy, including the
+uncalibrated liveness thresholds from the design.
+
+The lifecycle commands call `project_host_client.ensure_project_host` first. A
+published hint counts as a service only while its host still holds the host lock,
+which the kernel releases when a host dies, so no probe connection is made. With no
+live host it starts one detached `project_host.py`, with no inherited environment,
+and stops waiting as soon as that process serves or exits. A dead host's leftover
+hint, sockets and capability are replaced by the next start. Endpoints published
+without a host lock, as the older process fixtures do, are used as hinted.
+
+### What is and is not covered
+
+Only the orchestration lifecycle is authorized (`orchestration.*`). History,
+result-read, control and dispatch authorizers still default to denial. There is no
+account-service host or per-run driver yet. A project host stops on a signal, after
+fifteen idle minutes with no run held, or when its hint or lock file is removed;
+there is no drain command or status command for it yet, and a host that fails
+leaves no diagnostic because its output is discarded.
+
+`tests/test_service_host.py` drives a database-trapped CLI and raw clients against
+the host process with no synthetic context; that CLI wrapper disables the
+protected-entry and own-roots checks. `tests/test_project_service_startup.py` drives
+the unmodified CLI against a disposable ledger and collector: first start, reuse,
+restart after SIGTERM with the earlier orchestration intact, replacement after
+SIGKILL, and no host for an unregistered root. Neither runs inside a real Codex
+sandbox, so the claim that a sandboxed session cannot create a proof rests on the
+documented sandbox behaviour, not on a test here.
+
+Known gap, pinned by a test: a stored orchestration scope includes the supervisor
+generation and runtime digest, so a host started under a different generation, or a
+later runtime version, cannot read earlier orchestrations. Succession between
+generations needs its own design.
 
 Owner decision, 2026-11-13: this is the 0.3.0 enrollment boundary. The release keeps
 the 0.2.x trust level; proof of the actual primary process, explored in
 `native-caller-enrollment-design.md`, is a possible future feature and its NE gates
-do not apply to this release. The independent IPC security review is still
-required before this code is accepted.
+do not apply to this release. An independent review of the first version found the
+defects corrected above (context retention, cross-listener starvation, the late-line
+deadline, startup cleanup, and the read-versus-write authority overstatement that
+led to the proof of write). The corrected code has not been independently reviewed
+again and is not accepted.
 
 ## Historical learning corpus staging (uninstalled source)
 

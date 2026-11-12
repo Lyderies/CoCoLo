@@ -31,7 +31,7 @@ def main():
     state, key = CollectorPaths(Path(data['state'])), bytes.fromhex(data['fixture_key'])
 
     def open_history():
-        return ProjectHistory(state.root/'history', scope.project_id, result_key=key,
+        return ProjectHistory(state.root/data.get('history', 'history'), scope.project_id, result_key=key,
             orchestration_limits=OrchestrationLimits(2, 32),
             result_capacity=ResultCapacity(8, 2*MAX_RESULT_BODY_BYTES, 1_800_000, 120_000))
 

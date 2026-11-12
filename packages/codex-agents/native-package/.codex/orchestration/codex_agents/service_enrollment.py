@@ -1,12 +1,15 @@
-"""Scoped request capabilities for local service clients.
+"""Scoped request enrollment for local service clients.
 
-A capability is a random key in the owner-only state root, issued by a service
-host for one role and one host generation. Holding it is the authority v1
-already gives anything able to open the ledger in that directory. It is not a
-process identity and is no defence against another unsandboxed program of the
-same user; that documented limit is unchanged. It binds exactly one request to
-a role, a host class and the issuing generation, refuses replay inside its
-freshness window and dies with that generation.
+Enrollment has two parts. The proof is a single-use file the client creates in
+the host's owner-only proof directory: only a process that can WRITE the state
+root can make one, which is exactly who could write the ledger in 0.2.x. A
+sandboxed session that can merely read the state root cannot enroll. The
+capability is a random key issued by the host for one role and one host start;
+its MAC binds the proof to one request, a role, a host class and the issuing
+generation inside a freshness window.
+
+Neither part is a process identity, and neither defends against another
+unsandboxed program of the same user; that documented limit is unchanged.
 """
 from dataclasses import dataclass
 import hashlib
@@ -24,6 +27,8 @@ from .learning_contracts import canonical_json, keyed_digest, parse_bounded_json
 
 ENROLLMENT_VERSION = 1
 ROLES = frozenset({'host'})
+PROOF_DIRECTORY = 'proofs'
+MAX_PROOFS = 4_096
 KEY_BYTES = 32
 MAX_PREAMBLE_BYTES = 512
 MAX_WINDOW_MS = 120_000
@@ -79,6 +84,11 @@ def issue_capability(state, project_root, role):
         os.fsync(descriptor)
         return key
     except (StateError, OSError, ValueError):
+        if descriptor is not None:
+            try:
+                path.unlink()  # Never leave a partly written key behind.
+            except OSError:
+                pass
         raise EnrollmentError('enrollment_unavailable') from None
     finally:
         if descriptor is not None:
@@ -120,6 +130,70 @@ def read_capability(state, project_root, role):
             os.close(descriptor)
 
 
+def proof_directory(endpoint):
+    """Where a client proves write access for this endpoint: beside its socket."""
+    return Path(endpoint).parent / PROOF_DIRECTORY
+
+
+def prepare_proof_directory(directory):
+    """Host side: an empty owner-only directory; earlier proofs are discarded."""
+    try:
+        directory.mkdir(mode=0o700, exist_ok=True)
+        _assert_no_symlink_components(directory)
+        _check_owner_mode(directory, directory=True)
+        with os.scandir(directory) as entries:
+            for count, entry in enumerate(entries):
+                if count >= 4 * MAX_PROOFS:
+                    raise OSError()
+                os.unlink(entry.path)
+    except (StateError, OSError):
+        raise EnrollmentError('enrollment_unavailable') from None
+
+
+def prune_proofs(directory, *, older_than_seconds, now=None):
+    """Host side: drop proofs no accepted preamble claimed; bounded per call."""
+    limit = (time.time() if now is None else now) - older_than_seconds
+    try:
+        with os.scandir(directory) as entries:
+            for count, entry in enumerate(entries):
+                if count >= MAX_PROOFS:
+                    break
+                try:
+                    if entry.stat(follow_symlinks=False).st_mtime < limit:
+                        os.unlink(entry.path)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def _create_proof(directory, nonce):
+    descriptor = None
+    try:
+        _assert_no_symlink_components(directory)
+        _check_owner_mode(directory, directory=True)
+        descriptor = os.open(directory / nonce, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        os.fchmod(descriptor, 0o600)
+    except (StateError, OSError):
+        raise EnrollmentError('enrollment_unavailable') from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _consume_proof(directory, nonce):
+    """One owner-made regular file per nonce, removed as it is accepted."""
+    path = directory / nonce
+    try:
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != 0
+                or (hasattr(os, 'getuid') and info.st_uid != os.getuid())):
+            raise OSError()
+        path.unlink()
+    except OSError:
+        raise EnrollmentError('enrollment_invalid') from None
+
+
 def _mac(key, fields):
     return hmac.new(key, canonical_json({name: fields[name] for name in _FIELDS}), hashlib.sha256).hexdigest()
 
@@ -130,8 +204,8 @@ def request_digest(message):
     return hashlib.sha256(message).hexdigest()
 
 
-def enrollment_preamble(key, role, host_client, generation, message, *, now_ms=None, nonce=None):
-    """Client side: one line that authorizes exactly this request frame once."""
+def enrollment_preamble(key, role, host_client, generation, message, proofs, *, now_ms=None, nonce=None):
+    """Client side: prove write access, then name exactly this request frame once."""
     fields = {'enrollment_version': ENROLLMENT_VERSION, 'role': role, 'host_client': host_client,
               'generation': generation, 'issued_at_ms': time.time_ns() // 1_000_000 if now_ms is None else now_ms,
               'nonce': secrets.token_hex(16) if nonce is None else nonce, 'request_digest': request_digest(message)}
@@ -139,8 +213,9 @@ def enrollment_preamble(key, role, host_client, generation, message, *, now_ms=N
             or not _integer(generation, minimum=1) or not _integer(fields['issued_at_ms']) or not _hex(fields['nonce'], 32)):
         raise EnrollmentError('enrollment_invalid')
     line = canonical_json({**fields, 'mac': _mac(key, fields)})
-    if len(line) + 1 > MAX_PREAMBLE_BYTES or b'\n' in line:
+    if len(line) + 1 > MAX_PREAMBLE_BYTES or b'\n' in line or not isinstance(proofs, Path):
         raise EnrollmentError('enrollment_invalid')
+    _create_proof(proofs, fields['nonce'])
     return line
 
 
@@ -156,15 +231,16 @@ class Enrolled:
 class EnrollmentVerifier:
     """Host side: verify one preamble against this generation's key, once."""
 
-    def __init__(self, key, role, generation, *, window_ms=30_000, max_nonces=4_096,
+    def __init__(self, key, role, generation, proofs, *, window_ms=30_000, max_nonces=4_096,
                  clock_ms=lambda: time.time_ns() // 1_000_000):
         if (type(key) is not bytes or len(key) != KEY_BYTES or role not in ROLES or not _integer(generation, minimum=1)
+                or not isinstance(proofs, Path) or not proofs.is_absolute()
                 or not _integer(window_ms, minimum=1, maximum=MAX_WINDOW_MS)
                 or not _integer(max_nonces, minimum=1, maximum=MAX_NONCES) or not callable(clock_ms)):
             raise EnrollmentError('enrollment_invalid')
-        self._key, self._role, self._generation = key, role, generation
+        self._key, self._role, self._generation, self._proofs = key, role, generation, proofs
         self._window_ms, self._max_nonces, self._clock_ms = window_ms, max_nonces, clock_ms
-        self._seen, self._latest_ms = {}, 0
+        self._seen, self._latest_ms, self._pruned_ms = {}, 0, 0
         self._lock = threading.Lock()
 
     def verify(self, line):
@@ -196,12 +272,19 @@ class EnrollmentVerifier:
             now = self._latest_ms = max(now, self._latest_ms)
             if abs(now - value['issued_at_ms']) > self._window_ms:
                 raise EnrollmentError('enrollment_stale')
-            for nonce in [n for n, issued in self._seen.items() if now - issued > 2 * self._window_ms]:
-                del self._seen[nonce]
+            # One sweep per second at most, so a burst of valid preambles does
+            # not rescan the whole table for each of them.
+            if now - self._pruned_ms >= 1_000 or len(self._seen) >= self._max_nonces:
+                self._pruned_ms = now
+                for nonce in [n for n, issued in self._seen.items() if now - issued > 2 * self._window_ms]:
+                    del self._seen[nonce]
             if value['nonce'] in self._seen:
                 raise EnrollmentError('enrollment_replayed')
             if len(self._seen) >= self._max_nonces:
                 raise EnrollmentError('enrollment_overloaded')
             # Retained for twice the window, so a clock step cannot reopen it.
             self._seen[value['nonce']] = max(now, value['issued_at_ms'])
+        # The MAC shows the key was read; only this file shows the sender can
+        # write the state root. A nonce without its proof stays spent.
+        _consume_proof(self._proofs, value['nonce'])
         return Enrolled(value['role'], value['host_client'], value['generation'], value['request_digest'])

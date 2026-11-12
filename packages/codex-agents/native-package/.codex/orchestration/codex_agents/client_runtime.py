@@ -32,7 +32,7 @@ from .orchestration_api import OrchestrationClient, OrchestrationRequest, Orches
 from .provider_observation_contracts import ObservationError, ObservationInput
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .result_read_api import ResultReadClient
-from .service_enrollment import EnrollmentError, enrollment_preamble, read_capability
+from .service_enrollment import EnrollmentError, enrollment_preamble, proof_directory, read_capability
 from .service_protocol import ServiceTarget
 from .service_transport import install_enrollment
 
@@ -112,9 +112,9 @@ def read_runtime_hint(state, project_root):
 def enroll_host_client(state, project_root, scope, endpoints, host_client):
     """Enroll this checked CLI process for the hinted project endpoints.
 
-    The capability is read once from the owner-only state root. Without one the
-    process stays unenrolled and a production host refuses its requests; there
-    is no other path to the service and no database fallback.
+    The capability is read once from the owner-only state root, and each request
+    leaves a single-use proof file beside its endpoint. Without both, a
+    production host refuses the request; there is no database fallback.
     """
     try:
         key = read_capability(state, project_root, 'host')
@@ -127,7 +127,8 @@ def enroll_host_client(state, project_root, scope, endpoints, host_client):
         if Path(socket_path) not in enrolled:
             return None
         try:
-            return enrollment_preamble(key, 'host', host_client, scope.supervisor_generation, message)
+            return enrollment_preamble(key, 'host', host_client, scope.supervisor_generation, message,
+                                       proof_directory(socket_path))
         except EnrollmentError:
             raise OSError() from None
 

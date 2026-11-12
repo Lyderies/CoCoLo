@@ -1,7 +1,9 @@
-"""Fresh CLI and raw clients against the product service host process.
+"""Database-trapped CLI and raw clients against the product service host process.
 
 Nothing here supplies a context to a service: the host's own listeners,
-capability and enrollment step are the only way in.
+capability and enrollment step are the only way in. The CLI wrapper used here
+disables the protected-entry and own-roots checks, so those are not exercised;
+`test_project_service_startup` drives the unmodified CLI.
 """
 from dataclasses import asdict
 import json
@@ -22,7 +24,12 @@ from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
 from codex_agents.collector_paths import CollectorPaths
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.orchestration_api import OrchestrationRequest, OrchestrationScope, encode_orchestration_request
-from codex_agents.service_enrollment import EnrollmentError, capability_path, enrollment_preamble, read_capability
+from codex_agents.history_contracts import HistoryError
+from codex_agents.service_enrollment import (
+    EnrollmentError, EnrollmentVerifier, capability_path, enrollment_preamble, prepare_proof_directory,
+    proof_directory, read_capability,
+)
+from codex_agents.service_host import EnrolledFrontend, ServiceHostLimits
 
 
 def _environment():
@@ -113,7 +120,7 @@ class ServiceHostTests(unittest.TestCase):
         return encode_orchestration_request(OrchestrationRequest(1, operation, identity, self.scope(generation), payload or {}))
 
     def send(self, endpoint, payload, *, wait=3):
-        """Raw exchange: the reply line, or b'' when the host dropped the connection."""
+        """Raw exchange: the reply line, b'' once the host closed, None if it never answered."""
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(wait)
             client.connect(endpoint)
@@ -125,12 +132,17 @@ class ServiceHostTests(unittest.TestCase):
                     if not chunk:
                         break
                     received.extend(chunk)
-            except (TimeoutError, ConnectionError):
+            except TimeoutError:
+                return None
+            except ConnectionError:
                 pass
             return bytes(received)
 
-    def enrolled(self, key, frame, *, host='codex-host-v1', generation=1, **options):
-        return enrollment_preamble(key, 'host', host, generation, frame, **options)+b'\n'+frame+b'\n'
+    def preamble(self, key, frame, endpoint, *, host='codex-host-v1', generation=1, **options):
+        return enrollment_preamble(key, 'host', host, generation, frame, proof_directory(endpoint), **options)
+
+    def enrolled(self, key, frame, endpoint, **options):
+        return self.preamble(key, frame, endpoint, **options)+b'\n'+frame+b'\n'
 
     def test_fresh_cli_lifecycle_uses_only_what_the_host_published(self):
         server, ready = self.start()
@@ -156,7 +168,8 @@ class ServiceHostTests(unittest.TestCase):
         self.assertEqual((2, 10), (checkpoint['sequence'], checkpoint['goal_tokens_used']))
         paused = self.cli('learning-pause-orchestration', *target, '--request-id', 'original-pause')
         self.assertEqual(('paused', 3), (paused['status'], paused['sequence']))
-        # The owner itself refuses the other host class once enrollment carries it.
+        # The owner itself refuses the other host class once enrollment carries it. The CLI reads
+        # status first, which answers not-authorized; a direct mutation answers conflict (see below).
         wrong = self.cli('learning-resume-orchestration', *target, '--request-id', 'wrong-host', host='claude', expected=2)
         self.assertEqual('history_not_authorized', wrong['reason_code'])
         resumed = self.cli('learning-resume-orchestration', *target, '--request-id', 'original-resume')
@@ -178,35 +191,39 @@ class ServiceHostTests(unittest.TestCase):
         _, ready = self.start()
         endpoint, key = ready['project'], read_capability(self.paths, self.project, 'host')
         frame, now = self.frame('orchestration.open', 'guarded-open'), time.time_ns()//1_000_000
+        proofs = proof_directory(endpoint)
+        reader = self.enrolled(key, frame, endpoint, nonce='a'*32)
+        (proofs/('a'*32)).unlink()  # Holds the key but cannot write the state root.
         refused = {
             'no preamble': frame+b'\n',
-            'another key': self.enrolled(b'x'*32, frame),
-            'another request': enrollment_preamble(key, 'host', 'codex-host-v1', 1,
-                                                   self.frame('orchestration.open', 'other-open'))+b'\n'+frame+b'\n',
-            'another generation': self.enrolled(key, frame, generation=2),
-            'expired': self.enrolled(key, frame, now_ms=now-600_000),
-            'postdated': self.enrolled(key, frame, now_ms=now+600_000),
-            'altered label': self.enrolled(key, frame).replace(b'codex-host-v1', b'claude-host-v1', 1),
-            'preamble only': enrollment_preamble(key, 'host', 'codex-host-v1', 1, frame)+b'\n',
+            'key without write proof': reader,
+            'another key': self.enrolled(b'x'*32, frame, endpoint),
+            'another request': self.preamble(key, self.frame('orchestration.open', 'other-open'), endpoint)+b'\n'+frame+b'\n',
+            'another generation': self.enrolled(key, frame, endpoint, generation=2),
+            'expired': self.enrolled(key, frame, endpoint, now_ms=now-600_000),
+            'beyond the clock tolerance': self.enrolled(key, frame, endpoint, now_ms=now+600_000),
+            'altered label': self.enrolled(key, frame, endpoint).replace(b'codex-host-v1', b'claude-host-v1', 1),
         }
         for name, payload in refused.items():
             with self.subTest(name):
-                self.assertEqual(b'', self.send(endpoint, payload, wait=2))
+                self.assertEqual(b'', self.send(endpoint, payload, wait=4))  # Closed by the host, not timed out.
+        # A verified preamble with no request behind it is held, never answered.
+        self.assertIsNone(self.send(endpoint, self.preamble(key, frame, endpoint)+b'\n', wait=1))
 
-        accepted = self.enrolled(key, frame)
+        accepted = self.enrolled(key, frame, endpoint, nonce='c'*32)
         reply = json.loads(self.send(endpoint, accepted))
         # First sight of this request identity: no refused attempt committed it.
         self.assertTrue(reply['ready'])
         self.assertEqual((1, False, 'codex-host-v1'), (reply['result']['current']['snapshot']['sequence'],
             reply['result']['known'], reply['result']['current']['snapshot']['client_version']))
-        self.assertEqual(b'', self.send(endpoint, accepted, wait=2))  # Captured bytes cannot be replayed.
+        self.assertEqual(b'', self.send(endpoint, accepted, wait=4))  # Captured bytes cannot be replayed.
+        self.assertFalse((proofs/('c'*32)).exists())  # The accepted proof was consumed.
 
         # A correctly enrolled other host class still cannot change this orchestration.
         handle = reply['result']['current']['snapshot']['orchestration_handle']
         pause = self.frame('orchestration.pause', 'claude-pause', {'orchestration_handle': handle, 'expected_sequence': 1})
-        denied = json.loads(self.send(endpoint, self.enrolled(key, pause, host='claude-host-v1')))
-        self.assertFalse(denied['ready'])
-        self.assertIn(denied['reason_code'], {'history_not_authorized', 'history_conflict'})
+        denied = json.loads(self.send(endpoint, self.enrolled(key, pause, endpoint, host='claude-host-v1')))
+        self.assertEqual((False, 'history_conflict'), (denied['ready'], denied['reason_code']))
         status = self.cli('learning-orchestration-status', '--orchestration-handle', handle)
         self.assertEqual(('active', 1), (status['status'], status['sequence']))
 
@@ -224,6 +241,28 @@ class ServiceHostTests(unittest.TestCase):
         status = self.cli('learning-orchestration-status', '--orchestration-handle', opened['orchestration_handle'])
         self.assertEqual(('active', 1), (status['status'], status['sequence']))
 
+    def test_second_host_with_another_history_still_cannot_take_the_same_root(self):
+        _, ready = self.start()
+        hint, key = runtime_hint_path(self.paths, self.project), read_capability(self.paths, self.project, 'host')
+        before = hint.read_bytes()
+        (self.state/'other-history').mkdir(mode=0o700)
+        second, refused = self.start(expect='refused', history='other-history')
+        self.assertEqual(0, second.wait(timeout=8))
+        self.assertEqual('history_writer_busy', refused['reason_code'])
+        self.assertEqual((before, key), (hint.read_bytes(), read_capability(self.paths, self.project, 'host')))
+        reply = self.send(ready['project'], self.enrolled(key, self.frame('orchestration.open', 'still-first'), ready['project']))
+        self.assertTrue(json.loads(reply)['ready'])
+
+    def test_known_gap_a_new_supervisor_generation_cannot_read_earlier_orchestrations(self):
+        # Recorded so the gap stays visible: succession between generations is not designed yet.
+        first, _ = self.start()
+        opened = self.cli('learning-open-orchestration', '--request-id', 'generation-one')
+        self.stop(first)
+        self.start(generation=2)
+        orphaned = self.cli('learning-orchestration-status', '--orchestration-handle', opened['orchestration_handle'],
+                            expected=2)
+        self.assertEqual('history_not_authorized', orphaned['reason_code'])
+
     def test_restart_replaces_the_capability_and_keeps_history(self):
         first, ready = self.start()
         old = read_capability(self.paths, self.project, 'host')
@@ -236,7 +275,7 @@ class ServiceHostTests(unittest.TestCase):
         self.assertNotEqual(old, new)
         # A capability from before the restart is dead even inside its freshness window.
         self.assertEqual(b'', self.send(again['project'],
-            self.enrolled(old, self.frame('orchestration.open', 'stale-open')), wait=2))
+            self.enrolled(old, self.frame('orchestration.open', 'stale-open'), again['project']), wait=4))
         status = self.cli('learning-orchestration-status', '--orchestration-handle', opened['orchestration_handle'])
         self.assertEqual(('active', 1, 'codex-host-v1'), (status['status'], status['sequence'], status['client_version']))
 
@@ -256,6 +295,113 @@ class ServiceHostTests(unittest.TestCase):
         for client in stalled:
             client.settimeout(3)
             self.assertEqual(b'', client.recv(1))
+
+    def test_finished_exchanges_free_their_context_slots(self):
+        _, ready = self.start()
+        endpoint, key = ready['project'], read_capability(self.paths, self.project, 'host')
+        opened = json.loads(self.send(endpoint, self.enrolled(key, self.frame('orchestration.open', 'slots-open'), endpoint)))
+        handle = opened['result']['current']['snapshot']['orchestration_handle']
+        # The fixture retains 16 contexts for 30 seconds; 40 completed exchanges must all be served.
+        for index in range(40):
+            status = self.frame('orchestration.status', 'slots-status-%d' % index, {'orchestration_handle': handle})
+            reply = self.send(endpoint, self.enrolled(key, status, endpoint))
+            self.assertTrue(reply, index)
+            self.assertTrue(json.loads(reply)['ready'], index)
+
+    def test_unenrolled_control_connections_cannot_take_the_project_listeners_budget(self):
+        _, ready = self.start(pending=2, enrollment_timeout_ms=5000)
+        stalled = []
+        for _ in range(6):  # More than the control budget; the rest fill or overflow its backlog.
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.addCleanup(client.close)
+            try:
+                client.connect(ready['control'])
+                client.sendall(b'{"enrollment_version":1')
+            except OSError:
+                break
+            stalled.append(client)
+        self.assertGreaterEqual(len(stalled), 2)
+        key = read_capability(self.paths, self.project, 'host')
+        started = time.monotonic()
+        reply = self.send(ready['project'], self.enrolled(key, self.frame('orchestration.open', 'beside-flood'), ready['project']))
+        self.assertTrue(json.loads(reply)['ready'])
+        self.assertLess(time.monotonic()-started, 2)  # Well inside the stalled senders' five-second deadline.
+
+
+class EnrolledFrontendTests(unittest.TestCase):
+    """The enrollment step alone, on socket pairs and a controlled clock."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.proofs = self.root/'proofs'
+        prepare_proof_directory(self.proofs)
+        self.key, self.now, self.attached = b'k'*32, [1_000_000_000], []
+        verifier = EnrollmentVerifier(self.key, 'host', 1, self.proofs)
+        self.frontend = EnrolledFrontend(verifier, ServiceHostLimits(2, 1_000_000_000, 2, 60_000_000_000, 30_000, 64),
+            lambda kind, connection, token: self.attached.append((kind, connection, token)), self.proofs,
+            clock_ns=lambda: self.now[0])
+        self.frontend.listen(self.root/'p.sock', 'project')
+        self.addCleanup(self.frontend.close)
+        self.clients = []
+
+    def connect(self):
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(client.close)
+        client.connect(str(self.root/'p.sock'))
+        self.clients.append(client)
+        return client
+
+    def line(self, message=b'{"request":1}'):
+        return enrollment_preamble(self.key, 'host', 'codex-host-v1', 1, message, self.proofs)+b'\n'
+
+    def test_a_line_completed_after_the_deadline_is_refused(self):
+        client, line = self.connect(), self.line()
+        client.sendall(line[:20])
+        self.frontend.step()
+        self.assertEqual([], self.attached)
+        self.now[0] += 1_000_000_001  # Past the absolute deadline before the owner looks again.
+        client.sendall(line[20:])
+        self.frontend.step()
+        self.assertEqual([], self.attached)
+        client.settimeout(2)
+        self.assertEqual(b'', client.recv(1))
+
+    def test_a_closed_connection_releases_its_context_at_once(self):
+        for _ in range(5):  # Two context slots; each exchange closes before the next enrolls.
+            client = self.connect()
+            client.sendall(self.line())
+            self.frontend.step()
+            kind, connection, token = self.attached[-1]
+            self.assertEqual('project', kind)
+            self.assertIsNotNone(self.frontend.context(token))
+            connection.close()
+        self.assertEqual(5, len(self.attached))
+
+    def test_a_refused_attach_and_a_closed_frontend_leave_no_context(self):
+        refusing = EnrolledFrontend(EnrollmentVerifier(self.key, 'host', 1, self.proofs),
+            ServiceHostLimits(2, 1_000_000_000, 2, 60_000_000_000, 30_000, 64),
+            lambda kind, connection, token: (_ for _ in ()).throw(HistoryError('history_service_unavailable')),
+            self.proofs, clock_ns=lambda: self.now[0])
+        refusing.listen(self.root/'r.sock', 'project')
+        self.addCleanup(refusing.close)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(client.close)
+        client.connect(str(self.root/'r.sock'))
+        client.sendall(self.line())
+        refusing.step()
+        client.settimeout(2)
+        self.assertEqual(b'', client.recv(1))
+        self.assertEqual({}, refusing._contexts)
+        accepted = self.connect()
+        accepted.sendall(self.line())
+        self.frontend.step()
+        token = self.attached[-1][2]
+        self.assertIsNotNone(self.frontend.context(token))
+        self.frontend.close()
+        self.assertIsNone(self.frontend.context(token))
+        self.assertFalse((self.root/'p.sock').exists())
 
 
 if __name__ == '__main__':

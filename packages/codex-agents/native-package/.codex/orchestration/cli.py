@@ -125,6 +125,7 @@ from codex_agents.client_runtime import (  # noqa: E402
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
+from codex_agents.project_host_client import ensure_project_host  # noqa: E402
 from codex_agents.cli_reports import command_report  # noqa: E402
 from codex_agents.collector_contracts import (  # noqa: E402
     CollectorError,
@@ -1998,6 +1999,8 @@ def main() -> int:
         }:
             operation = ('status' if args.command == 'learning-orchestration-status'
                          else args.command.removeprefix('learning-').removesuffix('-orchestration'))
+            # Best effort: a client that still finds no service reports it unavailable.
+            ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)
             report = orchestration_client(args.state_root, args.project_root, 'orchestration.'+operation,
                 host_client=_host_client(), orchestration_handle=getattr(args, 'orchestration_handle', None),
                 request_id=args.request_id, expected_sequence=getattr(args, 'expected_sequence', None),

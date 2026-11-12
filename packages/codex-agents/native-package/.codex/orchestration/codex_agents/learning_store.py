@@ -11213,6 +11213,14 @@ class CollectorServer:
                     request["reason_code"],
                 )
                 return {"ok": True, "receipt_id": receipt_id}
+            if request.get("op") == "project" and set(request) == {
+                "protocol", "op", "project_root",
+            }:
+                # Registry lookup only: an unregistered root is never registered here.
+                return {
+                    "ok": True,
+                    "project_id": self.ledger.project_for_root(Path(request["project_root"])),
+                }
             if request.get("op") == "health" and set(request) in (
                 {"protocol", "op"},
                 {"protocol", "op", "project_root"},

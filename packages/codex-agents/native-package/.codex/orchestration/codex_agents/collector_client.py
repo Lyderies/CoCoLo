@@ -7,6 +7,7 @@ it does not authenticate a caller or enable the new project/account service APIs
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -210,6 +211,20 @@ class CollectorClient:
                 code="runtime_conflict",
             )
         return response
+
+    def project(self, project_root: Path) -> str:
+        """The registered project's identifier; registration stays an owner step."""
+        response = self._request(
+            {
+                "protocol": COLLECTOR_PROTOCOL_VERSION,
+                "op": "project",
+                "project_root": str(project_root.resolve()),
+            }
+        )
+        project_id = response.get("project_id")
+        if type(project_id) is not str or re.fullmatch(r"prj_[0-9a-f]{32}", project_id) is None:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return project_id
 
     def shutdown(self) -> None:
         self._request(
