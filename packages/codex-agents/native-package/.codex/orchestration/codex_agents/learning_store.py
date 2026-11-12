@@ -61,6 +61,9 @@ from .account_cleanup_schema import RELEASE_COLUMN, RELEASE_COLUMNS, RELEASE_SCH
 from .account_observation_schema import (OBSERVATION_COLUMNS, OBSERVATION_SCHEMA, assert_observation_schema,
                                          OBSERVATION_ORIGIN_COLUMNS, OBSERVATION_ORIGIN_SCHEMA,
                                          check_observation_coverage, install_observation_schema)
+from .billing_probe_schema import (BILLING_PROBE_COLUMNS, BILLING_PROBE_ORIGIN_COLUMNS,
+                                   BILLING_PROBE_OBJECTS, assert_billing_probe_schema,
+                                   check_billing_probe_coverage, install_billing_probe_schema)
 from .collector_contracts import (
     COLLECTOR_PROTOCOL_VERSION as COLLECTOR_PROTOCOL_VERSION,
     LEDGER_SCHEMA_VERSION as LEDGER_SCHEMA_VERSION,
@@ -314,6 +317,8 @@ _BACKUP_TABLE_COLUMNS = {
     "account_cleanup_receipts": RELEASE_COLUMNS,
     "account_observation_origins": OBSERVATION_ORIGIN_COLUMNS,
     "account_observation_requests": OBSERVATION_COLUMNS,
+    "account_billing_probe_origins": BILLING_PROBE_ORIGIN_COLUMNS,
+    "account_billing_probe_requests": BILLING_PROBE_COLUMNS,
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -376,6 +381,8 @@ _BACKUP_ORDER_COLUMNS = {
     "account_cleanup_receipts": ("handle_digest",),
     "account_observation_origins": ("request_key",),
     "account_observation_requests": ("request_key",),
+    "account_billing_probe_origins": ("request_key",),
+    "account_billing_probe_requests": ("request_key",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -411,6 +418,8 @@ def _backup_decode_value(value: Any) -> Any:
 
 
 def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 13 and table in {"account_billing_probe_origins", "account_billing_probe_requests"}:
+        return ()
     if schema_version < 12 and table in {"account_observation_origins", "account_observation_requests"}:
         return ()
     if schema_version < 11 and table == 'capacity_executions':
@@ -440,7 +449,8 @@ def _backup_tables(schema_version: int) -> tuple[str, ...]:
                  and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"})
                  and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'})
                  and (schema_version >= 11 or table != 'account_cleanup_receipts')
-                 and (schema_version >= 12 or table not in {'account_observation_origins', 'account_observation_requests'}))
+                 and (schema_version >= 12 or table not in {'account_observation_origins', 'account_observation_requests'})
+                 and (schema_version >= 13 or table not in {'account_billing_probe_origins', 'account_billing_probe_requests'}))
 
 
 def _snapshot_project_partition(
@@ -684,6 +694,7 @@ _BACKUP_RESTORE_SCHEMA += ('\n' + RELEASE_SCHEMA + ';\nALTER TABLE capacity_exec
 
 
 _BACKUP_RESTORE_SCHEMA += '\n' + OBSERVATION_ORIGIN_SCHEMA + ';\n' + OBSERVATION_SCHEMA + ';\n'
+_BACKUP_RESTORE_SCHEMA += '\n' + ';\n'.join(sql for _, _, sql in BILLING_PROBE_OBJECTS) + ';\n'
 
 def _verify_project_backup_body(
     body: Any,
@@ -697,7 +708,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -788,6 +799,8 @@ def _verify_project_backup_body(
             raise LedgerError('project backup cleanup coverage is incomplete')
         if schema_version >= 12 and not check_observation_coverage(restored):
             raise LedgerError('account observation coverage is unavailable')
+        if schema_version >= 13 and not check_billing_probe_coverage(restored):
+            raise LedgerError('project backup billing probe coverage is incomplete')
         integrity = restored.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise LedgerError("isolated project backup integrity check failed")
@@ -1885,6 +1898,8 @@ class LearningLedger:
         try:
             connection.row_factory = sqlite3.Row
             version = connection.execute('PRAGMA user_version').fetchone()[0]
+            if version > LEDGER_SCHEMA_VERSION:
+                raise LedgerError('ledger schema is newer than this package')
             if 5 <= version < LEDGER_SCHEMA_VERSION and not self._allow_schema_upgrade:
                 raise LedgerError('ledger schema upgrade requires explicit drained-owner authorization and verified backups')
             connection.execute("PRAGMA foreign_keys = ON")
@@ -2177,6 +2192,11 @@ class LearningLedger:
                         ("trigger", "cleanup_launch_operation_state", _LAUNCH_CLEANUP_SCHEMA)]
         if version >= 9:
             schemas += [entry for entry in CAPACITY_OBJECTS if version < 11 or entry[1] != 'capacity_executions']
+        if version >= 13:
+            try:
+                assert_billing_probe_schema(self._connection)
+            except ValueError:
+                raise LedgerError('billing probe schema is unavailable or incompatible') from None
         if version >= 12:
             try:
                 assert_observation_schema(self._connection)
@@ -2240,6 +2260,12 @@ class LearningLedger:
         except ValueError:
             raise LedgerError("account observation migration is unavailable or incompatible") from None
 
+    def _initialize_billing_probes_locked(self):
+        try:
+            install_billing_probe_schema(self._connection)
+        except ValueError:
+            raise LedgerError('billing probe migration is unavailable or incompatible') from None
+
     def _migrate_six_or_seven_to_current(self, version: int) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -2258,6 +2284,7 @@ class LearningLedger:
             self._initialize_account_opens_locked()
             self._initialize_account_cleanup_locked()
             self._initialize_account_observations_locked()
+            self._initialize_billing_probes_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
@@ -2359,6 +2386,7 @@ class LearningLedger:
             self._initialize_account_opens_locked()
             self._initialize_account_cleanup_locked()
             self._initialize_account_observations_locked()
+            self._initialize_billing_probes_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
@@ -2398,6 +2426,7 @@ class LearningLedger:
                 self._initialize_account_opens_locked()
                 self._initialize_account_cleanup_locked()
                 self._initialize_account_observations_locked()
+                self._initialize_billing_probes_locked()
                 self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             return
         if current >= 9:
@@ -2424,6 +2453,7 @@ class LearningLedger:
                     self._initialize_account_opens_locked()
                     self._initialize_account_cleanup_locked()
                     self._initialize_account_observations_locked()
+                    self._initialize_billing_probes_locked()
                     self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
                 return
             if current == 10:
@@ -2431,6 +2461,7 @@ class LearningLedger:
                 with self._account_transaction():
                     self._initialize_account_cleanup_locked()
                     self._initialize_account_observations_locked()
+                    self._initialize_billing_probes_locked()
                     self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
                 return
             if current >= 11:
@@ -2442,6 +2473,15 @@ class LearningLedger:
                 self._require_project_migration_backups(11, LEDGER_SCHEMA_VERSION)
                 with self._account_transaction():
                     self._initialize_account_observations_locked()
+                    self._initialize_billing_probes_locked()
+                    self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                return
+            if current >= 13 and not check_billing_probe_coverage(self._connection):
+                raise LedgerError('billing probe coverage is unavailable')
+            if current == 12:
+                self._require_project_migration_backups(12, LEDGER_SCHEMA_VERSION)
+                with self._account_transaction():
+                    self._initialize_billing_probes_locked()
                     self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
                 return
         with self._account_transaction():
@@ -3033,6 +3073,7 @@ class LearningLedger:
                 self._initialize_account_opens_locked()
                 self._initialize_account_cleanup_locked()
                 self._initialize_account_observations_locked()
+                self._initialize_billing_probes_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
         self.state.harden_database_files()
 
@@ -5918,7 +5959,11 @@ class LearningLedger:
             "SELECT 1 FROM active_run_capacity INDEXED BY active_capacity_machine "
             "WHERE released_at_ms IS NULL LIMIT ?", (policy.machine,),
         ).fetchall()
-        if len(active) >= policy.machine:
+        probe_active = self._connection.execute(
+            "SELECT 1 FROM account_billing_probe_requests INDEXED BY billing_probe_active_machine "
+            "WHERE state='admitted' LIMIT ?", (policy.machine,),
+        ).fetchall()
+        if len(active)+len(probe_active) >= policy.machine:
             raise ClaimError("claim_busy")
         # A legacy unknown account consumes a slot for every candidate. A
         # provider-known but account-unknown reservation counts for that whole
@@ -5930,7 +5975,12 @@ class LearningLedger:
             "AND (? IS NULL OR account_fingerprint IS NULL OR account_fingerprint=?))) LIMIT ?",
             (provider, account, account, policy.account),
         ).fetchall()
-        if len(account_active) >= policy.account:
+        account_probes = ([] if provider != 'claude' else self._connection.execute(
+            "SELECT 1 FROM account_billing_probe_requests INDEXED BY billing_probe_active_account "
+            "WHERE state='admitted' AND (? IS NULL OR account_fingerprint=?) LIMIT ?",
+            (account, account, policy.account),
+        ).fetchall())
+        if len(account_active)+len(account_probes) >= policy.account:
             raise ClaimError("claim_busy")
         return policy
 
@@ -10879,6 +10929,12 @@ class LearningLedger:
             if self._active_readers:
                 raise LedgerError("project deletion requires closed scoped readers")
             if self._connection.execute(
+                "SELECT 1 FROM account_billing_probe_requests "
+                "WHERE project_id=? AND state='admitted' LIMIT 1",
+                (project_id,),
+            ).fetchone() is not None:
+                raise LedgerError("project_has_active_billing_probe")
+            if self._connection.execute(
                 "SELECT 1 FROM active_run_capacity WHERE project_id=? AND released_at_ms IS NULL LIMIT 1",
                 (project_id,),
             ).fetchone() is not None:
@@ -10894,6 +10950,8 @@ class LearningLedger:
             self._begin_exclusive_maintenance()
             try:
                 self._connection.execute("DELETE FROM hook_ingestion WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM account_billing_probe_requests WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM account_billing_probe_origins WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM records WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM sessions WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM run_provenance WHERE project_id=?", (project_id,))

@@ -34,12 +34,12 @@ class AccountObservationBackupTests(unittest.TestCase):
     def test_both_verifiers_preserve_committed_and_unknown_original_requests(self):
         self.assertTrue(self.ledger.verify_sanitized_backup(self.project, file_id='observations')['verified'])
         self.standalone(self.body)
-        self.assertEqual(12, self.body['ledger_schema_version'])
+        self.assertEqual(13, self.body['ledger_schema_version'])
         self.assertEqual(2, self.body['counts']['account_observation_origins'])
         requests = self.body['tables']['account_observation_requests']
         self.assertEqual({'pending', 'committed'}, {row['state'] for row in requests})
         self.assertEqual(self.body['columns']['account_observation_requests'],
-                         list(self.tool['_expected_columns'](12, 'account_observation_requests')))
+                         list(self.tool['_expected_columns'](13, 'account_observation_requests')))
         for row in requests:
             if row['state'] == 'committed':
                 self.assertTrue(all(set(value) == {'record_id', 'content_digest'}

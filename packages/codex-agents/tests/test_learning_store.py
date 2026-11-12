@@ -590,7 +590,7 @@ class LearningStoreTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        self.assertEqual(12, version)
+        self.assertEqual(13, version)
         self.assertIn('account_open_receipts', tables)
         self.assertIn('account_open_requests', tables)
         self.assertIn("active_run_capacity", tables)
@@ -633,7 +633,7 @@ class LearningStoreTests(unittest.TestCase):
         connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         snapshot = self.ledger.ingestion_snapshot(self.project_a_id, now_ms=30)
-        self.assertEqual(12, self.ledger._connection.execute(
+        self.assertEqual(13, self.ledger._connection.execute(
             "PRAGMA user_version"
         ).fetchone()[0])
         self.assertEqual(1, snapshot["accepted_hook_event_count"])
@@ -2528,6 +2528,48 @@ class LearningStoreTests(unittest.TestCase):
         with self.ledger.repository(self.project_a_id) as repository:
             self.assertEqual([], repository.records())
 
+    def _seed_billing_probes(self, states):
+        db = self.ledger._connection
+        for index, state in enumerate(states):
+            key = 'probe-' + str(index)
+            db.execute(
+                'INSERT INTO account_billing_probe_origins VALUES(?,?,?,?,?)',
+                (self.project_a_id, key, 'd' * 64, 1, 'opaque-origin-seal-' + key))
+            row = (
+                self.project_a_id, key, 'd' * 64, 'r' * 64, 'host',
+                1, 2, state,
+                None if state == 'reserved' else 'a' * 64,
+                None if state == 'reserved' else 'original-admission',
+                None if state == 'reserved' else 'b' * 64,
+                '{"original":"reference"}' if state == 'committed' else None,
+                'opaque-state-seal-' + key)
+            db.execute(
+                'INSERT INTO account_billing_probe_requests VALUES(' +
+                ','.join('?' for _ in row) + ')', row)
+
+    def test_billing_probe_backup_expiry_and_restart_preserve_all_sealed_cells(self):
+        self._seed_billing_probes(('reserved', 'admitted', 'committed'))
+        names = ('account_billing_probe_origins', 'account_billing_probe_requests')
+        before = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        path = self.ledger.create_sanitized_backup(
+            self.project_a_id, file_id='sealed_probes',
+            expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
+        body = json.loads(path.read_bytes())['body']
+        report = self.ledger.verify_sanitized_backup(self.project_a_id, file_id='sealed_probes')
+        self.assertEqual(13, report['ledger_schema_version'])
+        for table in names:
+            self.assertEqual(3, report['counts'][table])
+            self.assertEqual(before['tables'][table], body['tables'][table])
+        self.ledger.expire(self.project_a_id, now_ms=10 ** 15)
+        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        for table in names:
+            self.assertEqual(before['tables'][table], after['tables'][table])
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        for table in names:
+            self.assertEqual(before['tables'][table], after['tables'][table])
+
     def test_backup_roundtrips_complete_project_authority_and_lifecycle_rows(self) -> None:
         self.ledger.bind_session(
             self.project_a, "backup-session", "hook", "codex-hooks-v1", now_ms=5
@@ -2624,6 +2666,7 @@ class LearningStoreTests(unittest.TestCase):
             'account_open_receipts', 'account_open_requests',
             'account_cleanup_receipts',
             'account_observation_origins', 'account_observation_requests',
+            'account_billing_probe_origins', 'account_billing_probe_requests',
         })
         self.assertEqual(
             {"$codex_agents_bytes_base64": "AP8="},
@@ -2634,6 +2677,26 @@ class LearningStoreTests(unittest.TestCase):
         )
         self.assertEqual("ok", report["isolated_restore_integrity"])
         self.assertEqual("ok", report["isolated_restore_foreign_keys"])
+
+    def test_billing_probe_backup_rejects_missing_or_changed_original_coverage(self):
+        self._seed_billing_probes(('reserved',))
+        original = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        for defect in ('missing_request', 'missing_origin', 'digest', 'created_at'):
+            with self.subTest(defect=defect):
+                body = deepcopy(original)
+                requests = body['tables']['account_billing_probe_requests']
+                if defect == 'missing_request':
+                    body['tables']['account_billing_probe_requests'] = []
+                    body['counts']['account_billing_probe_requests'] = 0
+                elif defect == 'missing_origin':
+                    body['tables']['account_billing_probe_origins'] = []
+                    body['counts']['account_billing_probe_origins'] = 0
+                elif defect == 'digest':
+                    requests[0]['parameters_digest'] = 'e' * 64
+                else:
+                    requests[0]['created_at_ms'] = 0
+                with self.assertRaises(LedgerError):
+                    _verify_project_backup_body(body, expected_project_id=self.project_a_id)
 
     def test_backup_relational_verifier_rejects_constraint_corruption(self) -> None:
         path = self.ledger.create_sanitized_backup(
@@ -2824,7 +2887,7 @@ class LearningStoreTests(unittest.TestCase):
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
 
         self.assertEqual(
-            12, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+            13, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         )
         checkpoint = self.ledger._connection.execute(
             "SELECT sequence,status,observed_at_ms FROM orchestration_checkpoints "
@@ -2891,7 +2954,7 @@ class LearningStoreTests(unittest.TestCase):
         finally:
             connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
-        self.assertEqual(12, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(13, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def test_schema_five_migration_rolls_back_an_injected_schema_failure(self) -> None:
         self._downgrade_fixture_to_schema_five()
@@ -3072,6 +3135,29 @@ class LearningStoreTests(unittest.TestCase):
                 self.project_a_id, now_ms=90 * 24 * 60 * 60 * 1000
             ),
         )
+
+    def test_admitted_billing_probe_refuses_project_deletion_after_deadline(self):
+        self._seed_billing_probes(('admitted',))
+        before = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        with self.assertRaisesRegex(LedgerError, '^project_has_active_billing_probe$'):
+            self.ledger.delete_project(self.project_a_id, now_ms=10 ** 15)
+        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        self.assertEqual(before, after)
+        self.ledger.delete_project(self.project_b_id, now_ms=10)
+
+    def test_project_deletion_scrubs_inactive_probe_origins_requests_and_backup(self):
+        self._seed_billing_probes(('reserved', 'committed'))
+        path = self.ledger.create_sanitized_backup(
+            self.project_a_id, file_id='inactive_probes',
+            expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
+        self.ledger.verify_sanitized_backup(self.project_a_id, file_id='inactive_probes')
+        self.ledger.delete_project(self.project_a_id, now_ms=10)
+        for table in ('account_billing_probe_origins', 'account_billing_probe_requests'):
+            self.assertEqual(0, self.ledger._connection.execute(
+                'SELECT COUNT(*) FROM ' + table + ' WHERE project_id=?',
+                (self.project_a_id,)).fetchone()[0])
+        self.assertFalse(path.exists())
+        self.assertEqual([], self.ledger.storage_residuals())
 
     def test_project_delete_requires_closed_readers_and_leaves_only_tombstone(self) -> None:
         with self.ledger._connection:
@@ -3362,6 +3448,42 @@ class LearningStoreTests(unittest.TestCase):
                 self.project_a_id, forged, producer="lifecycle", now_ms=10
             )
 
+    def test_billing_probe_restart_refuses_changed_origin_coverage_without_repair(self):
+        self._seed_billing_probes(('reserved',))
+        self.ledger._connection.execute(
+            'UPDATE account_billing_probe_requests SET parameters_digest=?', ('e' * 64,))
+        self.ledger.close()
+        original = self.state.database.read_bytes()
+        with self.assertRaisesRegex(LedgerError, 'billing probe coverage'):
+            LearningLedger(self.state, client_capabilities=self.clients)
+        self.assertEqual(original, self.state.database.read_bytes())
+        self._leave_ledger_closed()
+
+    def test_billing_probe_active_indexes_are_strictly_checked(self):
+        from codex_agents.billing_probe_schema import BILLING_PROBE_OBJECTS
+        for kind, name, sql in BILLING_PROBE_OBJECTS:
+            if kind != 'index':
+                continue
+            with self.subTest(index=name):
+                self.ledger._connection.execute('DROP INDEX ' + name)
+                with self.assertRaisesRegex(LedgerError, 'billing probe schema'):
+                    self.ledger._assert_launch_schema_locked(13)
+                self.ledger._connection.execute(sql)
+                self.ledger._assert_launch_schema_locked(13)
+
+    def test_schema_twelve_client_refuses_schema_thirteen_probe_state(self):
+        self._seed_billing_probes(('admitted',))
+        body = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        self.ledger.close()
+        original = self.state.database.read_bytes()
+        with mock.patch.object(learning_store, 'LEDGER_SCHEMA_VERSION', 12):
+            with self.assertRaisesRegex(LedgerError, 'newer'):
+                LearningLedger(self.state, client_capabilities=self.clients)
+        self.assertEqual(original, self.state.database.read_bytes())
+        with self.assertRaisesRegex(LedgerError, 'ledger version'):
+            _verify_project_backup_body(body, expected_ledger_schema_version=12)
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+
     def test_forward_database_schema_is_rejected(self) -> None:
         self.ledger.close()
         connection = sqlite3.connect(self.state.database)
@@ -3414,7 +3536,7 @@ class LearningStoreTests(unittest.TestCase):
         self.addCleanup(server.stop)
         client = CollectorClient(self.state.socket, timeout=0.2)
         health = client.health(self.project_a)
-        self.assertEqual(12, health["schema_version"])
+        self.assertEqual(13, health["schema_version"])
         self.assertEqual(PACKAGE_VERSION, health["runtime_version"])
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, health["runtime_digest"])
         self.assertIsInstance(health["started_at_ms"], int)
@@ -3709,7 +3831,9 @@ class LearningStoreTests(unittest.TestCase):
 
     def test_client_rejects_older_or_newer_schema_with_matching_runtime(self) -> None:
         client = CollectorClient(self.state.socket)
-        for schema, error in ((6, CollectorUpgradeRequired), (7, CollectorUpgradeRequired), (8, CollectorUpgradeRequired), (9, CollectorUpgradeRequired), (10, CollectorUpgradeRequired), (11, CollectorUpgradeRequired), (13, CollectorNewerVersionError)):
+        cases = [(schema, CollectorUpgradeRequired) for schema in range(6, learning_store.LEDGER_SCHEMA_VERSION)]
+        cases.append((learning_store.LEDGER_SCHEMA_VERSION+1, CollectorNewerVersionError))
+        for schema, error in cases:
             with self.subTest(schema=schema), mock.patch.object(client, "_request", return_value={
                 "ok": True, "schema_version": schema,
                 "runtime_version": PACKAGE_VERSION, "runtime_digest": COLLECTOR_RUNTIME_DIGEST,

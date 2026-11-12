@@ -4,6 +4,24 @@ Release 0.3.0 requires normal clients to use project/account services, with SQLi
 by their persistence components. This boundary is being implemented. Existing CLI workflows
 still use the installed 0.8.12 implementation; these source components do not activate native services.
 
+## Original billing-probe admission (uninstalled source)
+
+Account schema13 preserves sealed billing-probe origins and request states through
+verified forward migration, project backup and isolated restoration. An admitted
+request retains shared machine/account capacity across expiry and restart, and
+prevents project deletion. The admission owner consumes an actual registered
+signature return, rechecks its original raw evidence and current permission, then
+commits the original admission before exposing its internal original. Recent
+billing reuse references retained records with their original timestamps. Pending
+intake is bounded to64requests and8per project; retained origins are capped at4096
+per project. These are finite metadata reservations, not Python heap measurements.
+
+Context objects, callbacks and sealed metadata provide no native caller proof.
+The next integration connects the fixed model worker, original process/tree and
+watchdog custody, confirmed completion, account API and normal CLI billing-probe
+path. Admission alone cannot launch a model or release an admitted reservation.
+Production activation and independent release acceptance remain gated.
+
 ## Original Codex preparation (uninstalled source)
 
 Trusted startup can bind one `CodexPreparationLane` to the product runtime's

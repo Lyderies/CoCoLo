@@ -46,7 +46,7 @@ class AccountCleanupSchemaTests(unittest.TestCase):
     def test_verified_upgrade_preserves_old_manifest_and_invents_no_cleanup(self):
         self.old_ten()
         self.base.ledger = LearningLedger(self.base.state,allow_schema_upgrade=True)
-        self.assertEqual(12,self.base.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(13,self.base.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assertTrue(self.base.ledger.verify_sanitized_backup(self.base.project,file_id='old_ten')['verified'])
         self.assertEqual(0,self.base.ledger._connection.execute('SELECT COUNT(*) FROM account_cleanup_receipts').fetchone()[0])
         self.assertEqual('cleanup_reservation_digest',self.base.ledger._connection.execute('PRAGMA table_info(capacity_executions)').fetchall()[-1][1])

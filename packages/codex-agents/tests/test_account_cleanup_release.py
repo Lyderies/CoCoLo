@@ -273,7 +273,7 @@ class AccountCleanupReleaseTests(unittest.TestCase):
         path = self.ledger.create_sanitized_backup(self.binding.project_id, file_id='cleanup_release_backup',
             expires_at_ms=self.base.fixture.base.stamp+60_000)
         body = json.loads(path.read_bytes())['body']
-        self.assertEqual(12, body['ledger_schema_version'])
+        self.assertEqual(13, body['ledger_schema_version'])
         self.assertEqual(1, body['counts']['account_cleanup_receipts'])
         self.assertTrue(self.ledger.verify_sanitized_backup(self.binding.project_id, file_id='cleanup_release_backup')['verified'])
         tool = runpy.run_path(str(REPOSITORY_ROOT/'scripts/backup_installed_project.py'))
