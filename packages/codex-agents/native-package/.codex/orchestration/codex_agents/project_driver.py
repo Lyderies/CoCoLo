@@ -58,6 +58,9 @@ RECORD_GRACE_SECONDS = 3_600
 MAX_REQUEST_BYTES = 4_096
 WAIT_SECONDS = 5.0
 ACCOUNT_TIMEOUT_SECONDS = 60
+ACCOUNT_RETRY_SECONDS = 600  # How long an unreachable account is waited for, per call.
+ACCOUNT_RETRY_INTERVAL = 0.5
+_RETRYING = object()
 REASON_CODES = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable', 'run_abandoned',
 })
@@ -95,6 +98,9 @@ class _Run:
     submission: TerminalSubmissionInput | None = None
     terminal_evidence: bytes | None = None
     future: object = None
+    call: object = None
+    retry_at: float | None = None
+    retry_until: float = 0.0
     waiters: list = field(default_factory=list)
     dispatch_tokens: dict = field(default_factory=dict)
     submit_token: tuple | None = None
@@ -144,6 +150,7 @@ class RunDriver:
             finally:
                 self._call.role = self._call.host_client = self._call.context = None
 
+        run.call, run.retry_at, run.retry_until = call, None, self._clock() + ACCOUNT_RETRY_SECONDS
         run.future = self._executor.submit(call)
 
     def _custody(self, run, *, storage=None, terminal=None, cleanup=None):
@@ -401,13 +408,28 @@ class RunDriver:
                 run.waiters = [w for w in run.waiters if now < w[1]]
 
     def _result(self, run):
-        """The finished account call's reply, None while it runs; failures stop the run."""
+        """The finished account call's reply, None while it runs; failures stop the run.
+
+        An unreachable account (its collector restarting for maintenance, say) is
+        retried with the same request: every driver call has a fixed request ID,
+        so the owner either answers it for the first time or returns the reply it
+        already committed. Nothing else is retried.
+        """
+        if run.retry_at is not None:
+            if self._clock() < run.retry_at:
+                return None
+            run.retry_at, run.future = None, self._executor.submit(run.call)
+            return None
         if run.future is None or not run.future.done():
             return None
         future, run.future = run.future, None
         try:
             return future.result()
         except AccountError as error:
+            if error.reason_code == 'account_unavailable' and self._clock() < run.retry_until:
+                # The call stays outstanding (a sentinel, not a future) until its retry.
+                run.future, run.retry_at = _RETRYING, self._clock() + ACCOUNT_RETRY_INTERVAL
+                return None
             self._fail(run, error.reason_code)
         except Exception:
             self._fail(run, 'run_unavailable')

@@ -243,7 +243,14 @@ project custody; its report says `capacity_state: never_claimed`. A leased or
 claimed run is refused: settling it needs a reconciliation path that does not exist
 yet. No abandonment outcome record is written to project history.
 
-Not done: no retry, cancellation-before-dispatch or abandonment path through the
+Account calls from the driver are retried, for up to ten minutes per call, only
+when the account services are unreachable, with the same request ID; the owner
+then answers it for the first time or returns the reply it already committed. A
+driver test registers a new project while a child runs in another (registration
+still stops and restarts the collector for maintenance); the run completes, is
+recorded and releases its capacity.
+
+Not done: no cancellation-before-dispatch path for a claimed run through the
 driver, no driver state across a host restart (a run opened before a restart is
 refused at dispatch and keeps its account capacity until reconciled), the
 Claude bridge and native Claude paths are not driven, and `learning-bind-host-agent`, verification and QA still use

@@ -386,6 +386,33 @@ class ProjectDriverTests(DriverHarness):
         self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
+    def test_registering_another_project_during_a_run_does_not_disturb_it(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 3},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+        # A new project registers while the child runs; registration still takes the
+        # legacy maintenance path, which stops and restarts the collector.
+        newcomer = Path(self.temporary.name) / 'newcomer'
+        newcomer.mkdir()
+        git(newcomer, 'init', '-q')
+        registered = self.cli_for(newcomer, 'learning-register')
+        self.assertRegex(registered['project_id'], '^prj_[0-9a-f]{32}$')
+        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
+        self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
+        output, errors = process.communicate(timeout=60)
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        dispatched = json.loads(output)
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        observation = self.write('busy-observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        self.cli('learning-record-host-result', *context, '--route', route_path,
+                 '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
+        # Terminal acceptance and capacity release reached the restarted account services.
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
+
 
 class ClaudePrimaryDriverTests(ProjectDriverTests):
     """Path B: a Claude primary bridges the same Codex child through the same host."""
