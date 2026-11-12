@@ -10,6 +10,7 @@ import signal
 import secrets
 import stat
 import threading
+import time
 
 from .collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient, empty_ingestion_snapshot
 from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError, integer as account_integer, _ID as _ACCOUNT_ID
@@ -36,7 +37,7 @@ from .service_enrollment import (
     EnrollmentError, account_endpoint_path, enrollment_preamble, proof_directory, read_capability,
 )
 from .service_protocol import ServiceTarget
-from .service_transport import install_enrollment
+from .service_transport import exchange_frame, install_enrollment
 
 
 ACCOUNT_GENERATION = 1  # account_host.GENERATION; that module is a persistence owner.
@@ -491,6 +492,19 @@ def orchestration_client(state_root, project_root, operation, *, host_client, or
             **({'expected_sequence': captured_sequence} if captured_sequence is not None else {})}
 
 
+def _run_driver(contexts, control, operation, run_handle, attempt, inputs_digest, context, *, timeout):
+    """One exchange with the project host's run driver; its reply is metadata only."""
+    driver = Path(control).parent / 'run.sock'
+    contexts[driver] = canonical_json(context)
+    raw = exchange_frame(driver, canonical_json({'protocol': 1, 'operation': operation, 'run_handle': run_handle,
+        'attempt': attempt, 'inputs_digest': inputs_digest}), timeout=timeout, response_limit=4_096)
+    value = parse_bounded_json(raw, max_bytes=4_096)
+    if (value.keys() != {'protocol', 'state', 'reason_code'} or value['protocol'] != 1
+            or value['state'] not in {'preparing', 'ready', 'failed', 'refused'}):
+        raise ValueError()
+    return value
+
+
 def open_codex_client(state_root, project_root, orchestration_handle, task, route, assignment, parent_grant, *, host_client):
     """Read original project scope, then open once through the account API.
 
@@ -531,10 +545,23 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
     except (AccountError, HistoryError, OpenError) as error:
         raise RuntimeOpenError(error.reason_code) from None
     opened = reply['state'] == 'opened'
+    registered = False
+    if opened:
+        # The project host keeps the run's originals for its dispatch; the account
+        # run is open either way, and an unregistered run is refused at dispatch.
+        try:
+            contexts = enroll_clients(state, project_root, scope, (endpoints[0], Path(endpoints[0]).parent / 'run.sock'),
+                                      host_client=host_client)
+            registered = _run_driver(contexts, endpoints[0], 'run.register', reply['run_handle'], assignment['attempt'],
+                digest, {'purpose': 'register', 'orchestration_handle': orchestration_handle, 'run_id': reply['run_id'],
+                         'host_client': host_client, **originals}, timeout=10)['state'] != 'refused'
+        except Exception:
+            registered = False
     # The legacy open report's fields, projected from the account receipt.
     return {'ready': opened, **reply, 'admission': 'admitted' if opened else 'denied',
             'status': 'started' if opened else 'denied',
-            'observation_started_at_ms': reply['recorded_at_ms'] if opened else None, 'read_containment': 'advisory'}
+            'observation_started_at_ms': reply['recorded_at_ms'] if opened else None, 'read_containment': 'advisory',
+            'project_host_registered': registered}
 
 
 def dispatch_codex_client(state_root, project_root, run_handle, task, route, assignment, parent_grant, *, expected_export_commit=None):
@@ -546,9 +573,24 @@ def dispatch_codex_client(state_root, project_root, run_handle, task, route, ass
         raise DispatchError('dispatch_not_authorized')
     state = CollectorPaths(state_root)
     scope, endpoint, result_endpoint = read_runtime_hint(state, project_root)
-    enroll_clients(state, project_root, scope, (endpoint, result_endpoint))
+    contexts = enroll_clients(state, project_root, scope, (endpoint, result_endpoint, Path(endpoint).parent / 'run.sock'))
     client = DispatchClient(endpoint, result_endpoint, scope, timeout=2)
     seconds, _ = effective_dispatch_limits(route, assignment)
+    digest = open_inputs_digest(assignment, task, route, parent_grant)
+    # The project host prepares the admitted run, claims it and consumes its grant
+    # before dispatch can name it. Waiting here never extends a run's own bounds.
+    # A runtime without a run driver has prepared the run itself.
+    deadline = time.monotonic() + 600
+    while (Path(endpoint).parent / 'run.sock').exists():
+        try:
+            prepared = _run_driver(contexts, endpoint, 'run.prepare', run_handle, assignment['attempt'], digest,
+                {'purpose': 'prepare', 'expected_export_commit': expected_export_commit}, timeout=30)
+        except Exception:
+            raise DispatchError('dispatch_unavailable') from None
+        if prepared['state'] == 'ready':
+            break
+        if prepared['state'] in {'failed', 'refused'} or time.monotonic() >= deadline:
+            raise DispatchError('dispatch_unavailable')
     old = {}
     if threading.current_thread() is threading.main_thread():
         def interrupted(_signum, _frame):
@@ -556,7 +598,7 @@ def dispatch_codex_client(state_root, project_root, run_handle, task, route, ass
         for signum in (signal.SIGINT, signal.SIGTERM):
             old[signum] = signal.signal(signum, interrupted)
     try:
-        result = client.dispatch(run_handle, assignment['attempt'], open_inputs_digest(assignment, task, route, parent_grant),
+        result = client.dispatch(run_handle, assignment['attempt'], digest,
                                  wait_seconds=seconds+60, expected_export_commit=expected_export_commit)
         if result['bridge_report']['requested_model'] != assignment['model'] or result['bridge_report']['effort'] != assignment['effort']:
             raise DispatchError('dispatch_invalid_response')

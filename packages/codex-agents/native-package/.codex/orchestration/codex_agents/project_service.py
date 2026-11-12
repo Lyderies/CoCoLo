@@ -72,7 +72,7 @@ def _owned_directory(path):
     _check_owner_mode(path, directory=True)
 
 
-def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS):
+def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None):
     """Run the host until a signal, idleness or withdrawal; return a closed report."""
     from .project_history import ProjectHistory
 
@@ -96,8 +96,10 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
             result_capacity=ResultCapacity(64, MAX_ACTIVE_ATTEMPTS * MAX_RESULT_BODY_BYTES, 1_800_000, 7 * 86_400_000))
 
     try:
+        # The installed package this host runs from is the bundle a child is prepared from.
         host = ProjectServiceHost(state, root, supervisor_scope(state, project_id), open_history,
-                                  runtime_limits(), host_limits())
+                                  runtime_limits(), host_limits(),
+                                  bundle_root=Path(__file__).resolve().parents[3] if bundle_root is None else Path(bundle_root))
     except HistoryError as error:
         return {'ready': False, 'reason_code': error.reason_code}
     stopping, checked = [], [0.0]

@@ -21,6 +21,7 @@ from .account_observation import AccountObservationOwner, ObservationContext
 from .account_open_contracts import MAX_ACCOUNT_OPEN_CONTEXT_BYTES, AccountOpenContext, OpenOwnerLimits
 from .account_observation_jobs import AccountObservationJobs, ObservationJobLimits
 from .account_service import AccountAuthorization, AccountOwnerViews, AccountService
+from .result_contracts import ResultLeaseBinding
 from .billing_probe_worker import PROBE_SLOT_BYTES, BillingProbeWorkers, ProbeWorkerLimits
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
 from .collector_paths import CollectorPaths, _assert_no_symlink_components, _check_owner_mode
@@ -41,7 +42,13 @@ SECOND = 1_000_000_000
 HOST_OPERATIONS = frozenset({
     'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
     'account.observe_provider', 'account.record_observation_unavailable', 'account.billing_probe',
-    'account.open_host_run',
+    'account.open_host_run', 'account.claim_launch',
+})
+# A project host's custody calls for one admitted run, each bound to its lease.
+PROJECT_OPERATIONS = frozenset({
+    'account.health', 'account.observe_provider', 'account.record_observation_unavailable',
+    'account.open_provenance', 'account.register_execution', 'account.run_provenance',
+    'account.submit_terminal', 'account.release_capacity', 'account.close_denied_attempt',
 })
 GENERATION = 1
 
@@ -78,7 +85,8 @@ class AccountServiceHost:
             self._claims.bootstrap()
             self._observations.bootstrap()
             self._service = AccountService(COLLECTOR_RUNTIME_DIGEST, self._views, authorizer=self._authorize,
-                                           claim_jobs=self._claims, observation_jobs=self._observations)
+                                           claim_jobs=self._claims, observation_jobs=self._observations,
+                                           run_provenance_work_limits=limits, open_provenance_work_limits=limits)
             self._ingress = AccountIngress(self._service, AccountIngressLimits(32, 2, 8, 4, 60 * SECOND, 1_000_000))
             self._ingress.bootstrap()
             directory = account_directory(state)
@@ -90,7 +98,7 @@ class AccountServiceHost:
             prepare_proof_directory(proofs)
             key = issue_capability(state, None, 'account')
             self._issued = True
-            self._frontend = EnrolledFrontend(EnrollmentVerifier(key, 'account', GENERATION, proofs),
+            self._frontend = EnrolledFrontend(EnrollmentVerifier(key, frozenset({'account', 'project'}), GENERATION, proofs),
                 ServiceHostLimits(32, 2 * SECOND, 64, 65 * SECOND, 30_000, 4_096),
                 lambda kind, connection, token: self._ingress.attach(connection, token), proofs, clock_ns=clock_ns)
             self._frontend.listen(account_endpoint(state), 'account')
@@ -111,8 +119,9 @@ class AccountServiceHost:
     def _authorize(self, request, token):
         """Owner thread: the enrolled root must be the registered home of the project."""
         entry = self._frontend.context(token) if self._frontend is not None else None
-        if (entry is None or entry.kind != 'account' or entry.enrolled.role != 'account'
-                or request.operation not in HOST_OPERATIONS
+        role = None if entry is None else entry.enrolled.role
+        allowed = {'account': HOST_OPERATIONS, 'project': PROJECT_OPERATIONS}.get(role)
+        if (entry is None or entry.kind != 'account' or allowed is None or request.operation not in allowed
                 or account_request_digest(request) != entry.enrolled.request_digest):
             return None
         root = entry.enrolled.subject
@@ -128,13 +137,36 @@ class AccountServiceHost:
             context = self._contexts[token] = ObservationContext(root)
         caller = keyed_digest(self._state.digest_key(), 'account-caller\0' + entry.enrolled.host_client
                               + '\0' + request.project_id)
-        opening = None
+        opening, custody = None, {}
         if request.operation == 'account.open_host_run':
             opening = self._open_context(entry.enrolled.context)
             if opening is None:
                 return None
+        elif role == 'project' or request.operation == 'account.claim_launch':
+            custody = self._run_custody(entry.enrolled.context, request.project_id)
+            if custody is None and request.operation not in {'account.health', 'account.observe_provider',
+                                                             'account.record_observation_unavailable'}:
+                return None
         return AccountAuthorization(request.project_id, COLLECTOR_RUNTIME_DIGEST, account_request_digest(request),
-                                    'host', HOST_OPERATIONS, caller, observation_context=context, open_context=opening)
+                                    'host' if role == 'account' else 'project', allowed, caller,
+                                    observation_context=context, open_context=opening, **(custody or {}))
+
+    @staticmethod
+    def _run_custody(raw, project_id):
+        """The run's lease and the project writer's sealed evidence, as its host sent them."""
+        if raw is None:
+            return None
+        try:
+            value = parse_bounded_json(raw, max_bytes=65_536)
+            if (value.keys() != {'purpose', 'lease', 'storage_evidence', 'terminal_evidence', 'cleanup_evidence'}
+                    or value['purpose'] != 'run' or type(value['lease']) is not dict
+                    or value['lease'].get('project_id') != project_id):
+                return None
+            evidence = {name: None if value[name] is None else bytes.fromhex(value[name])
+                        for name in ('storage_evidence', 'terminal_evidence', 'cleanup_evidence')}
+            return {'storage_binding': ResultLeaseBinding(**value['lease']), **evidence}
+        except Exception:
+            return None
 
     @staticmethod
     def _open_context(raw):

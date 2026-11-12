@@ -35,9 +35,12 @@ def main(argv: list[str] | None = None) -> int:
     os.chdir("/")  # Hold no working directory open for as long as the collector lives.
     state = LearningState(args.state_root, create=False)
     require_authorized_collector_runtime(state)
-    stopping = []
+    def terminate(*_):
+        # Raise, so a wait in startup or in an owner step cannot outlive the signal.
+        raise SystemExit(0)
+
     for signum in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(signum, lambda *_: stopping.append(True))
+        signal.signal(signum, terminate)
     ledger = LearningLedger(state)
     server = CollectorServer(ledger)
     account = None
@@ -47,20 +50,44 @@ def main(argv: list[str] | None = None) -> int:
             account = AccountServiceHost(ledger, CollectorPaths(state.root))
         except HistoryError:
             account = None  # Hooks keep working; account clients report unavailable.
-        while not stopping and not server.wait(0.002 if account is not None else 0.5):
+        checked = time.monotonic()
+        while not server.wait(0.002 if account is not None else 0.5):
             if account is not None:
                 account.serve_once()
+            if time.monotonic() - checked >= 1:
+                checked = time.monotonic()
+                # A removed state root or endpoint means nobody can reach or own this collector.
+                if not state.root.is_dir() or not state.socket.exists():
+                    break
+    except SystemExit:
+        pass
     finally:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(signum, signal.SIG_IGN)  # Finish the shutdown that was asked for.
+        # Each step is attempted even if an earlier one fails, so the ledger is
+        # always closed; the entry below then ends the process, so a worker
+        # thread that did not stop cannot keep it alive.
         if account is not None:
-            account.close()
-            end = time.monotonic() + 10
-            while not account.drained() and time.monotonic() < end:
-                time.sleep(0.01)
-        server.stop()
+            try:
+                account.close()
+                end = time.monotonic() + 10
+                while not account.drained() and time.monotonic() < end:
+                    time.sleep(0.01)
+            except Exception:
+                pass
+        try:
+            server.stop()
+        except Exception:
+            pass
         ledger.close()
     print(json.dumps({"ready": True, "stopped": True, "account_services": account is not None}, sort_keys=True))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = 2
+    try:
+        code = main()
+    finally:
+        sys.stdout.flush()
+        os._exit(code)

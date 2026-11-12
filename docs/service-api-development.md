@@ -133,11 +133,57 @@ pipeline. The report keeps the legacy `admission`, `status` and
 `observation_started_at_ms` fields, and a denial prints the legacy admission error.
 A wrong-host lifecycle command again reports `host_client_mismatch`.
 
-What still stops a run: `dispatch` (no production per-run driver: preparation,
-lease, claim, registration, grant consumption and the dispatch authorizer), and the
-commands that still use the legacy ledger, such as `learning-bind-host-agent`,
-abandonment, the Claude native result path, verification and QA. The bridge
-lifecycle tests now fail at those points instead of at the first lifecycle call.
+### Production run driver (bridged Codex runs)
+
+`project_driver.RunDriver` runs inside the project host and gives a bridged Codex run
+its whole custody sequence. After an admitted open, the CLI registers the run with
+the host (`run.register` on the host's `run.sock`, with the originals as context).
+At `dispatch` the CLI asks the host to prepare it (`run.prepare`, with the expected
+export commit) and waits. The driver then runs, on the owner thread with account
+calls on one helper thread:
+
+1. committed-export preparation and the fixed worker input;
+2. a before-launch Codex observation through the account;
+3. the result lease and arming;
+4. the account's open provenance, recorded in project history;
+5. the launch claim;
+6. claim binding;
+7. registration;
+8. run provenance;
+9. grant consumption.
+
+Only then can `dispatch.submit` name the run. After the result is published it
+submits the terminal, acknowledges it, takes cleanup custody once the tracked tree is
+confirmed clean, and asks the account to release the capacity. Local custody is
+retired only after the primary has recorded the result, or an hour after release,
+because status and the result read need it until then.
+
+Account calls from the driver use the state-wide account key with a second role,
+`project`, for the custody operations (open provenance, registration, run
+provenance, terminal, release). The claim stays a `host` call. Each carries the
+run's lease and the project writer's sealed storage, terminal or cleanup evidence
+as its context. The account owner rebuilds the lease from that context and its
+existing checks verify the evidence. The project host now also authorizes the
+dispatch of runs it made ready, status and cancellation of runs it holds, result
+reads of those runs, record reads, and host-result admission for its own runs, each
+only for the host class that opened the run. A running dispatch is rechecked with
+its submit's connection token after that connection closes; the driver keeps
+honouring exactly that request while it holds the run.
+
+`tests/test_project_driver.py` drives one bridged Codex run end to end through the
+in-process CLI: open, host preparation, dispatch, refusal of a changed result,
+recording, then terminal acceptance, confirmed cleanup, released capacity and
+retirement. The collector, the account host and the project host run as threads of
+the test process, so the bridge tests' trusted fake clients apply. The legacy
+bridge lifecycle tests still start their hosts as subprocesses, where those fakes
+are not trusted, so they now stop at `dispatch` and need porting to that harness.
+
+Not done: no retry, cancellation-before-dispatch or abandonment path through the
+driver, no driver state across a host restart (a run opened before a restart is
+refused at dispatch and keeps its account capacity until reconciled), the
+dispatch payload tombstone is not retired, the Claude bridge and native Claude
+paths are not driven, and `learning-bind-host-agent`, verification and QA still use
+the legacy ledger.
 
 ### What is and is not covered
 

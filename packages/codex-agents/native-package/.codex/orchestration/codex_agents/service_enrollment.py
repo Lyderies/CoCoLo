@@ -27,8 +27,10 @@ from .learning_contracts import canonical_json, keyed_digest, parse_bounded_json
 
 ENROLLMENT_VERSION = 1
 # A host credential is per project; the account credential is per state root and
-# names the project root it acts for, checked by the account owner.
-ROLES = frozenset({'host', 'account'})
+# names the project root it acts for, checked by the account owner. The account key
+# serves two roles: a primary's own calls ('account') and a project host's run
+# custody calls ('project').
+ROLES = frozenset({'host', 'account', 'project'})
 MAX_SUBJECT_BYTES = 4_096
 # Protected originals a trusted client hands the owner for exactly one request.
 MAX_CONTEXT_BYTES = 262_144
@@ -67,7 +69,7 @@ def _subject(value):
 
 def capability_path(state, project_root, role):
     """A project's host key, or with no project the state root's account key."""
-    if type(state) is not CollectorPaths or role not in ROLES or (project_root is None) != (role == 'account'):
+    if type(state) is not CollectorPaths or role not in ROLES or (project_root is None) != (role != 'host'):
         raise EnrollmentError('enrollment_invalid')
     try:
         if project_root is None:
@@ -293,12 +295,14 @@ class EnrollmentVerifier:
 
     def __init__(self, key, role, generation, proofs, *, window_ms=30_000, max_nonces=4_096,
                  clock_ms=lambda: time.time_ns() // 1_000_000):
-        if (type(key) is not bytes or len(key) != KEY_BYTES or role not in ROLES or not _integer(generation, minimum=1)
+        roles = frozenset({role}) if type(role) is str else role
+        if (type(key) is not bytes or len(key) != KEY_BYTES or type(roles) is not frozenset or not roles
+                or not roles <= ROLES or not _integer(generation, minimum=1)
                 or not isinstance(proofs, Path) or not proofs.is_absolute()
                 or not _integer(window_ms, minimum=1, maximum=MAX_WINDOW_MS)
                 or not _integer(max_nonces, minimum=1, maximum=MAX_NONCES) or not callable(clock_ms)):
             raise EnrollmentError('enrollment_invalid')
-        self._key, self._role, self._generation, self._proofs = key, role, generation, proofs
+        self._key, self._roles, self._generation, self._proofs = key, roles, generation, proofs
         self._window_ms, self._max_nonces, self._clock_ms = window_ms, max_nonces, clock_ms
         self._seen, self._latest_ms, self._pruned_ms = {}, 0, 0
         self._lock = threading.Lock()
@@ -323,7 +327,7 @@ class EnrollmentVerifier:
         # Authenticate before any role, generation or freshness decision is disclosed.
         if not hmac.compare_digest(_mac(self._key, value), value['mac']):
             raise EnrollmentError('enrollment_invalid')
-        if value['role'] != self._role or value['generation'] != self._generation:
+        if value['role'] not in self._roles or value['generation'] != self._generation:
             raise EnrollmentError('enrollment_stale')
         now = self._clock_ms()
         if not _integer(now):

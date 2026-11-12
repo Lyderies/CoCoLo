@@ -42,4 +42,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = 2
+    try:
+        code = main()
+    finally:
+        # The host has closed what it owns; no worker thread may keep the process alive.
+        sys.stdout.flush()
+        os._exit(code)

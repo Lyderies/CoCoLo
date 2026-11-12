@@ -27,21 +27,33 @@ class ServiceTransportError(RuntimeError):
         super().__init__(reason_code)
 
 
-_ENROLLMENT = None
+_ENROLLMENTS: dict = {}
 
 
-def install_enrollment(provider) -> None:
-    """Set this process's enrollment: ``provider(socket_path, message)`` returns
-    the one-line preamble for an enrolled endpoint, or None for any other.
+def install_enrollment(provider, *, owner: str = "client") -> None:
+    """Set one owner's enrollment: ``provider(socket_path, message)`` returns the
+    one-line preamble for an endpoint it enrolled, or None for any other.
 
-    Only the checked CLI entry installs one. The preamble is sent once, ahead of
-    the request it names; this module still authenticates nothing by itself.
+    The checked CLI entry installs the client's; a service host that calls
+    another service installs its own under a different owner. None removes it.
+    The preamble is sent once, ahead of the request it names; this module
+    still authenticates nothing by itself.
     """
 
-    global _ENROLLMENT
-    if provider is not None and not callable(provider):
+    if (provider is not None and not callable(provider)) or type(owner) is not str:
         raise ServiceTransportError("invalid_request")
-    _ENROLLMENT = provider
+    if provider is None:
+        _ENROLLMENTS.pop(owner, None)
+    else:
+        _ENROLLMENTS[owner] = provider
+
+
+def _preamble(socket_path, message):
+    for provider in tuple(_ENROLLMENTS.values()):
+        line = provider(socket_path, message)
+        if line is not None:
+            return line
+    return None
 
 
 def exchange_frame(
@@ -79,7 +91,7 @@ def exchange_frame(
     reason = None
     response = b""
     try:
-        preamble = None if _ENROLLMENT is None else _ENROLLMENT(socket_path, message)
+        preamble = _preamble(socket_path, message)
         if preamble is not None and (type(preamble) is not bytes or not preamble or b"\n" in preamble):
             raise ValueError()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:

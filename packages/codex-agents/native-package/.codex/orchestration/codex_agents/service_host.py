@@ -28,8 +28,14 @@ from .history_contracts import HistoryError, valid_integer
 from .learning_contracts import canonical_json, keyed_digest
 from .orchestration_api import ORCHESTRATION_OPERATIONS, OrchestrationScope, orchestration_request_digest
 from .orchestration_service import OrchestrationAuthorization
+from .control_api import ControlScope, encode_control_request
+from .control_service import ControlAuthorization
+from .service_protocol import service_request_digest
 from .history_api import history_request_digest
 from .history_service import HistoryAuthorization
+from .host_result_contracts import decode_host_result_reference
+from .result_read_api import result_read_request_digest
+from .result_read_service import ResultReadAuthorization
 from .learning_contracts import parse_bounded_json
 from .open_scope_contracts import OpenScopeContext
 from .service_enrollment import MAX_CONTEXT_BYTES
@@ -40,7 +46,8 @@ from .service_enrollment import (
 )
 
 MAX_SOCKET_PATH_BYTES = 100  # Below the smallest supported sun_path, including its terminator.
-_KINDS = ('control', 'project')
+_KINDS = ('control', 'project', 'driver')
+DRIVER_ENDPOINT = 'run.sock'  # Beside the control socket; client_runtime uses the same name.
 
 
 @dataclass(frozen=True)
@@ -278,7 +285,8 @@ class EnrolledFrontend:
 
 
 class ProjectServiceHost:
-    def __init__(self, state, project_root, scope, open_history, runtime_limits, limits, *, clock_ns=time.monotonic_ns):
+    def __init__(self, state, project_root, scope, open_history, runtime_limits, limits, *, clock_ns=time.monotonic_ns,
+                 bundle_root=None):
         if (type(state) is not CollectorPaths or type(scope) is not OrchestrationScope
                 or type(runtime_limits) is not ProjectRuntimeLimits or type(limits) is not ServiceHostLimits
                 or scope.runtime_digest != COLLECTOR_RUNTIME_DIGEST or not callable(open_history) or not callable(clock_ns)):
@@ -288,11 +296,12 @@ class ProjectServiceHost:
         self._scope = OrchestrationScope(**scope.as_data())
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._closed = self._published = self._issued = False
-        self._runtime = self._frontend = self._lock_fd = None
+        self._runtime = self._frontend = self._lock_fd = self._driver = None
         try:
             self._project_root = _canonical_project_root(Path(project_root))
             directory = runtime_directory(state, self._project_root)
-            self._endpoints = {kind: directory / (kind[0] + '.sock') for kind in _KINDS}
+            self._endpoints = {kind: directory / {'control': 'c.sock', 'project': 'p.sock', 'driver': DRIVER_ENDPOINT}[kind]
+                               for kind in _KINDS}
             self._hint = state.root / 'client-runtimes' / (keyed_digest(state.digest_key(), str(self._project_root)) + '.json')
             if any(len(os.fsencode(path)) > MAX_SOCKET_PATH_BYTES for path in self._endpoints.values()):
                 raise HistoryError('history_invalid_input')
@@ -300,7 +309,9 @@ class ProjectServiceHost:
             # second host refuses here, before it can touch another host's files.
             self._runtime = ProjectRuntime(self._scope, open_history, runtime_limits,
                 orchestration_authorizer=self._authorize_orchestration, ingress_authorizer=self._authorize_ingress,
-                history_authorizer=self._authorize_history, clock_ns=clock_ns)
+                history_authorizer=self._authorize_history, control_authorizer=self._authorize_control,
+                result_authorizer=self._authorize_result,
+                clock_ns=clock_ns)
             for path in (directory.parent, directory, self._hint.parent):
                 path.mkdir(mode=0o700, exist_ok=True)
                 _assert_no_symlink_components(path)
@@ -321,6 +332,11 @@ class ProjectServiceHost:
                     if attempt == 19:
                         raise HistoryError('history_writer_busy') from None
                     time.sleep(0.01)
+            # A dead host's hint would make this one look served before it listens.
+            try:
+                self._hint.unlink()
+            except FileNotFoundError:
+                pass
             proofs = proof_directory(self._endpoints['project'])
             prepare_proof_directory(proofs)
             key = issue_capability(state, self._project_root, 'host')
@@ -329,6 +345,10 @@ class ProjectServiceHost:
                 EnrollmentVerifier(key, 'host', self._scope.supervisor_generation, proofs,
                                    window_ms=limits.enrollment_window_ms, max_nonces=limits.max_nonces),
                 limits, self._attach, proofs, clock_ns=clock_ns)
+            if bundle_root is not None:
+                from .project_driver import RunDriver
+                self._driver = RunDriver(state, self._project_root, bundle_root, self._scope, self._runtime)
+                self._driver._enrolled = self._enrolled_control
             for kind in _KINDS:
                 self._frontend.listen(self._endpoints[kind], kind)
             self._publish()
@@ -348,8 +368,28 @@ class ProjectServiceHost:
     def _attach(self, kind, connection, token):
         if kind == 'control':
             self._runtime.attach_control(connection, token)
-        else:
+        elif kind == 'project':
             self._runtime.attach_project(connection, token)
+        elif self._driver is not None:
+            self._driver.handle(connection, self._frontend.context(token).enrolled)
+        else:
+            raise HistoryError('history_service_unavailable')
+
+    def _enrolled_control(self, token):
+        entry = self._frontend.context(token) if self._frontend is not None else None
+        if entry is None or entry.kind != 'control' or entry.enrolled.role != 'host':
+            return None
+        return entry.enrolled
+
+    def _authorize_control(self, request, token):
+        """Status and cancellation of a run, only for the host class that owns it."""
+        enrolled = self._enrolled_control(token)
+        if (enrolled is None or self._driver is None or request.operation not in {'project.status', 'project.cancel'}
+                or hashlib.sha256(encode_control_request(request)).hexdigest() != enrolled.request_digest
+                or not self._driver.owns(request.target, enrolled.host_client)):
+            return None
+        return ControlAuthorization(ControlScope(**self._scope.as_data()), request.target, service_request_digest(request),
+                                    frozenset({'project.status', 'project.cancel'}))
 
     def _publish(self):
         value = {'schema_version': 1,
@@ -379,11 +419,34 @@ class ProjectServiceHost:
         return OrchestrationAuthorization(self._scope, orchestration_request_digest(request),
                                           entry.enrolled.host_client, ORCHESTRATION_OPERATIONS)
 
-    def _authorize_history(self, request, token):
-        """Open scope only, from the originals the enrolled client sent with this request."""
+    def _authorize_result(self, request, token):
+        """A run's own result, read by the host class that dispatched it."""
         entry = self._frontend.context(token) if self._frontend is not None else None
-        if (entry is None or entry.kind != 'project' or entry.enrolled.role != 'host'
-                or request.operation != 'history.open_scope' or entry.enrolled.context is None):
+        if (entry is None or entry.kind != 'project' or entry.enrolled.role != 'host' or self._driver is None
+                or not self._driver.owns_binding(request.binding, entry.enrolled.host_client)):
+            return None
+        return ResultReadAuthorization(request.binding, request.result_digest, result_read_request_digest(request))
+
+    def _authorize_history(self, request, token):
+        """Open scope from the originals sent with the request; a run's records and result admission."""
+        entry = self._frontend.context(token) if self._frontend is not None else None
+        if entry is None or entry.kind != 'project' or entry.enrolled.role != 'host':
+            return None
+        if request.operation == 'history.read_record':
+            return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
+                                        frozenset({'history.read_record'}))
+        if request.operation == 'history.admit_host_result':
+            try:
+                binding = decode_host_result_reference(request.payload).binding
+                original = None if self._driver is None else self._driver.result_context(binding, entry.enrolled.host_client)
+            except Exception:
+                return None
+            if original is None:
+                return None
+            return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
+                                        frozenset({'history.admit_host_result', 'history.read_record'}),
+                                        host_result_context=original)
+        if request.operation != 'history.open_scope' or entry.enrolled.context is None:
             return None
         try:
             original = parse_bounded_json(entry.enrolled.context, max_bytes=MAX_CONTEXT_BYTES)
@@ -405,6 +468,8 @@ class ProjectServiceHost:
             raise HistoryError('history_service_unavailable')
         self._frontend.step()
         self._runtime.run_once()
+        if self._driver is not None:
+            self._driver.step()
 
     def serve(self, stopped, *, idle_seconds=0.002):
         while not stopped():
@@ -426,7 +491,7 @@ class ProjectServiceHost:
         """Time since the last enrolled connection, or 0 while any run is held."""
         self._owner()
         runtime = self._runtime
-        if len(runtime.pool._jobs) or len(runtime.persistence._jobs):
+        if len(runtime.pool._jobs) or len(runtime.persistence._jobs) or (self._driver is not None and self._driver.busy()):
             return 0
         return max(0, self._clock_ns() - self._frontend.last_enrolled_ns)
 
@@ -445,6 +510,8 @@ class ProjectServiceHost:
             revoke_capability(self._state, self._project_root, 'host')
         if self._frontend is not None:
             self._frontend.close()
+        if self._driver is not None:
+            self._driver.close()
         if self._runtime is not None:
             self._runtime.request_close()
         if self._lock_fd is not None:
