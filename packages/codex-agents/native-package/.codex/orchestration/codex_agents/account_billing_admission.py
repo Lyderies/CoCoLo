@@ -7,6 +7,7 @@ Native authentication, launch containment and confirmed return are separate gate
 from dataclasses import dataclass, replace
 import hmac
 import os
+import time
 
 from .admission_inputs import AdmissionCaptureLimits
 from .admission_metadata import API_KEY_VARIABLES, evaluate_admission
@@ -58,6 +59,16 @@ class ProbeAdmission:
     admitted_at_ms: int
 
 
+@dataclass(frozen=True, repr=False)
+class _ExecutionInputs:
+    permit_fields: tuple
+    reservation: _Reservation
+    snapshot: object
+    identity: bytes
+    admission: bytes
+    deadline_ns: int
+
+
 class AccountBillingAdmission:
     def __init__(self, views, pool, work_limits, *, timeout_ms=60_000):
         from .account_service import AccountOwnerViews
@@ -76,7 +87,7 @@ class AccountBillingAdmission:
         self._views, self._ledger, self._pool, self._intake = views, ledger, pool, pool._intake
         self._pid, self._key, self._timeout = os.getpid(), ledger.state.digest_key(), timeout_ms
         self._limits = SQLReadLimits(work_limits.max_callbacks, work_limits.max_duration_ms, work_limits.max_value_bytes)
-        self._pending, self._signatures, self._permits = {}, {}, {}
+        self._pending, self._signatures, self._permits, self._execution_inputs = {}, {}, {}, {}
         ledger._billing_admission_owner = self
 
     def _guard(self):
@@ -234,6 +245,7 @@ class AccountBillingAdmission:
         return current.captured_at_ms
 
     def admit(self, reservation):
+        started_ns = time.monotonic_ns()
         row = self._original(reservation)
         if row['state'] == 'admitted':
             original = self._permits.get(reservation)
@@ -312,6 +324,11 @@ class AccountBillingAdmission:
             original = ProbeAdmission(reservation, final['account_fingerprint'], final['admission_record_id'],
                 final['admission_digest'], now)
             self._permits[reservation] = original
+            self._execution_inputs[original] = _ExecutionInputs(
+                (original.account_fingerprint, original.admission_record_id, original.admission_digest,
+                 original.admitted_at_ms), reservation,
+                replace(snapshot, policy=replace(snapshot.policy)), canonical_json(identity),
+                canonical_json(appended), started_ns+(reservation.deadline-now)*1_000_000)
             self._original(reservation)
             return original
         self._pending.pop((reservation.project, reservation.key))
@@ -320,6 +337,34 @@ class AccountBillingAdmission:
         if self._row(reservation.project, reservation.key) != final:
             raise ProbeAdmissionError('probe_conflict')
         return reply
+
+    def _execution(self, permit, *, launching=False):
+        """Original owner data only. Native launch authority is checked by its adapter."""
+        self._guard()
+        if type(permit) is not ProbeAdmission:
+            raise ProbeAdmissionError('probe_not_authorized')
+        inputs = self._execution_inputs.get(permit)
+        if (inputs is None or permit.reservation is not inputs.reservation
+                or self._permits.get(inputs.reservation) is not permit
+                or (permit.account_fingerprint, permit.admission_record_id, permit.admission_digest,
+                    permit.admitted_at_ms) != inputs.permit_fields):
+            raise ProbeAdmissionError('probe_not_authorized')
+        row = self._original(inputs.reservation)
+        if (row['state'] != 'admitted' or (row['account_fingerprint'], row['admission_record_id'],
+                row['admission_digest']) != inputs.permit_fields[:3]):
+            raise ProbeAdmissionError('probe_conflict')
+        admission = parse_bounded_json_value(inputs.admission, max_bytes=MAX_PROBE_REPLY_BYTES)
+        actual = self._one('SELECT content,content_digest,source FROM records WHERE project_id=? AND record_id=?',
+                          (inputs.reservation.project, permit.admission_record_id))
+        if (actual is None or bytes(actual['content']) != inputs.admission or actual['source'] != 'lifecycle'
+                or actual['content_digest'] != permit.admission_digest
+                or content_digest(admission) != permit.admission_digest):
+            raise ProbeAdmissionError('probe_conflict')
+        if launching:
+            self._fresh(inputs.reservation, inputs.snapshot, appended=admission)
+            if time.monotonic_ns() >= inputs.deadline_ns:
+                raise ProbeAdmissionError('probe_conflict')
+        return inputs, row
 
     def _update(self, row, **changes):
         final = {**row, **changes}
@@ -346,17 +391,22 @@ class AccountBillingAdmission:
     def _reply(self, row, *, known):
         from .learning_store import DEFAULT_RETENTION_MS
         value = parse_bounded_json_value(row['references_json'].encode(), max_bytes=4096)
-        if (type(value) is not dict or value.keys() != {'probe', 'reason_code', 'records'}
-                or value['probe'] not in {'reused', 'denied'} or type(value['records']) is not list
+        completed = type(value) is dict and value.get('probe') == 'completed'
+        if (type(value) is not dict or value.keys() != ({'probe', 'reason_code', 'records', 'completion_digest'}
+                if completed else {'probe', 'reason_code', 'records'})
+                or value['probe'] not in {'reused', 'denied', 'completed'} or type(value['records']) is not list
+                or (completed and (not matches(value['completion_digest'], _DIGEST)
+                    or value['reason_code'] not in {None, 'probe_incomplete', 'probe_invalid_events', 'probe_no_events'}))
                 or len(value['records']) > 3):
             raise ProbeAdmissionError('probe_conflict')
         now, records = self._now(), []
         for ref in value['records']:
             if type(ref) is not dict or ref.keys() != {'project_id', 'record_id', 'content_digest'}:
                 raise ProbeAdmissionError('probe_conflict')
-            raw = self._one("SELECT content,content_digest,source,observed_at_ms FROM records WHERE project_id=? AND record_id=?",
+            raw = self._one("SELECT content,content_digest,source,observed_at_ms,expires_at_ms FROM records WHERE project_id=? AND record_id=?",
                 (ref['project_id'], ref['record_id']))
             if (raw is None or raw['source'] != 'provider' or raw['content_digest'] != ref['content_digest']
+                    or (raw['expires_at_ms'] is not None and now >= raw['expires_at_ms'])
                     or not now-DEFAULT_RETENTION_MS <= raw['observed_at_ms'] <= now):
                 raise ProbeAdmissionError()
             record = validate_learning_record(parse_bounded_json_value(bytes(raw['content']), max_bytes=MAX_PROBE_REPLY_BYTES))

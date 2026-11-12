@@ -416,9 +416,34 @@ class OwnedExecutionRegistry:
             entry.worker_pool, entry.worker_handle = pool, handle
             job.supervisor = supervisor
 
-    def _complete_worker(self, pool, handle):
+    def _register_probe_worker_pool(self, pool):
+        from .billing_probe_worker import BillingProbeWorkers
+        if type(pool) is not BillingProbeWorkers or pool._registry is not self:
+            raise ExecutionCustodyError()
+        pool._owner()
         with self._lock:
-            if pool not in self._worker_pools:
+            self._worker_pools.add(pool)
+
+    def _complete_probe_worker(self, pool, handle):
+        from .billing_probe_worker import BillingProbePacket, BillingProbeWorkers
+        with self._lock:
+            if type(pool) is not BillingProbeWorkers or pool not in self._worker_pools:
+                raise ExecutionCustodyError()
+            job = pool._jobs.get(handle)
+            if job is None or job.state != 'finishing' or type(job.packet) is not BillingProbePacket:
+                raise ExecutionCustodyError()
+            entry = self._entry(job.ticket)
+            if (entry.worker_pool is not pool or entry.worker_handle is not handle
+                    or entry.worker_returned or entry.activity is not None
+                    or job.snapshot is None or tuple(getattr(entry.key, n) for n in _KEY_FIELDS) != job.snapshot[5]
+                    or entry.run_handle != job.snapshot[6] or entry.deadline_ns > job.snapshot[7]):
+                raise ExecutionCustodyError()
+            entry.worker_returned = True
+
+    def _complete_worker(self, pool, handle):
+        from .codex_worker import CodexWorkerPool
+        with self._lock:
+            if type(pool) is not CodexWorkerPool or pool not in self._worker_pools:
                 raise ExecutionCustodyError()
             job = pool._jobs.get(handle)
             if job is None or job.state != "finishing" or job.packet is None:

@@ -70,6 +70,7 @@ from .process_tree import (
 )
 from .providers import (
     api_keys_present,
+    claude_rate_limit_records,
     client_environment,
     codex_exec_options,
     observation_failure_reason,
@@ -1607,6 +1608,64 @@ PROBE_DEADLINE_SECONDS = 120
 MAX_PROBE_EVENTS = 64
 
 
+def _run_claude_billing_probe(arguments, *, environment, cwd, deadline_seconds, execution=None):
+    """Fixed probe protocol; retain partial restrictions without claiming success."""
+    state: dict[str, Any] = {"init": False, "infos": [], "result": False}
+
+    def on_frame(frame: dict[str, Any]) -> None:
+        if not state["init"]:
+            if frame.get("type") != "system" or frame.get("subtype") != "init":
+                raise _Abort("missing_init_frame")
+            violation = _check_claude_init(frame, PROBE_MODEL)
+            if violation is not None or frame.get("tools") != []:
+                raise _Abort(f"init_{violation or 'tool_not_allowed'}")
+            state["init"] = True
+        elif frame.get("type") == "system" and frame.get("subtype") == "init":
+            raise _Abort("probe_init_duplicate")
+        elif frame.get("type") in {"tool_use", "tool_result", "server_tool_use", "tool_progress"}:
+            raise _Abort("probe_tool_not_allowed")
+        elif frame.get("type") == "rate_limit_event":
+            state["infos"].append(frame.get("rate_limit_info"))
+            if len(state["infos"]) >= MAX_PROBE_EVENTS:
+                raise _Abort("too_many_rate_limit_events")
+            if state["result"]:
+                raise _Abort("probe_event_after_result")
+            # Classify only; the worker later normalizes with the original
+            # account/time and retains the event even when stopping here.
+            try:
+                headroom, billing = claude_rate_limit_records(frame.get("rate_limit_info"),
+                    account_fingerprint="0"*64, observed_at_ms=0)
+            except ContractError:
+                pass  # Preserve malformed metadata for incomplete normalization.
+            else:
+                if billing["paid_usage_usable"] is True or billing["is_using_overage"] is True:
+                    raise _Abort("paid_usage_observed")
+                if headroom["status"] == "rejected":
+                    raise _Abort("provider_rejected")
+        elif frame.get("type") == "result":
+            if state["result"]:
+                raise _Abort("probe_result_duplicate")
+            state["result"] = True
+            if frame.get("is_error") is not False or frame.get("subtype") != "success":
+                raise _Abort("probe_result_invalid")
+        elif frame.get("type") in {"assistant", "user"}:
+            message = frame.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, list) and any(isinstance(item, dict) and item.get("type") in {
+                    "tool_use", "tool_result", "server_tool_use"} for item in content):
+                raise _Abort("probe_tool_not_allowed")
+
+    outcome = run_child(arguments, environment=environment, cwd=cwd,
+        deadline_seconds=deadline_seconds, on_frame=on_frame, _execution=execution)
+    reason = outcome["abort"]
+    if reason is None:
+        if outcome["returncode"] != 0:
+            reason = "probe_process_failed"
+        elif not state["result"]:
+            reason = "probe_result_missing"
+    return state["infos"], reason
+
+
 def claude_billing_probe(
     environ: Mapping[str, str],
     *,
@@ -1655,33 +1714,14 @@ def claude_billing_probe(
             "--",
             PROBE_PROMPT,
         ]
-        state: dict[str, Any] = {"init": False, "infos": []}
-
-        def on_frame(frame: dict[str, Any]) -> None:
-            if not state["init"]:
-                if frame.get("type") != "system" or frame.get("subtype") != "init":
-                    raise _Abort("missing_init_frame")
-                violation = _check_claude_init(frame, PROBE_MODEL)
-                if violation is not None or frame.get("tools") != []:
-                    raise _Abort(f"init_{violation or 'tool_not_allowed'}")
-                state["init"] = True
-            elif frame.get("type") == "rate_limit_event":
-                # Every event is kept; the ledger merges them conservatively.
-                # The event that reaches the cap is kept before the probe stops.
-                state["infos"].append(frame.get("rate_limit_info"))
-                if len(state["infos"]) >= MAX_PROBE_EVENTS:
-                    raise _Abort("too_many_rate_limit_events")
-
-        outcome = run_child(
+        return _run_claude_billing_probe(
             arguments,
             environment=client_environment(environ, workspace / "tmp"),
             cwd=empty,
             deadline_seconds=PROBE_DEADLINE_SECONDS,
-            on_frame=on_frame,
         )
     finally:
         remove_private_directory(workspace)
-    return state["infos"], outcome["abort"]
 
 
 def dispatch(
