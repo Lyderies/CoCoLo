@@ -546,7 +546,9 @@ class ProjectHistory:
         if checked["record_type"] in {"dispatch_result", "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance", "host_open_provenance"}:
             # Closed business writers own terminal, usage and admission records.
             raise HistoryError("history_invalid_input")
-        if checked['record_type'] == 'outcome' and source == 'verifier':
+        if checked['record_type'] == 'outcome' and (source == 'verifier' or checked['status'] != 'unverified'):
+            # A producer tag and valid shape prove no original execution or QA.
+            # Closed result/QA writers own every verified disposition.
             raise HistoryError('history_invalid_input')
         with self._transaction():
             return self._append_locked(checked, content, source, ingested_at_ms)

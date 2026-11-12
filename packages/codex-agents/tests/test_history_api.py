@@ -197,8 +197,10 @@ class HistoryApiTests(unittest.TestCase):
         verifier = {"schema_version": 1, "record_type": "verification_binding", "record_id": "verify-api",
                     "run_id": "run-verifier", "worker_outcome_digest": "b" * 64, "observed_at_ms": 1000}
         client = HistoryClient(self.base / "unused.sock", PROJECT_A, RUNTIME, timeout=1)
+        unverified = verification_outcome()
+        unverified.update(status='unverified', accepted=False, admission_state='unverified')
         with mock.patch("codex_agents.history_api.exchange_frame", side_effect=lambda path, raw, **opts: self.service.handle(raw, FIXTURE_CONTEXT)):
-            for method, record in ((client.record_intent, intent), (client.record_outcome, verification_outcome()),
+            for method, record in ((client.record_intent, intent), (client.record_outcome, unverified),
                                    (client.bind_verifier, verifier)):
                 metadata = method(record)
                 self.assertEqual(record["record_id"], metadata["record_id"])
@@ -206,6 +208,19 @@ class HistoryApiTests(unittest.TestCase):
         with mock.patch("codex_agents.history_api.exchange_frame", side_effect=AssertionError("transport used")), \
                 self.assertRaises(HistoryError):
             client.record_intent(verification_outcome())
+
+    def test_host_record_outcome_cannot_bypass_original_result_and_qa_commit(self):
+        record = verification_outcome('generic-accepted')
+        command = request('history.record_outcome', identity=record['record_id'], payload={'record': record})
+        with self.assertRaisesRegex(HistoryError, '^history_invalid_input$'):
+            self.call(command)
+        self.assertEqual(0, self.service._store._connection.execute('SELECT COUNT(*) FROM records').fetchone()[0])
+        unverified = {**record, 'record_id': 'generic-unverified', 'status': 'unverified',
+                      'accepted': False, 'admission_state': 'unverified'}
+        command = request('history.record_outcome', identity=unverified['record_id'], payload={'record': unverified})
+        first = self.call(command)
+        self.assertEqual(first, self.call(command))
+        self.assertEqual(1, self.service._store._connection.execute('SELECT COUNT(*) FROM records').fetchone()[0])
 
     def test_allowed_operation_scope_and_thread_affinity_are_enforced_before_open(self):
         def limited(command, context):

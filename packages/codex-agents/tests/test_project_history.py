@@ -99,12 +99,39 @@ class ProjectHistoryTests(unittest.TestCase):
             "schema_version": 1, "record_type": "verification_binding", "record_id": "binding-fixture",
             "run_id": "verifier-fixture", "worker_outcome_digest": "a" * 64, "observed_at_ms": 1000,
         }
-        for record in (intent, verification_outcome(), verification):
+        unverified = verification_outcome()
+        unverified.update(status='unverified', accepted=False, admission_state='unverified')
+        for record in (intent, unverified, verification):
             with self.subTest(kind=record["record_type"]):
                 content = canonical_json(record)
                 entry = self.store.append_record(content, source="host", ingested_at_ms=1000)
                 self.assertEqual(content, entry.content)
                 self.assertEqual(entry, self.store.record(record["record_id"]))
+
+    def test_generic_outcome_append_cannot_claim_a_verified_disposition_from_any_source(self):
+        from codex_agents.learning_contracts import SOURCES
+        for status in ('accepted', 'rejected', 'failed', 'cancelled', 'interrupted'):
+            for source in sorted(SOURCES):
+                record = verification_outcome('generic-' + status + '-' + source)
+                record.update(status=status, accepted=status == 'accepted',
+                    admission_state='accepted' if status == 'accepted' else 'rejected',
+                    terminal_failure=status in {'failed', 'cancelled', 'interrupted'})
+                raw = canonical_json(record)
+                self.store._checked_record(raw, source, 1000)  # Valid shape is insufficient authority.
+                with self.subTest(status=status, source=source):
+                    with self.assertRaisesRegex(HistoryError, '^history_invalid_input$'):
+                        self.store.append_record(raw, source=source, ingested_at_ms=1000)
+        self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM records').fetchone()[0])
+        self.assertEqual(1, self.store._connection.execute('SELECT next_source_sequence FROM history_identity').fetchone()[0])
+
+    def test_generic_unverified_outcome_remains_byte_exact_and_replayable(self):
+        record = verification_outcome('generic-unverified')
+        record.update(status='unverified', accepted=False, admission_state='unverified')
+        raw = canonical_json(record)
+        entry = self.store.append_record(raw, source='host', ingested_at_ms=1000)
+        self.assertEqual(raw, entry.content)
+        self.assertEqual(entry, self.store.append_record(raw, source='host', ingested_at_ms=2000))
+        self.assertEqual(entry, self.store.record(record['record_id']))
 
     def test_terminal_record_and_outbox_are_atomic_and_exactly_idempotent(self) -> None:
         content = terminal()
