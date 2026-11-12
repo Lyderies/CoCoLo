@@ -118,6 +118,7 @@ RUNTIME_FILES = (
     "codex_agents/project_runtime.py",
     "codex_agents/project_worker_result.py",
     "codex_agents/provider_observation_contracts.py",
+    "codex_agents/provider_restrictions.py",
     "codex_agents/providers.py",
     "codex_agents/release_contracts.py",
     "codex_agents/result_contracts.py",

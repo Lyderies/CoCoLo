@@ -100,7 +100,16 @@ from .learning_contracts import (
     validate_execution_configuration,
 )
 from .learning_adapters import HOOK_EVENTS, empty_usage, load_client_capabilities, reconcile_run
-from .admission_metadata import EVIDENCE_HORIZON_MS
+from .admission_metadata import EVIDENCE_HORIZON_MS as EVIDENCE_HORIZON_MS
+from .provider_restrictions import (
+    BILLING_RANK as BILLING_RANK,
+    CLAUDE_STATUS_RANK as CLAUDE_STATUS_RANK,
+    _effective_window_reset as _effective_window_reset,
+    _merged_restriction as _merged_restriction,
+    _more_restrictive as _more_restrictive,
+    _restriction_windows as _restriction_windows,
+    _window_covered as _window_covered,
+)
 from .owner_key_contracts import (
     OWNER_SIGNER_LINE as OWNER_SIGNER_LINE,
     OWNER_SIGNERS_MAX_BYTES as OWNER_SIGNERS_MAX_BYTES,
@@ -183,8 +192,6 @@ PROVIDER_OBSERVATION_TYPES = {
 # A run keeps only rate-limit events more restrictive than those it already
 # recorded, so this cap is reached only by a stream that keeps escalating.
 MAX_RUN_RATE_LIMIT_RECORDS = 64
-CLAUDE_STATUS_RANK = {None: 0, "allowed": 0, "allowed_warning": 1, "rejected": 2}
-BILLING_RANK = {False: 0, None: 1, True: 2}
 INSTALLED_ROUTING_POLICY = (
     Path(__file__).resolve().parent.parent / "config" / "routing-policy.json"
 )
@@ -1752,113 +1759,6 @@ class SessionBinding:
     coverage: str
     event_codes: frozenset[str]
     expires_at_ms: int
-
-
-def _restriction_windows(record: dict[str, Any]) -> list[dict[str, Any]]:
-    """Include an unscoped fallback window for an aggregate Claude restriction."""
-
-    if record["windows"]:
-        return record["windows"]
-    if record["status"] in {"rejected", "allowed_warning"}:
-        return [{"scope": None, "window_minutes": None,
-                 "used_percent": None, "resets_at": None}]
-    return []
-
-
-def _effective_window_reset(window: dict[str, Any], observed_at_ms: int) -> int:
-    # Explicit resets are exclusive; the reset-less fallback is live through
-    # observed + horizon, inclusively, so its equivalent reset is one ms later.
-    return (window["resets_at"] if window["resets_at"] is not None
-            else observed_at_ms + EVIDENCE_HORIZON_MS + 1)
-
-
-def _window_covered(
-    window: dict[str, Any], earlier: dict[str, Any], *,
-    observed_at_ms: int, earlier_observed_at_ms: int,
-) -> bool:
-    """Whether an earlier window already restricts at least as much, as long."""
-
-    def used(item: dict[str, Any]) -> float:
-        return -1.0 if item["used_percent"] is None else float(item["used_percent"])
-
-    if (earlier["scope"], earlier["window_minutes"]) != (
-        window["scope"], window["window_minutes"]
-    ) or used(earlier) < used(window):
-        return False
-    return _effective_window_reset(earlier, earlier_observed_at_ms) >= _effective_window_reset(
-        window, observed_at_ms
-    )
-
-
-def _more_restrictive(record: dict[str, Any], prior: list[dict[str, Any]]) -> bool:
-    """Whether a run's new rate-limit record restricts more than its earlier ones.
-
-    Billing is ranked usable over unknown over unusable, and only a higher rank
-    is kept, because admission reads the latest billing record. A headroom
-    record is kept for a higher status, or for any window that no earlier
-    record covers. Only an earlier record at least as restrictive in status can
-    cover a window, so a rejection is never hidden behind an allowed reading
-    that happened to last longer.
-    """
-
-    if not prior:
-        return True
-    if record["record_type"] == "provider_billing":
-        return BILLING_RANK[record["paid_usage_usable"]] > max(
-            BILLING_RANK[item["paid_usage_usable"]] for item in prior
-        )
-    status = CLAUDE_STATUS_RANK[record["status"]]
-    covering = [item for item in prior if CLAUDE_STATUS_RANK[item["status"]] >= status]
-    if not covering:
-        return True
-    return any(
-        not any(
-            _window_covered(window, other, observed_at_ms=record["observed_at_ms"],
-                            earlier_observed_at_ms=item["observed_at_ms"])
-            for item in covering for other in _restriction_windows(item)
-        )
-        for window in _restriction_windows(record)
-    )
-
-
-def _merged_restriction(
-    records: list[dict[str, Any]], *, observed_at_ms: int
-) -> dict[str, Any]:
-    """One headroom record as restrictive as all of a run's: the highest status,
-    and per window the highest use and the latest effective reset.
-
-    A reset-less or empty aggregate restriction counts through a day from its
-    own observation. Its equivalent exclusive reset is one millisecond later.
-    Every merged window has an explicit reset at least as late as its inputs,
-    so neither merging nor a clock rollback can shorten that restriction.
-    """
-
-    from .providers import headroom_record
-
-    status = max((item["status"] for item in records), key=CLAUDE_STATUS_RANK.__getitem__)
-    windows: dict[tuple[Any, Any], dict[str, Any]] = {}
-    for item in records:
-        for window in _restriction_windows(item):
-            key = (window["scope"], window["window_minutes"])
-            effective_reset = _effective_window_reset(window, item["observed_at_ms"])
-            merged = windows.get(key)
-            if merged is None:
-                windows[key] = {**window, "resets_at": effective_reset}
-                continue
-            used = [value for value in (merged["used_percent"], window["used_percent"])
-                    if value is not None]
-            merged["used_percent"] = max(used) if used else None
-            merged["resets_at"] = max(merged["resets_at"], effective_reset)
-    last = records[-1]
-    return headroom_record(
-        provider=last["provider"],
-        account_fingerprint=last["account_fingerprint"],
-        windows=[windows[key] for key in sorted(windows, key=repr)],
-        status=status,
-        run_id=last["run_id"],
-        phase=last["phase"],
-        observed_at_ms=observed_at_ms,
-    )
 
 
 class _RecheckDenied(Exception):
