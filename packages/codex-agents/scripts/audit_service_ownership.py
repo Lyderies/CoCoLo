@@ -42,7 +42,10 @@ SQL_METHODS = frozenset({
     "execute", "executemany", "executescript", "cursor", "fetchone", "fetchmany",
     "fetchall", "commit", "rollback", "set_trace_callback",
 })
-MAX_MODULES = 128
+# The complete runtime now has 129 Python modules. Keep a finite inventory
+# ceiling while retaining the existing total byte/AST/call/report budgets and
+# every client root. A larger inventory never changes conformance findings.
+MAX_MODULES = 256
 MAX_SOURCE_BYTES = 1_048_576
 MAX_TOTAL_BYTES = 8 * MAX_SOURCE_BYTES
 MAX_AST_NODES = 1_000_000

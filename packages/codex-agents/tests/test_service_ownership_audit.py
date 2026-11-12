@@ -235,6 +235,18 @@ class OwnershipMemoryTests(unittest.TestCase):
             self.assertEqual(reason, caught.exception.reason_code)
             self.assertEqual(reason, str(caught.exception))
 
+    def test_complete_module_ceiling_and_overflow_never_return_partial_inventory(self):
+        sources = {f'module_{index}.py': 'value = 1\n' for index in range(audit.MAX_MODULES)}
+        sources['module_0.py'] = 'import sqlite3\n'
+        report = audit.audit_sources(sources, ['module_0.py'])
+        self.assertEqual(set(sources), {entry['path'] for entry in report['modules'].values()})
+        self.assertFalse(report['boundary_conformant'])
+        sources['extra.py'] = 'raise RuntimeError("CANARY")\n'
+        with mock.patch.object(audit.ast, 'parse', side_effect=AssertionError('overflow parsed source')) as parse, \
+                self.assertRaisesRegex(audit.AuditError, '^audit_source_limit$'):
+            audit.audit_sources(sources, ['module_0.py'])
+        parse.assert_not_called()
+
     def test_compound_receivers_and_key_aliases_do_not_disappear(self):
         report = self.check({
             "client.py": (
