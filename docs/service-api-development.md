@@ -216,8 +216,7 @@ one. That recycling is not yet covered by a test.
 Not done: no retry, cancellation-before-dispatch or abandonment path through the
 driver, no driver state across a host restart (a run opened before a restart is
 refused at dispatch and keeps its account capacity until reconciled), the
-dispatch payload tombstone is not retired, the Claude bridge and native Claude
-paths are not driven, and `learning-bind-host-agent`, verification and QA still use
+Claude bridge and native Claude paths are not driven, and `learning-bind-host-agent`, verification and QA still use
 the legacy ledger.
 
 ### What is and is not covered
