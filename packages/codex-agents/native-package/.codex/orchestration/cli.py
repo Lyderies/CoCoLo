@@ -474,7 +474,9 @@ def _start_project_host(args):
                 snapshot = client.learning_migration(args.project_root)
                 if not snapshot["moved"] and not snapshot["has_learning"]:
                     client.learning_moved_if_empty(args.project_root)
-                elif not snapshot["moved"] and snapshot["drained"]:
+                elif (not snapshot["moved"] or snapshot["activation_pending"]) and snapshot["drained"]:
+                    # Not yet moved, or retired by a migration that stopped before
+                    # switching the copy on: run (or finish) it now.
                     _migrate_learning(argparse.Namespace(
                         state_root=args.state_root, project_root=args.project_root, status=False, rollback=False))
     except Exception:
@@ -488,12 +490,24 @@ _MOVED_LEARNING_COMMANDS = frozenset({
 })
 
 
+def _project_moved(state_root, project_root):
+    """Whether the ledger is retired for this project's learning (even if a copy is still to be switched on)."""
+    try:
+        client = _compatible_collector(CollectorPaths(state_root))
+        return client is not None and client.learning_migration(project_root)["moved"]
+    except (CollectorError, StateError, OSError):
+        return False
+
+
 def _learning_moved(args):
     """Whether this project's learning history lives in its own store, asked of the collector."""
     _start_collector_quietly(args)
     try:
         client = _compatible_collector(CollectorPaths(args.state_root))
-        return client is not None and client.learning_migration(args.project_root)["moved"]
+        if client is None:
+            return False
+        snapshot = client.learning_migration(args.project_root)
+        return snapshot["moved"] and not snapshot["activation_pending"]
     except (CollectorError, StateError, OSError):
         return False
 
@@ -570,6 +584,13 @@ _OWNER_REFUSALS = {
 }
 
 
+def _migration_state(snapshot):
+    """complete, pending (still to copy, or copied but not yet switched on) or not_needed."""
+    if snapshot["moved"]:
+        return "pending" if snapshot["activation_pending"] else "complete"
+    return "pending" if snapshot["has_learning"] else "not_needed"
+
+
 def _migrate_learning(args):
     """Move, report or roll back one project's learning history: offline owner work.
 
@@ -588,8 +609,7 @@ def _migrate_learning(args):
             # Read from the running services; nothing is stopped for a question.
             with _collector_contact():
                 snapshot = client.learning_migration(args.project_root)
-            return {"ready": True, "can_start_now": snapshot["drained"], "state": (
-                "complete" if snapshot["moved"] else "pending" if snapshot["has_learning"] else "not_needed")}
+            return {"ready": True, "can_start_now": snapshot["drained"], "state": _migration_state(snapshot)}
 
     def refused(reason):
         return {"ready": False, "reason_code": reason,
@@ -968,6 +988,10 @@ def _store_free_route(project_root: Path, task: dict, client_version: str | None
         trusted = None if state_root is None else routing_evidence_client(
             state_root, project_root, validate_task(task), host_client=_host_client())
         if trusted is None:
+            if state_root is not None and _project_moved(state_root, project_root):
+                # The project's own store is the authority on what its owner has
+                # rejected since; the ledger's frozen copy cannot vouch for a run.
+                raise ContractError("routing evidence is not held by this project's service")
             return None
     try:
         if load_released_candidate_digests(RELEASES_PATH, verify_signature=None):

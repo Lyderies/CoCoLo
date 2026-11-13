@@ -140,10 +140,23 @@ class ActiveRunCapacityTests(unittest.TestCase):
         self.case.claim()
         row = self.rows()[0]
         account = row["account_fingerprint"]
-        limit = row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS
+        grace = learning_store.CRASHED_CLAIM_GRACE_MS
+        limit = row["deadline_at_ms"] + grace
+        # The child's own deadline is monotonic, so both clocks must be well past it.
+        ended = row["execution_deadline_ns"] + grace * 1_000_000
         with mock.patch.object(learning_store, "INSTALLED_ACTIVE_RUN_LIMITS", ActiveRunLimits(1, 1)):
-            for now, busy in ((row["deadline_at_ms"] + 1, True), (limit, True), (limit + 1, False)):
-                with self.subTest(now=now), mock.patch.object(self.ledger, "_clock_ms", return_value=now), \
+            for now, monotonic, busy in (
+                    (row["deadline_at_ms"] + 1, ended, True), (limit, ended, True), (limit + 1, ended, False),
+                    # The wall clock was set far forward while the child may still be running.
+                    (limit + 10 * grace, row["execution_deadline_ns"] - 1, True),
+                    (limit + 10 * grace, ended - 1, True),
+                    # The monotonic clock restarted below the claim's reference: the machine
+                    # rebooted, so no child of that claim is alive.
+                    (limit + 1, row["clock_reference_ns"] - 1, False),
+                    (row["deadline_at_ms"] + 1, row["clock_reference_ns"] - 1, True)):
+                with self.subTest(now=now, monotonic=monotonic), \
+                        mock.patch.object(self.ledger, "_clock_ms", return_value=now), \
+                        mock.patch.object(self.ledger, "_capacity_clock_reference", return_value=monotonic), \
                         self.ledger._account_transaction():
                     if busy:
                         with self.assertRaisesRegex(ClaimError, "claim_busy"):

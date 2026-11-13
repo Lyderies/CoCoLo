@@ -4,7 +4,10 @@ Invoke only AFTER the existing init/billing/model/tool fences. Whole assistant
 and user frames count as described below. With partial messages enabled, a
 streamed text, thinking or tool-input fragment of a message whose start named the
 requested model also counts, at most once per PARTIAL_ACTIVITY_SECONDS, so one long
-message keeps a working child alive without flooding the monitor. The frame shapes are assumed from
+message keeps a working child alive without flooding the monitor. A fragment counts only
+inside a content block that was started in the current message, a message whose stream
+already started is not counted again, and the same fragment repeated in a block is not
+new work, so a replayed partial frame never refreshes the timer. The frame shapes are assumed from
 the client's documented stream-json output and still need a version-pinned
 real-client capability/cadence check. No frame, message, tool input, output or
 provider timestamp is retained; repeated work is recognised by a short digest of
@@ -20,6 +23,7 @@ MAX_ACTIVITY_ITEMS = 4096
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _TEXT_BLOCKS = {"text": "text", "thinking": "thinking"}
 PARTIAL_ACTIVITY_SECONDS = 1.0
+MAX_STREAM_BLOCKS = 256
 _DELTA_TEXT = {"text_delta": "text", "thinking_delta": "thinking", "input_json_delta": "partial_json"}
 
 
@@ -60,13 +64,15 @@ class ClaudeActivity:
         self._clock = clock
         self._streaming = False  # Inside a streamed message from the requested model.
         self._last_partial = None
+        self._streamed = set()  # Digests of the message IDs whose stream has started.
+        self._blocks = {}  # Open content blocks of the current message: index to its last fragment.
         self._started = False
         self._pending = set()
         self._done = set()
         self._work = set()
 
     def _count(self):
-        if len(self._pending) + len(self._done) + len(self._work) >= MAX_ACTIVITY_ITEMS:
+        if len(self._pending) + len(self._done) + len(self._work) + len(self._streamed) >= MAX_ACTIVITY_ITEMS:
             raise ClaudeActivityError("monitor_unavailable")
 
     def startup(self):
@@ -144,13 +150,32 @@ class ClaudeActivity:
             message = event.get("message")
             if type(message) is not dict or not _identifier(message.get("id")):
                 raise ClaudeActivityError()
+            started = hashlib.sha256(message["id"].encode()).digest()[:16]
+            self._blocks = {}
+            if started in self._streamed:
+                # A message whose stream already started is being replayed: none of
+                # its fragments is new work.
+                self._streaming = False
+                return None
+            self._count()
+            self._streamed.add(started)
             self._streaming = message.get("model") == self._model
             return None
         if kind == "message_stop":
-            self._streaming = False
+            self._streaming, self._blocks = False, {}
             return None
-        if kind != "content_block_delta" or not self._streaming:
-            return None  # Block starts/stops, message deltas and other models are not work.
+        if kind in {"content_block_start", "content_block_stop", "content_block_delta"}:
+            index = event.get("index")
+            if type(index) is not int or not 0 <= index < MAX_STREAM_BLOCKS:
+                return None  # A block that cannot be followed is never work.
+            if kind == "content_block_start":
+                self._blocks[index] = None
+                return None
+            if kind == "content_block_stop":
+                self._blocks.pop(index, None)
+                return None
+        if kind != "content_block_delta" or not self._streaming or index not in self._blocks:
+            return None  # Message deltas, other models and fragments outside an open block are not work.
         delta = event.get("delta")
         if type(delta) is not dict or delta.get("type") not in _DELTA_TEXT:
             return None
@@ -159,6 +184,10 @@ class ClaudeActivity:
             raise ClaudeActivityError()
         if not text.strip():
             return None  # Whitespace never refreshes the timer.
+        fragment = hashlib.sha256(f"{delta['type']}\0{text}".encode()).digest()[:16]
+        if self._blocks[index] == fragment:
+            return None  # The same fragment again (a replayed frame) is not new work.
+        self._blocks[index] = fragment
         now = self._clock()
         if self._last_partial is not None and now - self._last_partial < PARTIAL_ACTIVITY_SECONDS:
             return None

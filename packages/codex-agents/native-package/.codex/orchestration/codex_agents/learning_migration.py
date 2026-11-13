@@ -10,7 +10,8 @@ Order, so that a failure at any point can be run again:
 1. stage: a sealed backup of the project's ledger partition is copied, byte for
    byte, into the project store (records, owner signatures, QA rows and the full
    original image), and compared with the ledger again before it counts;
-2. retire: the ledger stops accepting learning records for the project;
+2. retire: the ledger stops accepting learning records for the project, and notes
+   that the copy still has to be switched on;
 3. activate: the project store starts reading the staged records.
 
 Between 1 and 2 nothing has changed for anyone. Between 2 and 3 the project
@@ -27,7 +28,9 @@ from __future__ import annotations
 
 from .history_contracts import HistoryError
 from .learning_source_transfer import stage_source
-from .project_learning_activation import activate, activation, deactivate, discard_import, staged_imports
+from .project_learning_activation import (
+    activate, activation, deactivate, derived_records, discard_import, staged_imports,
+)
 from .sql_read_budget import SQLReadLimits
 
 BACKUP_LIFETIME_MS = 24 * 60 * 60 * 1000
@@ -53,7 +56,8 @@ def migration_status(ledger, history, project_id):
     if record is not None and not moved:
         raise MigrationError("migration_inconsistent")
     if moved:
-        pending = record is None and bool(staged_imports(history))
+        pending = ledger.learning_activation_pending(project_id) or (
+            record is None and bool(staged_imports(history)))
         return _report("pending" if pending else "complete", history, ledger, project_id)
     return _report("pending" if ledger.has_learning_history(project_id) else "not_needed",
                    history, ledger, project_id)
@@ -73,6 +77,7 @@ def migrate_project(ledger, history, project_id, *, now_ms):
                     raise MigrationError("migration_inconsistent")
                 if imports:
                     activate(history, imports[0], now_ms=now_ms)
+            ledger.clear_learning_activation_pending(project_id)
             return _report("complete", history, ledger, project_id)
         for stale in staged_imports(history):
             discard_import(history, stale)  # An attempt that never retired the ledger.
@@ -85,19 +90,27 @@ def migrate_project(ledger, history, project_id, *, now_ms):
         receipt = stage_source(ledger, history, project_id, name, import_id=import_id, work_limits=WORK_LIMITS)
         if any(receipt[part]["state"] != "staged" for part in ("source", "records", "qa")):
             raise MigrationError("migration_incomplete")
-        ledger.set_learning_moved(project_id, True)
+        ledger.set_learning_moved(project_id, True, activation_pending=True)
         activate(history, import_id, now_ms=now_ms)
+        ledger.clear_learning_activation_pending(project_id)
         return _report("complete", history, ledger, project_id)
     except HistoryError as error:
         raise MigrationError(_REASONS.get(error.reason_code, "migration_unavailable")) from None
 
 
 def rollback_project(ledger, history, project_id):
-    """Make the ledger the project's learning store again; the staged import is kept."""
+    """Make the ledger the project's learning store again; the staged import is kept.
+
+    Refused once the project store holds learning the ledger would not have:
+    records written after an import was switched on, or, for a project that
+    moved with nothing to import, any derived learning record at all.
+    """
     try:
         record = activation(history)
         if record is not None:
             deactivate(history, expected=record)
+        elif ledger.learning_moved(project_id) and derived_records(history):
+            raise HistoryError("history_learning_reconciliation")
         ledger.set_learning_moved(project_id, False)
         return _report("rolled_back", history, ledger, project_id)
     except HistoryError as error:

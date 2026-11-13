@@ -287,7 +287,7 @@ class ProjectDriverTests(DriverHarness):
         process = self.separate_dispatch(context, route_path, run_handle)
         self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
         client = CollectorClient(self.state.socket, timeout=5)
-        self.assertEqual({'moved': False, 'has_learning': False, 'drained': False},
+        self.assertEqual({'moved': False, 'has_learning': False, 'drained': False, 'activation_pending': False},
                          client.learning_migration(self.project))
         with self.assertRaises(CollectorError) as busy:
             client.shutdown(only_if_drained=True)
@@ -327,7 +327,8 @@ class ProjectDriverTests(DriverHarness):
         replacement.chmod(0o600)
         os.replace(replacement, hint)
         busy = mock.Mock()
-        busy.learning_migration.return_value = {'moved': False, 'has_learning': False, 'drained': False}
+        busy.learning_migration.return_value = {'moved': False, 'has_learning': False, 'drained': False,
+                                                'activation_pending': False}
         with mock.patch.object(cli, '_compatible_collector', return_value=busy):
             refused = self.cli_for(self.project, 'learning-open-orchestration', expected=2)
         self.assertEqual('project_service_other_version', refused['reason_code'])
@@ -339,6 +340,23 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, json.loads(hint.read_text())['scope']['runtime_digest'])
         self.assertEqual('active', self.cli('learning-orchestration-status', '--orchestration-handle',
                                             opened['orchestration_handle'])['status'])
+
+    def test_a_service_asked_to_stop_finishes_the_run_it_holds(self):
+        from codex_agents.client_runtime import runtime_hint_path
+
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 4},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+        # Its hint is withdrawn (as a replacement or a migration would) while the child
+        # runs: the service is not found by new commands, but it does not drop the run.
+        runtime_hint_path(self.paths, self.project).unlink()
+        output, errors = process.communicate(timeout=60)
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        self.assertEqual('result', json.loads(output)['bridge_report']['outcome'])
+        self.assertNotIn(('driver', 'stopping', 'cancelled'), self.stopped_runs)
 
     def test_an_owner_ledger_command_is_refused_while_a_child_runs(self):
         context, route_path, orchestration, run_handle = self.open_run()
@@ -559,6 +577,13 @@ class HostVerificationTests(DriverHarness):
         unknown = self.write('unknown-task.json', {**hard, 'routing_evidence_refs': ['outcome:' + 'f' * 64]})
         with mock.patch.object(cli, '_learning_ledger', side_effect=learning_store.LedgerError("routing evidence is not QA accepted")):
             self.assertFalse(self.cli('learning-route', '--task', unknown, expected=2)['ready'])
+        # Once the project's learning lives in its own store, the ledger's frozen copy
+        # cannot vouch for a run: the owner may have rejected it since.
+        from codex_agents.collector_client import CollectorClient
+        self.assertTrue(CollectorClient(self.state.socket, timeout=5).learning_moved_if_empty(self.project))
+        with mock.patch.object(cli, '_learning_ledger', side_effect=AssertionError('ledger path')):
+            self.assertFalse(self.cli('learning-route', '--task', unknown, expected=2)['ready'])
+            self.assertIn('hard_end_to_end_evidence', json.dumps(self.cli('learning-route', '--task', hard_path)))
 
     def test_a_complete_orchestration_never_opens_the_ledger_or_pauses_the_collector(self):
         from tests.test_bridge import passing_check_report

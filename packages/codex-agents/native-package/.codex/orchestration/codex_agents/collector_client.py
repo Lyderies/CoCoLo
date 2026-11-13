@@ -267,7 +267,7 @@ class CollectorClient:
         """Whether this project's learning history still has to move, and whether a move could start now."""
         response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "learning_migration",
                                   "project_root": str(project_root.resolve())})
-        names = ("moved", "has_learning", "drained")
+        names = ("moved", "has_learning", "drained", "activation_pending")
         if any(type(response.get(name)) is not bool for name in names):
             raise CollectorError("collector response is invalid", code="response_invalid")
         return {name: response[name] for name in names}

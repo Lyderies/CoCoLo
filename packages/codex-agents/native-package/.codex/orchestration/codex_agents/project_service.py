@@ -139,7 +139,11 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
             checked[0] = time.monotonic()
             # Stop when idle, or when the state under this host has been removed.
             limit = max(idle_stop_ns, retaining_idle_stop_ns) if host.retaining() else idle_stop_ns
-            return host.withdrawn() or host.exhausted() or host.idle_ns() >= limit
+            if host.withdrawn():
+                # Asked to stop (its hint was withdrawn): never from under a run it
+                # holds. It finishes that run first; no new client can find it meanwhile.
+                return not host.holding()
+            return host.exhausted() or host.idle_ns() >= limit
         return False
 
     try:

@@ -54,18 +54,30 @@ def _verified(outcome: dict[str, Any], task_slice: str, accepted_qa: frozenset[s
     )
 
 
+def outcome_lineage(project_outcomes: Iterable[tuple[dict[str, Any], Any]]) -> dict[str, list]:
+    """Every outcome of a project, in sequence order, grouped by assignment: retry ancestry."""
+
+    lineage: dict[str, list[tuple[dict[str, Any], Any]]] = {}
+    for outcome, sequence in project_outcomes:
+        lineage.setdefault(str(outcome["assignment_id"]), []).append((outcome, sequence))
+    return lineage
+
+
 def check_candidate_eligibility(
     candidate: dict[str, Any],
-    evidence: list[tuple[dict[str, Any], int]],
+    evidence: list[tuple[dict[str, Any], Any]],
     *,
     accepted_qa: frozenset[str] | set[str],
-    project_outcomes: Iterable[tuple[dict[str, Any], int]],
+    project_outcomes: Iterable[tuple[dict[str, Any], Any]] | None = None,
+    lineage: dict[str, list] | None = None,
 ) -> None:
     """Raise `EligibilityError` unless the candidate's evidence is a verified matched cohort.
 
     `evidence` is the candidate's outcome records with their store sequence,
-    one per evidence digest. `project_outcomes` is every outcome of the project
-    in sequence order, used to resolve retry ancestry.
+    one per evidence digest. Retry ancestry is resolved against every outcome
+    of the project: `project_outcomes` in sequence order, or the `lineage`
+    already built from them by `outcome_lineage`. Sequences only need to be
+    mutually comparable.
     """
 
     if len(evidence) != len(candidate["evidence_digests"]):
@@ -103,9 +115,8 @@ def check_candidate_eligibility(
     # exists in this project. Multiple records for one assignment are expected
     # while an unverified host outcome is superseded by accepted QA, but every
     # version must agree on its lineage and task fixture.
-    lineage: dict[str, list[tuple[dict[str, Any], int]]] = {}
-    for outcome, sequence in project_outcomes:
-        lineage.setdefault(str(outcome["assignment_id"]), []).append((outcome, sequence))
+    if lineage is None:
+        lineage = outcome_lineage(project_outcomes or ())
     for versions_of_one in lineage.values():
         claims = {
             (item.get("retry_attempt", 1), item.get("retry_of_assignment_id"), item["task_slice"],

@@ -34,9 +34,10 @@ from .learning_cycle_core import (
     MAX_CASES, MAX_OUTCOMES, MAX_SNAPSHOT_BYTES, LearningCycleBoundsError, plan_learning_cycle,
     select_mining_outcomes,
 )
-from .learning_eligibility import EligibilityError, check_candidate_eligibility
+from .learning_eligibility import EligibilityError, check_candidate_eligibility, outcome_lineage
 from .project_learning_activation import activation
 from .project_learning_identity import key_domain_digest, prepare_candidate, prepare_cases
+from .project_learning_owner import rejected_run_ids
 
 MAX_JOBS = 8
 CYCLE_SECONDS = 120.0
@@ -63,7 +64,7 @@ class _Job:
     as_of_ms: int
     deadline: float
     rows: dict
-    state: str = "selecting"  # selecting, mining, planning, finalizing, ready, failed
+    state: str = "waiting"  # waiting, selecting, mining, planning, finalizing, ready, failed
     reason: str | None = None
     thread: threading.Thread | None = None
     cancelled: threading.Event = field(default_factory=threading.Event)
@@ -73,6 +74,8 @@ class _Job:
     invalidated: frozenset = frozenset()
     accepted_qa: frozenset = frozenset()
     imported: str | None = None  # The activated legacy import whose records join the corpus.
+    lineage: dict | None = None
+    runs: dict = field(default_factory=dict)  # Outcome record identity to its run.
     mining: list = field(default_factory=list)
     mined: list = field(default_factory=list)
     plan: dict | None = None
@@ -88,6 +91,8 @@ def read_cycle_rows(history, now_ms=0):
     been brought over and switched on, that import's records before them. An
     outcome's sequence is (0, n) when imported and (1, n) when live. Outcomes
     and feedback past retention are left out, as the legacy ledger expired them.
+    Rows are read one at a time and the read stops at the first bound exceeded,
+    so no more than the snapshot limit is ever held.
     """
     history._require_owner()
     if history._connection.in_transaction:
@@ -96,72 +101,85 @@ def read_cycle_rows(history, now_ms=0):
     horizon = now_ms - RETENTION_MS
     cutover = activation(history)
     imported = None if cutover is None else cutover["import_id"]
-    outcomes, others, attested = [], [], []
     rows = {"outcome": [], "qa": [], "accepted_qa": [], "import_id": imported,
             **{kind: [] for kind in _OTHER_TYPES}}
+    used = {"bytes": 0, "outcome": 0, "other": 0, "qa": 0}
+
+    def take(statement, parameters, kind, limit):
+        """Rows one at a time, refused as soon as a count or the byte total is over its bound."""
+        cursor = connection.execute(statement, (*parameters, limit + 1 - used[kind]))
+        try:
+            for row in cursor:
+                content = row[-1]
+                if type(content) is not bytes:
+                    raise HistoryError("history_incompatible")
+                used[kind] += 1
+                used["bytes"] += len(content)
+                if used[kind] > limit or used["bytes"] > MAX_SNAPSHOT_BYTES:
+                    raise HistoryError("history_learning_capacity")
+                yield row
+        finally:
+            cursor.close()
+
+    def outcome(row, origin):
+        identity, digest, sequence, content = row
+        if type(identity) is not str or not matches(digest, _DIGEST) or not valid_integer(sequence, minimum=1):
+            raise HistoryError("history_incompatible")
+        rows["outcome"].append((identity, digest, content, (origin, sequence)))
+
+    def other(row):
+        if row[0] not in _OTHER_TYPES:
+            raise HistoryError("history_incompatible")
+        rows[row[0]].append(row[1])
+
+    def review(row):
+        if not matches(row[0], _DIGEST):
+            raise HistoryError("history_incompatible")
+        rows["qa"].append((row[0], row[1]))
+
     if imported is not None:
         current = "(expires_at_ms IS NULL OR expires_at_ms>?)"
-        outcomes = [(*row, 0) for row in connection.execute(
-            "SELECT record_id,content_digest,content,source_sequence FROM project_learning_records "
-            "WHERE project_id=? AND import_id=? AND record_type='outcome' AND " + current +
-            " ORDER BY source_sequence LIMIT ?", (project, imported, now_ms, MAX_OUTCOMES + 1))]
-        others = connection.execute(
-            "SELECT record_type,content FROM project_learning_records WHERE project_id=? AND import_id=? "
-            "AND record_type IN (?,?,?) AND " + current + " ORDER BY source_sequence LIMIT ?",
-            (project, imported, *_OTHER_TYPES, now_ms, MAX_CASES + MAX_OUTCOMES + 1)).fetchall()
+        for row in take(
+                "SELECT record_id,content_digest,source_sequence,content FROM project_learning_records "
+                "WHERE project_id=? AND import_id=? AND record_type='outcome' AND " + current +
+                " ORDER BY source_sequence LIMIT ?", (project, imported, now_ms), "outcome", MAX_OUTCOMES):
+            outcome(row, 0)
+        for row in take(
+                "SELECT record_type,content FROM project_learning_records WHERE project_id=? AND import_id=? "
+                "AND record_type IN (?,?,?) AND " + current + " ORDER BY source_sequence LIMIT ?",
+                (project, imported, *_OTHER_TYPES, now_ms), "other", MAX_CASES + MAX_OUTCOMES):
+            other(row)
         # Accepted QA of the old ledger: its operational QA rows, and the
         # owner-attested formal QA records it had admitted.
         accepted = connection.execute(
             "SELECT qa_digest FROM project_learning_qa_records WHERE project_id=? AND import_id=? "
             "AND accepted=1 LIMIT ?", (project, imported, MAX_QA_ROWS + 1)).fetchall()
-        attested = connection.execute(
-            "SELECT r.content_digest,r.content FROM project_learning_records r "
-            "JOIN project_learning_attestations a ON a.project_id=r.project_id AND a.import_id=r.import_id "
-            "AND a.subject_record_id=r.record_id WHERE r.project_id=? AND r.import_id=? "
-            "AND r.record_type='qa_evidence' LIMIT ?", (project, imported, MAX_QA_ROWS + 1)).fetchall()
-        if len(accepted) > MAX_QA_ROWS or len(attested) > MAX_QA_ROWS:
+        if len(accepted) > MAX_QA_ROWS:
             raise HistoryError("history_learning_capacity")
         for (digest,) in accepted:
             if not matches(digest, _DIGEST):
                 raise HistoryError("history_incompatible")
             rows["accepted_qa"].append(digest)
-    if len(outcomes) > MAX_OUTCOMES or len(others) > MAX_CASES + MAX_OUTCOMES:
-        raise HistoryError("history_learning_capacity")
-    live = [(*row, 1) for row in connection.execute(
-        "SELECT record_id,content_digest,content,source_sequence FROM records "
-        "INDEXED BY records_learning_outcomes "
-        "WHERE project_id=? AND record_type='outcome' AND ingested_at_ms>? ORDER BY source_sequence LIMIT ?",
-        (project, horizon, MAX_OUTCOMES + 1 - len(outcomes)))]
-    outcomes += live
-    others = [*others, *connection.execute(
-        "SELECT record_type,content FROM records WHERE project_id=? AND record_type IN (?,?,?) "
-        "AND (record_type!='feedback' OR ingested_at_ms>?) ORDER BY source_sequence LIMIT ?",
-        (project, *_OTHER_TYPES, horizon, MAX_CASES + MAX_OUTCOMES + 1 - len(others)))]
-    reviews = [*attested, *connection.execute(
-        "SELECT qa_digest,qa FROM project_operational_qa WHERE project_id=? LIMIT ?",
-        (project, MAX_QA_ROWS + 1 - len(attested)))]
-    if (len(outcomes) > MAX_OUTCOMES or len(others) > MAX_CASES + MAX_OUTCOMES
-            or len(reviews) > MAX_QA_ROWS):
-        raise HistoryError("history_learning_capacity")
-    size = 0
-    for identity, digest, content, sequence, origin in outcomes:
-        if (type(identity) is not str or not matches(digest, _DIGEST) or type(content) is not bytes
-                or not valid_integer(sequence, minimum=1)):
-            raise HistoryError("history_incompatible")
-        size += len(content)
-        rows["outcome"].append((identity, digest, content, (origin, sequence)))
-    for digest, content in reviews:
-        if not matches(digest, _DIGEST) or type(content) is not bytes:
-            raise HistoryError("history_incompatible")
-        size += len(content)
-        rows["qa"].append((digest, content))
-    for kind, content in others:
-        if kind not in _OTHER_TYPES or type(content) is not bytes:
-            raise HistoryError("history_incompatible")
-        size += len(content)
-        rows[kind].append(content)
-    if size > MAX_SNAPSHOT_BYTES:
-        raise HistoryError("history_learning_capacity")
+        for row in take(
+                "SELECT r.content_digest,r.content FROM project_learning_records r "
+                "JOIN project_learning_attestations a ON a.project_id=r.project_id AND a.import_id=r.import_id "
+                "AND a.subject_record_id=r.record_id WHERE r.project_id=? AND r.import_id=? "
+                "AND r.record_type='qa_evidence' LIMIT ?", (project, imported), "qa", MAX_QA_ROWS):
+            review(row)
+    for row in take(
+            "SELECT record_id,content_digest,source_sequence,content FROM records "
+            "INDEXED BY records_learning_outcomes "
+            "WHERE project_id=? AND record_type='outcome' AND ingested_at_ms>? ORDER BY source_sequence LIMIT ?",
+            (project, horizon), "outcome", MAX_OUTCOMES):
+        outcome(row, 1)
+    for row in take(
+            "SELECT record_type,content FROM records WHERE project_id=? AND record_type IN (?,?,?) "
+            "AND (record_type!='feedback' OR ingested_at_ms>?) ORDER BY source_sequence LIMIT ?",
+            (project, *_OTHER_TYPES, horizon), "other", MAX_CASES + MAX_OUTCOMES):
+        other(row)
+    for row in take("SELECT qa_digest,qa FROM project_operational_qa WHERE project_id=? LIMIT ?",
+                    (project,), "qa", MAX_QA_ROWS):
+        review(row)
     return rows
 
 
@@ -266,6 +284,7 @@ class ProjectLearning:
         digests = {record["record_id"]: digest for record, digest, _ in outcomes}
         job.outcomes, job.cases = outcomes, cases
         job.mining = [(record["record_id"], digests[record["record_id"]]) for record in mining]
+        job.runs = {record["record_id"]: record["run_id"] for record in mining}
         job.imported = job.rows["import_id"]
         job.rows = {}
 
@@ -274,6 +293,8 @@ class ProjectLearning:
         job.plan = plan_learning_cycle(
             [record for record, _, _ in job.outcomes], all_cases=job.cases, as_of_ms=job.as_of_ms,
             max_age_ms=job.max_age_ms, owner_invalidated_run_ids=job.invalidated, checkpoint=checkpoint)
+        # Retry ancestry for the candidate gate, built once here rather than per candidate.
+        job.lineage = outcome_lineage((record, sequence) for record, _, sequence in job.outcomes)
 
     def _start(self, job, step):
         job.thread = threading.Thread(target=self._work, args=(job, step), daemon=True,
@@ -283,7 +304,7 @@ class ProjectLearning:
     # Owner thread ----------------------------------------------------------------
     def _fail(self, job, reason):
         job.state, job.reason = "failed", reason
-        job.rows, job.outcomes, job.cases, job.plan = {}, [], [], None
+        job.rows, job.outcomes, job.cases, job.plan, job.lineage, job.runs = {}, [], [], None, None, {}
         job.accepted_qa = frozenset()
 
     def _advance(self, job, history):
@@ -292,15 +313,24 @@ class ProjectLearning:
         if job.failure is not None:
             self._fail(job, job.failure)
             return
-        running = any(other.thread is not None and other.thread.is_alive() for other in self._jobs.values())
+        if job.state == "waiting":
+            # One cycle at a time holds a corpus: the others wait their turn with nothing read.
+            if any(other.state not in {"waiting", "ready", "failed"} for other in self._jobs.values()):
+                return
+            job.as_of_ms = self._clock_ms()
+            job.rows = read_cycle_rows(history, job.as_of_ms)
+            job.state = "selecting"
         if job.state == "selecting":
             if job.thread is None:
-                if not running:  # One calculation at a time; the others wait their turn.
-                    self._start(job, self._select)
+                self._start(job, self._select)
                 return
             job.thread, job.state = None, "mining"
         if job.state == "mining":
             domain = key_domain_digest(history)
+            # The owner may have rejected a run since the snapshot: nothing is derived from it.
+            rejected = rejected_run_ids(history)
+            job.invalidated = job.invalidated | rejected  # The plan leaves those runs out too.
+            job.mining = [item for item in job.mining if job.runs.get(item[0]) not in rejected]
             for _ in range(MINING_BATCHES_PER_STEP):
                 if not job.mining:
                     break
@@ -315,8 +345,7 @@ class ProjectLearning:
             job.state = "planning"
         if job.state == "planning":
             if job.thread is None:
-                if not running:
-                    self._start(job, self._plan)
+                self._start(job, self._plan)
                 return
             job.thread, job.state = None, "finalizing"
         if job.state == "finalizing":
@@ -327,6 +356,7 @@ class ProjectLearning:
 
         domain = key_domain_digest(history)
         by_digest = {digest: (record, sequence) for record, digest, sequence in job.outcomes}
+        invalidated = job.invalidated | rejected_run_ids(history)  # As of now, not of the snapshot.
         proposed = []
         for spec in job.plan["candidate_specs"]:
             try:
@@ -337,12 +367,10 @@ class ProjectLearning:
                                            expected_domain_digest=domain, import_id=job.imported)
                 if record["candidate_digest"] in job.candidates:
                     continue
-                if any(outcome["run_id"] in job.invalidated for outcome, _ in evidence):
+                if any(outcome["run_id"] in invalidated for outcome, _ in evidence):
                     continue
                 # The same gate the legacy ledger applies before it stores a candidate.
-                check_candidate_eligibility(
-                    record, evidence, accepted_qa=job.accepted_qa,
-                    project_outcomes=((outcome, sequence) for outcome, _, sequence in job.outcomes))
+                check_candidate_eligibility(record, evidence, accepted_qa=job.accepted_qa, lineage=job.lineage)
                 if append_learning_records(history, [record], ingested_at_ms=job.as_of_ms):
                     proposed.append(record["candidate_digest"])
                 job.candidates.add(record["candidate_digest"])
@@ -354,7 +382,7 @@ class ProjectLearning:
         report = {"mined_case_ids": job.mined, "proposed_candidate_digests": proposed,
                   "analysis": job.plan["analysis"], "proposal_status": job.plan["proposal_status"]}
         job.report, job.summary = canonical_json(report), learning_cycle_summary(report)
-        job.outcomes, job.cases, job.plan = [], [], None
+        job.outcomes, job.cases, job.plan, job.lineage, job.runs = [], [], None, None, {}
         job.state = "ready"
 
     def _view(self, job):
@@ -370,29 +398,27 @@ class ProjectLearning:
         if self._closed or not valid_integer(max_age_ms, minimum=1, maximum=MAX_AGE_MS):
             raise HistoryError("history_invalid_input")
         job = self._jobs.get(request_id)
+        if job is not None and job.max_age_ms != max_age_ms:
+            raise HistoryError("history_conflict")
+        # Cycles whose callers left are expired first, so they never keep new ones out.
+        for other in self._jobs.values():
+            if other.state not in {"ready", "failed"} and self._monotonic() >= other.deadline:
+                other.cancelled.set()
+                if other.thread is None or not other.thread.is_alive():
+                    self._fail(other, "learning_deadline")
         if job is None:
             for known in [key for key, old in self._jobs.items() if old.state in {"ready", "failed"}][:-2]:
                 del self._jobs[known]
             if len(self._jobs) >= MAX_JOBS:
                 return {"state": "failed", "reason_code": "learning_busy", "summary": None, "report_bytes": None}
-            now = self._clock_ms()
-            try:
-                rows = read_cycle_rows(history, now)
-            except HistoryError as error:
-                reason = ("learning_capacity" if error.reason_code == "history_learning_capacity"
-                          else "learning_unavailable")
-                return {"state": "failed", "reason_code": reason, "summary": None, "report_bytes": None}
-            job = self._jobs[request_id] = _Job(request_id, max_age_ms, now, self._monotonic() + CYCLE_SECONDS, rows)
-        elif job.max_age_ms != max_age_ms:
-            raise HistoryError("history_conflict")
+            # The deadline covers the wait for its turn and the read of the corpus.
+            job = self._jobs[request_id] = _Job(
+                request_id, max_age_ms, self._clock_ms(), self._monotonic() + CYCLE_SECONDS, {})
         # Any request moves every cycle on, so one whose caller left still finishes.
         for other in list(self._jobs.values()):
+            if other.cancelled.is_set():
+                continue
             try:
-                if other.state not in {"ready", "failed"} and self._monotonic() >= other.deadline:
-                    other.cancelled.set()
-                    if other.thread is None or not other.thread.is_alive():
-                        self._fail(other, "learning_deadline")
-                    continue
                 self._advance(other, history)
             except HistoryError as error:
                 self._fail(other, "learning_capacity" if error.reason_code == "history_learning_capacity"

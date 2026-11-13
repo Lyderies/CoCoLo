@@ -160,3 +160,29 @@ CAPACITY_OBJECTS = (
     ("table", "capacity_executions", CAPACITY_EXECUTIONS_SCHEMA),
     ("trigger", "preserve_active_capacity_on_project_deletion", CAPACITY_DELETE_GUARD_SCHEMA),
 )
+
+
+# A claimed run whose project host crashed never settles. Well past its hard
+# deadline its child cannot still be running, so it stops counting against the
+# limits (and no longer holds back a drained migration) while its row stays
+# unreleased. "Well past" must hold on both clocks: the wall clock alone can
+# be set forward while the child, whose own deadline is monotonic, is alive.
+CRASHED_CLAIM_GRACE_MS = 3_600_000
+
+
+def crashed_claim(alias, now_ms, monotonic_ns):
+    """SQL for "this unreleased claim's run cannot still be alive", with its parameters.
+
+    True only when the wall clock is more than the grace past the claim's
+    deadline AND the monotonic clock is too (or has restarted below the
+    claim's reference: the machine rebooted since, and no child survives that).
+    A claim without a monotonic deadline (an earlier version's) never qualifies.
+    """
+    column = (alias + ".") if alias else ""
+    return (
+        f"({column}deadline_at_ms IS NOT NULL AND {column}deadline_at_ms<? "
+        f"AND {column}execution_deadline_ns IS NOT NULL "
+        f"AND ({column}execution_deadline_ns<=? OR {column}clock_reference_ns>?))",
+        (now_ms - CRASHED_CLAIM_GRACE_MS, monotonic_ns - CRASHED_CLAIM_GRACE_MS * 1_000_000, monotonic_ns),
+    )
+

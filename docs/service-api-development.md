@@ -280,8 +280,12 @@ immediately before launch; a mismatch never launches.
   Billing, result, status and other-model frames never refresh the silence timer.
   Partial messages are on (`--include-partial-messages`): a streamed text, thinking or
   tool-input fragment counts only inside a message whose `message_start` named the
-  requested model, only when non-blank, and at most once per second, so a long message
-  keeps a working child alive without flooding the monitor. A streamed
+  requested model, only inside a content block that was started in that message, only
+  when non-blank and different from the block's previous fragment, and at most once
+  per second, so a long message keeps a working child alive without flooding the
+  monitor. A message whose stream already started is not counted again, so replaying
+  partial frames (one fragment, or a whole message's stream) never refreshes the
+  silence timer. A streamed
   `message_start` from another model marks the run rerouted, and a prohibited tool
   stops the child as soon as its `content_block_start` arrives; a paid or rejected
   rate-limit event stops it mid-message as before. A tool call outside
@@ -345,18 +349,26 @@ outcome is positive and completed, and the owner has not rejected the run (live 
 imported feedback). A citation the service holds but that fails any of these refuses
 the route; it is never ignored. A citation the service does not hold (another host
 class, a run from before a service restart, or a run an earlier version recorded) is
-left to the ledger's own check, as before. Kept originals live in memory (at most 64),
-so after a service restart earlier reconnaissance can no longer be cited. Test:
+left to the ledger's own check only while the project's learning still lives in the
+ledger; once it has moved, the citation is refused, because the owner may have rejected
+that run in the project store since and the ledger's frozen copy would not know. Kept
+originals live in memory (at most 64), so after a service restart earlier
+reconnaissance can no longer be cited. Test:
 `HostVerificationTests.test_accepted_reconnaissance_of_the_same_task_is_trusted_routing_evidence`.
 
 Host crash recovery (owner decision 2026-11-13: automatic). If a project host stops
 while a run is claimed, the new host does not know the run: `learning-run-status`
 reports it unavailable, never a confirmed outcome, and new runs open and run normally.
 The account keeps the claimed row unreleased (unconfirmed), but once its hard deadline
-is more than `CRASHED_CLAIM_GRACE_MS` (one hour) past, it no longer counts against the
-machine or account active-run limits: the detached watchdog has enforced that deadline,
-and a live host would have settled it long before. A late terminal still settles the
-row normally. No owner step is needed. Tests:
+is more than `CRASHED_CLAIM_GRACE_MS` (one hour) past on both clocks, it no longer
+counts against the machine or account active-run limits
+(`active_run_capacity.crashed_claim`): the wall clock must be past the claim's deadline
+plus the grace, and so must the monotonic clock against the claim's stored monotonic
+deadline, which is the one the child and its detached watchdog run on. A wall clock set
+forward therefore frees nothing. A monotonic clock below the claim's reference means
+the machine rebooted since, which no child survives. A claim without a monotonic
+deadline never qualifies. A late terminal still settles the row normally. No owner
+step is needed. Tests:
 `ActiveRunCapacityTests.test_an_unsettled_claim_long_past_its_hard_deadline_stops_counting_but_stays_unreleased`
 and `HostRestartTests`.
 
@@ -389,9 +401,17 @@ summary by default, the full report with `--full-report` (read in slices with
 (`learning_cycle_core`, unchanged) on the project store: it derives development
 evaluation cases from verified outcomes, analyses every outcome and proposes inert
 model/effort candidates. `project_learning_live.ProjectLearning` runs inside the
-history service. Every SQL statement is a short call on the store's owner thread;
-parsing and the calculation run on one `project-learning` thread, one cycle at a time,
-and stop themselves at a 120 second deadline; at most eight cycles are held. Cases and
+history service. SQL runs on the store's owner thread; parsing and the calculation
+run on one `project-learning` thread and stop themselves at a 120 second deadline that
+also covers a cycle's wait for its turn. One cycle at a time holds a corpus: the others
+(at most eight are held) wait with nothing read, and cycles whose callers left expire
+before a new one is refused. The corpus is read row by row and the read stops at the
+first bound exceeded (10,000 outcomes, 30,000 cases, candidates and feedback, 20,000 QA
+rows, 64 MiB in all), so that is the most ever held; the read itself, and the keyed
+derivation of up to 512 cases per request, are owner-thread work that the deadline does
+not interrupt. The owner's feedback is read again before cases are derived and before
+candidates are stored, so a run rejected after the snapshot was taken yields neither.
+Cases and
 candidates get the same keyed identities as the ledger gave them
 (`project_learning_identity`) and are appended idempotently with source `evaluator`;
 no client can write these record types. A candidate is stored only if it passes
@@ -511,9 +531,12 @@ What an update or an owner command may stop, and what it says when it may not:
   fallbacks, registration over an older runtime, migration) asks the collector to stop
   with `shutdown_if_drained`. With any run active or unsettled the collector answers
   `collector_busy`, keeps running, and the command reports "a child run is active;
-  nothing was changed, try again when none is running". A collector from before that
-  operation existed answers `operation_invalid`; it drives no runs and is stopped as
-  before. (`LearningStoreTests.test_maintenance_never_stops_a_collector_from_under_a_run`,
+  nothing was changed, try again when none is running". Only a collector of an older
+  release (its health says so, and the caller is the owner's registration) may answer
+  `operation_invalid` and be stopped as before: those releases drive no runs, their CLIs
+  run children themselves and pause the collector for every command. The same answer
+  from a collector of this version stops nothing.
+  (`LearningStoreTests.test_maintenance_never_stops_a_collector_from_under_a_run`,
   `ProjectDriverTests.test_an_owner_ledger_command_is_refused_while_a_child_runs`.)
 - A project's service that another version started (the project was updated while it
   idled) cannot answer this version's commands, and holds the project's store.
@@ -521,6 +544,11 @@ What an update or an owner command may stop, and what it says when it may not:
   collector reports no run active anywhere; otherwise the command reports
   `project_service_other_version` and nothing is stopped
   (`ProjectDriverTests.test_a_service_left_by_another_version_is_replaced_only_when_no_run_is_active`).
+  The check and the withdrawal are two steps. A service of this version is safe in
+  between: one whose hint is withdrawn finishes any run it holds before it stops
+  (`ProjectDriverTests.test_a_service_asked_to_stop_finishes_the_run_it_holds`). A
+  service of an earlier build stops at once; the only clients that could give it a new
+  run in between are that earlier build's, which the update has replaced.
   Commands that do not start a service (status of a run, dispatch, record) still report
   the service as unavailable in that situation.
 - Clients and collectors of different versions: a client refuses a collector with an
@@ -662,21 +690,27 @@ and does not block); the project's own service holding its store
 ledger that changed during the copy (`migration_source_changed`); a history larger
 than the staging bounds (`migration_too_large`). The collector is started again
 whatever happens. `learning-status` reports `learning_migration`: `complete`,
-`pending`, `not_needed` or `unavailable`.
+`pending` (still to copy, or copied and retired but not yet switched on: the ledger
+keeps a second row, `project_learning_activation_pending_v1:<project id>`, from the
+retirement until the activation, so the running services can tell and the next start
+finishes it), `not_needed` or `unavailable`.
 
-Rollback (`--rollback`) removes the activation row and the ledger's marker; the
+Rollback (`--rollback`) removes the activation row and the ledger's markers; the
 staged copy is kept. It is refused with `migration_reconciliation_required` once any
 case, candidate or feedback was written to the project store after the cutover,
-because those may rest on the imported history.
+because those may rest on the imported history; for a project that moved with nothing
+to import, once its store holds any case, candidate or feedback at all.
 
 When it happens. `cli._start_project_host` runs before a command starts a project's
 service (not when one already serves). A project with no learning history in the
 ledger is marked moved by the running collector (`learning_moved_if_empty`; nothing to
-copy, nothing paused). A project with history is migrated there and then if no run is
+copy, nothing paused), unless a run an earlier version opened in the ledger is still
+unsettled, whose outcome would be recorded there. A project with history is migrated there and then if no run is
 active anywhere; otherwise it stays pending and the next start tries again. Any failure
 leaves the project as it was and its service starts regardless. The explicit command
-does the same on request and, because it has confirmed no run is active, withdraws the
-project's idle service (its published hint) so that it can hold the store; the next
+does the same on request and withdraws the project's idle service (its published
+hint) so that it can hold the store; it does so with the collector stopped and the
+ledger checked drained, so no run exists and none can be claimed meanwhile. The next
 command starts the service again.
 
 Owner commands on a moved project (`cli._moved_learning_command`; the ledger is not
@@ -702,6 +736,9 @@ identity check; feedback alone carries its own authority, the owner's signature.
 - `learning-orchestration-report`: `history.orchestration_report` gives the same
   content-free statistics for an orchestration the project's service ran (any host
   class or the owner label); the ledger still answers for orchestrations it holds.
+  One checkpoint per orchestration is read to find it; rows are selected by SQLite and
+  only that orchestration's (at most 512 runs, else refused) are parsed in the service.
+  The SQLite scans themselves still grow with the project's history.
 - `learning-expire` still applies the ledger's retention to the ledger.
 - The candidate pipeline commands (evaluation assignments, trials, comparison,
   promotion, canary, rollback, drift, grader calibration, grants) are refused by the

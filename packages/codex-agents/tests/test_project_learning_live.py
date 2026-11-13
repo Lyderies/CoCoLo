@@ -191,7 +191,7 @@ class ProjectLearningLiveTests(unittest.TestCase):
         ticks = iter([0.0] + [live.CYCLE_SECONDS + 1.0] * 1000)
         late = live.ProjectLearning(clock_ms=lambda: 500, monotonic=lambda: next(ticks))
         self.addCleanup(late.close)
-        view = late.cycle(self.store, "one", MAX_AGE_MS)
+        view = run_cycle(late, self.store, "one")
         self.assertEqual({"state": "failed", "reason_code": "learning_deadline", "summary": None,
                           "report_bytes": None}, view)
         self.assertEqual([], stored(self.store, "evaluation_case"))
@@ -212,14 +212,42 @@ class ProjectLearningLiveTests(unittest.TestCase):
 
     def test_too_many_unfinished_cycles_are_refused_and_close_stops_everything(self):
         self.outcome()
-        blocked = live.ProjectLearning(clock_ms=lambda: 500)
+        now = [0.0]
+        blocked = live.ProjectLearning(clock_ms=lambda: 500, monotonic=lambda: now[0])
         with mock.patch.object(blocked, "_advance", lambda job, history: None):
             for index in range(live.MAX_JOBS):
                 self.assertEqual("pending", blocked.cycle(self.store, f"job-{index}", MAX_AGE_MS)["state"])
             self.assertEqual("learning_busy", blocked.cycle(self.store, "extra", MAX_AGE_MS)["reason_code"])
+            # Cycles whose callers never came back expire; they do not keep new ones out.
+            now[0] = live.CYCLE_SECONDS + 1
+            self.assertEqual("pending", blocked.cycle(self.store, "after", MAX_AGE_MS)["state"])
+            last = f"job-{live.MAX_JOBS - 1}"
+            self.assertEqual("learning_deadline", blocked.cycle(self.store, last, MAX_AGE_MS)["reason_code"])
         blocked.close()
         with self.assertRaises(HistoryError):
             blocked.cycle(self.store, "job-0", MAX_AGE_MS)
+
+    def test_one_cycle_at_a_time_holds_a_corpus(self):
+        self.outcome()
+        first = self.learning.cycle(self.store, "first", MAX_AGE_MS)
+        second = self.learning.cycle(self.store, "second", MAX_AGE_MS)
+        self.assertEqual(("pending", "pending"), (first["state"], second["state"]))
+        waiting = self.learning._jobs["second"]
+        self.assertEqual(("waiting", {}, []), (waiting.state, waiting.rows, waiting.outcomes))
+        self.assertEqual(1, run_cycle(self.learning, self.store, "first")["summary"]["mined_case_count"])
+        self.assertEqual(0, run_cycle(self.learning, self.store, "second")["summary"]["mined_case_count"])
+
+    def test_a_run_the_owner_rejects_after_the_snapshot_is_not_mined(self):
+        entry = self.outcome()
+        self.assertEqual("pending", self.learning.cycle(self.store, "one", MAX_AGE_MS)["state"])
+        self.learning._jobs["one"].thread.join(10)  # The snapshot is taken and the selection made.
+        fixture_record(self.store, {
+            "schema_version": 1, "record_type": "feedback", "record_id": "feedback-late",
+            "run_id": json.loads(entry.content)["run_id"], "label": "rejected"}, "owner", 20)
+        view = run_cycle(self.learning, self.store, "one")
+        self.assertEqual("ready", view["state"], view)
+        self.assertEqual(0, view["summary"]["mined_case_count"])
+        self.assertEqual([], stored(self.store, "evaluation_case"))
 
     def test_damaged_stored_record_fails_the_cycle_without_writing(self):
         self.outcome()

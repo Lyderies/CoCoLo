@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -3830,9 +3831,10 @@ class LearningStoreTests(unittest.TestCase):
         )
 
     def test_maintenance_never_stops_a_collector_from_under_a_run(self) -> None:
-        def acquire(shutdown_effect):
+        def acquire(shutdown_effect, health=True):
             with (
-                mock.patch("codex_agents.learning_store.CollectorClient.health", return_value={}),
+                mock.patch("codex_agents.learning_store.CollectorClient.health", return_value={})
+                if health else contextlib.nullcontext(),
                 mock.patch("codex_agents.learning_store.CollectorClient.shutdown",
                            side_effect=shutdown_effect) as shutdown,
                 mock.patch("codex_agents.learning_store._wait_for_collector_shutdown", return_value=True),
@@ -3853,9 +3855,17 @@ class LearningStoreTests(unittest.TestCase):
         self.assertIn("nothing was changed", str(busy.exception))
         # The maintenance lock was released: the next command can take it.
         self.assertEqual(([{"only_if_drained": True}], 1), acquire(None))
-        # A collector from before the check existed drives no runs and is stopped as before.
+        # A collector of this version that does not know the drained stop is not
+        # assumed idle: nothing is stopped.
+        with self.assertRaises(CollectorError) as unknown:
+            acquire(CollectorError("collector rejected request: operation_invalid", code="operation_invalid"))
+        self.assertEqual("operation_invalid", unknown.exception.code)
+        # Only a collector of an older release, which drives no runs, is stopped as before.
         older = iter([CollectorError("collector rejected request: operation_invalid", code="operation_invalid"), None])
-        self.assertEqual(([{"only_if_drained": True}, {}], 1), acquire(lambda **_: _raise_or_return(next(older))))
+        with mock.patch("codex_agents.learning_store.CollectorClient.health",
+                        side_effect=CollectorUpgradeRequired("older runtime")):
+            self.assertEqual(([{"only_if_drained": True}, {}], 1),
+                             acquire(lambda **_: _raise_or_return(next(older)), health=False))
         # Any other refusal is not treated as permission.
         with self.assertRaises(CollectorError) as other:
             acquire(CollectorError("collector rejected request: operation_rejected", code="operation_rejected"))

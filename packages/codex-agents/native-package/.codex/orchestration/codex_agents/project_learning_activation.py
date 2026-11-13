@@ -162,6 +162,15 @@ def written_since(history, record):
         (history.project_id, record["live_sequence"], *DERIVED_TYPES)).fetchone()[0]
 
 
+def derived_records(history):
+    """How many learning records this store holds that only the project store has."""
+    history._require_owner()
+    placeholders = ",".join("?" for _ in DERIVED_TYPES)
+    return history._connection.execute(
+        f"SELECT COUNT(*) FROM records WHERE project_id=? AND record_type IN ({placeholders})",
+        (history.project_id, *DERIVED_TYPES)).fetchone()[0]
+
+
 def deactivate(history, *, expected):
     """Undo the cutover named by `expected` (its full record). Refused with
     `history_learning_reconciliation` once learning records were written after it."""

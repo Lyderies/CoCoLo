@@ -143,11 +143,16 @@ class LearningMigrationTests(unittest.TestCase):
         self.assertTrue(self.source.learning_moved(self.project))
         self.assertIsNone(activation(self.target))
         self.assertEqual("pending", self.status()["state"])
+        # The ledger itself says the copy is not switched on yet, so the running
+        # services report it and the next start finishes it.
+        self.assertTrue(self.source.learning_activation_pending(self.project))
         self.reopen()
         with mock.patch.object(migration, "stage_source", side_effect=AssertionError("copied again")):
             report = self.migrate()
         self.assertEqual("complete", report["state"])
         self.assertEqual(23, report["imported_records"])
+        self.assertFalse(self.source.learning_activation_pending(self.project))
+        self.assertEqual("complete", self.status()["state"])
 
     def test_undrained_ledger_is_refused_and_left_as_it_was(self):
         with mock.patch.object(image, "_drained", side_effect=HistoryError("history_unavailable")), \
@@ -240,6 +245,19 @@ class LearningMigrationTests(unittest.TestCase):
             report["state"], report["ledger_retired"], report["import_id"], report["imported_records"]))
         self.assertEqual((), staged_imports(target))
         self.assertFalse(self.source.learning_moved(self.project))
+        self.assertFalse(self.source.learning_activation_pending(other))
+        # With nothing learned yet it can go straight back; once the project store
+        # holds learning of its own, going back would leave that behind.
+        self.assertEqual("rolled_back", migration.rollback_project(self.source, target, other)["state"])
+        self.assertEqual("complete", migration.migrate_project(self.source, target, other, now_ms=now_ms())["state"])
+        learning = live.ProjectLearning(clock_ms=now_ms)
+        self.addCleanup(learning.close)
+        fixture_record(target, verification_outcome("first-live"), "verifier", now_ms())
+        self.assertEqual(1, run_cycle(learning, target, "one")["summary"]["mined_case_count"])
+        with self.assertRaises(migration.MigrationError) as refused:
+            migration.rollback_project(self.source, target, other)
+        self.assertEqual("migration_reconciliation_required", refused.exception.reason_code)
+        self.assertTrue(self.source.learning_moved(other))
 
     def test_cutover_needs_the_offline_owners(self):
         self.source._collector_active = True
@@ -325,6 +343,38 @@ for _name in dir(cli_fixture.LearningCliTests):
         setattr(MigrationCliTests, _name, vars(cli_fixture.LearningCliTests)[_name])
 
 
+class EmptyRetirementTests(unittest.TestCase):
+    """A project with nothing to copy is retired by the running collector, but not from under a legacy run."""
+
+    def setUp(self):
+        from tests import test_learning_store as store_fixture
+
+        self.fixture = store_fixture.LearningStoreTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.ledger, self.project = self.fixture.ledger, self.fixture.project_a_id
+
+    def test_a_run_an_earlier_version_opened_keeps_the_ledger_until_it_settles(self):
+        self.fixture._admit(self.project)
+        self.assertFalse(self.ledger.has_learning_history(self.project))
+        orchestration, opened = self.fixture._pending_upgrade_run()
+        # Its outcome would still be recorded in the ledger.
+        self.assertFalse(self.ledger.mark_learning_moved_if_empty(self.project))
+        self.assertFalse(self.ledger.learning_moved(self.project))
+        self.ledger.set_orchestration_paused(
+            self.project, orchestration_handle=orchestration["orchestration_handle"], paused=True)
+        self.ledger.classify_host_run_abandoned(
+            self.project, run_handle=opened["run_handle"], reason="recovery_unavailable")
+        self.assertTrue(self.ledger.mark_learning_moved_if_empty(self.project))
+        self.assertTrue(self.ledger.mark_learning_moved_if_empty(self.project))  # Already moved.
+        self.assertFalse(self.ledger.learning_activation_pending(self.project))
+        # Another project is untouched, and one with history is never retired this way.
+        other = self.fixture.project_b_id
+        self.assertFalse(self.ledger.learning_moved(other))
+        self.fixture._admit_outcome(other, verification_outcome("has-history"), now_ms=now_ms())
+        self.assertFalse(self.ledger.mark_learning_moved_if_empty(other))
+
+
 class ActivationSchemaTests(unittest.TestCase):
     def test_schema15_store_gains_the_cutover_table_only_by_explicit_upgrade(self):
         from contextlib import closing
@@ -364,33 +414,45 @@ class DrainedRuleTests(unittest.TestCase):
         self.addCleanup(self.connection.close)
         self.connection.executescript(
             "CREATE TABLE host_run_bindings(project_id,handle_digest,binding_state);"
-            "CREATE TABLE active_run_capacity(project_id,handle_digest,deadline_at_ms,released_at_ms);")
+            "CREATE TABLE active_run_capacity(project_id,handle_digest,deadline_at_ms,released_at_ms,"
+            "clock_reference_ns,execution_deadline_ns);")
         self.now = 10 * learning_store.CRASHED_CLAIM_GRACE_MS
+        self.monotonic = self.now * 1_000_000  # Both clocks at the same instant, for simplicity.
 
-    def claim(self, name, *, deadline, released=None, binding="pending"):
+    def claim(self, name, *, deadline, released=None, binding="pending", monotonic_deadline="same"):
         self.connection.execute("INSERT INTO host_run_bindings VALUES('p',?,?)", (name, binding))
-        self.connection.execute("INSERT INTO active_run_capacity VALUES('p',?,?,?)", (name, deadline, released))
+        if monotonic_deadline == "same":
+            monotonic_deadline = None if deadline is None else deadline * 1_000_000
+        self.connection.execute("INSERT INTO active_run_capacity VALUES('p',?,?,?,?,?)", (
+            name, deadline, released, None if monotonic_deadline is None else 1, monotonic_deadline))
+
+    def drained(self):
+        image._drained(self.connection, self.now, self.monotonic)
 
     def test_settled_and_long_crashed_runs_do_not_block(self):
-        image._drained(self.connection, self.now)
+        self.drained()
         self.claim("done", deadline=self.now, released=self.now, binding="terminal")
         self.claim("driven-by-the-project-service", deadline=self.now, released=self.now)
         self.claim("crashed", deadline=self.now - learning_store.CRASHED_CLAIM_GRACE_MS - 1)
-        image._drained(self.connection, self.now)
+        self.drained()
 
     def test_running_recent_and_unaccounted_runs_block(self):
+        long_ago = self.now - learning_store.CRASHED_CLAIM_GRACE_MS - 1
         for name, arguments in (("running", {"deadline": self.now + 1}),
                                 ("recent", {"deadline": self.now - 1}),
-                                ("open-ended", {"deadline": None})):
+                                ("open-ended", {"deadline": None}),
+                                # Past on the wall clock only: it may have been set forward.
+                                ("wall-clock-only", {"deadline": long_ago, "monotonic_deadline": self.monotonic}),
+                                ("no-monotonic-deadline", {"deadline": long_ago, "monotonic_deadline": None})):
             with self.subTest(name=name):
                 self.connection.execute("DELETE FROM host_run_bindings")
                 self.connection.execute("DELETE FROM active_run_capacity")
                 self.claim(name, **arguments)
                 with self.assertRaisesRegex(HistoryError, "history_unavailable"):
-                    image._drained(self.connection, self.now)
+                    self.drained()
         self.connection.execute("DELETE FROM active_run_capacity")
         with self.assertRaisesRegex(HistoryError, "history_unavailable"):
-            image._drained(self.connection, self.now)  # A pending binding with no claim at all.
+            self.drained()  # A pending binding with no claim at all.
 
 
 if __name__ == "__main__":

@@ -570,11 +570,16 @@ class ProjectServiceHost:
         self._owner()
         return self._driver is not None and self._driver.retaining()
 
-    def idle_ns(self):
-        """Time since the last enrolled connection, or 0 while any run is held."""
+    def holding(self):
+        """Whether any run or unfinished work for one is held here."""
         self._owner()
         runtime = self._runtime
-        if len(runtime.pool._jobs) or len(runtime.persistence._jobs) or (self._driver is not None and self._driver.busy()):
+        return bool(len(runtime.pool._jobs) or len(runtime.persistence._jobs)
+                    or (self._driver is not None and self._driver.busy()))
+
+    def idle_ns(self):
+        """Time since the last enrolled connection, or 0 while any run is held."""
+        if self.holding():
             return 0
         return max(0, self._clock_ns() - self._frontend.last_enrolled_ns)
 

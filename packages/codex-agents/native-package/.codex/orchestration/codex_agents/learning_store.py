@@ -56,6 +56,7 @@ from .collector_client import (
 )
 from .active_run_capacity import CAPACITY_OBJECTS, CAPACITY_SCHEMA, CAPACITY_PARENT_SCHEMA, CAPACITY_COMPLETIONS_SCHEMA, CAPACITY_EXECUTIONS_SCHEMA
 from .active_run_capacity import INSTALLED_ACTIVE_RUN_LIMITS
+from .active_run_capacity import CRASHED_CLAIM_GRACE_MS as CRASHED_CLAIM_GRACE_MS, crashed_claim
 from .owned_execution import ExecutionCustodyError, OwnedExecutionKey, OwnedExecutionRegistry
 from .capacity_status_contracts import CapacityStatusInput, checked_capacity_status
 from .account_open_schema import HISTORY_OWNER_COLUMN, OPEN_OBJECTS, assert_open_schema, install_open_schema
@@ -147,6 +148,9 @@ DEFAULT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 # keeps that project's account rows and account-owned evidence; it accepts no
 # further learning records for it.
 LEARNING_MOVED_KEY = "project_learning_moved_v1:"
+# Set with the moved marker by a migration that still has to switch the copied
+# history on in the project store, and cleared when that is done.
+LEARNING_ACTIVATION_PENDING_KEY = "project_learning_activation_pending_v1:"
 LEARNING_MOVED_ERROR = "project learning has moved to its project store"
 LEARNING_MOVED_TYPES = frozenset({
     "outcome", "feedback", "evaluation_case", "evaluation_assignment", "qa_evidence",
@@ -195,7 +199,6 @@ PROBE_COOLDOWN_SECONDS = 300
 MAX_RUN_RATE_LIMIT_RECORDS = 64
 # How long after its hard deadline an unsettled claimed run still counts against
 # the account's active-run limits (a crashed project host never settles it).
-CRASHED_CLAIM_GRACE_MS = 3_600_000
 INSTALLED_ROUTING_POLICY = (
     Path(__file__).resolve().parent.parent / "config" / "routing-policy.json"
 )
@@ -3047,10 +3050,39 @@ class LearningLedger:
                 return True
             if self.has_learning_history(project_id):
                 return False
+            # A run an earlier version opened here would still record its outcome in
+            # the ledger: while one is unsettled the project is not retired.
+            crashed, crashed_parameters = crashed_claim("a", self._clock_ms(), time.monotonic_ns())
+            if self._connection.execute(
+                "SELECT 1 FROM host_run_bindings h WHERE h.project_id=? "
+                "AND h.binding_state='pending' AND NOT EXISTS("
+                "SELECT 1 FROM active_run_capacity a WHERE a.project_id=h.project_id "
+                f"AND a.handle_digest=h.handle_digest AND (a.released_at_ms IS NOT NULL OR {crashed})) LIMIT 1",
+                (project_id, *crashed_parameters),
+            ).fetchone() is not None:
+                return False
             self._connection.execute(
                 "INSERT INTO additive_migrations VALUES(?)", (LEARNING_MOVED_KEY + project_id,)
             )
             return True
+
+    def learning_activation_pending(self, project_id: str) -> bool:
+        """Whether a migration retired the ledger but has not yet switched the copy on."""
+
+        with self._lock:
+            return self._connection.execute(
+                "SELECT 1 FROM additive_migrations WHERE feature_key=?",
+                (LEARNING_ACTIVATION_PENDING_KEY + project_id,),
+            ).fetchone() is not None
+
+    def clear_learning_activation_pending(self, project_id: str) -> None:
+        if self._allow_schema_upgrade is not True or self._collector_active is not False:
+            raise LedgerError("learning store cutover requires the offline owner")
+        with self._lock, self._connection:
+            self._connection.execute(
+                "DELETE FROM additive_migrations WHERE feature_key=?",
+                (LEARNING_ACTIVATION_PENDING_KEY + project_id,),
+            )
 
     def learning_moved(self, project_id: str) -> bool:
         """Whether this project's learning history now lives in its project store."""
@@ -3058,10 +3090,14 @@ class LearningLedger:
         with self._lock:
             return self._learning_moved_locked(project_id)
 
-    def set_learning_moved(self, project_id: str, moved: bool) -> bool:
+    def set_learning_moved(
+        self, project_id: str, moved: bool, *, activation_pending: bool = False
+    ) -> bool:
         """Retire (or, for a rollback, restore) the ledger as this project's learning store.
 
         Offline owner work during a drained migration; returns whether it changed.
+        `activation_pending` records, in the same transaction, that a staged copy
+        still has to be switched on in the project store.
         """
 
         if self._allow_schema_upgrade is not True or self._collector_active is not False:
@@ -3079,10 +3115,15 @@ class LearningLedger:
                     "INSERT INTO additive_migrations VALUES(?)",
                     (LEARNING_MOVED_KEY + project_id,),
                 )
+                if activation_pending:
+                    self._connection.execute(
+                        "INSERT OR IGNORE INTO additive_migrations VALUES(?)",
+                        (LEARNING_ACTIVATION_PENDING_KEY + project_id,),
+                    )
             else:
                 self._connection.execute(
-                    "DELETE FROM additive_migrations WHERE feature_key=?",
-                    (LEARNING_MOVED_KEY + project_id,),
+                    "DELETE FROM additive_migrations WHERE feature_key IN (?,?)",
+                    (LEARNING_MOVED_KEY + project_id, LEARNING_ACTIVATION_PENDING_KEY + project_id),
                 )
             return True
 
@@ -5838,17 +5879,18 @@ class LearningLedger:
         policy.__post_init__()
         # A claimed run whose project host crashed never settles. Its hard
         # deadline is enforced by the detached watchdog, so well past that
-        # deadline the child cannot still be running: it stops counting against
-        # the limits, while its row stays unreleased (explicitly unconfirmed) and
-        # a late terminal still settles it normally.
+        # deadline on both the wall and the monotonic clock the child cannot
+        # still be running: it stops counting against the limits, while its row
+        # stays unreleased (explicitly unconfirmed) and a late terminal still
+        # settles it normally.
         now = self._clock_ms()
         if type(now) is not int:
             raise ClaimError("claim_unavailable")
-        expired_before = now - CRASHED_CLAIM_GRACE_MS
+        crashed, crashed_parameters = crashed_claim("", now, self._capacity_clock_reference())
         active = self._connection.execute(
             "SELECT 1 FROM active_run_capacity INDEXED BY active_capacity_machine "
-            "WHERE released_at_ms IS NULL AND (deadline_at_ms IS NULL OR deadline_at_ms>=?) LIMIT ?",
-            (expired_before, policy.machine),
+            f"WHERE released_at_ms IS NULL AND NOT {crashed} LIMIT ?",
+            (*crashed_parameters, policy.machine),
         ).fetchall()
         probe_active = self._connection.execute(
             "SELECT 1 FROM account_billing_probe_requests INDEXED BY billing_probe_active_machine "
@@ -5862,10 +5904,10 @@ class LearningLedger:
         # active rows even after a large conservative historical backfill.
         account_active = self._connection.execute(
             "SELECT 1 FROM active_run_capacity INDEXED BY active_capacity_account "
-            "WHERE released_at_ms IS NULL AND (deadline_at_ms IS NULL OR deadline_at_ms>=?) "
+            f"WHERE released_at_ms IS NULL AND NOT {crashed} "
             "AND (provider IS NULL OR (provider=? "
             "AND (? IS NULL OR account_fingerprint IS NULL OR account_fingerprint=?))) LIMIT ?",
-            (expired_before, provider, account, account, policy.account),
+            (*crashed_parameters, provider, account, account, policy.account),
         ).fetchall()
         account_probes = ([] if provider != 'claude' else self._connection.execute(
             "SELECT 1 FROM account_billing_probe_requests INDEXED BY billing_probe_active_account "
@@ -11263,6 +11305,7 @@ class CollectorServer:
                     "moved": self.ledger.learning_moved(project_id),
                     "has_learning": self.ledger.has_learning_history(project_id),
                     "drained": self.ledger.drained(),
+                    "activation_pending": self.ledger.learning_activation_pending(project_id),
                 }
             if request.get("op") == "learning_moved_if_empty" and set(request) == {
                 "protocol", "op", "project_root",
@@ -11417,11 +11460,13 @@ class CollectorMaintenance:
         transferred = False
         try:
             client = CollectorClient(state.socket)
+            older = False
             try:
                 client.health()
             except CollectorUpgradeRequired:
                 if not owner_registration:
                     raise
+                older = True
             except CollectorVersionError:
                 raise
             except CollectorError:
@@ -11437,7 +11482,10 @@ class CollectorMaintenance:
                         "a child run is active; nothing was changed, try again when none is running",
                         code="collector_busy",
                     ) from None
-                if error.code != "operation_invalid":
+                # Only a collector of an older release may lack the drained stop:
+                # those drive no runs (their CLIs run children themselves and pause
+                # the collector for every command). Anything else fails closed.
+                if error.code != "operation_invalid" or not older:
                     raise
                 client.shutdown()
             if _wait_for_collector_shutdown(client, state, deadline):

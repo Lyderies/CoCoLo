@@ -266,8 +266,9 @@ def status_client(state_root, project_root):
         report['active'] = collector_ready = True
         try:
             moved = CollectorClient(state.socket, timeout=1).learning_migration(Path(project_root))
-            report['learning_migration'] = ('complete' if moved['moved'] else
-                                            'pending' if moved['has_learning'] else 'not_needed')
+            report['learning_migration'] = (
+                ('pending' if moved['activation_pending'] else 'complete') if moved['moved']
+                else 'pending' if moved['has_learning'] else 'not_needed')
         except (CollectorError, OSError):
             pass  # Only this field stays unavailable.
     except CollectorError as error:

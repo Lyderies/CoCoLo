@@ -13,6 +13,7 @@ import os
 import sqlite3
 import stat
 import threading
+import time
 
 from .collector_paths import StateError, _assert_no_symlink_components, _check_owner_mode
 from .history_contracts import HistoryError, _DIGEST, _PROJECT, matches
@@ -141,23 +142,24 @@ def _registry(connection, project_id, file_id):
     return tuple(row)
 
 
-def _drained(connection, now):
+def _drained(connection, now, monotonic_ns=None):
     # A run the project's own service drove settles by releasing its claim; the
     # ledger never consumes its binding. A claim more than the crash grace past
     # its hard deadline belongs to a run whose host is gone (the account already
     # stopped counting it): it and its binding never settle, and must not hold
     # every later migration back.
-    from .learning_store import CRASHED_CLAIM_GRACE_MS
+    from .active_run_capacity import crashed_claim
 
-    crashed_before = now - CRASHED_CLAIM_GRACE_MS
+    monotonic_ns = time.monotonic_ns() if monotonic_ns is None else monotonic_ns
+    crashed, parameters = crashed_claim("a", now, monotonic_ns)
     if (_one(connection,
             "SELECT 1 FROM host_run_bindings h WHERE h.binding_state='pending' AND NOT EXISTS("
             "SELECT 1 FROM active_run_capacity a WHERE a.project_id=h.project_id "
-            "AND a.handle_digest=h.handle_digest AND (a.released_at_ms IS NOT NULL "
-            "OR (a.deadline_at_ms IS NOT NULL AND a.deadline_at_ms<?))) LIMIT 1", (crashed_before,))
+            f"AND a.handle_digest=h.handle_digest AND (a.released_at_ms IS NOT NULL OR {crashed})) LIMIT 1",
+            parameters)
             is not None or _one(connection,
-                "SELECT 1 FROM active_run_capacity WHERE released_at_ms IS NULL "
-                "AND (deadline_at_ms IS NULL OR deadline_at_ms>=?) LIMIT 1", (crashed_before,)) is not None):
+                f"SELECT 1 FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND NOT {crashed} LIMIT 1",
+                parameters) is not None):
         raise HistoryError("history_unavailable")
 
 

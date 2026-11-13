@@ -94,10 +94,28 @@ class ClaudeActivityTests(unittest.TestCase):
         self.assertEqual("activity", activity.observe(self.delta("thinking_delta", "thinking")))
         now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
         self.assertEqual("activity", activity.observe(self.delta("input_json_delta", "partial_json", '{"a"')))
+        # The same fragment replayed, interval after interval, is never new work.
+        for _ in range(5):
+            now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+            self.assertIsNone(activity.observe(self.delta("input_json_delta", "partial_json", '{"a"')))
+        self.assertEqual("activity", activity.observe(self.delta("input_json_delta", "partial_json", ': 1}')))
+        # A fragment for a block that never started, or that has stopped, is not work.
+        now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+        self.assertIsNone(activity.observe(self.stream(
+            "content_block_delta", index=1, delta={"type": "text_delta", "text": "PRIVATE-OTHER"})))
+        self.assertIsNone(activity.observe(self.stream("content_block_stop", index=0)))
+        self.assertIsNone(activity.observe(self.delta(value="PRIVATE-AFTER-STOP")))
         self.assertIsNone(activity.observe(self.stream("message_delta", delta={"stop_reason": "end_turn"})))
         self.assertIsNone(activity.observe(self.stream("message_stop")))
         now[0] += 10
         self.assertIsNone(activity.observe(self.delta()))  # After the message ended.
+        # The whole stream of that message replayed is not new work either; a new message is.
+        for message, expected in (("msg_1", None), ("msg_2", "activity")):
+            now[0] += 10
+            activity.observe(self.stream("message_start", message={"id": message, "model": MODEL}))
+            activity.observe(self.stream("content_block_start", index=0, content_block={"type": "text"}))
+            with self.subTest(message=message):
+                self.assertEqual(expected, activity.observe(self.delta(value="PRIVATE-REPLAY")))
         self.assertNotIn("PRIVATE", repr(vars(activity)))
 
     def test_partial_fragments_of_another_model_or_bad_shapes_never_count(self):
@@ -111,6 +129,7 @@ class ClaudeActivityTests(unittest.TestCase):
             fresh = ClaudeActivity(MODEL, bridge.CLAUDE_TOOLS, clock=lambda: 1.0)
             fresh.startup()
             fresh.observe(self.stream("message_start", message={"id": "msg_1", "model": MODEL}))
+            fresh.observe(self.stream("content_block_start", index=0, content_block={"type": "text"}))
             with self.subTest(frame=frame), self.assertRaisesRegex(ClaudeActivityError, "^claude_activity_invalid$"):
                 fresh.observe(frame)
         with self.assertRaises(ClaudeActivityError):
@@ -245,6 +264,8 @@ class ClaudeActivityExecutionTests(unittest.TestCase):
         rows = [{"frame": bridge_fixtures.init_frame()},
                 {"frame": {"type": "stream_event", "event": {"type": "message_start",
                                                              "message": {"id": "msg_1", "model": MODEL}}}},
+                {"frame": {"type": "stream_event", "event": {"type": "content_block_start", "index": 0,
+                                                             "content_block": {"type": "text", "text": ""}}}},
                 {"pause": "continue"},
                 {"frame": {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {
                     "type": "text_delta", "text": "PRIVATE-PARTIAL"}}}}]
