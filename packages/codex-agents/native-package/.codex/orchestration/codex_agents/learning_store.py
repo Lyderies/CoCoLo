@@ -108,6 +108,7 @@ from .learning_contracts import (
     validate_execution_configuration,
 )
 from .learning_adapters import HOOK_EVENTS, empty_usage, load_client_capabilities, reconcile_run
+from .learning_eligibility import EligibilityError, check_candidate_eligibility
 from .admission_metadata import EVIDENCE_HORIZON_MS as EVIDENCE_HORIZON_MS
 from .provider_restrictions import (
     BILLING_RANK as BILLING_RANK,
@@ -3203,7 +3204,6 @@ class LearningLedger:
         """Derive candidate eligibility from persisted admitted outcomes."""
 
         evidence = candidate["evidence_digests"]
-        receipt = candidate["eligibility_receipt"]
         placeholders = ",".join("?" for _ in evidence)
         rows = self._connection.execute(
             "SELECT content_digest,record_type,content,source_sequence FROM records "
@@ -3214,14 +3214,6 @@ class LearningLedger:
             row["record_type"] != "outcome" for row in rows
         ):
             raise LedgerError("candidate evidence is not a complete outcome cohort")
-        outcomes = [
-            (
-                json.loads(bytes(row["content"])),
-                str(row["content_digest"]),
-                int(row["source_sequence"]),
-            )
-            for row in rows
-        ]
         accepted_operational_qa = {
             str(row["qa_digest"])
             for row in self._connection.execute(
@@ -3242,156 +3234,26 @@ class LearningLedger:
                 (project_id,),
             ).fetchall()
         }
-        accepted_qa = accepted_operational_qa | accepted_formal_qa
-        required_usage = {
-            "input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens",
-            "model_calls", "tool_calls", "latency_ms",
-        }
-        for outcome, _, _ in outcomes:
-            sources = outcome.get("usage_sources")
-            if (
-                outcome["task_slice"] != candidate["task_slice"]
-                or outcome["accepted"] is not True
-                or outcome.get("execution_state") != "completed"
-                or outcome.get("admission_state") != "accepted"
-                or outcome.get("semantic_verdict")
-                not in {"pass", "ready", "ready-with-corrections"}
-                or not isinstance(outcome.get("retry_attempt"), int)
-                or outcome["verification_required"] is not True
-                or outcome["verifier_digest"] is None
-                or outcome["verifier_disagreement"] is not False
-                or outcome["deterministic_pass"] is not True
-                or outcome["security_pass"] is not True
-                or outcome["required_criteria_passed"]
-                != outcome["required_criteria_total"]
-                or outcome["coverage"] != "end_to_end_complete"
-                or not (set(outcome["evidence_digests"]) & accepted_qa)
-                or any(outcome["usage"][field] is None for field in required_usage)
-                or not isinstance(sources, dict)
-                or any(
-                    sources.get(field, {}).get("source") == "unavailable"
-                    or sources.get(field, {}).get("coverage")
-                    != "end_to_end_complete"
-                    for field in required_usage
-                )
-            ):
-                raise LedgerError("candidate evidence fails a verified eligibility gate")
-        versions = {
-            (
-                outcome["package_digest"], outcome["policy_digest"],
-                outcome["client_digest"], outcome["task_slice"],
-            )
-            for outcome, _, _ in outcomes
-        }
-        if len(versions) != 1:
-            raise LedgerError("candidate evidence is version or task-mix confounded")
-        configuration_fields = (
-            "model", "effort", "role", "topology", "max_parallel",
-            "verification_required", "verifier_digest", "bounds_digest",
-            "package_digest", "policy_digest", "agent_digest", "skill_digests",
-            "prompt_digest", "client_digest",
-        )
-
-        def configuration(outcome: dict[str, Any]) -> dict[str, Any]:
-            return {field: outcome[field] for field in configuration_fields}
-
-        champion = [
-            outcome for outcome, _, _ in outcomes
-            if configuration(outcome) == candidate["champion_configuration"]
-        ]
-        challenger = [
-            outcome for outcome, _, _ in outcomes
-            if configuration(outcome) == candidate["candidate_configuration"]
-        ]
-        matched_fixtures = {
-            outcome["fixture_digest"] for outcome in champion
-        } & {
-            outcome["fixture_digest"] for outcome in challenger
-        }
-        if (
-            len(champion) + len(challenger) != len(outcomes)
-            or len(matched_fixtures) < 20
-            or any(
-                sum(item["fixture_digest"] == fixture for item in cohort) != 1
-                for fixture in matched_fixtures
-                for cohort in (champion, challenger)
-            )
-            or any(
-                item["fixture_digest"] not in matched_fixtures
-                for item, _, _ in outcomes
-            )
-            or receipt["independent_case_count"] != len(matched_fixtures)
-        ):
-            raise LedgerError("candidate evidence lacks a matched task cohort")
-
-        # Retry claims are only authoritative when their complete ancestry already
-        # exists in this project. Multiple records for one assignment are expected
-        # while an unverified host outcome is superseded by accepted QA, but every
-        # version must agree on its lineage and task fixture.
         lineage_rows = self._connection.execute(
             "SELECT content,source_sequence FROM records WHERE project_id=? "
             "AND record_type='outcome' ORDER BY source_sequence",
             (project_id,),
         ).fetchall()
-        lineage: dict[str, list[tuple[dict[str, Any], int]]] = {}
-        for row in lineage_rows:
-            outcome = json.loads(bytes(row["content"]))
-            lineage.setdefault(str(outcome["assignment_id"]), []).append(
-                (outcome, int(row["source_sequence"]))
+        try:
+            check_candidate_eligibility(
+                candidate,
+                [
+                    (json.loads(bytes(row["content"])), int(row["source_sequence"]))
+                    for row in rows
+                ],
+                accepted_qa=accepted_operational_qa | accepted_formal_qa,
+                project_outcomes=(
+                    (json.loads(bytes(row["content"])), int(row["source_sequence"]))
+                    for row in lineage_rows
+                ),
             )
-        for assignment_outcomes in lineage.values():
-            claims = {
-                (
-                    item.get("retry_attempt", 1),
-                    item.get("retry_of_assignment_id"),
-                    item["task_slice"],
-                    item["fixture_digest"],
-                )
-                for item, _ in assignment_outcomes
-            }
-            if len(claims) != 1:
-                raise LedgerError("persisted retry lineage is internally inconsistent")
-
-        def retry_root(outcome: dict[str, Any], source_sequence: int) -> str:
-            current = outcome
-            current_sequence = source_sequence
-            seen: set[str] = set()
-            while True:
-                assignment_id = str(current["assignment_id"])
-                if assignment_id in seen:
-                    raise LedgerError("candidate retry lineage is cyclic")
-                seen.add(assignment_id)
-                predecessor = current.get("retry_of_assignment_id")
-                attempt = current.get("retry_attempt")
-                if predecessor is None:
-                    if attempt != 1:
-                        raise LedgerError("candidate retry lineage is incomplete")
-                    return assignment_id
-                prior = [
-                    item
-                    for item in lineage.get(str(predecessor), [])
-                    if item[1] < current_sequence
-                ]
-                if not prior:
-                    raise LedgerError(
-                        "candidate retry predecessor is not an earlier persisted outcome"
-                    )
-                parent, parent_sequence = prior[-1]
-                if (
-                    parent["task_slice"] != current["task_slice"]
-                    or parent["fixture_digest"] != current["fixture_digest"]
-                    or parent.get("retry_attempt", 1) != attempt - 1
-                ):
-                    raise LedgerError("candidate retry predecessor changes task lineage")
-                current = parent
-                current_sequence = parent_sequence
-
-        roots = {
-            retry_root(outcome, source_sequence)
-            for outcome, _, source_sequence in outcomes
-        }
-        if len(roots) != len(outcomes) or len(roots) < 40:
-            raise LedgerError("candidate evidence is not independently retry-deduplicated")
+        except EligibilityError as error:
+            raise LedgerError(str(error)) from None
 
     def open_orchestration(
         self,
@@ -6243,7 +6105,8 @@ class LearningLedger:
             ).fetchone()
             orchestration_digest = self._claim_original_orchestration_digest(expected, 'claim_terminal_unavailable')
             if (row is None or row['kind'] != 'claimed' or row['provider'] not in {'codex', 'claude'}
-                    or terminal_record['client_diagnostics'] is not None
+                    # Only the Claude client reports diagnostics; the record validator closed their values.
+                    or (terminal_record['client_diagnostics'] is not None and row['provider'] != 'claude')
                     or row['runtime_digest'] != runtime_digest or row['run_id'] != grant.binding.run_id
                     or row['client_version'] != 'bridge-v1' or row['owner_digest'] != grant.registration_digest
                     or orchestration_digest != keyed_digest(key, grant.binding.orchestration_handle)

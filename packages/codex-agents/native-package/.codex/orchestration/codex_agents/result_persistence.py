@@ -867,11 +867,12 @@ class ResultPersistenceLane:
 
     def _publish(self, pending):
         selected = pending.selected.packet
-        observation = ResultObservation(pending.binding.claim_id, pending.observed_at_ms,
-                                        selected.fenced, selected.reviewed, selected.terminal_state,
-                                        selected.validation_reason)
         assignment = parse_bounded_json(pending.assignment, max_bytes=MAX_ASSIGNMENT_CANONICAL_BYTES)
         report = (None if selected.report is None else parse_bounded_json(selected.report, max_bytes=MAX_REPORT_BYTES))
+        observation = ResultObservation(pending.binding.claim_id, pending.observed_at_ms,
+                                        selected.fenced, selected.reviewed, selected.terminal_state,
+                                        selected.validation_reason,
+                                        None if type(report) is not dict else report.get("client_diagnostics"))
         provider = "claude" if assignment["model"].startswith("claude-") else "codex"
         if report is not None and (type(report) is not dict or report.get("provider") != provider
                                    or report.get("requested_model") != assignment["model"]):

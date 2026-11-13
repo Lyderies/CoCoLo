@@ -16,10 +16,11 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .history_api import (
-    HISTORY_OPERATIONS, HISTORY_PROTOCOL_VERSION, MAX_HISTORY_REPLY_BYTES,
+    HISTORY_OPERATIONS, HISTORY_PROTOCOL_VERSION, LARGE_REPLY_OPERATIONS, MAX_HISTORY_REPLY_BYTES,
     HistoryRequest, decode_history_request, decode_history_response, history_request_digest,
 )
 from .history_contracts import AttemptBinding, HistoryEntry, HistoryError, _DIGEST, _PROJECT, matches
+from .project_learning_live import ProjectLearning
 from .host_result_contracts import (HostResultContext, OperationalCheckContext, OperationalQAContext,
                                     WorkerResultContext, decode_host_result_reference)
 from .host_open_contracts import HostOpenContext, decode_host_open_submission
@@ -108,6 +109,7 @@ class HistoryService:
         self._thread = threading.current_thread()
         self._store: ProjectHistory | None = None
         self._closed = False
+        self._learning = ProjectLearning(clock_ms=self._clock)
         self._reader = ResultReadService(project_id, runtime_digest, self._history,
                                          authorizer=result_authorizer, close_history=False)
         self._orchestrations = OrchestrationService(project_id, runtime_digest, self._history,
@@ -426,8 +428,7 @@ class HistoryService:
                         result["deliveries"][-1]["delivery_sequence"] if result["deliveries"] else None
                     )
                     reply = self._reply(identity, request_digest=digest, project_id=project, runtime_digest=runtime, result=result)
-            limit = (MAX_FRAME_BYTES if request.operation in {"history.read_record", 'history.qa_details', 'history.worker_input'}
-                     else MAX_HISTORY_REPLY_BYTES)
+            limit = MAX_FRAME_BYTES if request.operation in LARGE_REPLY_OPERATIONS else MAX_HISTORY_REPLY_BYTES
             if len(reply) + 1 > limit:
                 raise HistoryError("history_service_unavailable")
             decode_history_response(reply, request)
@@ -486,6 +487,10 @@ class HistoryService:
 
     def _execute(self, request: HistoryRequest, authorization: HistoryAuthorization) -> dict:
         operation, payload, store = request.operation, request.payload, self._store
+        if operation == 'history.learning_cycle':
+            return self._learning.cycle(store, request.request_id, payload['max_age_ms'])
+        if operation == 'history.learning_report':
+            return self._learning.report_chunk(request.request_id, payload['offset'])
         if operation in {"history.record_event", "history.record_intent", "history.record_outcome", "history.bind_verifier"}:
             return _metadata(store.append_record(canonical_json(payload["record"]), source=authorization.source,
                                                  ingested_at_ms=self._clock()))
@@ -518,6 +523,7 @@ class HistoryService:
         if self._closed:
             return
         self._closed = True
+        self._learning.close()
         try:
             self._reader.close()
             self._orchestrations.close()

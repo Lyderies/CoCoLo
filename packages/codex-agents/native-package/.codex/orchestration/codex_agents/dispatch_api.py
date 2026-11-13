@@ -13,7 +13,9 @@ import time
 from .control_api import ControlScope, scope_data
 from .contracts import RESULT_VALIDATION_REASON_CODES
 from .history_contracts import AttemptBinding, TerminalDelivery, _DIGEST, _RUN, matches, valid_integer
-from .learning_contracts import SUPPORTED_EFFORTS, SUPPORTED_MODELS, canonical_json, parse_bounded_json
+from .learning_contracts import (
+    SUPPORTED_EFFORTS, SUPPORTED_MODELS, canonical_json, parse_bounded_json, validate_client_diagnostics,
+)
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .result_read_api import ResultReadClient
 from .service_transport import MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
@@ -154,7 +156,9 @@ def decode_dispatch_response(raw, request):
                                         or not valid_integer(report['rate_limit_events'])
                                         or not valid_integer(report['rate_limit_records_kept'])))):
                     raise ValueError()
-                if (set(report) - (_RATE_LIMIT_FIELDS if claude else set()) - {'provider', 'requested_model', 'observed_model', 'effort', 'wall_seconds',
+                if claude and report.get('client_diagnostics') is not None:
+                    validate_client_diagnostics(report['client_diagnostics'])
+                if (set(report) - (_RATE_LIMIT_FIELDS | {'client_diagnostics'} if claude else set()) - {'provider', 'requested_model', 'observed_model', 'effort', 'wall_seconds',
                         'read_containment', 'rerouted', 'outcome', 'usage', 'result_validation_reason_code',
                         'bridge_run_id', 'reviewed', 'terminal_state', 'capacity_state', 'export_file_count',
                         'export_commit', 'export_manifest_digest'}

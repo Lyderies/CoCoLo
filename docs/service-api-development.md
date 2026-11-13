@@ -359,8 +359,46 @@ substituted by the primary. `learning-record-host-result` derives that route its
 run the project host holds, so `--route` is optional again as the skills say; the other
 host class gets `host_client_mismatch` and an undispatched run "must be dispatched".
 The record report carries `dispatch_diagnostics` (the validator's safe reason and client
-diagnostics) from the durable terminal record. It does not yet carry `learning_cycle`:
-see the learning rebuild plan.
+diagnostics) from the durable terminal record and `learning_cycle` from the project's
+own live cycle (next paragraph).
+
+Live learning on the project's own history. After a host-path result or its
+operational QA is committed, the CLI asks the project host for one learning cycle
+(`history.learning_cycle`, role `host`; the request ID names the cycle and polling the
+same request moves it on) and attaches the answer as `learning_cycle`: the compact
+summary by default, the full report with `--full-report` (read in slices with
+`history.learning_report`). The cycle is the legacy ledger calculation
+(`learning_cycle_core`, unchanged) on the project store: it derives development
+evaluation cases from verified outcomes, analyses every outcome and proposes inert
+model/effort candidates. `project_learning_live.ProjectLearning` runs inside the
+history service. Every SQL statement is a short call on the store's owner thread;
+parsing and the calculation run on one `project-learning` thread, one cycle at a time,
+and stop themselves at a 120 second deadline; at most eight cycles are held. Cases and
+candidates get the same keyed identities as the ledger gave them
+(`project_learning_identity`) and are appended idempotently with source `evaluator`;
+no client can write these record types. A candidate is stored only if it passes
+`learning_eligibility.check_candidate_eligibility`, the ledger's own gate moved into a
+pure function that both stores now call: every evidence outcome verified, complete and
+tied to an accepted QA of this project (`project_operational_qa` rows whose content
+matches its digest and says accepted), one version tuple, at least 20 matched fixtures
+and 40 independent retry roots, and no evidence the owner rejected. A cycle that fails,
+is refused or is still running after the CLI's 20 second wait is reported as the fixed
+unavailable shape with a `reason_code` (`learning_pending`, `learning_deadline`,
+`learning_capacity`, `learning_invalid`, `learning_busy`, `learning_unavailable`) and
+never as zero counts; it never fails the already committed result or QA, and the next
+cycle redoes whatever was not written. Tests: `tests/test_project_learning_live.py`
+(mining once, bounds, deadline, damaged rows, real QA rows, proposal with and without
+accepted QA, owner-rejected evidence, the pure gate), the legacy parity tests in
+`tests/test_learning_cycle_core.py` (each legacy fixture workflow now also runs the
+live cycle on a copy and must produce the same report bytes and the same stored
+records), `tests/test_history_api.py` for the two operations, and the CLI lifecycle
+tests for the attached report. Limits: the live corpus is this project's own records
+only. Records still in the legacy ledger are not seen until they are migrated;
+`learning-run-cycle` and the other owner learning commands still read the ledger; a
+host restart forgets a finished cycle's report (the records it wrote are durable). The
+sandboxed helper-process stack that an earlier design planned for this calculation
+(`learning_cycle_execution`, `_worker`, `_process`, `_input`) was removed by owner
+decision on 2026-11-13; nothing called it.
 
 Verification and operational QA on the host path. When the CLI reports a recorded
 result (`run.recorded`) it names the result's `host_outcome_digest`; the driver then

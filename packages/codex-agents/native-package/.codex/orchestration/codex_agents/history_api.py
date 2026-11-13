@@ -37,7 +37,12 @@ HISTORY_OPERATIONS = frozenset({
     "history.admit_host_result", "history.record_host_open", "history.worker_reference", "history.qa_scope",
     "history.issue_qa_checks",
     "history.commit_qa", "history.qa_details", "history.open_scope", "history.worker_input",
+    "history.learning_cycle", "history.learning_report",
 })
+# Replies that may carry more than the ordinary metadata reply.
+LARGE_REPLY_OPERATIONS = frozenset({"history.read_record", "history.qa_details", "history.worker_input",
+                                    "history.learning_report"})
+LEARNING_CYCLE_STATES = frozenset({"pending", "ready", "failed"})
 HISTORY_RECORD_TYPES = frozenset({*_RECORD_OPERATIONS.values(), "host_result_admission",
                                   "provider_usage", "observation_unavailable", "execution_provenance", "host_open_provenance"})
 _REQUEST_FIELDS = {"protocol_version", "operation", "request_id", "project_id", "runtime_digest", "payload"}
@@ -102,6 +107,12 @@ def _validate_request(request: HistoryRequest) -> None:
             identity = binding.claim_id
         if request.request_id != identity:
             raise HistoryError("history_invalid_request")
+    elif operation == 'history.learning_cycle':
+        if not _closed(payload, {'max_age_ms'}) or not valid_integer(payload['max_age_ms'], minimum=1):
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.learning_report':
+        if not _closed(payload, {'offset'}) or not valid_integer(payload['offset']):
+            raise HistoryError('history_invalid_request')
     elif operation == 'history.worker_input':
         if (not _closed(payload, {'host_outcome_digest'}) or not matches(payload['host_outcome_digest'], _DIGEST)
                 or request.request_id != payload['host_outcome_digest']):
@@ -261,7 +272,22 @@ def _validate_host_reference(result, binding, digest, *, verification):
 
 def _validate_result(request: HistoryRequest, result: object) -> None:
     operation = request.operation
-    if operation == 'history.worker_input':
+    if operation == 'history.learning_cycle':
+        from .project_learning_live import LEARNING_REASONS
+        if (not _closed(result, {'state', 'reason_code', 'summary', 'report_bytes'})
+                or result['state'] not in LEARNING_CYCLE_STATES
+                or (result['state'] == 'failed') != (result['reason_code'] is not None)
+                or (result['reason_code'] is not None and result['reason_code'] not in LEARNING_REASONS)
+                or (result['state'] == 'ready') != (type(result['summary']) is dict)
+                or (result['state'] == 'ready') != valid_integer(result['report_bytes'], minimum=2)):
+            raise HistoryError('history_invalid_response')
+    elif operation == 'history.learning_report':
+        if (not _closed(result, {'chunk', 'next_offset', 'report_bytes'}) or type(result['chunk']) is not str
+                or not valid_integer(result['report_bytes'], minimum=2)
+                or not valid_integer(result['next_offset'], maximum=result['report_bytes'])
+                or result['next_offset'] != request.payload['offset'] + len(result['chunk'])):
+            raise HistoryError('history_invalid_response')
+    elif operation == 'history.worker_input':
         if (not _closed(result, {'worker', 'reference'}) or type(result['worker']) is not dict
                 or not _closed(result['reference'], {'terminal_record_id', 'result_digest'})
                 or not matches(result['reference']['terminal_record_id'], _ID)
@@ -401,7 +427,7 @@ def decode_history_response(raw: bytes, request: HistoryRequest) -> dict:
     invalid = False
     try:
         _validate_request(request)
-        limit = MAX_FRAME_BYTES if request.operation in {"history.read_record", 'history.qa_details'} else MAX_HISTORY_REPLY_BYTES
+        limit = MAX_FRAME_BYTES if request.operation in LARGE_REPLY_OPERATIONS else MAX_HISTORY_REPLY_BYTES
         if type(raw) is not bytes or len(raw) + 1 > limit:
             raise HistoryError("history_invalid_response")
         response = parse_bounded_json(raw, max_bytes=limit - 1)
@@ -455,8 +481,7 @@ class HistoryClient:
         failure = False
         try:
             raw = exchange_frame(self._endpoint, encoded, timeout=self._timeout,
-                                 response_limit=MAX_FRAME_BYTES if operation in {"history.read_record", 'history.qa_details',
-                                                                                 'history.worker_input'}
+                                 response_limit=MAX_FRAME_BYTES if operation in LARGE_REPLY_OPERATIONS
                                  else MAX_HISTORY_REPLY_BYTES)
         except ServiceTransportError:
             failure = True
@@ -496,6 +521,14 @@ class HistoryClient:
     def original_open_scope(self, scope, orchestration_handle: str, inputs_digest: str) -> dict:
         payload = {'scope': scope.as_data(), 'orchestration_handle': orchestration_handle, 'inputs_digest': inputs_digest}
         return self._call('history.open_scope', hashlib.sha256(canonical_json(payload)).hexdigest(), payload)
+
+    def learning_cycle(self, cycle_id: str, *, max_age_ms: int) -> dict:
+        """Start this project's learning cycle or move it on one step; poll until it is not pending."""
+        return self._call('history.learning_cycle', cycle_id, {'max_age_ms': max_age_ms})
+
+    def learning_report(self, cycle_id: str, offset: int) -> dict:
+        """One slice of a finished cycle's full report."""
+        return self._call('history.learning_report', cycle_id, {'offset': offset})
 
     def worker_input(self, host_outcome_digest: str) -> dict:
         """A run this host recorded: its exact originals and where its terminal and result are."""

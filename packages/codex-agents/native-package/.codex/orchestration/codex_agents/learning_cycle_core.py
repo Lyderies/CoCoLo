@@ -9,6 +9,10 @@ all evidence links and durable eligibility before recording anything.
 This module does not activate a service or certify a migrated corpus. It preserves
 legacy calculations inside explicit resource envelopes; exhaustion raises rather
 than truncating evidence, manufacturing an empty corpus or reporting success.
+
+The project's learning owner runs these functions on a worker thread. A thread
+cannot be stopped from outside, so each long loop calls the optional
+`checkpoint`, which raises when the cycle's deadline passed or it was cancelled.
 """
 
 from __future__ import annotations
@@ -33,7 +37,11 @@ class LearningCycleBoundsError(ContractError):
     """A complete calculation cannot fit its explicit resource envelope."""
 
 
-def _snapshot(outcomes, cases, invalidated):
+def _no_checkpoint():
+    return None
+
+
+def _snapshot(outcomes, cases, invalidated, checkpoint=_no_checkpoint):
     for records, maximum, code in (
         (outcomes, MAX_OUTCOMES, "outcome_limit"),
         (cases, MAX_CASES, "case_limit"),
@@ -52,6 +60,7 @@ def _snapshot(outcomes, cases, invalidated):
     for records, validate in ((outcomes, validate_outcome), (cases, validate_evaluation_case)):
         identifiers = set()
         for record in records:
+            checkpoint()
             size += len(canonical_json(record))
             if size > MAX_SNAPSHOT_BYTES:
                 raise LearningCycleBoundsError("snapshot_bytes")
@@ -68,11 +77,11 @@ def _snapshot(outcomes, cases, invalidated):
 
 def select_mining_outcomes(
     outcomes: list[dict[str, Any]], *, existing_cases: list[dict[str, Any]],
-    owner_invalidated_run_ids=(),
+    owner_invalidated_run_ids=(), checkpoint=_no_checkpoint,
 ) -> list[dict[str, Any]]:
     """Select sources; the owner must derive IDs using the original key domain."""
 
-    selected, invalidated = _snapshot(outcomes, existing_cases, owner_invalidated_run_ids)
+    selected, invalidated = _snapshot(outcomes, existing_cases, owner_invalidated_run_ids, checkpoint)
     sources = {case["source_outcome_id"] for case in existing_cases}
     mining = [outcome for outcome in selected if not (
         outcome["record_id"] in sources
@@ -87,7 +96,7 @@ def select_mining_outcomes(
 
 def plan_learning_cycle(
     outcomes: list[dict[str, Any]], *, all_cases: list[dict[str, Any]],
-    as_of_ms: int, max_age_ms: int, owner_invalidated_run_ids=(),
+    as_of_ms: int, max_age_ms: int, owner_invalidated_run_ids=(), checkpoint=_no_checkpoint,
 ) -> dict[str, Any]:
     """Analyze a complete owner-bound snapshot and return unkeyed candidate specs.
 
@@ -99,7 +108,7 @@ def plan_learning_cycle(
     if any(type(value) is not int or value < 0 for value in (as_of_ms, max_age_ms)):
         raise ContractError("learning cycle clock or retention is invalid")
     outcomes, owner_invalidated_run_ids = _snapshot(
-        outcomes, all_cases, owner_invalidated_run_ids,
+        outcomes, all_cases, owner_invalidated_run_ids, checkpoint,
     )
     sources = {case["source_outcome_id"] for case in all_cases}
     if any(
@@ -136,6 +145,7 @@ def plan_learning_cycle(
     changed = True
     while changed:
         changed = False
+        checkpoint()
         for case in all_cases:
             if (
                 case["lineage_digest"] in protected_lineages
@@ -186,6 +196,7 @@ def plan_learning_cycle(
 
     grouped_lineages: dict[tuple[str, str], set[str]] = {}
     for outcome, row in outcome_pairs:
+        checkpoint()
         if (
             outcome["evaluation_candidate_digest"] is not None
             or outcome["record_id"] in controlled_source_ids
@@ -232,6 +243,7 @@ def plan_learning_cycle(
             )
         }
         for (other_slice, _), candidate_records in sorted(groups_to_compare.items()):
+            checkpoint()
             if other_slice != task_slice or candidate_records is champion_records:
                 continue
             if len(candidate_records) < 20:

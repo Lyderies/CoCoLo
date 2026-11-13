@@ -24,7 +24,9 @@ import weakref
 
 from . import bridge
 from .contracts import RESULT_VALIDATION_REASON_CODES, ContractError, validate_assignment
-from .learning_contracts import SUPPORTED_EFFORTS, SUPPORTED_MODELS, canonical_json, parse_bounded_json
+from .learning_contracts import (
+    SUPPORTED_EFFORTS, SUPPORTED_MODELS, canonical_json, parse_bounded_json, validate_client_diagnostics,
+)
 from .owned_execution import ExecutionCustodyError, ExecutionTicket, OwnedExecutionRegistry
 from .result_contracts import MAX_RESULT_BODY_BYTES
 
@@ -175,6 +177,9 @@ def _safe_report(report, provider):
             raise CodexWorkerError()
         result.update(rate_limit_events=counts[0], rate_limit_records_kept=counts[1],
                       rate_limit_record_failed=report["rate_limit_record_failed"])
+        # The client's own exit code, result subtype and error label: fixed safe values only.
+        if report.get("client_diagnostics") is not None:
+            result["client_diagnostics"] = validate_client_diagnostics(report["client_diagnostics"])
     body = canonical_json(result)
     if len(body) > MAX_REPORT_BYTES:
         raise CodexWorkerError()

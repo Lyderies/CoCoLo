@@ -26,6 +26,7 @@ from tests.test_bridge import (
 
 from codex_agents import codex_worker, learning_store, project_driver
 from codex_agents.account_api import AccountClient, AccountError
+from codex_agents.rate_limit_contracts import RateLimitError
 from codex_agents.liveness_clock import LivenessLimits
 
 SECOND = 1_000_000_000
@@ -417,7 +418,10 @@ class HostVerificationTests(DriverHarness):
                              *[item for pair in files.items() for item in pair])
         # A repeat is the same committed QA, now reported as known; no legacy ledger is opened.
         self.assertEqual((False, True), (qa['known'], again['known']))
-        self.assertEqual({k: v for k, v in qa.items() if k != 'known'}, {k: v for k, v in again.items() if k != 'known'})
+        same = {'known', 'learning_cycle'}  # Each call runs its own learning cycle.
+        self.assertEqual({k: v for k, v in qa.items() if k not in same},
+                         {k: v for k, v in again.items() if k not in same})
+        self.assertEqual('available', qa['learning_cycle']['summary_state'])
 
     def recorded_worker(self, orchestration, task_id):
         """One more Codex worker in the same orchestration, dispatched and recorded."""
@@ -608,9 +612,18 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
         self.frames('claude', [init_frame(), {'type': 'assistant', 'message': {
             'id': 'msg_1', 'model': 'claude-opus-5-5', 'content': [{'type': 'text', 'text': 'Reading.'}]}},
             RATE_LIMIT, result_frame()])
-        dispatched = self.dispatch_claude(context, route_path, run_handle)
+        recorders, original = [], project_driver._RateLimitRecorder.__init__
+
+        def remember(recorder, *args):
+            recorders.append(recorder)
+            return original(recorder, *args)
+
+        with mock.patch.object(project_driver._RateLimitRecorder, '__init__', remember):
+            dispatched = self.dispatch_claude(context, route_path, run_handle)
         report = dispatched['bridge_report']
         self.assertEqual(('result', 'claude', 'enforced'), (report['outcome'], report['provider'], report['read_containment']))
+        self.assertEqual({'exit_code', 'result_frame_seen', 'result_subtype', 'error_code'},
+                         set(report['client_diagnostics']))
         self.assertEqual((1, False), (report['rate_limit_events'], report['rate_limit_record_failed']))
         self.assertGreaterEqual(report['rate_limit_records_kept'], 1)
         argv = [i for i in self.invocations('claude') if '-p' in i['argv']]
@@ -622,6 +635,10 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
                             '--result', self.write('result.json', dispatched['result']), '--observation', observation)
         self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
         self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
+        # The run is finished: the account takes no further rate-limit event for it.
+        with self.assertRaises(RateLimitError):
+            recorders[0].record_claude_rate_limit_event(
+                self.project_id, run_handle=run_handle, rate_limit_info=RATE_LIMIT['rate_limit_info'])
 
     def test_a_running_claude_child_reports_live_status_and_stops_on_cancellation(self):
         context, route_path, orchestration, run_handle = self.open_claude_run()

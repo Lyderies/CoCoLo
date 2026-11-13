@@ -15,6 +15,9 @@ from tests.learning_support import (
     heldout_cases, verification_outcome,
 )
 
+from tests.test_project_learning_live import live_cycle
+
+from codex_agents.cli_reports import learning_cycle_summary
 from codex_agents.contracts import ContractError
 from codex_agents.learning_contracts import canonical_json, content_digest, keyed_digest
 from codex_agents.learning_engine import mine_evaluation_case, review_evaluation_case
@@ -207,11 +210,31 @@ class LearningCycleLegacyParityTests(unittest.TestCase):
         finally:
             connection.execute("ROLLBACK TO core_parity_prediction")
             connection.execute("RELEASE core_parity_prediction")
-        return {
+        predicted = {
             "mined_case_ids": [item["record_id"] for item in new_cases],
             "proposed_candidate_digests": proposed,
             "analysis": plan["analysis"], "proposal_status": plan["proposal_status"],
-        }, appended
+        }
+        # The project host's live cycle must produce the same report and records.
+        accepted_qa = {str(row[0]) for row in connection.execute(
+            "SELECT qa_digest FROM operational_qa WHERE project_id=? AND accepted=1", (project_id,),
+        )} | {str(row[0]) for row in connection.execute(
+            "SELECT records.content_digest FROM records JOIN owner_attestations ON "
+            "owner_attestations.project_id=records.project_id AND "
+            "owner_attestations.subject_record_id=records.record_id "
+            "WHERE records.project_id=? AND records.record_type='qa_evidence' "
+            "AND json_extract(CAST(records.content AS TEXT),'$.accepted')=1", (project_id,),
+        )}
+        report, summary, added = live_cycle(
+            self.fixture.state_root.parent / ("project-live-" + str(self.calls)), project_id,
+            self.fixture.state.digest_key(), outcomes=outcomes, cases=cases,
+            candidates=records("candidate"), feedback=records("feedback"), accepted_qa=accepted_qa,
+            as_of_ms=as_of_ms, max_age_ms=max_age_ms,
+        )
+        self.assertEqual(canonical_json(predicted), canonical_json(report))
+        self.assertEqual(learning_cycle_summary(predicted), summary)
+        self.assertEqual([canonical_json(item) for item in appended], added)
+        return predicted, appended
 
     def test_dominant_proposal_and_exact_replay_match_unchanged_legacy(self):
         self.fixture.test_learning_cycle_mines_cases_and_generates_only_inert_dominant_proposal()

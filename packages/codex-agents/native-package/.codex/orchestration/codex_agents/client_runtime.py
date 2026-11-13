@@ -379,6 +379,52 @@ class RuntimeResultError(RuntimeError):
         super().__init__(self.reason_code)
 
 
+LEARNING_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000  # The ledger's retention, the cycle's default window.
+
+
+def learning_cycle_client(state_root, project_root, *, host_client, full=False,
+                          max_age_ms=LEARNING_MAX_AGE_MS, seconds=20.0):
+    """Run this project's learning cycle through its host and return its report.
+
+    Called after a result or QA is already committed, so nothing here raises: a
+    cycle that fails, is refused or is still running when the wait ends comes back
+    as the fixed unavailable shape with its reason. The host finishes a running
+    cycle on a later request. The compact summary comes from the host; the full
+    report is read in slices only when asked for.
+    """
+    from .cli_reports import unavailable_cycle
+
+    try:
+        state = CollectorPaths(state_root)
+        scope, _, endpoint = read_runtime_hint(state, project_root)
+        history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=10)
+        cycle_id = 'cycle-' + secrets.token_hex(16)
+        deadline = time.monotonic() + seconds
+        while True:
+            enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+            view = history.learning_cycle(cycle_id, max_age_ms=max_age_ms)
+            if view['state'] != 'pending':
+                break
+            if time.monotonic() >= deadline:
+                return unavailable_cycle('learning_pending')
+            time.sleep(0.05)
+        if view['state'] == 'failed':
+            return unavailable_cycle(view['reason_code'])
+        if not full:
+            return view['summary']
+        chunks, offset = [], 0
+        while offset < view['report_bytes']:
+            enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+            part = history.learning_report(cycle_id, offset)
+            if not part['chunk'] or part['report_bytes'] != view['report_bytes']:
+                return unavailable_cycle('learning_unavailable')
+            chunks.append(part['chunk'])
+            offset = part['next_offset']
+        return parse_bounded_json(''.join(chunks).encode('ascii'), max_bytes=view['report_bytes'])
+    except Exception:
+        return unavailable_cycle('learning_unavailable')
+
+
 class HostOutcomeUnknown(RuntimeError):
     """The outcome is not one this project's host recorded; the legacy ledger owns it."""
 

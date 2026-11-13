@@ -448,6 +448,10 @@ class ProjectServiceHost:
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
                                         frozenset({'history.admit_host_result', 'history.read_record'}),
                                         host_result_context=original)
+        if request.operation in {'history.learning_cycle', 'history.learning_report'}:
+            # The project's own learning: any enrolled primary of this project may run and read it.
+            return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
+                                        frozenset({request.operation}))
         if request.operation == 'history.worker_input':
             worker = None if self._driver is None else self._driver.worker_context(
                 None, request.payload.get('host_outcome_digest'), entry.enrolled.host_client)

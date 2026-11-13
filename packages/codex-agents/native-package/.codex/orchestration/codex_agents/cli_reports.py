@@ -104,9 +104,23 @@ def learning_cycle_summary(cycle):
         }
 
 
+def unavailable_cycle(reason_code="learning_summary_unavailable"):
+    """The fixed shape for a cycle that produced no report; never zero counts or success."""
+    return {
+        "format": "compact-learning-cycle-v1", "full_report_option": "--full-report",
+        "omitted_fields": ["analysis.slices", "mined_case_ids", "proposed_candidate_digests"],
+        "summary_state": "unavailable", "reason_code": reason_code,
+        "analysis_summary": None, "mined_case_count": None,
+        "proposed_candidate_count": None, "proposal_status": None,
+    }
+
+
 def command_report(command, report, *, full=False):
     """Preserve every field outside the optional learning_cycle verbatim."""
     if (full or command not in COMPACT_CYCLE_COMMANDS
             or type(report) is not dict or "learning_cycle" not in report):
         return report
+    cycle = report["learning_cycle"]
+    if type(cycle) is dict and cycle.get("format") == "compact-learning-cycle-v1":
+        return report  # The project's learning owner already summarised it.
     return report | {"learning_cycle": learning_cycle_summary(report["learning_cycle"])}

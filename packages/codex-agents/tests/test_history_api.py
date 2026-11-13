@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +27,7 @@ from codex_agents.history_contracts import HistoryError
 from codex_agents.history_service import HistoryAuthorization, HistoryService
 from codex_agents.learning_contracts import canonical_json, validate_learning_record
 from codex_agents.project_history import ProjectHistory
+from codex_agents.result_contracts import ResultCapacity
 from codex_agents.service_transport import MAX_FRAME_BYTES
 from tests.learning_support import event_record, verification_outcome
 from tests.test_project_history import PROJECT_A, PROJECT_B, binding, terminal
@@ -532,6 +534,55 @@ class HistoryApiTests(unittest.TestCase):
             decode_history_response(canonical_json(bad), command)
         with self.assertRaisesRegex(HistoryError, "history_invalid_response"):
             decode_history_response(b"x" * MAX_HISTORY_REPLY_BYTES, command)
+
+    def test_learning_cycle_is_polled_by_its_request_and_its_report_is_paged(self):
+        directory = self.base / "keyed"
+        directory.mkdir(mode=0o700)
+        self.service = HistoryService(
+            PROJECT_A, RUNTIME, lambda: ProjectHistory(
+                directory, PROJECT_A, result_key=b"K" * 32,
+                result_capacity=ResultCapacity(1, 1_048_576, 120_000, 120_000)),
+            authorizer=fixture_authorizer, clock_ms=lambda: 1000)
+        self.addCleanup(self.service.close)
+        cycle = request("history.learning_cycle", payload={"max_age_ms": 1000}, identity="cycle-1")
+        view = self.call(cycle)
+        self.assertIsNone(view["reason_code"])
+        for _ in range(2000):
+            if view["state"] != "pending":
+                break
+            time.sleep(0.002)
+            view = self.call(cycle)
+        self.assertEqual("ready", view["state"])
+        self.assertEqual("compact-learning-cycle-v1", view["summary"]["format"])
+        self.assertEqual(0, view["summary"]["mined_case_count"])
+        page = request("history.learning_report", payload={"offset": 0}, identity="cycle-1")
+        part = self.call(page)
+        self.assertEqual(view["report_bytes"], part["report_bytes"])
+        self.assertEqual([], json.loads(part["chunk"])["mined_case_ids"])
+        # A cycle keeps the window it started with, and only a finished one has a report.
+        changed = request("history.learning_cycle", payload={"max_age_ms": 1001}, identity="cycle-1")
+        with self.assertRaisesRegex(HistoryError, "history_conflict"):
+            self.call(changed)
+        with self.assertRaisesRegex(HistoryError, "history_not_found"):
+            self.call(request("history.learning_report", payload={"offset": 0}, identity="cycle-2"))
+        for operation, payload in (("history.learning_cycle", {}), ("history.learning_cycle", {"max_age_ms": 0}),
+                                   ("history.learning_cycle", {"max_age_ms": 1, "as_of_ms": 1}),
+                                   ("history.learning_report", {"offset": -1}),
+                                   ("history.learning_report", {"offset": 0, "bytes": 9})):
+            with self.subTest(operation=operation, payload=payload), \
+                    self.assertRaisesRegex(HistoryError, "history_invalid_request"):
+                encode_history_request(request(operation, payload=payload, identity="cycle-3"))
+        good = json.loads(self.service.handle(encode_history_request(cycle), FIXTURE_CONTEXT))
+        for changes in ({"state": "done"}, {"reason_code": "learning_busy"}, {"summary": None},
+                        {"report_bytes": None}, {"extra": 1}):
+            forged = {**good, "result": {**good["result"], **changes}}
+            with self.subTest(changes=changes), self.assertRaisesRegex(HistoryError, "history_invalid_response"):
+                decode_history_response(canonical_json(forged), cycle)
+        chunk = json.loads(self.service.handle(encode_history_request(page), FIXTURE_CONTEXT))
+        for changes in ({"next_offset": 0}, {"chunk": 5}, {"report_bytes": 1}):
+            forged = {**chunk, "result": {**chunk["result"], **changes}}
+            with self.subTest(changes=changes), self.assertRaisesRegex(HistoryError, "history_invalid_response"):
+                decode_history_response(canonical_json(forged), page)
 
     def test_client_validates_inputs_and_keeps_the_sent_request_immutable(self):
         endpoint = self.base / "unused.sock"

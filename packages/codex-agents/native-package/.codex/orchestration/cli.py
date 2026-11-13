@@ -124,7 +124,7 @@ from codex_agents.collector_paths import UNMOVED_STATE, CollectorPaths  # noqa: 
 from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
-    HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client,
+    HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client, learning_cycle_client,
     run_control_client, bridged_run_owner, abandon_bridged_run,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
@@ -2333,6 +2333,9 @@ def main() -> int:
                 try:
                     report = record_codex_result_client(args.state_root, args.project_root, task, route, assignment,
                         parent_grant, result, observation, host_client=host)
+                    # The result is committed; the project's learning cycle follows and never fails it.
+                    report["learning_cycle"] = learning_cycle_client(
+                        args.state_root, args.project_root, host_client=host, full=args.full_report)
                 except RuntimeResultError as error:
                     # The run is this host's (checked above), so no published dispatch means it never ran.
                     if derived_route and error.reason_code in {
@@ -2538,6 +2541,8 @@ def main() -> int:
                         _json_input(args.evaluator_assignment), _json_input(args.evaluator_result),
                         _json_input(args.verifier_assignment), _json_input(args.verifier_result),
                         host_client=_host_client())
+                    report["learning_cycle"] = learning_cycle_client(
+                        args.state_root, args.project_root, host_client=_host_client(), full=args.full_report)
             except (HostOutcomeUnknown, HistoryError, DispatchError) as error:
                 # The project refused the pair, the files or the receipt; nothing was committed.
                 _print({"ready": False, "error": "operational QA admission rejected",
