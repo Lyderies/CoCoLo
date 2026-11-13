@@ -72,6 +72,25 @@ def _owned_directory(path):
     _check_owner_mode(path, directory=True)
 
 
+def _result_capacity():
+    return ResultCapacity(64, MAX_ACTIVE_ATTEMPTS * MAX_RESULT_BODY_BYTES, 1_800_000, 7 * 86_400_000)
+
+
+def open_offline_history(state, project_id):
+    """The project's store for an offline owner tool (a drained migration).
+
+    The store's exclusive lock refuses this with `history_writer_busy` while
+    the project's own service runs; nothing here stops or waits for it.
+    """
+    from .project_history import ProjectHistory
+
+    directory = history_directory(state, project_id)
+    _owned_directory(directory.parent)
+    _owned_directory(directory)
+    return ProjectHistory(directory, project_id, result_key=state.digest_key(), orchestration_limits=ORCHESTRATIONS,
+                          result_capacity=_result_capacity(), allow_schema_upgrade=True)
+
+
 def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None,
                   liveness=LIVENESS):
     """Run the host until a signal, idleness or withdrawal; return a closed report."""
@@ -94,7 +113,7 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
 
     def open_history():
         return ProjectHistory(directory, project_id, result_key=key, orchestration_limits=ORCHESTRATIONS,
-            result_capacity=ResultCapacity(64, MAX_ACTIVE_ATTEMPTS * MAX_RESULT_BODY_BYTES, 1_800_000, 7 * 86_400_000))
+                              result_capacity=_result_capacity())
 
     try:
         # The installed package this host runs from is the bundle a child is prepared from.

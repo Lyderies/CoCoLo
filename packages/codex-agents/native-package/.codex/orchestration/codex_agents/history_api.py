@@ -37,7 +37,7 @@ HISTORY_OPERATIONS = frozenset({
     "history.admit_host_result", "history.record_host_open", "history.worker_reference", "history.qa_scope",
     "history.issue_qa_checks",
     "history.commit_qa", "history.qa_details", "history.open_scope", "history.worker_input",
-    "history.learning_cycle", "history.learning_report",
+    "history.learning_cycle", "history.learning_report", "history.routing_evidence",
 })
 # Replies that may carry more than the ordinary metadata reply.
 LARGE_REPLY_OPERATIONS = frozenset({"history.read_record", "history.qa_details", "history.worker_input",
@@ -115,6 +115,12 @@ def _validate_request(request: HistoryRequest) -> None:
             raise HistoryError('history_invalid_request')
     elif operation == 'history.worker_input':
         if (not _closed(payload, {'host_outcome_digest'}) or not matches(payload['host_outcome_digest'], _DIGEST)
+                or request.request_id != payload['host_outcome_digest']):
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.routing_evidence':
+        if (not _closed(payload, {'host_outcome_digest', 'task_id', 'family'})
+                or not matches(payload['host_outcome_digest'], _DIGEST) or not matches(payload['task_id'], _ID)
+                or type(payload['family']) is not str or not 0 < len(payload['family']) <= 64
                 or request.request_id != payload['host_outcome_digest']):
             raise HistoryError('history_invalid_request')
     elif operation == 'history.open_scope':
@@ -286,6 +292,9 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
                 or not valid_integer(result['report_bytes'], minimum=2)
                 or not valid_integer(result['next_offset'], maximum=result['report_bytes'])
                 or result['next_offset'] != request.payload['offset'] + len(result['chunk'])):
+            raise HistoryError('history_invalid_response')
+    elif operation == 'history.routing_evidence':
+        if not _closed(result, {'trusted'}) or type(result['trusted']) is not bool:
             raise HistoryError('history_invalid_response')
     elif operation == 'history.worker_input':
         if (not _closed(result, {'worker', 'reference'}) or type(result['worker']) is not dict
@@ -529,6 +538,11 @@ class HistoryClient:
     def learning_report(self, cycle_id: str, offset: int) -> dict:
         """One slice of a finished cycle's full report."""
         return self._call('history.learning_report', cycle_id, {'offset': offset})
+
+    def routing_evidence(self, host_outcome_digest: str, *, task_id: str, family: str) -> bool:
+        """Whether this recorded outcome is accepted reconnaissance for the named task."""
+        return self._call('history.routing_evidence', host_outcome_digest, {
+            'host_outcome_digest': host_outcome_digest, 'task_id': task_id, 'family': family})['trusted']
 
     def worker_input(self, host_outcome_digest: str) -> dict:
         """A run this host recorded: its exact originals and where its terminal and result are."""

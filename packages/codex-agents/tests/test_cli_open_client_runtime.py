@@ -133,7 +133,7 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
             code, refused = self.invoke_open(original, assigned=changed)
             self.assertEqual(2, code)
             self.assertFalse(refused['ready'])
-            self.assertEqual('history_not_authorized' if version == 2 else 'open_unavailable', refused['reason_code'])
+            self.assertEqual('history_not_authorized' if version == 2 else 'open_unavailable', refused.get('reason_code'), refused)
             self.assertEqual(before, self.fixture.ledger._connection.execute('SELECT COUNT(*) FROM account_open_receipts').fetchone()[0])
             self.assertFalse((child['root']/'launches').exists())
         code, wrong_host = self.invoke_open(original, host='claude' if self.parent_host == 'codex' else 'codex')

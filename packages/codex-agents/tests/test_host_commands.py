@@ -84,6 +84,7 @@ OWNER_COMMANDS = {
     "learning-calibrate-grader",
     "learning-record-feedback",
     "learning-expire",
+    "learning-migrate-project",
     "install-codex-rule",
     "remove-codex-rule",
     "codex-session-scan",

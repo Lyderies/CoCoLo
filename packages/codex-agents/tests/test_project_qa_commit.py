@@ -271,7 +271,7 @@ class ProjectQACommitTests(unittest.TestCase):
             result_clock_ms=lambda:self.pair.fixture.base.stamp,
             orchestration_limits=OrchestrationLimits(1,8),allow_schema_upgrade=True)
         self.store=self.pair.fixture.store
-        self.assertEqual(15,self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(16, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
         for n,rows in before.items():
             assert_migrated_rows(self, self.store, n, rows)
         self.assertEqual(0,self.count())

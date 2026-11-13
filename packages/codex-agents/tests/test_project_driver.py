@@ -275,6 +275,44 @@ class ProjectDriverTests(DriverHarness):
         # Terminal acceptance and capacity release reached the restarted account services.
         self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
 
+    def test_learning_migration_never_takes_the_collector_from_under_a_run(self):
+        from codex_agents.collector_client import CollectorClient
+        from codex_agents.collector_contracts import CollectorError
+
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 3},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+        client = CollectorClient(self.state.socket, timeout=5)
+        self.assertEqual({'moved': False, 'has_learning': False, 'drained': False},
+                         client.learning_migration(self.project))
+        with self.assertRaises(CollectorError) as busy:
+            client.shutdown(only_if_drained=True)
+        self.assertEqual('collector_busy', busy.exception.code)
+        # The owner's command reports and refuses; it stops nothing and opens no store.
+        with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
+            self.assertEqual({'ready': True, 'state': 'not_needed', 'can_start_now': False},
+                             self.cli('learning-migrate-project', '--status'))
+            refused = self.cli_for(self.project, 'learning-migrate-project', expected=2)
+        self.assertEqual('migration_not_drained', refused['reason_code'])
+        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
+        self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
+        output, errors = process.communicate(timeout=60)
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        dispatched = json.loads(output)
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        observation = self.write('busy-observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        self.cli('learning-record-host-result', *context, '--route', route_path,
+                 '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
+        self.assertTrue(client.learning_migration(self.project)['drained'])
+        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
+        self.assertEqual((1, 1, 0), (lifecycle['host_runs_opened'], lifecycle['host_runs_terminal'],
+                                     lifecycle['host_runs_pending']))
+
 
 class HostRestartTests(DriverHarness):
     """The project host stops mid-run and starts again: nothing is claimed that is not known."""
@@ -422,6 +460,54 @@ class HostVerificationTests(DriverHarness):
         self.assertEqual({k: v for k, v in qa.items() if k not in same},
                          {k: v for k, v in again.items() if k not in same})
         self.assertEqual('available', qa['learning_cycle']['summary_state'])
+
+    def test_accepted_reconnaissance_of_the_same_task_is_trusted_routing_evidence(self):
+        base = self.task()
+        original_worker = self.worker
+
+        def reconnaissance():
+            # The worker's task does not yet know how broad the work is.
+            with mock.patch.object(self, 'task', return_value={**base, 'context_breadth': 'unknown'}):
+                return original_worker()
+
+        with mock.patch.object(self, 'worker', reconnaissance):
+            worker, verifier, verifier_assignment, verifier_result = self.verified()
+        hard = {**base, 'operation': 'end_to_end', 'complexity': 'extreme', 'ambiguity': 'high',
+                'context_breadth': 'cross_system', 'routing_evidence_refs': ['outcome:' + worker]}
+        hard_path = self.write('hard-task.json', hard)
+        plain = self.cli('learning-route', '--task', self.write('plain-task.json', {**hard, 'routing_evidence_refs': []}))
+        # Recorded but not yet through QA: cited evidence is refused, not ignored.
+        with mock.patch.object(cli, '_learning_ledger', side_effect=AssertionError('ledger path')):
+            early = self.cli('learning-route', '--task', hard_path, expected=2)
+        self.assertFalse(early['ready'])
+        from tests.test_bridge import passing_check_report
+        with mock.patch.object(cli, 'run_operational_check_suite',
+                               side_effect=lambda _root, **_scratch: passing_check_report()):
+            checks = self.cli('learning-run-operational-checks', '--host-outcome-digest', worker,
+                              '--verifier-host-outcome-digest', verifier)
+        qa = self.cli('learning-record-operational-qa', '--host-outcome-digest', worker,
+                      '--verifier-host-outcome-digest', verifier, '--check-receipt', checks['check_receipt'],
+                      '--evaluator-assignment', self.write('eval-assignment.json', json.loads(
+                          Path(self.temporary.name, 'project-assignment.json').read_text())),
+                      '--evaluator-result', str(Path(self.temporary.name, 'worker-result.json')),
+                      '--verifier-assignment', self.write('ver-assignment.json', verifier_assignment),
+                      '--verifier-result', self.write('ver-result.json', verifier_result))
+        self.assertTrue(qa['ready'])
+        with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')), \
+                mock.patch.object(cli, 'CollectorMaintenance', side_effect=AssertionError('collector paused')):
+            routed = self.cli('learning-route', '--task', hard_path)
+            self.assertIn('hard_end_to_end_evidence', json.dumps(routed))
+            self.assertNotIn('hard_end_to_end_evidence', json.dumps(plain))
+            # The same evidence cited for another task, or for another family, is refused.
+            for change in ({'id': 'another-task'}, {'family': 'coding'}):
+                with self.subTest(change=change):
+                    other = self.cli('learning-route', '--task', self.write('other-task.json', {**hard, **change}),
+                                     expected=2)
+                    self.assertFalse(other['ready'])
+        # Evidence this service does not hold is left to the ledger, never assumed.
+        unknown = self.write('unknown-task.json', {**hard, 'routing_evidence_refs': ['outcome:' + 'f' * 64]})
+        with mock.patch.object(cli, '_learning_ledger', side_effect=learning_store.LedgerError("routing evidence is not QA accepted")):
+            self.assertFalse(self.cli('learning-route', '--task', unknown, expected=2)['ready'])
 
     def recorded_worker(self, orchestration, task_id):
         """One more Codex worker in the same orchestration, dispatched and recorded."""

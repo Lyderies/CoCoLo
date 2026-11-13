@@ -45,6 +45,10 @@ def main():
         namespace['main'].__globals__['_require_protected_runtime'] = lambda args: None
         namespace['main'].__globals__['_require_own_roots'] = lambda args: None
         namespace['main'].__globals__['_learning_ledger'] = forbidden
+        # The fixture's routes are synthetic: the one supplied stands for the installed
+        # route, so these tests reach the client boundary they are about.
+        json_input = namespace['main'].__globals__['_json_input']
+        namespace['main'].__globals__['_installed_route'] = lambda args, task: json_input(args.route)
         namespace['main'].__globals__['CollectorMaintenance'].acquire = forbidden
         from codex_agents import bridge, providers
         with mock.patch.object(providers, 'observe_codex', new=forbidden), \

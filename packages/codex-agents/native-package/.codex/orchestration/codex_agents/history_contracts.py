@@ -27,7 +27,7 @@ HISTORY_REASON_CODES = frozenset({
     "history_execution_consumed", "history_execution_not_ready",
     "history_orchestration_unavailable", "history_orchestration_state",
     "history_orchestration_pending", "history_orchestration_full",
-    "history_learning_capacity", "history_learning_incomplete",
+    "history_learning_capacity", "history_learning_incomplete", "history_learning_reconciliation",
 })
 
 

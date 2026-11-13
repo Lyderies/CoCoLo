@@ -311,9 +311,13 @@ class DispatchPreflightTests(unittest.TestCase):
                    "--task", str(self.base / "task.json"), "--assignment", str(self.base / "assignment.json"),
                    "--parent-grant", str(self.base / "grant.json")]
         completed = subprocess.run(command, capture_output=True, text=True, timeout=20)
-        self.assertEqual(2, completed.returncode, completed.stderr + completed.stdout)
-        self.assertFalse(json.loads(completed.stdout)["ready"])
-        self.assertNotIn("files", json.loads(completed.stdout))
+        # A route that needs nothing from the ledger is pure policy: the preview is
+        # given without any state, and creates none.
+        self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["ready"])
+        self.assertTrue(report["preflight_only"])
+        self.assertFalse(report["admission_created"])
         self.assertFalse(state.exists())
 
     def test_cli_uses_the_trusted_route_including_released_model_and_effort_changes(self) -> None:
@@ -330,6 +334,7 @@ class DispatchPreflightTests(unittest.TestCase):
         with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), \
                 mock.patch.object(cli, "_learning_ledger", return_value=(ledger, "project-fixture")), \
                 mock.patch.object(cli, "_close_ledger") as close, \
+                mock.patch.object(cli, "_store_free_route", return_value=None), \
                 mock.patch.object(cli, "route_task", side_effect=AssertionError("base route used")), \
                 mock.patch.object(cli, "_trusted_host_route", return_value=(learned, {})) as resolve:
             self.assertEqual(0, cli.main())

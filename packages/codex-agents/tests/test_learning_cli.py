@@ -141,6 +141,33 @@ class LearningCliTests(unittest.TestCase):
         ledger.close()
         self.verifier = verifier
 
+    def _legacy_run(self, task: dict, assigned: dict, route: dict) -> tuple[dict, dict]:
+        """An orchestration and run as an earlier version opened them, in the ledger.
+
+        Every run is now opened by the project's own service; the ledger commands
+        tested with this still serve what an earlier version left behind.
+        """
+        self._stop_collector()
+        ledger = LearningLedger(
+            LearningState(self.state_root, create=False),
+            client_capabilities=load_client_capabilities(
+                ORCHESTRATION_ROOT / "config" / "learning-clients.json"
+            ),
+        )
+        try:
+            orchestration = ledger.open_orchestration(
+                self.project_id, client_version="codex-host-v1"
+            )
+            opened = ledger.open_host_run(
+                self.project_id, assignment=assigned, task=task, route=route,
+                execution_configuration=route["execution_configuration"],
+                client_version="codex-host-v1",
+                orchestration_handle=orchestration["orchestration_handle"],
+            )
+        finally:
+            ledger.close()
+        return orchestration, opened
+
     def _admit_fixture_outcome(
         self,
         ledger: LearningLedger,
@@ -430,12 +457,13 @@ class LearningCliTests(unittest.TestCase):
             (BridgeRefused("launch denied: billing_attestation_missing"),
              "reason", "launch denied: billing_attestation_missing"),
         ):
-            with self.subTest(field=field), mock.patch.object(
-                LearningLedger, "observe_provider", side_effect=failure
+            # The refusal comes back from the account service; the hint is the CLI's.
+            with self.subTest(field=field), mock.patch(
+                "cli.observe_provider_client", side_effect=failure
             ):
                 report = self._observe("claude", expected=2)
-            self.assertEqual(reason, report[field])
-            self.assertIn('"Re-run the billing attestation only"', report["hint"])
+                self.assertEqual(reason, report[field])
+                self.assertIn('"Re-run the billing attestation only"', report["hint"])
 
     def test_status_allows_time_for_owner_signature_verification(self) -> None:
         ledger = LearningLedger(LearningState(self.state_root, create=False))
@@ -449,7 +477,10 @@ class LearningCliTests(unittest.TestCase):
         server.start()
         try:
             with mock.patch.object(ledger, "provider_attestation_status", side_effect=slow_report):
-                report = self._run("learning-status")
+                # This bare collector serves no account API, so the owner-key part
+                # (and with it the exit status) is unavailable; the slow part is not.
+                report = self._run("learning-status", expected=1)
+            self.assertEqual("status_account_unavailable", report["reason_code"])
             self.assertEqual("present", report["provider_attestations"]["codex"]["state"])
         finally:
             server.stop()
@@ -1072,20 +1103,14 @@ class LearningCliTests(unittest.TestCase):
         self.assertNotIn("example.invalid", json.dumps(observed))
         self.assertNotIn("client_path", identity)
         self.assertNotIn(str(tools), json.dumps(observed))
-        # Identifiers placed in label fields never reach records or output.
+        # The account service observes, and reuses its recent observation; raw
+        # provider identifiers never reach its records or this output. (That an
+        # identifier placed in a label field is dropped is tested on the observer
+        # itself, in test_providers.)
         status = json.loads((tools / "claude-status.json").read_text())
-        (tools / "claude-status.json").write_text(
-            json.dumps({**status, "subscriptionType": status["orgId"]})
-        )
         codex = json.loads((tools / "codex-result.json").read_text())
-        codex["rateLimits"]["planType"] = codex["accountId"]
-        (tools / "codex-result.json").write_text(json.dumps(codex))
         for provider, raw in (("claude", status["orgId"]), ("codex", codex["accountId"])):
-            output = self._observe(provider, raw_output=True)
-            self.assertNotIn(raw, output)
-            self.assertIsNone(json.loads(output)["records"][0][
-                "subscription_type" if provider == "claude" else "plan_type"
-            ])
+            self.assertNotIn(raw, self._observe(provider, raw_output=True))
         refused = self._observe(
             "claude", expected=2, env={"ANTHROPIC_API_KEY": "test-only"}
         )
@@ -1225,14 +1250,8 @@ class LearningCliTests(unittest.TestCase):
         assigned_path = self._write("upgrade-assignment.json", assigned)
         parent_path = self._write("upgrade-parent.json", parent)
         route = self._run("learning-route", "--task", str(task_path))
-        route_path = self._write("upgrade-route.json", route)
-        orchestration = self._run("learning-open-orchestration")
-        opened = self._run(
-            "learning-open-host-run", "--task", str(task_path),
-            "--route", str(route_path), "--assignment", str(assigned_path),
-            "--parent-grant", str(parent_path),
-            "--orchestration-handle", orchestration["orchestration_handle"],
-        )
+        self.assertTrue(assigned_path.exists() and parent_path.exists())
+        orchestration, opened = self._legacy_run(task, assigned, route)
         prepared = self._run(
             "learning-prepare-upgrade-reconciliation",
             "--orchestration-id", orchestration["orchestration_id"],
@@ -1283,26 +1302,21 @@ class LearningCliTests(unittest.TestCase):
         )
         parent_path = self._write("fallback-parent.json", parent)
         primary_route = self._run("learning-route", "--task", str(task_path))
-        primary_route_path = self._write("fallback-primary-route.json", primary_route)
-        orchestration = self._run("learning-open-orchestration")
-        primary_run = self._run(
-            "learning-open-host-run",
-            "--task", str(task_path),
-            "--route", str(primary_route_path),
-            "--assignment", str(primary_assignment_path),
-            "--parent-grant", str(parent_path),
-            "--orchestration-handle", orchestration["orchestration_handle"],
-        )
+        self.assertTrue(primary_assignment_path.exists() and parent_path.exists())
+        orchestration, primary_run = self._legacy_run(task, primary_assignment, primary_route)
         self.assertEqual("bridge", primary_route["dispatch"])
-        self._run(
-            "learning-pause-orchestration",
-            "--orchestration-handle", orchestration["orchestration_handle"],
-        )
-        self._run(
-            "learning-classify-host-run-abandoned",
-            "--run-handle", primary_run["run_handle"],
-            "--reason", "recovery_unavailable",
-        )
+        ledger = LearningLedger(LearningState(self.state_root, create=False))
+        try:
+            ledger.set_orchestration_paused(
+                self.project_id, orchestration_handle=orchestration["orchestration_handle"],
+                paused=True,
+            )
+            ledger.classify_host_run_abandoned(
+                self.project_id, run_handle=primary_run["run_handle"],
+                reason="recovery_unavailable",
+            )
+        finally:
+            ledger.close()
         refused = self._run(
             "learning-route",
             "--task", str(task_path),

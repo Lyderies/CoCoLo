@@ -4,8 +4,17 @@ from dataclasses import replace
 from codex_agents.claim_storage import lease_state_seal
 
 
+def legacy_learning_activation_layout(store):
+    """Remove only the empty schema16 cutover table from an older fixture."""
+    name = 'project_learning_activation'
+    if store._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0]:
+        raise AssertionError('legacy fixture contains a learning cutover')
+    store._connection.execute('DROP TABLE ' + name)
+
+
 def legacy_learning_source_layout(store):
     """Remove only empty schema15 archive tables from an older fixture."""
+    legacy_learning_activation_layout(store)
     names = ('project_learning_source_chunks', 'project_learning_source_images')
     for name in names:
         if store._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0]:

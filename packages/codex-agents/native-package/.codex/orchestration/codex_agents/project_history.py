@@ -41,6 +41,7 @@ from .project_learning_corpus import LEARNING_SCHEMA, LEARNING_COLUMNS
 from .project_learning_qa import QA_SCHEMA as LEARNING_QA_SCHEMA, QA_COLUMNS as LEARNING_QA_COLUMNS
 from .project_learning_chunks import CHUNK_SCHEMA as LEARNING_CHUNK_SCHEMA, CHUNK_COLUMNS as LEARNING_CHUNK_COLUMNS
 from .project_learning_source import SOURCE_SCHEMA as LEARNING_SOURCE_SCHEMA, SOURCE_COLUMNS as LEARNING_SOURCE_COLUMNS
+from .project_learning_activation import ACTIVATION_SCHEMA, ACTIVATION_COLUMNS
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
     keyed_digest, parse_bounded_json, validate_execution_configuration, validate_learning_record,
@@ -52,7 +53,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 15
+_SCHEMA_VERSION = 16
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -149,8 +150,10 @@ _SCHEMA_V11 = _SCHEMA_V10 + LEARNING_SCHEMA
 _SCHEMA_V12 = _SCHEMA_V11 + LEARNING_OUTCOME_INDEX
 _SCHEMA_V13 = _SCHEMA_V12 + LEARNING_QA_SCHEMA
 _SCHEMA_V14 = _SCHEMA_V13 + LEARNING_CHUNK_SCHEMA
-_SCHEMA = _SCHEMA_V14 + LEARNING_SOURCE_SCHEMA
+_SCHEMA_V15 = _SCHEMA_V14 + LEARNING_SOURCE_SCHEMA
+_SCHEMA = _SCHEMA_V15 + ACTIVATION_SCHEMA
 _COLUMNS = {
+    **ACTIVATION_COLUMNS,
     **LEARNING_SOURCE_COLUMNS,
     **LEARNING_CHUNK_COLUMNS,
     **LEARNING_QA_COLUMNS,
@@ -397,18 +400,19 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14} and application == _APPLICATION_ID
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15} and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
                                                5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8,
                                                9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11,
-                                               12: _SCHEMA_V12, 13: _SCHEMA_V13, 14: _SCHEMA_V14}[version])):
+                                               12: _SCHEMA_V12, 13: _SCHEMA_V13, 14: _SCHEMA_V14,
+                                               15: _SCHEMA_V15}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*LEARNING_SOURCE_COLUMNS, *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*ACTIVATION_COLUMNS, *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
                                                  or (name == 'project_cleanup_reservations' and version == 9)) else columns)
@@ -432,7 +436,8 @@ class ProjectHistory:
                                   + (LEARNING_OUTCOME_INDEX if version < 12 else '')
                                   + (LEARNING_QA_SCHEMA if version < 13 else '')
                                   + (LEARNING_CHUNK_SCHEMA if version < 14 else '')
-                                  + LEARNING_SOURCE_SCHEMA).split(';'):
+                                  + (LEARNING_SOURCE_SCHEMA if version < 15 else '')
+                                  + ACTIVATION_SCHEMA).split(';'):
                     if statement.strip():
                         connection.execute(statement)
                 connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")

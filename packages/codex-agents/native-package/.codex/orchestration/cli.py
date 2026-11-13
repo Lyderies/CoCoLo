@@ -125,6 +125,7 @@ from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
     HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client, learning_cycle_client,
+    routing_evidence_client,
     run_control_client, bridged_run_owner, abandon_bridged_run,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
@@ -426,6 +427,76 @@ def _compatible_collector(state):
     return client
 
 
+_MIGRATION_MESSAGES = {
+    "migration_not_drained": "a child run is still active or unsettled; nothing was changed, try again when none is running",
+    "migration_project_service_running": "this project's service is running; nothing was changed, "
+                                         "try again after it has been idle for fifteen minutes",
+    "migration_source_changed": "the ledger changed while it was being copied; nothing was changed, run it again",
+    "migration_reconciliation_required": "learning was recorded after the move; going back would drop it",
+    "migration_too_large": "the project's learning history is larger than a migration can copy",
+}
+
+
+def _migrate_learning(args):
+    """Move, report or roll back one project's learning history: offline owner work.
+
+    The collector is stopped only if no run is active anywhere, and is started
+    again whatever happens. The project's own service must not be running.
+    """
+    from codex_agents.learning_migration import (
+        MigrationError, migrate_project, migration_status, rollback_project,
+    )
+    from codex_agents.project_service import open_offline_history
+
+    state = LearningState(args.state_root, create=False)
+    if args.status:
+        client = _compatible_collector(state)
+        if client is not None:
+            # Read from the running services; nothing is stopped for a question.
+            with _collector_contact():
+                snapshot = client.learning_migration(args.project_root)
+            return {"ready": True, "can_start_now": snapshot["drained"], "state": (
+                "complete" if snapshot["moved"] else "pending" if snapshot["has_learning"] else "not_needed")}
+
+    def refused(reason):
+        return {"ready": False, "reason_code": reason,
+                "error": _MIGRATION_MESSAGES.get(reason, "the learning history could not be moved")}
+
+    with _collector_contact():
+        try:
+            maintenance = CollectorMaintenance.acquire(
+                state, ORCHESTRATION_ROOT / "cli.py", args.project_root, only_if_drained=True)
+        except CollectorError as error:
+            if getattr(error, "code", None) == "collector_busy":
+                return refused("migration_not_drained")
+            raise
+    ledger = history = None
+    try:
+        ledger = LearningLedger(state, allow_schema_upgrade=True)
+        project_id = ledger.project_for_root(args.project_root)
+        history = open_offline_history(state, project_id)
+        if args.status:
+            report = migration_status(ledger, history, project_id)
+        elif args.rollback:
+            report = rollback_project(ledger, history, project_id)
+        else:
+            report = migrate_project(ledger, history, project_id, now_ms=time.time_ns() // 1_000_000)
+        return {"ready": True, **report}
+    except MigrationError as error:
+        return refused(error.reason_code)
+    except HistoryError as error:
+        return refused("migration_project_service_running" if error.reason_code == "history_writer_busy"
+                       else "migration_unavailable")
+    finally:
+        try:
+            if history is not None:
+                history.close()
+            if ledger is not None:
+                ledger.close()
+        finally:
+            maintenance.resume()
+
+
 def _host_qa(args):
     """Whether this project's host recorded the worker outcome QA names (else the legacy ledger did)."""
     try:
@@ -559,7 +630,7 @@ def _validated_assignment_route(
     if trusted_host:
         if project_root is None:
             raise ContractError("trusted route preflight requires a registered project")
-        fast = _store_free_route(project_root, task)
+        fast = _store_free_route(project_root, task, state_root=getattr(args, "state_root", None))
         if fast is not None:
             route = fast[0]
         else:
@@ -731,17 +802,23 @@ def _host_client_for(route: dict) -> str:
     return BRIDGE_CLIENT if route.get("dispatch") == "bridge" else _host_client()
 
 
-def _store_free_route(project_root: Path, task: dict, client_version: str | None = None):
+def _store_free_route(project_root: Path, task: dict, client_version: str | None = None,
+                      state_root: Path | None = None):
     """The route when it needs nothing from the ledger, else None.
 
-    Without routing evidence and with an empty release registry there are no
-    trusted references or learning candidates to read, so routing is pure
-    policy: the CLI routes without opening the ledger or pausing the shared
-    collector, which serves other projects' running children. A verifier's
+    With an empty release registry there are no learning candidates to read, and
+    routing evidence the project's own service recorded is confirmed by that
+    service, so routing is policy: the CLI routes without opening the ledger or
+    pausing the shared collector, which serves other projects' running children.
+    Evidence the service does not hold is left to the ledger. A verifier's
     worker outcome is bound by its open, not here.
     """
+    trusted = frozenset()
     if validate_task(task)["routing_evidence_refs"]:
-        return None
+        trusted = None if state_root is None else routing_evidence_client(
+            state_root, project_root, validate_task(task), host_client=_host_client())
+        if trusted is None:
+            return None
     try:
         if load_released_candidate_digests(RELEASES_PATH, verify_signature=None):
             return None
@@ -752,7 +829,7 @@ def _store_free_route(project_root: Path, task: dict, client_version: str | None
         ORCHESTRATION_ROOT / "config" / "routing-policy.json",
         ORCHESTRATION_ROOT / "config" / "discovery-policy.json",
     )
-    route = route_task(task, policy, trusted_routing_evidence_refs=frozenset(),
+    route = route_task(task, policy, trusted_routing_evidence_refs=trusted,
                        primary_provider=_host_primary_provider())
     clients = load_client_capabilities(ORCHESTRATION_ROOT / "config" / "learning-clients.json")
     capability = clients[client_version or _host_client_for(route)]
@@ -766,7 +843,7 @@ def _store_free_route(project_root: Path, task: dict, client_version: str | None
 
 def _installed_route(args: argparse.Namespace, task: dict) -> dict:
     """The route the installed policy gives this task, from the ledger only when it must be."""
-    fast = _store_free_route(args.project_root, task)
+    fast = _store_free_route(args.project_root, task, state_root=args.state_root)
     if fast is not None:
         return fast[0]
     ledger, project_id = _learning_ledger(args)
@@ -1257,6 +1334,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_learning_project(learning_expire)
     learning_expire.add_argument("--now-ms", type=int)
 
+    learning_migrate = subparsers.add_parser(
+        "learning-migrate-project",
+        help="move one project's learning history from the shared ledger to its own project store",
+    )
+    _add_learning_project(learning_migrate)
+    migrate_mode = learning_migrate.add_mutually_exclusive_group()
+    migrate_mode.add_argument("--status", action="store_true", help="report only; nothing is changed")
+    migrate_mode.add_argument(
+        "--rollback", action="store_true",
+        help="make the shared ledger the learning store again (refused once new learning was recorded)")
+
     learning_cycle = subparsers.add_parser(
         "learning-run-cycle",
         help="run deterministic aggregation, case mining, and inert proposal generation",
@@ -1548,7 +1636,7 @@ def main() -> int:
                     "client version is not in the validated capability matrix"
                 )
             selection_slice = model_selection_slice(task)
-            fast = (_store_free_route(args.project_root, task, explicit_client)
+            fast = (_store_free_route(args.project_root, task, explicit_client, state_root=args.state_root)
                     if args.fallback_from_run_handle is None else None)
             if fast is not None:
                 report = fast[0]
@@ -2109,6 +2197,11 @@ def main() -> int:
                 return 2
             report = completed_dispatch
         elif args.command == "provider-observe":
+            if api_keys_present(os.environ) and not args.billing_probe:
+                # The account service observes with a clean environment; a session that
+                # carries an API key is still told so here, as every earlier version did.
+                # (A billing probe is denied by its own admission, with its reason code.)
+                raise ContractError("provider API key environment variables must not be set")
             _start_collector_quietly(args)
             if not args.billing_probe:
                 report = observe_provider_client(args.state_root, args.project_root, args.provider,
@@ -2647,6 +2740,11 @@ def main() -> int:
                 }
             finally:
                 _close_ledger(ledger)
+        elif args.command == "learning-migrate-project":
+            report = _migrate_learning(args)
+            if not report["ready"]:
+                _print(report)
+                return 2
         elif args.command == "learning-run-cycle":
             if args.max_age_ms < 1:
                 raise ContractError("max age must be positive")

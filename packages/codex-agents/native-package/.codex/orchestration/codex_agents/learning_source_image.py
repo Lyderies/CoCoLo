@@ -141,10 +141,23 @@ def _registry(connection, project_id, file_id):
     return tuple(row)
 
 
-def _drained(connection):
-    if (_one(connection, "SELECT 1 FROM host_run_bindings WHERE binding_state='pending' LIMIT 1")
+def _drained(connection, now):
+    # A run the project's own service drove settles by releasing its claim; the
+    # ledger never consumes its binding. A claim more than the crash grace past
+    # its hard deadline belongs to a run whose host is gone (the account already
+    # stopped counting it): it and its binding never settle, and must not hold
+    # every later migration back.
+    from .learning_store import CRASHED_CLAIM_GRACE_MS
+
+    crashed_before = now - CRASHED_CLAIM_GRACE_MS
+    if (_one(connection,
+            "SELECT 1 FROM host_run_bindings h WHERE h.binding_state='pending' AND NOT EXISTS("
+            "SELECT 1 FROM active_run_capacity a WHERE a.project_id=h.project_id "
+            "AND a.handle_digest=h.handle_digest AND (a.released_at_ms IS NOT NULL "
+            "OR (a.deadline_at_ms IS NOT NULL AND a.deadline_at_ms<?))) LIMIT 1", (crashed_before,))
             is not None or _one(connection,
-                "SELECT 1 FROM active_run_capacity WHERE released_at_ms IS NULL LIMIT 1") is not None):
+                "SELECT 1 FROM active_run_capacity WHERE released_at_ms IS NULL "
+                "AND (deadline_at_ms IS NULL OR deadline_at_ms>=?) LIMIT 1", (crashed_before,)) is not None):
         raise HistoryError("history_unavailable")
 
 
@@ -222,9 +235,9 @@ def _page(connection, store, project_id, file_id, table, last):
     return rows
 
 
-def _compare(connection, store, project_id, file_id, body, limits):
+def _compare(connection, store, project_id, file_id, body, limits, now):
     def project():
-        _drained(connection)
+        _drained(connection, now)
         row = _one(connection, "SELECT " + ",".join(store._BACKUP_PROJECT_COLUMNS)
                    + " FROM projects WHERE project_id=? AND status='active'", (project_id,))
         return None if row is None else {
@@ -307,7 +320,7 @@ def _capture(ledger, project_id, file_id, expected_domain_digest, limits):
         changes, started = connection.total_changes, _clock(ledger)
 
         def registry():
-            _drained(connection)
+            _drained(connection, started)
             return _registry(connection, project_id, file_id)
 
         registration = connection.read_call(limits, registry)
@@ -339,7 +352,7 @@ def _capture(ledger, project_id, file_id, expected_domain_digest, limits):
             # File and key I/O must remain outside it, including on failure.
             connection.execute("BEGIN").close()
             try:
-                _compare(connection, store, project_id, file_id, body, limits)
+                _compare(connection, store, project_id, file_id, body, limits, started)
             finally:
                 connection.rollback()
             _schema(connection, store)

@@ -16,6 +16,7 @@ from codex_agents import project_learning_source as archive
 from codex_agents.history_contracts import HistoryError
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.project_history import ProjectHistory
+from codex_agents.project_learning_activation import ACTIVATION_COLUMNS
 from codex_agents.result_contracts import ResultCapacity
 from codex_agents.sql_read_budget import SQLReadLimits
 
@@ -181,7 +182,8 @@ class LearningSourceTransferTests(unittest.TestCase):
 
     def old14(self):
         self.transfer()
-        self.old_rows = {n: rows for n, rows in self.target_rows().items() if n not in archive.SOURCE_COLUMNS}
+        self.old_rows = {n: rows for n, rows in self.target_rows().items()
+                         if n not in archive.SOURCE_COLUMNS and n not in ACTIVATION_COLUMNS}
         directory = Path(self.fixture.temporary.name) / 'old14'
         directory.mkdir(mode=0o700)
         database = directory / 'history.sqlite3'

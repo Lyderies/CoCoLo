@@ -16,6 +16,7 @@ from .collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient, empty_i
 from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError, integer as account_integer, _ID as _ACCOUNT_ID
 from .account_open_contracts import AccountOpenInput, OpenError
 from .collector_paths import CollectorPaths, StateError, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
+from .contracts import ContractError
 from .collector_contracts import CollectorError, CollectorTransportError
 from .collector_runtime import client_health_snapshot
 from .control_api import ControlClient, ControlScope
@@ -251,7 +252,9 @@ def status_client(state_root, project_root):
               'ingestion': _status_ingestion_unavailable(),
               'provider_attestations': {p: {'state': 'unavailable'} for p in ('codex', 'claude')},
               'owner_key': {'state': 'unavailable', 'fingerprint': None,
-                            'replacements': None, 'last_replaced_at_ms': None}}
+                            'replacements': None, 'last_replaced_at_ms': None},
+              # Whether this project's learning history still has to move to its own store.
+              'learning_migration': 'unavailable'}
     try:
         state = CollectorPaths(state_root)
         report['client_failures'] = client_health_snapshot(state, project_root)
@@ -261,6 +264,12 @@ def status_client(state_root, project_root):
     try:
         report.update(_status_collector_fields(CollectorClient(state.socket, timeout=1).health(project_root)))
         report['active'] = collector_ready = True
+        try:
+            moved = CollectorClient(state.socket, timeout=1).learning_migration(Path(project_root))
+            report['learning_migration'] = ('complete' if moved['moved'] else
+                                            'pending' if moved['has_learning'] else 'not_needed')
+        except (CollectorError, OSError):
+            pass  # Only this field stays unavailable.
     except CollectorError as error:
         reason = ('status_collector_transport_unavailable' if isinstance(error, CollectorTransportError)
                   else 'status_collector_unavailable')
@@ -423,6 +432,34 @@ def learning_cycle_client(state_root, project_root, *, host_client, full=False,
         return parse_bounded_json(''.join(chunks).encode('ascii'), max_bytes=view['report_bytes'])
     except Exception:
         return unavailable_cycle('learning_unavailable')
+
+
+def routing_evidence_client(state_root, project_root, task, *, host_client):
+    """The task's routing evidence this project's service vouches for, or None.
+
+    None means the service does not hold one of the cited runs (or is not
+    running): the legacy ledger may. A cited run the service does hold but that
+    is not accepted reconnaissance for this task is a refusal, not None.
+    """
+    references = task['routing_evidence_refs']
+    try:
+        state = CollectorPaths(state_root)
+        scope, _, endpoint = read_runtime_hint(state, project_root)
+        history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=10)
+        for reference in references:
+            kind, _, digest = reference.partition(':')
+            if kind != 'outcome':
+                raise ContractError('routing evidence must be a typed host outcome digest')
+            enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+            if not history.routing_evidence(digest, task_id=task['id'], family=task['family']):
+                raise ContractError('routing evidence is not accepted reconnaissance for this task')
+    except HistoryError as error:
+        if error.reason_code in {'history_not_authorized', 'history_service_unavailable'}:
+            return None
+        raise ContractError('routing evidence could not be checked') from None
+    except (DispatchError, StateError, OSError):
+        return None
+    return frozenset(references)
 
 
 class HostOutcomeUnknown(RuntimeError):

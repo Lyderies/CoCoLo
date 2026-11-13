@@ -328,8 +328,26 @@ Routing without the ledger. `learning-route`, and the trusted route behind
 no routing evidence and the release registry is empty: there are no trusted references
 or learning candidates to read. They then route from policy alone
 (`cli._store_free_route`), never opening the ledger or pausing the shared collector that
-serves other projects' running children. Routing evidence, released candidates, canary
-routes and legacy fallback receipts still use the ledger.
+serves other projects' running children. Released candidates, canary routes and legacy
+fallback receipts still use the ledger.
+
+Routing evidence from the project's own service. A task that cites earlier
+reconnaissance (`routing_evidence_refs: ["outcome:<host_outcome_digest>"]`) is routed
+as hard end-to-end work only if every citation is trusted. For a run the project's
+service recorded, the CLI asks that service (`history.routing_evidence`, role `host`,
+one cited digest per request; `client_runtime.routing_evidence_client`):
+`project_routing_evidence.trusted_reconnaissance` answers true only when the service
+still keeps that run's originals for this host class, they match the run's consumed
+grant and returned result, the run's task has the same `id` and `family` as the task
+being routed and was reconnaissance (ambiguity or context breadth unknown), the
+project's own operational QA row for the outcome is intact and accepted, the verified
+outcome is positive and completed, and the owner has not rejected the run (live or
+imported feedback). A citation the service holds but that fails any of these refuses
+the route; it is never ignored. A citation the service does not hold (another host
+class, a run from before a service restart, or a run an earlier version recorded) is
+left to the ledger's own check, as before. Kept originals live in memory (at most 64),
+so after a service restart earlier reconnaissance can no longer be cited. Test:
+`HostVerificationTests.test_accepted_reconnaissance_of_the_same_task_is_trusted_routing_evidence`.
 
 Host crash recovery (owner decision 2026-11-13: automatic). If a project host stops
 while a run is claimed, the new host does not know the run: `learning-run-status`
@@ -392,10 +410,11 @@ accepted QA, owner-rejected evidence, the pure gate), the legacy parity tests in
 `tests/test_learning_cycle_core.py` (each legacy fixture workflow now also runs the
 live cycle on a copy and must produce the same report bytes and the same stored
 records), `tests/test_history_api.py` for the two operations, and the CLI lifecycle
-tests for the attached report. Limits: the live corpus is this project's own records
-only. Records still in the legacy ledger are not seen until they are migrated;
-`learning-run-cycle` and the other owner learning commands still read the ledger; a
-host restart forgets a finished cycle's report (the records it wrote are durable). The
+tests for the attached report. Limits: the corpus is this project's own records
+plus its migrated ledger history (see "Moving a project's learning history to its
+project store"). `learning-run-cycle` and the other owner learning commands still read
+the ledger; a host restart forgets a finished cycle's report (the records it wrote are
+durable). The
 sandboxed helper-process stack that an earlier design planned for this calculation
 (`learning_cycle_execution`, `_worker`, `_process`, `_input`) was removed by owner
 decision on 2026-11-13; nothing called it.
@@ -511,7 +530,73 @@ replay and paged reads; every receipt reports `learning_ready: false`.
 Shape checks and copied QA decisions do not authenticate original execution or
 check-receipt provenance. A verified source image, complete dependencies, the
 legacy writer drain and retirement, compatible key custody and explicit activation
-remain necessary before any learning cycle can use the imported corpus.
+remain necessary before any learning cycle can use the imported corpus. The next
+section is that step.
+
+## Moving a project's learning history to its project store (uninstalled source)
+
+`learning-migrate-project --project-root <root>` (owner command; `--status` reports,
+`--rollback` undoes) moves one project's learning history out of the shared ledger.
+`learning_migration.migrate_project` does three things in an order that can be run
+again after a failure at any point:
+
+1. Stage. A sealed backup of the project's ledger partition is written and
+   `learning_source_transfer.stage_source` copies it byte for byte into the project
+   store (records, owner signatures, operational QA rows and the full original
+   image), comparing the ledger with the backup again before the copy counts.
+2. Retire. The ledger records `project_learning_moved_v1:<project id>` in its
+   `additive_migrations` table. From then on `_append_checked_locked` refuses every
+   learning record type for that project and `run_learning_cycle` refuses, with
+   "project learning has moved to its project store". Account rows and
+   account-owned evidence (provider observations, billing attestations, admission
+   decisions, claims, capacity) stay in the ledger and keep working; they are not
+   copied anywhere live.
+3. Activate. Project store schema 16 adds `project_learning_activation`, one sealed
+   row naming the import whose records join the live records. The project's own
+   service only reads it (`project_learning_activation.activation`).
+
+A failure after step 1 has changed nothing for anyone; the next run discards that
+staged attempt and copies again. A failure after step 2 leaves the project learning
+from its live records only; the next run activates the copy already staged and does
+not copy again. A project with no learning history in the ledger is only retired.
+
+The live cycle then reads one corpus (`project_learning_live.read_cycle_rows`): the
+import's outcomes, cases, candidates and owner feedback, ordered before the live
+records; accepted QA from the import's operational QA rows and its owner-attested
+`qa_evidence` records, plus the project's own QA rows. An imported outcome the
+ledger had not mined yet is mined here with the same keyed identity
+(`project_learning_identity` reads it from the import). Outcomes and feedback past
+the ledger's 90 day retention are left out of the calculation, as the ledger expired
+them; nothing is deleted from the project store yet.
+
+What stops a migration, always with nothing changed: a run that is active or
+unsettled anywhere (`migration_not_drained`: the collector is asked to stop with
+`shutdown_if_drained` and refuses with `collector_busy`, and the copy itself checks
+again; a claim more than an hour past its hard deadline belongs to a crashed host
+and does not block); the project's own service holding its store
+(`migration_project_service_running`; it stops after fifteen idle minutes); a
+ledger that changed during the copy (`migration_source_changed`); a history larger
+than the staging bounds (`migration_too_large`). The collector is started again
+whatever happens. `learning-status` reports `learning_migration`: `complete`,
+`pending`, `not_needed` or `unavailable`.
+
+Rollback (`--rollback`) removes the activation row and the ledger's marker; the
+staged copy is kept. It is refused with `migration_reconciliation_required` once any
+case, candidate or feedback was written to the project store after the cutover,
+because those may rest on the imported history.
+
+Limits. Owner signatures are preserved as bytes and chained; the ledger verified
+them when it admitted the records and they are not verified again. The owner
+learning commands other than the cycle still read the ledger, so for a migrated
+project they see history frozen at the cutover and their writes are refused, until
+they are moved to the project store. Migration is not yet started automatically; a
+project registered on this runtime with no ledger history is not yet marked moved at
+registration. An old runtime cannot write the ledger at all once the new runtime is
+authorized for the state root (runtime authorization, not this marker). Tests:
+`tests/test_learning_migration.py` (byte equality of records and signatures, the
+ledger partition unchanged, each failure point, refusals, rollback, the command as a
+separate process, the drained rule, the schema 15 to 16 upgrade) and
+`ProjectDriverTests.test_learning_migration_never_takes_the_collector_from_under_a_run`.
 
 ## Complete registered source rows (uninstalled offline owner)
 

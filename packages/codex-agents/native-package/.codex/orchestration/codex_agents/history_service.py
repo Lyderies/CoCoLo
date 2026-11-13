@@ -377,6 +377,14 @@ class HistoryService:
 
                 entry = self._store.record_host_open(expected, open_request, proof, **captured, before_commit=authorize_open)
                 result = {'record': parse_bounded_json(entry.content), 'metadata': _metadata(entry)}
+            elif request.operation == 'history.routing_evidence':
+                if authorization.host_result_context is None:
+                    raise HistoryError('history_not_authorized')
+                from .project_routing_evidence import trusted_reconnaissance
+                self._history()
+                result = {'trusted': trusted_reconnaissance(
+                    self._store, authorization.host_result_context, request.payload['host_outcome_digest'],
+                    task_id=request.payload['task_id'], family=request.payload['family'])}
             elif request.operation == 'history.worker_input':
                 # A recorded worker's exact originals, for the account open of its
                 # verifier: checked against the worker's consumed grant first.

@@ -452,13 +452,14 @@ class ProjectServiceHost:
             # The project's own learning: any enrolled primary of this project may run and read it.
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
                                         frozenset({request.operation}))
-        if request.operation == 'history.worker_input':
+        if request.operation in {'history.worker_input', 'history.routing_evidence'}:
+            # About a run this host class recorded: its originals are the ones kept here.
             worker = None if self._driver is None else self._driver.worker_context(
                 None, request.payload.get('host_outcome_digest'), entry.enrolled.host_client)
             if worker is None:
                 return None
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
-                                        frozenset({'history.worker_input'}), host_result_context=worker)
+                                        frozenset({request.operation}), host_result_context=worker)
         if request.operation in {'history.qa_scope', 'history.issue_qa_checks', 'history.commit_qa', 'history.qa_details'}:
             # QA of a worker and its verifier, both recorded by this host class: the
             # originals are the ones this host kept, never request JSON.

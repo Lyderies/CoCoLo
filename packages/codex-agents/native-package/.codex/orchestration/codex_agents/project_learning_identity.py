@@ -13,6 +13,7 @@ No normal API exposes these helpers and no transaction may enclose preparation.
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 
 from .contracts import ContractError
@@ -78,27 +79,48 @@ def _references(references):
     return tuple(captured)
 
 
-def _outcomes(history, references):
+def _stored_outcome(history, identity, import_id):
+    """One outcome's bytes and digest: a live record, or one of the activated import's."""
+    try:
+        entry = history.record(identity)
+        return entry.content, entry.content_digest
+    except HistoryError as error:
+        if error.reason_code != "history_not_found" or import_id is None:
+            raise
+    if not matches(import_id, _ID):
+        raise HistoryError("history_invalid_input")
+    row = history._connection.execute(
+        "SELECT CASE WHEN typeof(content)='blob' AND length(content) BETWEEN 1 AND ? THEN content END,"
+        "content_digest FROM project_learning_records WHERE project_id=? AND import_id=? AND record_id=? "
+        "AND record_type='outcome'", (MAX_RECORD_BYTES, history.project_id, import_id, identity)).fetchone()
+    if row is None:
+        raise HistoryError("history_not_found")
+    if type(row[0]) is not bytes or hashlib.sha256(row[0]).hexdigest() != row[1]:
+        raise HistoryError("history_incompatible")
+    return row[0], row[1]
+
+
+def _outcomes(history, references, import_id=None):
     result, size = [], 0
     for identity, digest in references:
         # Primary-key lookups, never a digest/JSON predicate scan of the corpus.
-        entry = history.record(identity)
-        if entry.content_digest != digest:
+        content, stored_digest = _stored_outcome(history, identity, import_id)
+        if stored_digest != digest:
             raise HistoryError("history_conflict")
-        size += len(entry.content)
+        size += len(content)
         if size > MAX_PREPARATION_BYTES:
             raise HistoryError("history_learning_capacity")
-        record = parse_bounded_json(entry.content)
+        record = parse_bounded_json(content)
         if record["record_type"] != "outcome":
             raise HistoryError("history_invalid_input")
         result.append(record)
     return result
 
 
-def prepare_cases(history, references, *, expected_domain_digest):
+def prepare_cases(history, references, *, expected_domain_digest, import_id=None):
     key = _compatible_key(history, expected_domain_digest)
     references = _references(references)
-    outcomes = _outcomes(history, references)
+    outcomes = _outcomes(history, references, import_id)
     cases = []
     for outcome in outcomes:
         if outcome["status"] == "unverified" or outcome["evaluation_candidate_digest"] is not None:
@@ -113,7 +135,7 @@ def prepare_cases(history, references, *, expected_domain_digest):
     return cases
 
 
-def prepare_candidate(history, spec, references, *, expected_domain_digest):
+def prepare_candidate(history, spec, references, *, expected_domain_digest, import_id=None):
     key = _compatible_key(history, expected_domain_digest)
     references = _references(references)
     if type(spec) is not bytes or not 0 < len(spec) <= MAX_RECORD_BYTES:
@@ -131,7 +153,7 @@ def prepare_candidate(history, spec, references, *, expected_domain_digest):
                 or spec["evidence_digests"] != sorted(digest for _, digest in references)):
             raise HistoryError("history_invalid_input")
         validate_execution_configuration(spec["champion_configuration"])
-        _outcomes(history, references)
+        _outcomes(history, references, import_id)
         # Reuse the exact legacy generator; no eligibility claim is upgraded here.
         record = generate_candidate(digest_key=key, **spec)
         if len(canonical_json(record)) > MAX_RECORD_BYTES:

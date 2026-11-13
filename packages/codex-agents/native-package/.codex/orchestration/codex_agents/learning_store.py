@@ -141,6 +141,16 @@ from .account_claim_contracts import (
 # The owner's allowed-signers file is read whole up to this size; anything longer refuses.
 OWNER_KEY_REPLACE_HINT = "run ./setup.sh and choose Replace a lost owner key"
 DEFAULT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+# A project whose learning history moved to its own project store. The ledger
+# keeps that project's account rows and account-owned evidence; it accepts no
+# further learning records for it.
+LEARNING_MOVED_KEY = "project_learning_moved_v1:"
+LEARNING_MOVED_ERROR = "project learning has moved to its project store"
+LEARNING_MOVED_TYPES = frozenset({
+    "outcome", "feedback", "evaluation_case", "evaluation_assignment", "qa_evidence",
+    "evidence_review", "evaluation_trial", "candidate", "comparison", "canary_report",
+    "grader_calibration", "owner_grant", "promotion", "learning_export",
+})
 # A worker result kept for its verifier is raw child text, so it lives only while
 # its orchestration is open, and never longer than this; only digests stay.
 WORKER_RESULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
@@ -2985,6 +2995,72 @@ class LearningLedger:
                 (project_id, root_text, digest, "active", timestamp),
             )
             return project_id
+
+    def _learning_moved_locked(self, project_id: str) -> bool:
+        return self._connection.execute(
+            "SELECT 1 FROM additive_migrations WHERE feature_key=?",
+            (LEARNING_MOVED_KEY + project_id,),
+        ).fetchone() is not None
+
+    def has_learning_history(self, project_id: str) -> bool:
+        """Whether the ledger holds any learning record or QA row for the project."""
+
+        types = sorted(LEARNING_MOVED_TYPES)
+        with self._lock:
+            return self._connection.execute(
+                "SELECT 1 FROM records WHERE project_id=? AND record_type IN ("
+                + ",".join("?" for _ in types) + ") LIMIT 1",
+                (project_id, *types),
+            ).fetchone() is not None or self._connection.execute(
+                "SELECT 1 FROM operational_qa WHERE project_id=? LIMIT 1", (project_id,)
+            ).fetchone() is not None
+
+    def drained(self) -> bool:
+        """No run is active or unsettled anywhere (long-crashed claims aside)."""
+
+        from .history_contracts import HistoryError
+        from .learning_source_image import _drained
+
+        with self._lock:
+            try:
+                _drained(self._connection, self._clock_ms())
+            except HistoryError:
+                return False
+            return True
+
+    def learning_moved(self, project_id: str) -> bool:
+        """Whether this project's learning history now lives in its project store."""
+
+        with self._lock:
+            return self._learning_moved_locked(project_id)
+
+    def set_learning_moved(self, project_id: str, moved: bool) -> bool:
+        """Retire (or, for a rollback, restore) the ledger as this project's learning store.
+
+        Offline owner work during a drained migration; returns whether it changed.
+        """
+
+        if self._allow_schema_upgrade is not True or self._collector_active is not False:
+            raise LedgerError("learning store cutover requires the offline owner")
+        with self._lock, self._connection:
+            project = self._connection.execute(
+                "SELECT status FROM projects WHERE project_id=?", (project_id,)
+            ).fetchone()
+            if not project or project["status"] != "active":
+                raise LedgerError("project binding is not active")
+            if self._learning_moved_locked(project_id) is moved:
+                return False
+            if moved:
+                self._connection.execute(
+                    "INSERT INTO additive_migrations VALUES(?)",
+                    (LEARNING_MOVED_KEY + project_id,),
+                )
+            else:
+                self._connection.execute(
+                    "DELETE FROM additive_migrations WHERE feature_key=?",
+                    (LEARNING_MOVED_KEY + project_id,),
+                )
+            return True
 
     def project_for_root(self, project_root: Path) -> str:
         root = _canonical_project_root(project_root)
@@ -9105,6 +9181,10 @@ class LearningLedger:
         producer: str,
         timestamp: int,
     ) -> dict[str, Any]:
+        if checked["record_type"] in LEARNING_MOVED_TYPES and self._learning_moved_locked(
+            project_id
+        ):
+            raise LedgerError(LEARNING_MOVED_ERROR)
         if checked["record_type"] == "candidate":
             self._validate_candidate_eligibility_locked(project_id, checked)
         source = SOURCE_BY_PRODUCER[producer]
@@ -10053,6 +10133,8 @@ class LearningLedger:
             ).fetchone()
             if not project or project["status"] != "active":
                 raise LedgerError("project binding is not active")
+            if self._learning_moved_locked(project_id):
+                raise LedgerError(LEARNING_MOVED_ERROR)
             outcome_rows = self._connection.execute(
                 "SELECT content,content_digest FROM records WHERE project_id=? "
                 "AND record_type='outcome' ORDER BY source_sequence LIMIT 10001",
@@ -10476,15 +10558,19 @@ class LearningLedger:
                 "FROM hook_ingestion WHERE project_id=? ORDER BY event_code",
                 (project_id,),
             ).fetchall()
+            # A run the project's own service drove settles through its capacity
+            # row; its binding here is never consumed by the ledger.
             host_row = self._connection.execute(
                 "SELECT COUNT(*) AS opened,"
-                "SUM(consumed_at_ms IS NOT NULL) AS terminal,"
-                "SUM(binding_state='pending') AS pending,"
-                "SUM(native_assignment_id IS NOT NULL) AS native_bound,"
-                "SUM(usage_complete=1) AS usage_complete,"
-                "SUM(usage_complete=0) AS usage_unknown,"
-                "SUM(binding_state='abandoned') AS abandoned "
-                "FROM host_run_bindings WHERE project_id=?",
+                "SUM(h.consumed_at_ms IS NOT NULL OR c.released_at_ms IS NOT NULL) AS terminal,"
+                "SUM(h.binding_state='pending' AND c.released_at_ms IS NULL) AS pending,"
+                "SUM(h.native_assignment_id IS NOT NULL) AS native_bound,"
+                "SUM(h.usage_complete=1) AS usage_complete,"
+                "SUM(h.usage_complete=0) AS usage_unknown,"
+                "SUM(h.binding_state='abandoned') AS abandoned "
+                "FROM host_run_bindings AS h LEFT JOIN active_run_capacity AS c "
+                "ON c.project_id=h.project_id AND c.handle_digest=h.handle_digest "
+                "WHERE h.project_id=?",
                 (project_id,),
             ).fetchone()
             orchestration_rows = self._connection.execute(
@@ -11188,6 +11274,22 @@ class CollectorServer:
                         ),
                     )
                 return response
+            if request.get("op") == "learning_migration" and set(request) == {
+                "protocol", "op", "project_root",
+            }:
+                project_id = self.ledger.project_for_root(Path(request["project_root"]))
+                return {
+                    "ok": True,
+                    "moved": self.ledger.learning_moved(project_id),
+                    "has_learning": self.ledger.has_learning_history(project_id),
+                    "drained": self.ledger.drained(),
+                }
+            if request.get("op") == "shutdown_if_drained" and set(request) == {"protocol", "op"}:
+                # For a migration tool: never taken away from under an active run.
+                if not self.ledger.drained():
+                    return {"ok": False, "code": "collector_busy"}
+                self._stop.set()
+                return {"ok": True}
             if request.get("op") == "shutdown" and set(request) == {"protocol", "op"}:
                 self._stop.set()
                 return {"ok": True}
@@ -11300,6 +11402,7 @@ class CollectorMaintenance:
         *,
         timeout: float = 2.0,
         owner_registration: bool = False,
+        only_if_drained: bool = False,
     ) -> "CollectorMaintenance":
         if not owner_registration:
             require_authorized_collector_runtime(state)
@@ -11336,7 +11439,10 @@ class CollectorMaintenance:
                     transferred = True
                     return cls(state, cli_path, project_root, descriptor, False)
                 raise CollectorError("collector writer did not stop for maintenance")
-            client.shutdown()
+            if only_if_drained:
+                client.shutdown(only_if_drained=True)
+            else:
+                client.shutdown()
             if _wait_for_collector_shutdown(client, state, deadline):
                 transferred = True
                 return cls(state, cli_path, project_root, descriptor, True)
