@@ -8,6 +8,7 @@ and whether one of them stops the run.
 """
 from dataclasses import dataclass
 import math
+import re
 
 from .contracts import ContractError
 from .history_contracts import _RUN, matches
@@ -22,6 +23,8 @@ _FIELDS = ('status', 'rateLimitType', 'utilization', 'resetsAt', 'isUsingOverage
 _WINDOW_FIELDS = ('status', 'utilization', 'resetsAt')
 MAX_WINDOWS = 8
 MAX_TEXT = 64  # Per string field; with these bounds the reduced event stays well under 4 KiB.
+# Plain printable ASCII without quotes or backslashes, so one character is one encoded byte.
+_TEXT = re.compile(r'[ !#-\[\]-~]*')
 
 
 class RateLimitError(ContractError):
@@ -35,7 +38,7 @@ def _scalar(value):
         return value if -(1 << 53) <= value <= 1 << 53 else None
     if type(value) is float:
         return value if math.isfinite(value) else None
-    return value if type(value) is str and len(value) <= MAX_TEXT else None
+    return value if type(value) is str and len(value) <= MAX_TEXT and _TEXT.fullmatch(value) else None
 
 
 def bounded_rate_limit_info(info):
@@ -55,13 +58,43 @@ def bounded_rate_limit_info(info):
         for scope in sorted(windows, key=str):
             entry = windows[scope]
             entry = {n: _scalar(entry.get(n)) for n in _WINDOW_FIELDS if n in entry} if type(entry) is dict else None
-            if len(kept) < MAX_WINDOWS and type(scope) is str and len(scope) <= MAX_TEXT // 2:
+            if (len(kept) < MAX_WINDOWS and type(scope) is str and len(scope) <= MAX_TEXT // 2
+                    and _TEXT.fullmatch(scope)):
                 kept[scope] = entry
             elif (entry is None or entry.get('status') != 'allowed') and facts.get('status') != 'rejected':
                 # Never less restrictive than what was dropped.
                 facts['status'] = 'rejected' if (entry or {}).get('status') == 'rejected' else None
         facts['unifiedWindows'] = kept
+    if len(canonical_json(facts)) > MAX_RATE_LIMIT_INFO_BYTES:  # Defence in depth; the bounds above prevent it.
+        rejected = facts.get('status') == 'rejected' or any(
+            (entry or {}).get('status') == 'rejected' for entry in facts.get('unifiedWindows', {}).values())
+        facts = {'status': 'rejected' if rejected else None,
+                 **{n: facts[n] for n in ('isUsingOverage', 'overageStatus', 'overageDisabledReason') if n in facts}}
     return facts
+
+
+_STATUS_RANK = {'allowed': 0, 'allowed_warning': 1, None: 2, 'rejected': 3}
+_USING_RANK = {False: 0, None: 1, True: 2}
+_OVERAGE_RANK = {'rejected': 0, None: 1, 'allowed_warning': 2, 'allowed': 3}
+
+
+def _worst(values, rank):
+    return max((v if v in rank else None for v in values), key=lambda v: rank[v])
+
+
+def merged_restriction(events):
+    """One event at least as restrictive as every one given, for events that cannot each be sent.
+
+    The status, overage use and overage status are the most restrictive seen; the
+    disabled reason is dropped, so the account cannot read paid usage as unusable.
+    """
+    events = list(events)
+    windows = [entry for event in events for entry in (event.get('unifiedWindows') or {}).values()]
+    return {'status': _worst([e.get('status') for e in events] + [(w or {}).get('status', 'allowed') for w in windows],
+                             _STATUS_RANK),
+            'isUsingOverage': _worst([e.get('isUsingOverage') for e in events], _USING_RANK),
+            'overageStatus': _worst([e.get('overageStatus') for e in events], _OVERAGE_RANK),
+            'overageDisabledReason': None}
 
 
 @dataclass(frozen=True)

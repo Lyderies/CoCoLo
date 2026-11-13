@@ -291,10 +291,14 @@ immediately before launch; a mismatch never launches.
   `during` reading. Every event without an accepted reply stays pending in the driver
   and is delivered with its original request ID before the terminal is submitted,
   retried for as long as the account is unreachable, so the run's capacity stays
-  charged until the restriction is kept. The reduced event is at most about 3 KiB (8
-  windows, 64-character strings, finite numbers), always within the 4 KiB request.
-  More than 64 pending events, more than 1000 events in a run, or a refusal at
-  delivery stops the run with its capacity still charged. Limits: pending events live
+  charged until the restriction is kept. The reduced event keeps 8 windows, strings of
+  up to 64 plain printable ASCII characters without quotes or backslashes (anything
+  else becomes unknown) and finite numbers, so it encodes to about 3 KiB, within the
+  4 KiB request; a larger encoding is replaced by a conservative compact event. Events
+  after the 1000th in a run are not sent live but held like undelivered ones; beyond
+  64 held events the rest are folded into one event at least as restrictive as all of
+  them (worst status and overage, disabled reason dropped), delivered last. A refusal
+  at delivery stops the run with its capacity still charged. Limits: pending events live
   in driver memory, so a project host that dies before delivery loses them (the driver
   keeps no state across a restart), and nothing fences other admissions on the
   account while an event is pending; an unreachable account refuses those admissions
@@ -311,6 +315,16 @@ native subagent can be observed through hooks but has no documented way to be st
 from outside its session, so it could not meet the silence cutoff, deadline or
 cleanup guarantees. Tests: `ClaudePrimaryClaudeChildTests` (the Claude-child tests
 with a Claude primary).
+
+Open gap (verification on the host path): a verifier of a host-driven worker cannot be
+opened through the host yet, for either provider. `open_codex_client` and the driver's
+registration send no worker context (`prospective.worker` is None), while the account
+open (`account_original_open`) and preparation (`codex_preparation._worker_input`)
+require the exact retained worker for a task with `verification_for_outcome`, so such
+an open is refused rather than run unbound. Routing Claude verifiers through the bridge
+moves them onto this gap. The fix is to carry the worker's retained reference
+(`history.verification_worker_reference`) through the CLI open, driver registration and
+preparation, without weakening those checks.
 
 Tests: `tests/test_project_driver.py` `ClaudeChildDriverTests` (open to released
 capacity with a rate-limit event recorded; a paid-usage event stops the child and the

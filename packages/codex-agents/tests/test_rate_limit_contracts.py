@@ -6,7 +6,7 @@ import tests.support  # noqa: F401
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.rate_limit_contracts import (
     MAX_RATE_LIMIT_INFO_BYTES, MAX_TEXT, MAX_WINDOWS, RateLimitEventInput, bounded_rate_limit_info,
-    checked_rate_limit_reply,
+    checked_rate_limit_reply, merged_restriction,
 )
 
 
@@ -30,6 +30,26 @@ class BoundedRateLimitInfoTests(unittest.TestCase):
         self.assertLessEqual(len(canonical_json(facts)), MAX_RATE_LIMIT_INFO_BYTES)
         self.assertIsNone(facts['utilization'])  # Non-finite numbers become unknown.
         RateLimitEventInput('hrn_' + 'a' * 48, facts)
+
+    def test_escaped_characters_cannot_grow_the_encoding(self):
+        nul, quote = '\x00' * MAX_TEXT, '"' * MAX_TEXT
+        windows = {('\x00' * 31) + str(i): {'status': 'allowed', 'resetsAt': nul} for i in range(MAX_WINDOWS)}
+        windows.update({chr(0x41 + i) * 31: {'status': quote, 'resetsAt': '\u2028' * MAX_TEXT} for i in range(MAX_WINDOWS)})
+        facts = bounded_rate_limit_info({'status': 'allowed', 'isUsingOverage': True, 'resetsAt': nul,
+                                         'unifiedWindows': windows})
+        self.assertLessEqual(len(canonical_json(facts)), MAX_RATE_LIMIT_INFO_BYTES)
+        self.assertIs(True, facts['isUsingOverage'])
+        self.assertIsNone(facts['resetsAt'])
+        self.assertTrue(all(entry['status'] is None for entry in facts['unifiedWindows'].values()))
+
+    def test_a_merged_event_is_at_least_as_restrictive_as_each(self):
+        merged = merged_restriction([
+            {'status': 'allowed', 'isUsingOverage': False, 'overageStatus': 'rejected', 'overageDisabledReason': 'x'},
+            {'status': 'allowed_warning', 'isUsingOverage': True, 'overageStatus': 'rejected',
+             'unifiedWindows': {'five_hour': {'status': 'rejected'}}},
+        ])
+        self.assertEqual({'status': 'rejected', 'isUsingOverage': True, 'overageStatus': 'rejected',
+                          'overageDisabledReason': None}, merged)
 
     def test_dropped_windows_never_make_the_event_less_restrictive(self):
         windows = {f'w{i:02}': {'status': 'allowed', 'utilization': 0.1} for i in range(MAX_WINDOWS)}

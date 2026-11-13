@@ -41,7 +41,7 @@ from .learning_contracts import canonical_json, content_digest, parse_bounded_js
 from .open_scope_contracts import OpenScopeContext, open_inputs_digest
 from .orchestration_api import OrchestrationScope
 from .prepared_dispatch import DispatchAuthorization, PreparedDispatchContext
-from .rate_limit_contracts import RateLimitError, bounded_rate_limit_info
+from .rate_limit_contracts import RateLimitError, bounded_rate_limit_info, merged_restriction
 from .result_contracts import LEASE_SCOPE_FIELDS, ResultLeaseBinding
 from .run_provenance import RunProvenanceInput
 from .service_enrollment import (
@@ -135,7 +135,9 @@ class _RateLimitRecorder:
         self._custody = driver._custody(run, storage=run.evidence)
         self._prefix, self._count = 'rate-' + driver._id(run) + '-', 0
         self._lock = Lock()
-        self.pending, self.overflow = [], False  # Read by the driver after the worker returns.
+        # Read by the driver after the worker returns. Events beyond the pending
+        # limit are folded into one event at least as restrictive as all of them.
+        self.pending, self.overflow = [], None
 
     def request_id(self):
         with self._lock:
@@ -143,10 +145,15 @@ class _RateLimitRecorder:
             return self._prefix + str(self._count)
 
     def record_claude_rate_limit_event(self, project_id, *, run_handle, rate_limit_info):
-        if project_id != self._project or self._count >= MAX_RUN_RATE_LIMIT_EVENTS:
+        if project_id != self._project:
             raise RateLimitError('rate limit event was not recorded')
         facts = bounded_rate_limit_info(rate_limit_info)
         request_id = self.request_id()
+        if self._count > MAX_RUN_RATE_LIMIT_EVENTS:
+            # Past the cap the event is not sent now, but it is never dropped: it
+            # waits for delivery before the terminal like any undelivered event.
+            self._hold(run_handle, facts, request_id)
+            raise RateLimitError('rate limit event was not recorded')
         call = self._driver._call
         call.role, call.host_client, call.context = 'project', self._host, self._custody
         try:
@@ -156,11 +163,7 @@ class _RateLimitRecorder:
         except AccountError:
             # Whatever the failure, the driver tries this exact request again
             # before the terminal; a refusal then stops the run, capacity charged.
-            with self._lock:
-                if len(self.pending) < MAX_PENDING_RATE_LIMITS:
-                    self.pending.append((run_handle, facts, request_id))
-                else:
-                    self.overflow = True
+            self._hold(run_handle, facts, request_id)
             raise RateLimitError('rate limit event was not recorded') from None
         finally:
             call.role = call.host_client = call.context = None
@@ -171,6 +174,14 @@ class _RateLimitRecorder:
                 'provider_rejected': {'record_type': 'provider_headroom', 'status': 'rejected'}}.get(reply['stop'])
         kept = [{'record_type': 'provider_headroom', 'status': 'allowed'} for _ in range(reply['kept'])]
         return [stop, *kept[1:]] if stop is not None else kept
+
+    def _hold(self, run_handle, facts, request_id):
+        with self._lock:
+            if len(self.pending) < MAX_PENDING_RATE_LIMITS:
+                self.pending.append((run_handle, facts, request_id))
+            else:
+                folded = [facts] if self.overflow is None else [self.overflow[1], facts]
+                self.overflow = (run_handle, merged_restriction(folded), self._prefix + 'merged')
 
     def record_observation_unavailable(self, project_id, **_):
         return None  # The account already recorded it when it refused the event.
@@ -624,9 +635,9 @@ class RunDriver:
                 if self._result(run) is None:
                     return
                 recorder.pending.pop(0)
-            if recorder is not None and recorder.overflow:
-                self._fail(run, 'run_failed')
-                return
+            if recorder is not None and not recorder.pending and recorder.overflow is not None:
+                recorder.pending.append(recorder.overflow)  # Delivered last, once.
+                recorder.overflow = None
             if recorder is not None and recorder.pending:
                 handle, facts, request_id = recorder.pending[0]
                 self._account_call(run, 'project', 'record_rate_limit_event', handle, facts, request_id=request_id,

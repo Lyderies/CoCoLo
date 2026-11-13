@@ -529,6 +529,43 @@ class ClaudeRestrictionDeliveryTests(ClaudeChildHarness):
                            '--orchestration-handle', orchestration, expected=2)
         self.assertIn('paid', refused['reason_code'])
 
+    def held_paid_event(self, limits, *, unreachable_first):
+        """A paid event that is not accepted live still reaches the account before the terminal."""
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        paid = {**RATE_LIMIT, 'rate_limit_info': {**RATE_LIMIT['rate_limit_info'], 'isUsingOverage': True,
+                                                  'overageStatus': 'allowed'}}
+        self.frames('claude', [init_frame(), paid, {'sleep': 30}, result_frame()])
+        original, calls = AccountClient.record_rate_limit_event, []
+
+        def record(client, *args, **options):
+            calls.append(options['request_id'])
+            if unreachable_first and len(calls) == 1:
+                raise AccountError('account_unavailable')
+            return original(client, *args, **options)
+
+        with mock.patch.multiple(project_driver, **limits), \
+                mock.patch.object(AccountClient, 'record_rate_limit_event', record):
+            dispatched = self.dispatch_claude(context, route_path, run_handle)
+            self.assertEqual('rate_limit_event_invalid', dispatched['bridge_report']['outcome'])
+            self.wait_for(lambda: ('driver', 'reporting', 'terminal') in self.stopped_runs, seconds=30)
+        task = self.write('next-task.json', {**self.task(), 'id': 'task-2'})
+        route = self.cli('learning-route', '--task', task)
+        assigned = {**self.assignment_for(route), 'assignment_id': 'next-assignment', 'task_id': 'task-2'}
+        refused = self.cli('learning-open-host-run', '--task', task, '--assignment', self.write('next.json', assigned),
+                           '--parent-grant', context[5], '--route', self.write('next-route.json', route),
+                           '--orchestration-handle', orchestration, expected=2)
+        self.assertIn('paid', refused['reason_code'])
+        return calls
+
+    def test_an_event_past_the_run_cap_is_held_and_delivered(self):
+        calls = self.held_paid_event({'MAX_RUN_RATE_LIMIT_EVENTS': 0}, unreachable_first=False)
+        self.assertEqual(1, len(calls))  # Not sent live; delivered once before the terminal.
+
+    def test_events_past_the_pending_limit_are_folded_and_delivered(self):
+        calls = self.held_paid_event({'MAX_PENDING_RATE_LIMITS': 0}, unreachable_first=True)
+        self.assertEqual(2, len(calls))
+        self.assertTrue(calls[1].endswith('-merged'))
+
     def test_a_client_changed_after_the_account_observed_it_is_never_launched(self):
         context, route_path, orchestration, run_handle = self.open_claude_run()
         self.frames('claude', [init_frame(), result_frame()])
