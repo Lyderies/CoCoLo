@@ -875,13 +875,13 @@ class ProviderRoutingTests(unittest.TestCase):
             ("gpt-6.1-sol", "high"), (exploratory["model"], exploratory["effort"])
         )
 
-    def test_claude_primary_picks_native_claude_and_bridged_codex(self) -> None:
+    def test_claude_primary_bridges_both_claude_and_codex_children(self) -> None:
         policy = self.provider_policy()
         exploratory = route_task(
             self.exploratory(), policy, primary_provider="claude"
         )
         self.assertEqual(
-            ("claude", "native", "claude-opus-5-5", "medium"),
+            ("claude", "bridge", "claude-opus-5-5", "medium"),
             (
                 exploratory["provider"], exploratory["dispatch"],
                 exploratory["model"], exploratory["effort"],
@@ -1056,7 +1056,7 @@ class ProviderRoutingTests(unittest.TestCase):
         )
         codex_work = route_task(self.task(), policy, primary_provider="claude")
         self.assertEqual(
-            ("claude", "native", "claude-opus-5-5", "high"),
+            ("claude", "bridge", "claude-opus-5-5", "high"),
             tuple(
                 codex_work["verifier"][field]
                 for field in ("provider", "dispatch", "model", "effort")

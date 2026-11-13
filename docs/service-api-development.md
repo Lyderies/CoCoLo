@@ -254,8 +254,8 @@ recorded and releases its capacity.
 Not done: no cancellation-before-dispatch path for a claimed run through the
 driver, no driver state across a host restart (a run opened before a restart is
 refused at dispatch and keeps its account capacity until reconciled), the
-native Claude path (path D) is not driven (the bridged Claude path is, below), and
-`learning-bind-host-agent`, verification and QA still use the legacy ledger.
+`learning-bind-host-agent` (native routes from older policies only), verification and
+QA still use the legacy ledger.
 
 
 #### Claude children (path C)
@@ -302,8 +302,15 @@ immediately before launch; a mismatch never launches.
   a recorder and the prepared client digest a Claude job is never launched.
 - Gaps: a run with no rate-limit event leaves no `no_rate_limit_event` record (the
   legacy bridge wrote one); real stream-json frame shapes and cadence still need a
-  version-pinned real-client check; a native Claude child (path D) does not use this
-  driver.
+  version-pinned real-client check.
+
+Path D (owner decision, 2026-11-13): a Claude primary's Claude child is also a
+separate `claude -p` process run by this driver, not a native Agent-tool subagent.
+`routing._dispatch` now returns `bridge` for every child, from either primary. A
+native subagent can be observed through hooks but has no documented way to be stopped
+from outside its session, so it could not meet the silence cutoff, deadline or
+cleanup guarantees. Tests: `ClaudePrimaryClaudeChildTests` (the Claude-child tests
+with a Claude primary).
 
 Tests: `tests/test_project_driver.py` `ClaudeChildDriverTests` (open to released
 capacity with a rate-limit event recorded; a paid-usage event stops the child and the

@@ -496,6 +496,11 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
         self.assertIn('paid', refused['reason_code'])
 
 
+class ClaudePrimaryClaudeChildTests(ClaudeChildDriverTests):
+    """Path D: a Claude primary's Claude child is a separate `claude -p` process run by the same host."""
+    primary = 'claude'
+
+
 class ClaudeRestrictionDeliveryTests(ClaudeChildHarness):
     def test_an_undelivered_paid_event_reaches_the_account_before_the_run_finishes(self):
         context, route_path, orchestration, run_handle = self.open_claude_run()
