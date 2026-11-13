@@ -77,7 +77,7 @@ def read_run(path):
                         or value.get("kind") not in {"start", "frame", "end", "truncated"}):
                     return None
                 lines.append(value)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     if not lines or lines[0].get("kind") != "start" or lines[0].get("schema") != 1:
         return None

@@ -2142,16 +2142,19 @@ def main() -> int:
                     maintenance.resume()
                 except CollectorError:
                     pass
-                if ledger_copy is None or not isinstance(failure, (LedgerError, StateError, OSError)):
+                if behind is None or not isinstance(failure, (LedgerError, StateError, OSError)):
                     raise
                 # The schema change is one transaction, but the registration that follows
-                # it is not part of it: say which side of that the failure fell on.
+                # it is not part of it: say which side of that the failure fell on. A copy
+                # that could not be made stopped everything before the ledger was touched.
                 try:
                     still_behind = ledger_schema_behind(state) is not None
                 except LedgerError:
                     still_behind = None
                 _print_command_report(args, {
                     "ready": False,
+                    # Old macOS records moved by this same command stay moved.
+                    "state_moved": str(moved_aside) if moved_aside is not None else None,
                     **({"reason_code": "ledger_upgrade_failed",
                         "error": "the records could not be upgraded and are as the earlier version left them; "
                                  "install that version again to keep using them, and keep the copy"}
@@ -2164,7 +2167,7 @@ def main() -> int:
                         "error": "the upgrade stopped and the records cannot be read to see how far it got; "
                                  "keep the copy of the records as they were and do not delete anything"}),
                     "ledger_schema_version": behind,
-                    "ledger_copy": str(ledger_copy),
+                    "ledger_copy": str(ledger_copy) if ledger_copy is not None else None,
                 })
                 return 2
             try:

@@ -659,8 +659,27 @@ class LearningCliTests(unittest.TestCase):
                     mock.patch.object(cli, "copy_ledger_before_upgrade",
                                       side_effect=learning_store.LedgerError("the ledger could not be copied before its upgrade")):
                 self.assertEqual(2, cli_main())
-            self.assertIn("could not be copied", json.loads(stdout.getvalue())["error"])
+            uncopied = json.loads(stdout.getvalue())
+            self.assertEqual(("ledger_upgrade_failed", None, None), (
+                uncopied["reason_code"], uncopied["ledger_copy"], uncopied["state_moved"]))
             self.assertEqual(6, learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
+            # The upgrade went through, registration failed, and the ledger cannot then be read.
+            readings = iter([6, 6])
+            stdout = io.StringIO()
+            with mock.patch.object(sys, "argv", ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                                                 "--project-root", str(self.project), "--upgrade-ledger"]), \
+                    contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(cli, "authorize_collector_runtime", side_effect=OSError("disk")), \
+                    mock.patch.object(cli, "ledger_schema_behind", side_effect=lambda state: next(
+                        readings, None) or (_ for _ in ()).throw(learning_store.LedgerError("unreadable"))):
+                self.assertEqual(2, cli_main())
+            unknown = json.loads(stdout.getvalue())
+            self.assertEqual("ledger_upgrade_unknown", unknown["reason_code"])
+            self.assertIn("do not delete anything", unknown["error"])
+            self.assertTrue(Path(unknown["ledger_copy"]).is_file())
+            ledger = LearningLedger(LearningState(self.state_root, create=False))
+            downgrade_ledger_to_six(ledger)
+            ledger.close()
             # The migration fails inside its transaction: the earlier records are as they were.
             initialize = LearningLedger._initialize_launch_claims_locked
 

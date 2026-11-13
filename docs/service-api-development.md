@@ -571,9 +571,11 @@ What an update or an owner command may stop, and what it says when it may not:
   runs, so this rests on the collector being the owner's own, as everything it answers
   does. A collector that accepted the stop but is slow to go down is waited for a little
   longer (`STOP_RECOVERY_SECONDS`), and the command goes ahead if it stops in that time.
-  If it is still up after that, the command refuses and says which it is: "still
-  running", or, when it has gone and could not be started again, "not answering; the
-  next command starts it again". Nothing here waits for a stop for ever, so a collector
+  If it is still up after that, the command refuses and says which it is, by asking the
+  collector itself whatever its version: "still running", or, when nothing answers,
+  "not answering; the next command starts it again, or run setup if it does not" (a
+  runtime that is not the authorized one cannot start a collector; setup authorizes
+  it). Nothing here waits for a stop for ever, so a collector
   that goes down only after the refusal is started by whichever command next needs it
   (every command that uses the collector starts a missing one first)
   (`LearningStoreTests.test_a_collector_that_outlives_the_wait_for_its_stop_is_reported_as_it_is`).
@@ -647,7 +649,10 @@ against a pinned real client without keeping anything a child said:
   record (`test_no_file_is_touched_while_the_child_runs`). What it does add there is the
   small, bounded work of shaping each frame. A failure switches recording off for that run
   and is not reported. Nothing is recorded once the folder holds 512 files or 256 MiB: the
-  owner deletes records to make room.
+  owner deletes records to make room. That limit is checked when a run starts, so runs that
+  are under way together can pass it by their own records (16 MiB each at most, and the
+  number of runs is capped), and each holds up to that much in memory until it ends. A
+  service that is killed mid-run leaves no record of that run.
 - `scripts/event_capability_report.py [--state-root <root>] [--codex-version <v>]` turns the
   records into the report: per provider, client version, model and effort, the time to the
   first frame and the first work frame, reasoning and tool use, the longest gaps (against the
@@ -685,7 +690,11 @@ run against a ledger the 0.2.2 runtime itself created.
   and reports `ledger_upgrade_failed` with the copy's path; a failure after it (the
   project's registration or the runtime's authorization) reports
   `registration_incomplete_after_upgrade`, never that the records are unchanged; if the
-  ledger cannot be read to tell, `ledger_upgrade_unknown`. The backup registrations are
+  ledger cannot be read to tell, `ledger_upgrade_unknown`. Each failure report also
+  carries `state_moved` when old macOS records were moved by the same command, and
+  setup's step 5 has one fixed sentence for each of the three
+  (`WizardTerminalTests.test_a_failure_after_the_upgrade_is_never_described_as_records_left_unchanged`
+  and its two neighbours). The backup registrations are
   written before the transaction and stay after a failed upgrade. The ledger is opened
   for the check and the copy through a URI built from its own path, so no character in
   the path can name another file. The per-project copies expire after

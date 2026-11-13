@@ -223,6 +223,7 @@ class EventShapeTests(unittest.TestCase):
             {"kind": "frame", "ms": 1, "type": "stream_event", "event": {"type": "content_block_delta", "delta": []}})]))
         (folder / "provider.jsonl").write_text(genuine[0].replace('"claude"', '"' + CANARY + '"') + "\n")
         os.symlink(sorted(folder.glob("codex-*.jsonl"))[0], folder / "linked.jsonl")
+        (folder / "nested.jsonl").write_text(genuine[0] + "\n" + "[" * 100_000 + "]" * 100_000 + "\n")
         output = io.StringIO()
         with redirect_stdout(output), self.assertRaises(SystemExit) as done, \
                 mock.patch("sys.argv", [str(REPORT), "--state-root", str(self.state), "--codex-version", "0.164.0"]):
@@ -236,7 +237,7 @@ class EventShapeTests(unittest.TestCase):
         self.assertIn("- Tool calls: Read x1, other x1", report)
         self.assertIn("- success, structured output present: 1", report)
         self.assertIn("| `stream_event:content_block_delta/thinking_delta` | 2 |", report)
-        self.assertIn("Files skipped because they are not shape records: 4", report)
+        self.assertIn("Files skipped because they are not shape records: 5", report)
         self.assertIn("## claude client not reported, model other, effort other", report)  # The crafted one.
         self.assertIn("## codex client 0.164.0, model gpt-6-astra, effort high\n\nRuns recorded: 1\n", report)
         self.assertNotIn(CANARY, report)

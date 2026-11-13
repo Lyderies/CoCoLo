@@ -2252,9 +2252,22 @@ step_collector() {
   if [ "$rc" -ne 0 ]; then
     failure_detail "Collector registration failed"
     version_hint
+    # After an approved upgrade the failure says how far it got; one fixed sentence each.
+    case "$(pj get "$LAST_OUT" reason_code)" in
+      ledger_upgrade_failed)
+        list_sub "Your records were not upgraded: they are as the earlier version left them.";;
+      registration_incomplete_after_upgrade)
+        list_sub "Your records were upgraded, but registering this project did not finish. Run setup again and repeat this step.";;
+      ledger_upgrade_unknown)
+        list_sub "The upgrade stopped and the records could not be read afterwards. Delete nothing, and keep the copy.";;
+    esac
     copy=$(pj get "$LAST_OUT" ledger_copy); copy=${copy//[[:cntrl:]]/}
     if [ "${copy:0:1}" = / ]; then
-      list_sub "Your records are as the earlier version left them. A copy of them is also at $copy."
+      list_sub "A copy of the records as they were before the upgrade is at $copy."
+    fi
+    copy=$(pj get "$LAST_OUT" state_moved); copy=${copy//[[:cntrl:]]/}
+    if [ "${copy:0:1}" = / ]; then
+      list_sub "Your records were moved to the protected folder first and stay there; the old copy is at $copy. The earlier version's collector was not started again."
     fi
     mark_step 5 fail "registration failed"
     pause; return 1

@@ -1072,7 +1072,8 @@ class WizardTerminalTests(unittest.TestCase):
             ' echo "$FAKE_SCAN"; exit 0;; esac; fi\n'
             # An earlier version's records: refused until approved, then upgraded.
             'if [ -n "$FAKE_UPGRADE" ]; then case "$*" in *"cli.py learning-register "*"--upgrade-ledger"*)'
-            f' printf "%s\\n" "$*" >> "{self.base / "register.log"}"; echo "$FAKE_UPGRADE"; exit 0;;'
+            f' printf "%s\\n" "$*" >> "{self.base / "register.log"}"; echo "$FAKE_UPGRADE";'
+            ' case "$FAKE_UPGRADE" in *\'"ready": false\'*) exit 2;; esac; exit 0;;'
             ' *"cli.py learning-register "*)'
             f' printf "%s\\n" "$*" >> "{self.base / "register.log"}";'
             ' echo \'{"ready": false, "reason_code": "ledger_upgrade_required", "ledger_schema_version": 6,'
@@ -1506,6 +1507,33 @@ class WizardTerminalTests(unittest.TestCase):
         asked = (self.base / "register.log").read_text().splitlines()
         self.assertEqual(2, len(asked))
         self.assertIn("--upgrade-ledger", asked[1])
+
+    def failed_upgrade(self, reason: str, said: str, never: str) -> None:
+        self.drive_to_upgrade_question(
+            '{"ready": false, "reason_code": "%s", "ledger_copy": "/kept/old ledger",'
+            ' "state_moved": "/somewhere/old copy"}' % reason)
+        self.send("\r")  # Yes, upgrade them
+        self.expect("Collector registration failed")
+        self.expect(said)
+        self.expect("A copy of the records as they were before the upgrade is at /kept/old ledger")
+        self.expect("stay there; the old copy is at /somewhere/old copy")
+        self.settle()
+        last = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", self.screen.split("\x1b[2J")[-1]))
+        self.assertNotIn(never, last)
+
+    def test_an_upgrade_that_failed_before_changing_anything_says_so(self) -> None:
+        self.failed_upgrade("ledger_upgrade_failed",
+                            "Your records were not upgraded: they are as the earlier version left them.",
+                            "were upgraded, but")
+
+    def test_a_failure_after_the_upgrade_is_never_described_as_records_left_unchanged(self) -> None:
+        self.failed_upgrade("registration_incomplete_after_upgrade",
+                            "Your records were upgraded, but registering this project did not",
+                            "as the earlier version left them")
+
+    def test_an_upgrade_whose_outcome_cannot_be_read_tells_the_owner_to_keep_everything(self) -> None:
+        self.failed_upgrade("ledger_upgrade_unknown", "could not be read afterwards. Delete nothing",
+                            "as the earlier version left them")
 
     def test_declining_the_upgrade_changes_nothing(self) -> None:
         self.drive_to_upgrade_question('{"ready": true}')
