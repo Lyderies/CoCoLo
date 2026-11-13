@@ -24,6 +24,26 @@ PREFIX = [{"frame": {"type": "thread.started", "thread_id": "thread_1"}},
           {"frame": {"type": "turn.started"}}]
 
 
+# The inert client: prints each frame row, waits on pause files, exits on request.
+FIXTURE_BODY = '''
+import json, sys, time
+from pathlib import Path
+root = Path(__file__).parent
+for row in json.loads((root / "frames.json").read_text()):
+    if "pause" in row:
+        end = time.monotonic() + 15
+        while not (root / row["pause"]).exists():
+            if time.monotonic() >= end:
+                sys.exit(13)
+            time.sleep(0.005)
+    elif "exit" in row:
+        sys.exit(0)
+    else:
+        print(json.dumps(row["frame"]), flush=True)
+time.sleep(30)
+'''
+
+
 def reasoning(number=1):
     return {"frame": {"type": "item.completed", "item": {
         "id": f"item_{number}", "type": "reasoning", "text": "PRIVATE-REASONING-CANARY",
@@ -45,23 +65,7 @@ class CodexActivityExecutionTests(unittest.TestCase):
         for name in ("control", "export", "tmp"):
             (root / name).mkdir(mode=0o700)
         executable = root / "inert-exec"
-        executable.write_text("#!" + sys.executable + "\n" + '''
-import json, sys, time
-from pathlib import Path
-root = Path(__file__).parent
-for row in json.loads((root / "frames.json").read_text()):
-    if "pause" in row:
-        end = time.monotonic() + 15
-        while not (root / row["pause"]).exists():
-            if time.monotonic() >= end:
-                sys.exit(13)
-            time.sleep(0.005)
-    elif "exit" in row:
-        sys.exit(0)
-    else:
-        print(json.dumps(row["frame"]), flush=True)
-time.sleep(30)
-''')
+        executable.write_text("#!" + sys.executable + "\n" + FIXTURE_BODY)
         executable.chmod(0o700)
         (root / "frames.json").write_text(json.dumps(rows))
         target = owner_fixtures.attempt()

@@ -26,6 +26,7 @@ from typing import Any
 from .owned_execution import ExecutionCustodyError, ExecutionTicket
 
 from .catalog import CatalogError, parse_claude_agent
+from .claude_activity import ClaudeActivity, ClaudeActivityError
 from .codex_activity import CodexActivity, CodexActivityError
 from .contracts import (
     ONE_EVIDENCE_ENTRY_RULE,
@@ -1194,6 +1195,15 @@ def run_claude(
         "models": set(),
         "helper_models": set(),
     }
+    activity = (ClaudeActivity(model, CLAUDE_TOOLS) if type(_execution) is ExecutionTicket
+                and _execution.activity_enabled() else None)
+
+    def publish(category: str | None) -> None:
+        if category is not None:
+            try:
+                _execution.publish_activity(category)
+            except ExecutionCustodyError:
+                raise _Abort("monitor_unavailable") from None
 
     def on_frame(frame: dict[str, Any]) -> None:
         state["frames"] += 1
@@ -1216,6 +1226,8 @@ def run_claude(
             if violation is not None:
                 raise _Abort(f"init_{violation}")
             state["init"] = frame
+            if activity is not None:
+                publish(activity.startup())
             return
         if kind == "rate_limit_event":
             # Every event goes to the ledger, which keeps each one that is more
@@ -1266,6 +1278,24 @@ def run_claude(
             served = message.get("model") if isinstance(message, dict) else None
             if served is not None:
                 state["models"].add(str(served))
+            content = message.get("content") if isinstance(message, dict) else None
+            # The init check proved the advertised tools; a later call outside
+            # them stops the child at once, like a prohibited Codex item.
+            if isinstance(content, list) and any(
+                isinstance(block, dict) and block.get("type") == "tool_use"
+                and block.get("name") not in CLAUDE_TOOLS
+                for block in content
+            ):
+                raise _Abort("claude_tool_not_allowed")
+        # Work from another model is not this run's activity (the run is
+        # marked rerouted); classify only after every fence above has passed.
+        if activity is not None and not (state["models"] - {model}):
+            try:
+                category = activity.observe(frame)
+            except ClaudeActivityError as error:
+                _execution.fail_activity()
+                raise _Abort(error.reason_code) from None
+            publish(category)
 
     started = time.monotonic()
     outcome = run_child(

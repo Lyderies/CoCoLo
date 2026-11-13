@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import threading
+import unittest
+from unittest import mock
+
+import tests.support  # noqa: F401
+import tests.test_bridge as bridge_fixtures
+import tests.test_bridge_liveness as owner_fixtures
+import tests.test_codex_activity_execution as codex_fixtures
+from tests.test_liveness_clock import SECOND
+
+from codex_agents import bridge, claude_activity
+from codex_agents.claude_activity import ClaudeActivity, ClaudeActivityError
+from codex_agents.owned_execution import OwnedExecutionKey, OwnedExecutionRegistry
+
+MODEL = "claude-opus-5-5"
+
+
+def assistant(*content, model=MODEL, **changes):
+    return {"type": "assistant", "message": {"id": "msg_1", "model": model, "content": list(content)},
+            "parent_tool_use_id": None, **changes}
+
+
+def text(value="PRIVATE-TEXT"):
+    return {"type": "text", "text": value}
+
+
+def tool_use(identity="toolu_1", name="Read"):
+    return {"type": "tool_use", "id": identity, "name": name, "input": {"file_path": "PRIVATE-PATH"}}
+
+
+def tool_result(identity="toolu_1"):
+    return {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": identity, "content": "PRIVATE-OUTPUT"}]},
+        "parent_tool_use_id": None}
+
+
+class ClaudeActivityTests(unittest.TestCase):
+    def start(self):
+        activity = ClaudeActivity(MODEL, bridge.CLAUDE_TOOLS)
+        self.assertEqual("startup", activity.startup())
+        self.assertIsNone(activity.startup())
+        return activity
+
+    def test_nonempty_requested_model_work_and_completed_tools_count(self):
+        activity = self.start()
+        self.assertEqual("activity", activity.observe(assistant(text())))
+        self.assertEqual("activity", activity.observe(assistant({"type": "thinking", "thinking": "PRIVATE"})))
+        self.assertIsNone(activity.observe(assistant(text(" \n"))))
+        self.assertEqual("activity", activity.observe(assistant(tool_use())))
+        self.assertIsNone(activity.observe(assistant(tool_use())))  # Repeated call ID.
+        self.assertEqual("activity", activity.observe(tool_result()))
+        self.assertIsNone(activity.observe(tool_result()))  # Already completed.
+        self.assertIsNone(activity.observe(tool_result("toolu_unknown")))
+        self.assertNotIn("PRIVATE", repr(vars(activity)))
+
+    def test_metadata_billing_errors_and_other_models_do_not_refresh(self):
+        activity = self.start()
+        for frame in ({"type": "system", "subtype": "init"}, {"type": "result", "subtype": "success"},
+                      {"type": "rate_limit_event", "rate_limit_info": {}},
+                      {"type": "stream_event", "event": {"type": "content_block_delta"}},
+                      assistant(text(), model="claude-sonnet-5-5"),
+                      assistant(text(), error="rate_limit"),
+                      {"type": "user", "message": {"role": "user", "content": "PRIVATE-PROMPT"}}):
+            with self.subTest(frame=frame["type"]):
+                self.assertIsNone(activity.observe(frame))
+
+    def test_bad_shapes_tools_and_subagent_frames_have_fixed_errors(self):
+        for frame in ([], {"type": []}, {"type": "assistant", "message": []},
+                      assistant(text([])), assistant(tool_use(identity="PRIVATE/INVALID")),
+                      assistant(tool_use(name="Bash")), assistant(text(), parent_tool_use_id="toolu_1"),
+                      {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": []}]}}):
+            with self.subTest(frame=frame), self.assertRaisesRegex(ClaudeActivityError, "^claude_activity_invalid$"):
+                self.start().observe(frame)
+        with self.assertRaises(ClaudeActivityError):
+            ClaudeActivity(MODEL, bridge.CLAUDE_TOOLS).observe(assistant(text()))
+
+    def test_tool_cardinality_overflow_is_monitoring_failure(self):
+        activity = self.start()
+        with mock.patch.object(claude_activity, "MAX_ACTIVITY_ITEMS", 1):
+            activity.observe(assistant(tool_use()))
+            with self.assertRaisesRegex(ClaudeActivityError, "^monitor_unavailable$"):
+                activity.observe(assistant(tool_use("toolu_2")))
+
+
+class ClaudeActivityExecutionTests(unittest.TestCase):
+    """The fixed Claude reader on an owned execution with an inert stream-json fixture."""
+
+    setUp = owner_fixtures.BridgeLivenessTests.setUp
+    authorize = owner_fixtures.BridgeLivenessTests.authorize
+    at = owner_fixtures.BridgeLivenessTests.at
+    request = owner_fixtures.BridgeLivenessTests.request
+    finish_fixture = owner_fixtures.BridgeLivenessTests.finish_fixture
+    until = codex_fixtures.CodexActivityExecutionTests.until
+    queued = codex_fixtures.CodexActivityExecutionTests.queued
+    finished = codex_fixtures.CodexActivityExecutionTests.finished
+
+    def execution(self, rows):
+        temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        for name in ("control", "export", "tmp"):
+            (root / name).mkdir(mode=0o700)
+        executable = root / "inert-claude"
+        executable.write_text("#!" + sys.executable + "\n" + codex_fixtures.FIXTURE_BODY)
+        executable.chmod(0o700)
+        (root / "frames.json").write_text(json.dumps(rows))
+        target = owner_fixtures.attempt()
+        self.monitor.register(target, hard_deadline_ns=self.deadline)
+        registry = OwnedExecutionRegistry()
+        key = OwnedExecutionKey(target.project_id, "b" * 64, target.run_id, target.claim_id)
+        ticket = registry.issue(key, deadline_ns=self.deadline, run_handle=target.run_handle)
+        entry = registry._entry(ticket)
+        outcomes, errors = [], []
+
+        def run():
+            try:
+                outcomes.append(bridge.run_claude(
+                    ledger=object(), project_id=target.project_id, run_handle=target.run_handle,
+                    route={"model": MODEL, "effort": "high"},
+                    assignment=bridge_fixtures.assignment(), role_prompt="Read the fixture only.",
+                    export=root / "export", control=root / "control", environ={"PATH": os.defpath},
+                    deadline_seconds=60, max_turns=4, executable=str(executable), _execution=ticket,
+                ))
+            except BaseException as error:
+                errors.append(error)
+
+        worker = threading.Thread(target=run, daemon=True)
+        supervisor = registry.handoff(ticket, worker)
+        self.addCleanup(self.finish_fixture, worker, threading.Event(), entry, supervisor)
+        self.owner.bind(target, supervisor)
+        worker.start()
+        return root, target, registry, ticket, entry, worker, supervisor, outcomes, errors
+
+    def test_clean_init_is_startup_and_assistant_work_is_activity_until_silence(self):
+        rows = [{"frame": bridge_fixtures.init_frame()}, {"pause": "continue"},
+                {"frame": assistant(text())}]
+        execution = self.execution(rows)
+        root, target, registry, _, entry, _, supervisor, _, _ = execution
+        self.until(lambda: self.monitor.status(target).health == "active")
+        self.at(9)
+        (root / "continue").touch()
+        self.until(lambda: self.queued(registry, entry), tick=False)
+        with registry._lock:
+            self.assertEqual([("activity", self.origin + 9 * SECOND)], entry.activity.events)
+        self.at(18)
+        self.owner.run_once()
+        self.assertEqual("stale", self.monitor.status(target).health)
+        self.assertFalse(supervisor.snapshot()["stop_requested"])
+        self.at(19)
+        self.owner.run_once()
+        self.finished(execution, "work_silence")
+
+    def test_prohibited_tool_call_stops_before_activity(self):
+        execution = self.execution([{"frame": bridge_fixtures.init_frame()},
+                                    {"frame": assistant(tool_use(name="Bash"))}])
+        self.finished(execution, "claude_tool_not_allowed")
+        self.assertEqual(0, self.monitor._entry(execution[1]).clock._activity_events)
+
+    def test_rerouted_model_work_does_not_establish_activity(self):
+        execution = self.execution([{"frame": bridge_fixtures.init_frame()},
+                                    {"frame": assistant(text(), model="claude-sonnet-5-5")},
+                                    {"exit": True}])
+        self.finished(execution, "missing_result")
+        self.assertTrue(execution[7][0][1]["rerouted"])
+        self.assertEqual(0, self.monitor._entry(execution[1]).clock._activity_events)
+
+
+if __name__ == "__main__":
+    unittest.main()
