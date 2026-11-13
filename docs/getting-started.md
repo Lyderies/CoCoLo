@@ -9,7 +9,7 @@ wizard and one request in Claude Code or Codex.
 - **Git:** from the Command Line Tools, Xcode or Homebrew (`/usr/bin/git` on Linux).
 - **Python:** 3.11 or later from a trusted install such as Homebrew or python.org, first on `PATH`. Not a
   virtual environment, and not macOS's `/usr/bin/python3` shim.
-- **Clients:** Claude Code 2.1.x, Codex CLI 0.164.0 or both, signed in with their subscriptions.
+- **Clients:** Claude Code 2.1.x, Codex CLI 0.164.0 to 0.169.x or both, signed in with their subscriptions.
 - **No API keys:** `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` must not be set.
 
 ## 2. Clone this repository

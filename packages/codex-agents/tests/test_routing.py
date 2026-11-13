@@ -1147,7 +1147,7 @@ class ProviderRoutingTests(unittest.TestCase):
             "must contain exactly minimum": lambda policy: policy["providers"]["claude"][
                 "client_versions"
             ].pop("maximum_exclusive"),
-            "ascending semantic version range": versions(minimum="0.165.0"),
+            "ascending semantic version range": versions(minimum="0.170.0"),
             "ascending semantic version range ": versions(maximum_exclusive="0.164"),
             " ascending semantic version range": versions(minimum="v0.164.0"),
             "ascending semantic version range  ": versions(minimum="0.164.0-alpha.1"),
@@ -1182,7 +1182,7 @@ class ProviderRoutingTests(unittest.TestCase):
             loaded = load_policy(self.write_policy(directory, uncapped))
         self.assertEqual(
             {
-                "client_versions": {"minimum": "0.164.0", "maximum_exclusive": "0.164.1"},
+                "client_versions": {"minimum": "0.164.0", "maximum_exclusive": "0.170.0"},
                 "max_admissions_per_window": None,
             },
             admission_settings(loaded, "codex"),

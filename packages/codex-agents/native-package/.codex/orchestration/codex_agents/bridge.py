@@ -101,11 +101,17 @@ CLAUDE_DISABLED_PLUGINS = (
 CODEX_REROUTE_EVENTS = {"model/rerouted", "model_rerouted", "model.rerouted"}
 # Codex features switched off for every child. `code_mode_host` must stay enabled:
 # disabling it breaks Codex's own tool invocation.
-# These disables plus `--ephemeral` are the pre-dispatch denial, and they are only
-# demonstrated on codex-cli 0.164.0: under `--ephemeral`, `spawn_agent` fails before
-# any sub-agent run because no rollout exists, and no item event is emitted for the
-# attempt. The reviewed Codex range in config/routing-policy.json is therefore
-# pinned to that build; widening it requires a live containment check on the new build.
+# These disables plus `--ephemeral` are the pre-dispatch denial. It was demonstrated
+# live on codex-cli 0.164.0: under `--ephemeral`, `spawn_agent` fails before any
+# sub-agent run because no rollout exists, and no item event is emitted for the
+# attempt. The reviewed Codex range in config/routing-policy.json runs from that
+# build to the 0.169 line. On 0.169.0 the surface this launch relies on was compared
+# without a model call and is unchanged (every feature named below still exists, no
+# new feature is on by default that adds a tool, `codex exec` still has the required
+# options, the event and item names are the same, and the role's instructions are
+# still rendered as a developer message); the live containment check on that build is
+# a step of the release's real-install trial. Widening the range further requires the
+# same comparison and a live containment check on the new build.
 # `skill_mcp_dependency_install` lets a skill the prompt mentions install and start
 # its declared MCP server, which would run outside the sandbox; skills from the user's
 # directories and from the export itself are listed to every child.
@@ -125,7 +131,7 @@ CODEX_APPROVAL_SETTING = 'approval_policy="never"'
 # `codex_exec_options_unavailable`.
 CODEX_REQUIRED_EXEC_OPTIONS = ("--ignore-user-config", "--ignore-rules")
 # The routed Codex role's developer instructions reach a bridged child as this
-# configuration key, which codex-cli 0.164.0 renders as a developer message
+# configuration key, which codex-cli 0.164.0 and 0.169.0 render as a developer message
 # (checked with `codex debug prompt-input`, which makes no model call).
 CODEX_DEVELOPER_INSTRUCTIONS_KEY = "developer_instructions"
 # Collaboration tools cannot be switched off by configuration. This allowlist only

@@ -2126,9 +2126,10 @@ os.kill(os.getpid(), signal.SIGKILL)
         self.attest("codex", identity["account_fingerprint"])
         for text, admitted in (
             ("codex-cli 0.164.0\n", True),   # the lower boundary is inside
-            ("codex-cli 0.164.1\n", False),  # the upper boundary is outside
-            ("codex-cli 0.164.99\n", False),
-            ("codex-cli 0.165.0\n", False),
+            ("codex-cli 0.164.1\n", True),
+            ("codex-cli 0.169.0\n", True),   # the latest build compared with the first
+            ("codex-cli 0.169.99\n", True),
+            ("codex-cli 0.170.0\n", False),  # the upper boundary is outside
             ("codex-cli 0.163.9\n", False),
             ("codex-cli 1.0.0\n", False),
             ("", False),                       # missing
@@ -2147,7 +2148,7 @@ os.kill(os.getpid(), signal.SIGKILL)
                 else:
                     self.assert_denied("client_version_unreviewed")
                     if observed["client_version"] is not None:
-                        self.assertNotEqual("0.164.0", observed["client_version"])
+                        self.assertNotIn(observed["client_version"], {"0.164.0", "0.169.0"})
         claude = self.observe("claude")[0]
         self.attest("claude", claude["account_fingerprint"])
         for text, admitted in (

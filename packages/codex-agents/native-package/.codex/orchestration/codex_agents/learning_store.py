@@ -1552,6 +1552,13 @@ class LearningState:
                         if time.monotonic() >= deadline:
                             raise StateError("another owner key change is in progress; try again") from error
                         time.sleep(0.01)
+            # Every writer holds this turn for as long as its temporary file exists, so
+            # one found now was left by a write that was interrupted (by this version or,
+            # under one fixed name, an earlier one). They hold a public key and were never
+            # the signer file.
+            for leftover in self.root.glob(".owner-allowed-signers*.tmp"):
+                with contextlib.suppress(OSError):
+                    leftover.unlink()
             yield
         finally:
             os.close(descriptor)
@@ -1559,9 +1566,6 @@ class LearningState:
     def _write_owner_signers(self, content: bytes) -> Path:
         # A name of its own, so no other writer's file is ever the one removed or renamed.
         temporary = self.root / f".owner-allowed-signers.{secrets.token_hex(8)}.tmp"
-        # A leftover from an interrupted write by an earlier version (one fixed name).
-        with contextlib.suppress(OSError):
-            (self.root / ".owner-allowed-signers.tmp").unlink()
         descriptor = os.open(
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -1574,7 +1578,7 @@ class LearningState:
                 os.fsync(handle.fileno())
             os.replace(temporary, self.allowed_signers_path)
             os.chmod(self.allowed_signers_path, 0o600)
-        except Exception:
+        except BaseException:
             with contextlib.suppress(OSError):
                 temporary.unlink()
             raise

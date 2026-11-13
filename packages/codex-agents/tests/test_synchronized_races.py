@@ -455,6 +455,19 @@ class OwnerKeyConfigurationRaceTests(unittest.TestCase):
             seen.update(self.final_state(root, keys, told))
         self.assertEqual({}, dict(seen), f"inconsistent rounds out of {rounds}; answers seen: {dict(answers)}")
 
+    def test_a_file_left_by_an_interrupted_configuration_is_removed_by_the_next_one(self):
+        root = self.fresh_root()
+        state = LearningState(root)
+        for name in (".owner-allowed-signers.tmp", ".owner-allowed-signers.0123456789abcdef.tmp"):
+            (root / name).write_bytes(self.lines[1])  # Another key's line, never the signer file.
+        with mock.patch("codex_agents.learning_store.os.replace", side_effect=KeyboardInterrupt), \
+                self.assertRaises(KeyboardInterrupt):
+            state.install_owner_public_key(self.publics[0])
+        self.assertEqual([], sorted(path.name for path in root.glob(".owner-allowed-signers*")))
+        self.assertEqual(b"", state.allowed_signers_path.read_bytes())
+        self.assertEqual(state.allowed_signers_path, state.install_owner_public_key(self.publics[0]))
+        self.assertEqual(self.lines[0], state.allowed_signers_path.read_bytes())
+
     def test_two_different_keys_configured_at_once_leave_the_one_key_whose_caller_was_told_it_won(self):
         self.assert_consistent(self.threads, (0, 1), self.THREAD_ROUNDS)
 

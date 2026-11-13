@@ -642,15 +642,24 @@ or one line (separate processes), repeats on fresh state and reads the exact fin
   file name, so a caller could be told its key was installed while the other's was in
   force, or fail on the other's file. `install_owner_public_key` now does both in one
   turn (`_owner_key_turn`, a lock held on the state root itself), each writer has a
-  temporary file of its own, and a key replacement takes the same turn for its write.
+  temporary file of its own (removed on any exit; one left by a killed process is
+  removed at the start of the next turn), and a key replacement takes the same turn for
+  its write.
   The loser gets the answer a later caller would: the path for the same key, a refusal
   for another.
 
 `tests/test_status_write_frequency.py` sends thousands of work frames through the real
 readers, the owned execution and the project monitor: Claude fragments are published at
 most once per second of the work clock, whole frames and Codex items up to the fixed cap
-for a run (then the run stops with `monitor_unavailable`), each poll hands the monitor at
-most its fixed batch, and no file of the run is written or changed for any of them.
+for a run (then the run stops with `monitor_unavailable`), and each poll hands the monitor
+at most its fixed batch. What is measured about writes is narrower: across 4,000 Claude
+fragments no file of the run changed in size or content and none was added, and after the
+whole-frame and Codex runs the run's folders held only what the launch put there; the
+ledger handed to the reader is a bare object, so any use of it would have failed the run.
+A rewrite of identical content, or a file created and removed in between, would not show.
+The race tests start their callers together and repeat; they do not exhaust
+interleavings, and they do not cover a key replacement racing a configuration, a lock
+that times out, or an interrupted write (whose leftover the next owner-key turn removes).
 
 ## Event capability report (L1)
 
@@ -717,9 +726,12 @@ run against a ledger the 0.2.2 runtime itself created.
   and reports `ledger_upgrade_failed` with the copy's path; a failure after it (the
   project's registration or the runtime's authorization) reports
   `registration_incomplete_after_upgrade`, never that the records are unchanged; if the
-  ledger cannot be read to tell, `ledger_upgrade_unknown`. Each failure report also
-  carries `state_moved` when old macOS records were moved by the same command, and
-  setup's step 5 has one fixed sentence for each of the three
+  ledger cannot be read to tell, `ledger_upgrade_unknown`. One report
+  (`cli._registration_failure`) covers every step after old records were moved or an
+  upgrade began, whatever fails (the copy, the migration, SQLite itself, registration,
+  authorization, the collector's start), and always carries `state_moved` and
+  `ledger_copy` when there is one; a move followed by a failure without an upgrade is
+  `registration_incomplete_after_move`. Setup's step 5 has one fixed sentence for each
   (`WizardTerminalTests.test_a_failure_after_the_upgrade_is_never_described_as_records_left_unchanged`
   and its two neighbours). The backup registrations are
   written before the transaction and stay after a failed upgrade. The ledger is opened

@@ -662,6 +662,31 @@ class LearningCliTests(unittest.TestCase):
             uncopied = json.loads(stdout.getvalue())
             self.assertEqual(("ledger_upgrade_failed", None, None), (
                 uncopied["reason_code"], uncopied["ledger_copy"], uncopied["state_moved"]))
+            self.assertNotIn("copy", uncopied["error"])  # There is none to keep.
+            # The upgrade and the registration went through and the collector then did not start:
+            # still one report, with the copy, never a bare error.
+            stdout = io.StringIO()
+            with mock.patch.object(sys, "argv", ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                                                 "--project-root", str(self.project), "--upgrade-ledger"]), \
+                    contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(cli, "ensure_collector", side_effect=cli.CollectorError("did not become healthy")):
+                self.assertEqual(2, cli_main())
+            unstarted = json.loads(stdout.getvalue())
+            self.assertEqual("registration_incomplete_after_upgrade", unstarted["reason_code"])
+            self.assertTrue(Path(unstarted["ledger_copy"]).is_file())
+            # SQLite itself failing inside the migration is reported the same way as any other failure there.
+            ledger = LearningLedger(LearningState(self.state_root, create=False))
+            downgrade_ledger_to_six(ledger)
+            ledger.close()
+            stdout = io.StringIO()
+            with mock.patch.object(sys, "argv", ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                                                 "--project-root", str(self.project), "--upgrade-ledger"]), \
+                    contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(LearningLedger, "_initialize_launch_claims_locked", autospec=True,
+                                      side_effect=sqlite3.OperationalError("disk I/O error")):
+                self.assertEqual(2, cli_main())
+            self.assertEqual("ledger_upgrade_failed", json.loads(stdout.getvalue())["reason_code"])
+            self.assertEqual(6, learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
             self.assertEqual(6, learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
             # The upgrade went through, registration failed, and the ledger cannot then be read.
             readings = iter([6, 6])
@@ -675,7 +700,7 @@ class LearningCliTests(unittest.TestCase):
                 self.assertEqual(2, cli_main())
             unknown = json.loads(stdout.getvalue())
             self.assertEqual("ledger_upgrade_unknown", unknown["reason_code"])
-            self.assertIn("do not delete anything", unknown["error"])
+            self.assertIn("do not delete anything; keep the copy", unknown["error"])
             self.assertTrue(Path(unknown["ledger_copy"]).is_file())
             ledger = LearningLedger(LearningState(self.state_root, create=False))
             downgrade_ledger_to_six(ledger)

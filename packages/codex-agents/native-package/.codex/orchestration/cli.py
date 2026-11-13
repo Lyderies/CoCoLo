@@ -707,6 +707,123 @@ def _migrate_learning(args):
             maintenance.resume()
 
 
+def _register_project(args, moved_aside, upgrade_required, progress):
+    """The owner's registration once any old macOS records are in place; its report, or an exit code."""
+    state = progress["state"] = LearningState(args.state_root)
+    behind = ledger_schema_behind(state)
+    if behind is not None and not args.upgrade_ledger:
+        return upgrade_required(behind, moved_aside)
+    running = (_compatible_collector(state)
+               if moved_aside is None and args.move_legacy_state is None else None)
+    if running is not None:
+        # Another project's children keep the collector: register through it.
+        project_id = running.register(args.project_root)
+        health = running.health()
+        return {
+            "ready": True,
+            "active": True,
+            "project_id": project_id,
+            "collector_schema_version": health["schema_version"],
+            "collector_runtime_version": health["runtime_version"],
+            "collector_runtime_digest": health["runtime_digest"],
+            "state_moved": None,
+            "ledger_upgraded_from": None,
+            "ledger_copy": None,
+        }
+    maintenance = CollectorMaintenance.acquire(
+        state,
+        ORCHESTRATION_ROOT / "cli.py",
+        args.project_root,
+        owner_registration=True,
+    )
+    try:
+        # Looked at again now that nothing else can write: only what is
+        # still an earlier version's ledger is copied and upgraded.
+        behind = progress["behind"] = ledger_schema_behind(state) if args.upgrade_ledger else None
+        if behind is not None:
+            progress["copy"] = copy_ledger_before_upgrade(state, behind)
+        ledger = LearningLedger(state, allow_schema_upgrade=behind is not None,
+                                backup_before_upgrade=behind is not None)
+        try:
+            project_id = ledger.register_project(args.project_root)
+        finally:
+            _close_ledger(ledger)
+        authorize_collector_runtime(
+            state, ORCHESTRATION_ROOT / "cli.py"
+        )
+    except BaseException:
+        try:
+            maintenance.resume()
+        except CollectorError:
+            pass
+        raise
+    try:
+        maintenance.resume()
+    except CollectorError as exc:
+        raise CollectorRestartError(
+            "project registration completed; collector restart failed; "
+            "run learning-status for the registered project"
+        ) from exc
+    health = ensure_collector(
+        state,
+        ORCHESTRATION_ROOT / "cli.py",
+        project_root=args.project_root,
+    )
+    return {
+        "ready": True,
+        "active": True,
+        "project_id": project_id,
+        "collector_schema_version": health["schema_version"],
+        "collector_runtime_version": health["runtime_version"],
+        "collector_runtime_digest": health["runtime_digest"],
+        "state_moved": str(moved_aside) if moved_aside is not None else None,
+        "ledger_upgraded_from": behind,
+        "ledger_copy": str(progress["copy"]) if progress["copy"] is not None else None,
+    }
+
+
+def _registration_failure(moved_aside, progress):
+    """What a failed registration tells the owner once records were moved or an upgrade began; else None.
+
+    The schema change is one transaction, but the copy before it and the
+    registration, authorization and collector start after it are not part of
+    it: the ledger is read again to say which side the failure fell on.
+    """
+    behind, copy = progress["behind"], progress["copy"]
+    if behind is None and moved_aside is None:
+        return None
+    kept = "; keep the copy of the records as they were" if copy is not None else ""
+    if behind is None:
+        reason, error = "registration_incomplete_after_move", (
+            "your records were moved to the protected folder, but registering this project did not finish; "
+            "run setup again")
+    else:
+        try:
+            still_behind = ledger_schema_behind(progress["state"]) is not None
+        except Exception:
+            still_behind = None
+        if still_behind:
+            reason, error = "ledger_upgrade_failed", (
+                "the records could not be upgraded and are as the earlier version left them; "
+                "install that version again to keep using them" + kept)
+        elif still_behind is False:
+            reason, error = "registration_incomplete_after_upgrade", (
+                "the records were upgraded, but registering this project did not finish; run setup again" + kept)
+        else:
+            reason, error = "ledger_upgrade_unknown", (
+                "the upgrade stopped and the records cannot be read to see how far it got; "
+                "do not delete anything" + kept)
+    return {
+        "ready": False,
+        "reason_code": reason,
+        "error": error,
+        # Old macOS records moved by this same command stay moved.
+        "state_moved": str(moved_aside) if moved_aside is not None else None,
+        "ledger_schema_version": behind,
+        "ledger_copy": str(copy) if copy is not None else None,
+    }
+
+
 def _host_qa(args):
     """Whether this project's host recorded the worker outcome QA names (else the legacy ledger did)."""
     try:
@@ -2092,107 +2209,20 @@ def main() -> int:
                 if args.state_root is None
                 else None
             )
-            state = LearningState(args.state_root)
-            behind = ledger_schema_behind(state)
-            if behind is not None and not args.upgrade_ledger:
-                return upgrade_required(behind, moved_aside)
-            running = (_compatible_collector(state)
-                       if moved_aside is None and args.move_legacy_state is None else None)
-            if running is not None:
-                # Another project's children keep the collector: register through it.
-                project_id = running.register(args.project_root)
-                health = running.health()
-                report = {
-                    "ready": True,
-                    "active": True,
-                    "project_id": project_id,
-                    "collector_schema_version": health["schema_version"],
-                    "collector_runtime_version": health["runtime_version"],
-                    "collector_runtime_digest": health["runtime_digest"],
-                    "state_moved": None,
-                    "ledger_upgraded_from": None,
-                    "ledger_copy": None,
-                }
-                _print_command_report(args, report)
-                return 0
-            maintenance = CollectorMaintenance.acquire(
-                state,
-                ORCHESTRATION_ROOT / "cli.py",
-                args.project_root,
-                owner_registration=True,
-            )
-            ledger_copy = None
+            # From here on old records may have been moved, and an approved upgrade may
+            # be under way: whatever then fails, the owner is told how far it got and
+            # where the records and their copy are.
+            progress: dict[str, Any] = {"state": None, "behind": None, "copy": None}
             try:
-                # Looked at again now that nothing else can write: only what is
-                # still an earlier version's ledger is copied and upgraded.
-                behind = ledger_schema_behind(state) if args.upgrade_ledger else None
-                if behind is not None:
-                    ledger_copy = copy_ledger_before_upgrade(state, behind)
-                ledger = LearningLedger(state, allow_schema_upgrade=behind is not None,
-                                        backup_before_upgrade=behind is not None)
-                try:
-                    project_id = ledger.register_project(args.project_root)
-                finally:
-                    _close_ledger(ledger)
-                authorize_collector_runtime(
-                    state, ORCHESTRATION_ROOT / "cli.py"
-                )
-            except Exception as failure:
-                try:
-                    maintenance.resume()
-                except CollectorError:
-                    pass
-                if behind is None or not isinstance(failure, (LedgerError, StateError, OSError)):
+                report = _register_project(args, moved_aside, upgrade_required, progress)
+            except Exception:
+                report = _registration_failure(moved_aside, progress)
+                if report is None:
                     raise
-                # The schema change is one transaction, but the registration that follows
-                # it is not part of it: say which side of that the failure fell on. A copy
-                # that could not be made stopped everything before the ledger was touched.
-                try:
-                    still_behind = ledger_schema_behind(state) is not None
-                except LedgerError:
-                    still_behind = None
-                _print_command_report(args, {
-                    "ready": False,
-                    # Old macOS records moved by this same command stay moved.
-                    "state_moved": str(moved_aside) if moved_aside is not None else None,
-                    **({"reason_code": "ledger_upgrade_failed",
-                        "error": "the records could not be upgraded and are as the earlier version left them; "
-                                 "install that version again to keep using them, and keep the copy"}
-                       if still_behind else
-                       {"reason_code": "registration_incomplete_after_upgrade",
-                        "error": "the records were upgraded, but registering this project did not finish; "
-                                 "run setup again, and keep the copy of the records as they were"}
-                       if still_behind is False else
-                       {"reason_code": "ledger_upgrade_unknown",
-                        "error": "the upgrade stopped and the records cannot be read to see how far it got; "
-                                 "keep the copy of the records as they were and do not delete anything"}),
-                    "ledger_schema_version": behind,
-                    "ledger_copy": str(ledger_copy) if ledger_copy is not None else None,
-                })
+                _print_command_report(args, report)
                 return 2
-            try:
-                maintenance.resume()
-            except CollectorError as exc:
-                raise CollectorRestartError(
-                    "project registration completed; collector restart failed; "
-                    "run learning-status for the registered project"
-                ) from exc
-            health = ensure_collector(
-                state,
-                ORCHESTRATION_ROOT / "cli.py",
-                project_root=args.project_root,
-            )
-            report = {
-                "ready": True,
-                "active": True,
-                "project_id": project_id,
-                "collector_schema_version": health["schema_version"],
-                "collector_runtime_version": health["runtime_version"],
-                "collector_runtime_digest": health["runtime_digest"],
-                "state_moved": str(moved_aside) if moved_aside is not None else None,
-                "ledger_upgraded_from": behind,
-                "ledger_copy": str(ledger_copy) if ledger_copy is not None else None,
-            }
+            if type(report) is int:
+                return report
         elif args.command == "learning-serve":
             # The collector and the account services run from their own entry,
             # so this client imports none of the account persistence owners.

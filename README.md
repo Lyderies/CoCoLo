@@ -43,7 +43,7 @@ You need:
 
 - macOS, or Linux (WSL counts) without operational QA yet, with Git from the Command Line Tools, Xcode
   or Homebrew and Python 3.11 or later from a trusted install such as Homebrew or python.org;
-- Claude Code 2.1.x, Codex CLI 0.164.0 or both, signed in with their subscriptions, and no API key in
+- Claude Code 2.1.x, Codex CLI 0.164.0 to 0.169.x or both, signed in with their subscriptions, and no API key in
   the environment;
 - for a new project, an `operational-checks.json` naming its exact test and security commands
   ([recipe](docs/manual-setup.md#operational-checks)).
