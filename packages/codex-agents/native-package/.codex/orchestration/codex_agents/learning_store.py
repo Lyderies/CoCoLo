@@ -1516,25 +1516,52 @@ class LearningState:
         """
 
         content = self._owner_signer_content(public_key)
-        existing = self.allowed_signers_path.read_bytes()
-        if existing:
-            if existing == content:
-                return self.allowed_signers_path
-            raise StateError(
-                f"owner public key is already configured; to change it, {OWNER_KEY_REPLACE_HINT}"
-            )
-        recorded = self.recorded_owner_key()
-        if recorded is not None and recorded["signer_line"] != content:
-            raise StateError(
-                f"an owner key is already on record; to change it, {OWNER_KEY_REPLACE_HINT}"
-            )
-        return self._write_owner_signers(content)
+        # Looked at and written in one turn: of two first configurations at the same
+        # moment, the second finds the first one's key and follows the rule above.
+        with self._owner_key_turn():
+            existing = self.allowed_signers_path.read_bytes()
+            if existing:
+                if existing == content:
+                    return self.allowed_signers_path
+                raise StateError(
+                    f"owner public key is already configured; to change it, {OWNER_KEY_REPLACE_HINT}"
+                )
+            recorded = self.recorded_owner_key()
+            if recorded is not None and recorded["signer_line"] != content:
+                raise StateError(
+                    f"an owner key is already on record; to change it, {OWNER_KEY_REPLACE_HINT}"
+                )
+            return self._write_owner_signers(content)
+
+    @contextlib.contextmanager
+    def _owner_key_turn(self) -> Iterator[None]:
+        """One change of the owner's signer file at a time, across threads and processes.
+
+        Held on the state root itself, so it needs no file of its own there.
+        """
+
+        descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            if fcntl is not None:
+                deadline = time.monotonic() + OWNER_KEY_TURN_SECONDS
+                while True:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError as error:
+                        if time.monotonic() >= deadline:
+                            raise StateError("another owner key change is in progress; try again") from error
+                        time.sleep(0.01)
+            yield
+        finally:
+            os.close(descriptor)
 
     def _write_owner_signers(self, content: bytes) -> Path:
-        temporary = self.root / ".owner-allowed-signers.tmp"
-        # A leftover from an interrupted write would otherwise block every later one.
-        with contextlib.suppress(FileNotFoundError):
-            temporary.unlink()
+        # A name of its own, so no other writer's file is ever the one removed or renamed.
+        temporary = self.root / f".owner-allowed-signers.{secrets.token_hex(8)}.tmp"
+        # A leftover from an interrupted write by an earlier version (one fixed name).
+        with contextlib.suppress(OSError):
+            (self.root / ".owner-allowed-signers.tmp").unlink()
         descriptor = os.open(
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -2015,7 +2042,8 @@ class LearningLedger:
                     "VALUES(?,'replaced',?)",
                     (content, timestamp),
                 )
-        self.state._write_owner_signers(content)
+        with self.state._owner_key_turn():
+            self.state._write_owner_signers(content)
         self.state.harden_database_files()
         return self.state.owner_key_report()
 
@@ -11558,6 +11586,8 @@ def _wait_for_collector_shutdown(
     return False
 
 
+# How long one owner-key change waits for another to finish.
+OWNER_KEY_TURN_SECONDS = 10.0
 # How long a collector that accepted a stop but outlived the caller's wait is
 # given before it is started again.
 STOP_RECOVERY_SECONDS = 3.0

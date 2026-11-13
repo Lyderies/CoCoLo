@@ -3648,9 +3648,10 @@ class LearningStoreTests(unittest.TestCase):
     def test_a_collector_that_takes_seconds_to_start_is_waited_for_except_by_a_hook(self) -> None:
         from codex_agents import collector_runtime
 
-        def start(**arguments):
+        def start(ended=None, **arguments):
             clock = [0.0]
             answers = iter([CollectorError("down")] * 6)  # Down, then five polls before it answers.
+            self.polls = clock
 
             def health(_client):
                 clock[0] += 0.5
@@ -3665,6 +3666,8 @@ class LearningStoreTests(unittest.TestCase):
                 mock.patch("codex_agents.collector_runtime.time.monotonic", lambda: clock[0]),
                 mock.patch("codex_agents.collector_runtime.time.sleep"),
             ):
+                if ended is not None:
+                    popen.return_value.poll.return_value = ended
                 try:
                     return ensure_collector(
                         self.state, ORCHESTRATION_ROOT / "cli.py", project_root=self.project_a, **arguments)
@@ -3677,6 +3680,10 @@ class LearningStoreTests(unittest.TestCase):
         # A hook does not hold its session up that long; the collector it started keeps starting.
         with self.assertRaisesRegex(CollectorError, "^collector did not become healthy$"):
             start(timeout=collector_runtime.HOOK_START_SECONDS)
+        # A collector that ended without serving is not waited for at all.
+        with self.assertRaisesRegex(CollectorError, "^collector did not become healthy$"):
+            start(ended=1)
+        self.assertEqual(1.5, self.polls[0])  # The two checks before starting and one poll, not eight seconds of them.
         hook = (ORCHESTRATION_ROOT / "learning_hook.py").read_text()
         self.assertEqual(1, hook.count("timeout=HOOK_START_SECONDS"))
         self.assertEqual(1, hook.count("ensure_collector("))

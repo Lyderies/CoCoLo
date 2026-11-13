@@ -460,14 +460,28 @@ def _start_collector_locked(
         env={"PATH": os.defpath, "xcrun_nocache": "1"},
         start_new_session=True,
     )
-    # A detached service that outlives this client: nothing waits for it, so its
-    # handle is given up here instead of being reported as a leak when dropped.
-    collector.returncode = 0
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            return client.health()
+            health = client.health()
         except CollectorError:
+            # A collector that has already ended never served: waiting longer cannot help,
+            # so a start that cannot work is reported at once and only a slow one is waited for.
+            if _ended(collector):
+                break
             time.sleep(0.02)
+            continue
+        # A detached service that outlives this client: nothing waits for it, so its
+        # handle is given up here instead of being reported as a leak when dropped.
+        with contextlib.suppress(AttributeError):
+            collector.returncode = 0
+        return health
     client_health_increment(state, project_root, "collector_start_failed")
     raise CollectorError("collector did not become healthy")
+
+
+def _ended(collector: Any) -> bool:
+    """Whether the process just started has already ended."""
+
+    poll = getattr(collector, "poll", None)
+    return poll is None or type(poll()) is int

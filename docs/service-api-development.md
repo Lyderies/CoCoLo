@@ -606,7 +606,9 @@ What an update or an owner command may stop, and what it says when it may not:
 - Starting the collector: it starts as two interpreters (the CLI entry, which checks the
   runtime's authorization, then `collector_host.py`) and opens the account services, so on
   a busy machine it answers after one to three seconds. A command waits up to
-  `COLLECTOR_START_SECONDS` (8) for it, and stops waiting as soon as it answers; before
+  `COLLECTOR_START_SECONDS` (8) for it, stops waiting as soon as it answers, and gives up
+  at once when the process it started has already ended (a start that cannot work is not
+  waited for); before
   0.3.0 the wait was one second, which a loaded machine now exceeds (measured 1.6 to 2.5 s
   on the development machine under load, with the migration command then reporting
   "collector did not become healthy" after a move that had completed). A hook still waits
@@ -624,6 +626,31 @@ What an update or an owner command may stop, and what it says when it may not:
 Not covered by a test here: an old runtime's CLI driven against this collector as a
 separate installed tree (the refusal rests on the runtime authorization tests), and a
 real update performed while a real child runs.
+
+## Requests at the same instant (C4) and how often status is written (L10)
+
+`tests/test_synchronized_races.py` releases two or more callers from one barrier (threads)
+or one line (separate processes), repeats on fresh state and reads the exact final state:
+
+- The same host result committed twice at once is recorded once, in the ledger and in the
+  project's store; the other caller gets a refusal, or the identical reply where the store
+  is idempotent. Two different terminals for one claim leave one and refuse the other.
+- Two runs, two projects, or a run and a billing probe opened at once on a new Claude
+  account share its one unverified-billing admission.
+- Two first configurations of the owner's key for one state root: these tests found that
+  the check and the write were not one step and that both writers used one temporary
+  file name, so a caller could be told its key was installed while the other's was in
+  force, or fail on the other's file. `install_owner_public_key` now does both in one
+  turn (`_owner_key_turn`, a lock held on the state root itself), each writer has a
+  temporary file of its own, and a key replacement takes the same turn for its write.
+  The loser gets the answer a later caller would: the path for the same key, a refusal
+  for another.
+
+`tests/test_status_write_frequency.py` sends thousands of work frames through the real
+readers, the owned execution and the project monitor: Claude fragments are published at
+most once per second of the work clock, whole frames and Codex items up to the fixed cap
+for a run (then the run stops with `monitor_unavailable`), each poll hands the monitor at
+most its fixed batch, and no file of the run is written or changed for any of them.
 
 ## Event capability report (L1)
 
