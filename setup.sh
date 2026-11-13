@@ -2259,9 +2259,11 @@ step_collector() {
       registration_incomplete_after_upgrade)
         list_sub "Your records were upgraded, but registering this project did not finish. Run setup again and repeat this step.";;
       ledger_upgrade_unknown)
-        list_sub "The upgrade stopped and the records could not be read afterwards. Delete nothing, and keep the copy.";;
+        list_sub "The upgrade stopped and the records could not be read afterwards. Delete nothing.";;
       registration_incomplete_after_move)
         list_sub "Registering this project did not finish. Run setup again and repeat this step.";;
+      collector_not_started_after_registration)
+        list_sub "This project is registered, but the collector did not start again. Run setup again and repeat this step.";;
     esac
     copy=$(pj get "$LAST_OUT" ledger_copy); copy=${copy//[[:cntrl:]]/}
     if [ "${copy:0:1}" = / ]; then

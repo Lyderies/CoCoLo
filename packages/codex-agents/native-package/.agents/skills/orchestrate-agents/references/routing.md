@@ -341,11 +341,13 @@ provider API key, and a run handle that was already dispatched.
   (`--disable <feature>`, never `code_mode_host`) and web search
   (`web_search="disabled"`). The feature disables plus `--ephemeral` are the pre-dispatch denial (on
   codex-cli 0.164.0, `spawn_agent` fails before any sub-agent run because no rollout
-  exists). The reviewed Codex range runs from 0.164.0 to the 0.169 line: on 0.169.0 the
-  options, features, event names and developer-message rendering this launch relies on
-  were compared without a model call and are unchanged, and the live containment check
-  on that build belongs to the release's real-install trial. Widening the range further
-  needs the same comparison and a live containment check on the new build. The event
+  exists). The admitted Codex range runs from 0.164.0 up to, but not including, 0.170.0.
+  Only 0.164.0 was checked live. On 0.169.0 the options, features, event names and
+  developer-message rendering this launch relies on were compared without a model call
+  and are unchanged; the builds in between were neither compared nor checked. The live
+  containment check on 0.169.0 belongs to the release's real-install trial and must pass
+  before the release is published with this range. Widening it further needs the same
+  comparison and a live containment check first. The event
   stream is allowlisted only to
   detect emitted, typed events: only the events `thread.started`, `turn.started`,
   `turn.completed`, `turn.failed`, `error` and `item.started/updated/completed`, and

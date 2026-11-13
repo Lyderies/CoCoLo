@@ -124,11 +124,17 @@ The first means the records were upgraded but registering the project did not fi
 again and repeat step 5 (Collector). The second means the upgrade stopped and the records could not be
 read afterwards: delete nothing, keep the copy the message names, and report the problem.
 
-## "collector did not stop for maintenance"
+## "collector did not stop for maintenance", or "collector stopped too late for this command"
 
 A command asked the shared collector to pause and it was slow to do so. Nothing was changed. If the
-message ends "it is still running", run the command again. If it ends "is not answering", the next
-command starts the collector again; run `learning-status` (or `./setup.sh`, verify) and then repeat.
+message says "it is still running" or "was started again", run the command again. If it says "is not
+answering", the next command starts the collector again; run `learning-status` (or `./setup.sh`, verify)
+and then repeat.
+
+## `collector_not_started_after_registration`
+
+The project was registered (and, if you approved it, the records upgraded), but the collector did not
+start afterwards. Run `./setup.sh` again and repeat step 5 (Collector).
 
 ## Another project stopped working after this one was updated
 

@@ -672,7 +672,10 @@ class LearningCliTests(unittest.TestCase):
                     mock.patch.object(cli, "ensure_collector", side_effect=cli.CollectorError("did not become healthy")):
                 self.assertEqual(2, cli_main())
             unstarted = json.loads(stdout.getvalue())
-            self.assertEqual("registration_incomplete_after_upgrade", unstarted["reason_code"])
+            # Registration completed: it is not described as unfinished, and the cause is kept.
+            self.assertEqual(("collector_not_started_after_registration", "did not become healthy"), (
+                unstarted["reason_code"], unstarted["cause"]))
+            self.assertIn("were upgraded and this project is registered", unstarted["error"])
             self.assertTrue(Path(unstarted["ledger_copy"]).is_file())
             # SQLite itself failing inside the migration is reported the same way as any other failure there.
             ledger = LearningLedger(LearningState(self.state_root, create=False))

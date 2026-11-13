@@ -104,14 +104,18 @@ CODEX_REROUTE_EVENTS = {"model/rerouted", "model_rerouted", "model.rerouted"}
 # These disables plus `--ephemeral` are the pre-dispatch denial. It was demonstrated
 # live on codex-cli 0.164.0: under `--ephemeral`, `spawn_agent` fails before any
 # sub-agent run because no rollout exists, and no item event is emitted for the
-# attempt. The reviewed Codex range in config/routing-policy.json runs from that
-# build to the 0.169 line. On 0.169.0 the surface this launch relies on was compared
+# attempt. The Codex range admitted by config/routing-policy.json runs from that
+# build up to, but not including, 0.170.0, and what stands behind it differs by build:
+# 0.164.0 was checked live; on 0.169.0 the surface this launch relies on was compared
 # without a model call and is unchanged (every feature named below still exists, no
 # new feature is on by default that adds a tool, `codex exec` still has the required
 # options, the event and item names are the same, and the role's instructions are
-# still rendered as a developer message); the live containment check on that build is
-# a step of the release's real-install trial. Widening the range further requires the
-# same comparison and a live containment check on the new build.
+# still rendered as a developer message); the builds in between, and later 0.169
+# builds, were neither compared nor checked. A comparison cannot show that the denial
+# itself still holds: the live containment check on 0.169.0 is a step of the release's
+# real-install trial, and the release is not to be published with this range unless
+# that check has passed (otherwise the upper bound goes back to 0.164.1). Widening the
+# range further requires the same comparison and a live containment check first.
 # `skill_mcp_dependency_install` lets a skill the prompt mentions install and start
 # its declared MCP server, which would run outside the sandbox; skills from the user's
 # directories and from the export itself are listed to every child.

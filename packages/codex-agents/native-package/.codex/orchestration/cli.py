@@ -751,6 +751,7 @@ def _register_project(args, moved_aside, upgrade_required, progress):
         authorize_collector_runtime(
             state, ORCHESTRATION_ROOT / "cli.py"
         )
+        progress["registered"] = True
     except BaseException:
         try:
             maintenance.resume()
@@ -782,18 +783,23 @@ def _register_project(args, moved_aside, upgrade_required, progress):
     }
 
 
-def _registration_failure(moved_aside, progress):
+def _registration_failure(moved_aside, progress, failure):
     """What a failed registration tells the owner once records were moved or an upgrade began; else None.
 
     The schema change is one transaction, but the copy before it and the
     registration, authorization and collector start after it are not part of
-    it: the ledger is read again to say which side the failure fell on.
+    it: the ledger is read again to say which side the failure fell on, and a
+    registration that completed is never described as unfinished.
     """
     behind, copy = progress["behind"], progress["copy"]
     if behind is None and moved_aside is None:
         return None
     kept = "; keep the copy of the records as they were" if copy is not None else ""
-    if behind is None:
+    if progress["registered"]:
+        reason, error = "collector_not_started_after_registration", (
+            ("the records were upgraded and " if behind is not None else "") +
+            "this project is registered, but the collector did not start again; run setup again" + kept)
+    elif behind is None:
         reason, error = "registration_incomplete_after_move", (
             "your records were moved to the protected folder, but registering this project did not finish; "
             "run setup again")
@@ -817,6 +823,8 @@ def _registration_failure(moved_aside, progress):
         "ready": False,
         "reason_code": reason,
         "error": error,
+        # What the collector said, when that is what failed: its messages are fixed text.
+        "cause": str(failure)[:200] if isinstance(failure, CollectorError) else None,
         # Old macOS records moved by this same command stay moved.
         "state_moved": str(moved_aside) if moved_aside is not None else None,
         "ledger_schema_version": behind,
@@ -2212,11 +2220,11 @@ def main() -> int:
             # From here on old records may have been moved, and an approved upgrade may
             # be under way: whatever then fails, the owner is told how far it got and
             # where the records and their copy are.
-            progress: dict[str, Any] = {"state": None, "behind": None, "copy": None}
+            progress: dict[str, Any] = {"state": None, "behind": None, "copy": None, "registered": False}
             try:
                 report = _register_project(args, moved_aside, upgrade_required, progress)
-            except Exception:
-                report = _registration_failure(moved_aside, progress)
+            except Exception as failure:
+                report = _registration_failure(moved_aside, progress, failure)
                 if report is None:
                     raise
                 _print_command_report(args, report)

@@ -3955,19 +3955,22 @@ class LearningStoreTests(unittest.TestCase):
         start.assert_called_once_with(self.state, ORCHESTRATION_ROOT / "cli.py", project_root=self.project_a)
         # Still up after both waits: it is asked to start (which finds it answering) and the
         # refusal says it is still running; if it has gone and cannot be started, it says that.
-        # Which it is comes from asking the collector itself: one this runtime may not start
-        # (another version's, during an update) can still be the one running.
+        # Which it is comes from asking the collector itself first: one this runtime may not start
+        # (another version's, during an update) can still be the one running, and one that is
+        # answering is not started a second time.
         running = "collector did not stop for maintenance; it is still running"
         gone = ("collector did not stop for maintenance and is not answering; the next command starts it again, "
                 "or run setup if it does not")
-        for restart, answering, said in (
-                ({}, True, running),
-                (CollectorError("collector did not become healthy"), False, gone),
-                (CollectorError("collector runtime differs from the owner-authorized runtime"), True, running)):
+        late = "collector stopped too late for this command and was started again; run the command again"
+        for restart, answering, said, started in (
+                ({}, True, running, 0),
+                (CollectorError("collector runtime differs from the owner-authorized runtime"), True, running, 0),
+                (CollectorError("collector did not become healthy"), False, gone, 1),
+                ({}, False, late, 1)):
             with self.subTest(said=said, restart=restart), self.assertRaises(CollectorError) as refused:
                 acquire([False, False], restart, answering)
             self.assertEqual(said, str(refused.exception))
-            self.assertEqual(1, len(self.starts))
+            self.assertEqual(started, len(self.starts))
             # The maintenance lock was released either way.
             descriptor = os.open(self.state.runtime_lock, os.O_RDWR)
             try:

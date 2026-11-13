@@ -11705,19 +11705,22 @@ class CollectorMaintenance:
             # It may still go down after this returns. Start it again if it already
             # has, and say which it is: nothing here can wait for it for ever, and
             # any later command starts a collector that is missing.
-            with contextlib.suppress(CollectorError, StateError, OSError):
-                _start_collector_locked(state, cli_path, project_root=project_root)
-            # Asked plainly, whatever version answers: a collector this runtime may not
-            # start (another version's, during an update) can still be the one running.
+            # Asked plainly first, whatever version answers: a collector this runtime may
+            # not start (another version's, during an update) can still be the one running.
             try:
                 client._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "health"})
-                answering = True
             except CollectorError:
-                answering = False
+                pass
+            else:
+                raise CollectorError("collector did not stop for maintenance; it is still running")
+            try:
+                _start_collector_locked(state, cli_path, project_root=project_root)
+            except (CollectorError, StateError, OSError):
+                raise CollectorError(
+                    "collector did not stop for maintenance and is not answering; the next command starts it "
+                    "again, or run setup if it does not") from None
             raise CollectorError(
-                "collector did not stop for maintenance; it is still running" if answering else
-                "collector did not stop for maintenance and is not answering; the next command starts it "
-                "again, or run setup if it does not")
+                "collector stopped too late for this command and was started again; run the command again")
         finally:
             if not transferred:
                 with contextlib.suppress(OSError):

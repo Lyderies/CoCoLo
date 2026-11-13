@@ -1531,6 +1531,11 @@ class WizardTerminalTests(unittest.TestCase):
                             "Your records were upgraded, but registering this project did not",
                             "as the earlier version left them")
 
+    def test_a_collector_that_did_not_start_after_registration_is_not_called_an_unfinished_registration(self) -> None:
+        self.failed_upgrade("collector_not_started_after_registration",
+                            "This project is registered, but the collector",
+                            "did not finish")
+
     def test_an_upgrade_whose_outcome_cannot_be_read_tells_the_owner_to_keep_everything(self) -> None:
         self.failed_upgrade("ledger_upgrade_unknown", "could not be read afterwards. Delete nothing",
                             "as the earlier version left them")

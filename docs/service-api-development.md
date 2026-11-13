@@ -572,8 +572,9 @@ What an update or an owner command may stop, and what it says when it may not:
   does. A collector that accepted the stop but is slow to go down is waited for a little
   longer (`STOP_RECOVERY_SECONDS`), and the command goes ahead if it stops in that time.
   If it is still up after that, the command refuses and says which it is, by asking the
-  collector itself whatever its version: "still running", or, when nothing answers,
-  "not answering; the next command starts it again, or run setup if it does not" (a
+  collector itself whatever its version: "still running"; or, when nothing answers and a
+  collector could be started, "stopped too late for this command and was started again";
+  or "not answering; the next command starts it again, or run setup if it does not" (a
   runtime that is not the authorized one cannot start a collector; setup authorizes
   it). Nothing here waits for a stop for ever, so a collector
   that goes down only after the refusal is started by whichever command next needs it
@@ -630,7 +631,8 @@ real update performed while a real child runs.
 ## Requests at the same instant (C4) and how often status is written (L10)
 
 `tests/test_synchronized_races.py` releases two or more callers from one barrier (threads)
-or one line (separate processes), repeats on fresh state and reads the exact final state:
+or one line (separate processes), repeats (the owner-key races on a fresh state root each
+time, the others on fresh runs or accounts in one store) and reads the exact final state:
 
 - The same host result committed twice at once is recorded once, in the ledger and in the
   project's store; the other caller gets a refusal, or the identical reply where the store
@@ -653,9 +655,10 @@ readers, the owned execution and the project monitor: Claude fragments are publi
 most once per second of the work clock, whole frames and Codex items up to the fixed cap
 for a run (then the run stops with `monitor_unavailable`), and each poll hands the monitor
 at most its fixed batch. What is measured about writes is narrower: across 4,000 Claude
-fragments no file of the run changed in size or content and none was added, and after the
-whole-frame and Codex runs the run's folders held only what the launch put there; the
-ledger handed to the reader is a bare object, so any use of it would have failed the run.
+fragments no file of the run changed in size or content and none was added (and the ledger
+handed to that reader is a bare object, so any use of it would have failed the run); after
+the whole-frame run its control folder, and after the Codex run its temporary folder, held
+only what the launch put there.
 A rewrite of identical content, or a file created and removed in between, would not show.
 The race tests start their callers together and repeat; they do not exhaust
 interleavings, and they do not cover a key replacement racing a configuration, a lock
@@ -731,7 +734,11 @@ run against a ledger the 0.2.2 runtime itself created.
   upgrade began, whatever fails (the copy, the migration, SQLite itself, registration,
   authorization, the collector's start), and always carries `state_moved` and
   `ledger_copy` when there is one; a move followed by a failure without an upgrade is
-  `registration_incomplete_after_move`. Setup's step 5 has one fixed sentence for each
+  `registration_incomplete_after_move`, and a registration that completed before the
+  collector failed to start is `collector_not_started_after_registration` with the
+  collector's own message as `cause`. (A move that fails part-way leaves the old folder
+  as it was, so there is nothing moved to report.) Setup's step 5 has one fixed sentence
+  for each
   (`WizardTerminalTests.test_a_failure_after_the_upgrade_is_never_described_as_records_left_unchanged`
   and its two neighbours). The backup registrations are
   written before the transaction and stay after a failed upgrade. The ledger is opened
