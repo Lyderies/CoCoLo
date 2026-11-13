@@ -99,6 +99,30 @@ exists in both folders, keep the one in use, move the other out of both places, 
 Unset `XDG_STATE_HOME`, or point it at a hidden folder in your home such as `~/.local/state`, and run
 again. The default records folder is `~/.local/state/codex-agents`.
 
+## "a child run is active; nothing was changed, try again when none is running"
+
+The command needs the shared ledger to itself, and a child is running (or ended without being settled
+less than an hour ago) in some project. Nothing was stopped. Wait for the child to finish, or ask the
+primary to cancel it, and run the command again.
+
+## `project_service_other_version`
+
+The project was updated while its service was still running from before the update, and a child is
+still active somewhere, so the old service was left alone. Try again when no child is running; the old
+service is then replaced by itself.
+
+## `learning_migration` stays `pending`
+
+The project's learning history moves to its own store the first time the project is used after an
+update, but only while no child is running anywhere. Use the project again when things are quiet, or
+run `cli.py learning-migrate-project --project-root <root>`; it says what is in the way.
+
+## A verifier is refused for a result recorded earlier
+
+The project's service keeps what it needs to verify a recorded result only while it runs. It stops
+after twelve idle hours, and when the project is updated or migrated. Verify and run operational QA in
+the same working session as the work; otherwise run the work again.
+
 ## Hook ingestion is idle or has never received an event
 
 `learning-status` separates a running collector from event delivery. `freshness.state: idle` means

@@ -9,8 +9,8 @@ verified, runs operational QA and reports back, or stops with a `reason_code`.
 Open the project and ask for the `agent-orchestration` skill, for example: "Use the agent-orchestration
 skill to have the routed reviewer check the error handling in `src/`."
 
-It routes the task, opens the run, spawns a Claude child natively or dispatches a Codex child through
-the bridge, verifies the result, runs operational QA and reports.
+It routes the task, opens the run, dispatches the child (Claude or Codex, always a separate read-only
+process), verifies the result, runs operational QA and reports.
 
 ## From Codex
 
@@ -104,6 +104,25 @@ limit. The option's documented unit is [agentic turns](https://code.claude.com/d
 Real-client enforcement/calibration and the remaining LIVE-3 disposition remain
 release gates; fake-client stream tests establish host behavior only.
 
+## Watching and stopping a child
+
+While a child runs, the primary can ask how it is doing and can stop it; you can ask the primary to do
+either. The commands it uses are:
+
+```
+cli.py learning-run-status --project-root <root> --orchestration-handle <orc> --run-handle <hrn>
+cli.py learning-cancel-run --project-root <root> --orchestration-handle <orc> --run-handle <hrn>
+```
+
+Status reports `health`: `starting`, `active`, `quiet` (no new work for two minutes), `stale` (five
+minutes), then `stopping` or `terminal`. A child that produces no new work for ten minutes is stopped
+without anyone asking, and so is one that reaches its deadline. A cancellation reply means the stop was
+requested; the child's result then comes back marked `cancelled`. A stopped child is never retried
+automatically.
+
+Only the session that started a run can see or stop it, and one project never sees another's runs.
+Several projects can run children at the same time.
+
 ## When a task is denied
 
 A denial comes back as a `reason_code`, and no child starts. Admission fails closed, for example on an
@@ -158,6 +177,16 @@ the [documented Claude message types](https://code.claude.com/docs/en/agent-sdk/
 
 - Run `./setup.sh` again to update the install, verify it, re-run the billing attestation or change the
   owner key passphrase.
+- After an update, the first use of each project moves that project's learning history from the shared
+  ledger into the project's own store. It happens by itself when no child is running anywhere, and
+  waits for the next use otherwise. `learning-status` shows `learning_migration`: `complete`, `pending`
+  or `not_needed`. To do it by hand, or to undo it before anything new was learned:
+  `cli.py learning-migrate-project --project-root <root>` (`--status`, `--rollback`).
+- Commands that need the shared ledger to themselves (backup, owner-key replacement, migration and
+  similar) refuse while any child is running, with "a child run is active; nothing was changed". Try
+  again when it has finished.
+- The candidate commands (evaluation, comparison, promotion, canary, rollback) are not available for a
+  project whose learning has moved to its own store; they return with release 0.4.0.
 - Re-attest whenever your billing settings change.
 - Close every Codex session in the project before installing or updating.
 - After every install or update (a Python upgrade needs one), trust the orchestrator's learning hooks

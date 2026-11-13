@@ -55,8 +55,7 @@ and tools installed under your home folder, which the rule then runs.
 - **Read-only children in a private export.** A bridged child sees only the committed bytes of its granted
   paths, under a hard deadline. Claude children get `Read`, `Glob` and `Grep` only. Codex children run
   `codex exec` read-only and ephemeral, without user config, execpolicy rules, approvals or connectors.
-  Every Codex child is bridged, from either primary; only a Claude primary spawns children natively,
-  and only Claude children.
+  Every child is bridged, from either primary; none runs inside the primary's session.
 - **Results bound in the ledger.** `dispatch` fences an invalid result and binds a digest of the one it
   returns. QA accepts only the verifier opened for that outcome and runs only the project's hashed
   commands.
@@ -70,8 +69,7 @@ and tools installed under your home folder, which the rule then runs.
 The passphrase protects your key; it cannot stop a program swapping in a different key. The ledger records
 the enrolled key, and a signer file that does not match is refused: nothing is signed, and every billing
 statement stops counting, because each signature is checked against the current key. That applies when a run
-opens and when a bridged child launches; a native Claude child opened before the change can still start. A
-replaced key cannot be made current again.
+opens and when a child launches. A replaced key cannot be made current again.
 
 - "Replace a lost owner key" cannot ask for the old key, since that is what was lost. Nothing proves
   cryptographically who replaced it, as at first setup. The new key's date shows in the wizard's menu and in
@@ -161,7 +159,7 @@ owner key only from your own `~/.ssh`) is described in the
 These are accepted limits of v1. A report that shows one is worse than documented is welcome.
 
 - **Codex reads.** Codex's read-only sandbox can read outside the export; enforced read roots come in
-  G3. A native Claude child has the primary's permissions, so its reads are advisory.
+  G3.
 - **A session that already writes `~/.codex`** (opened on `/`, or given it with `--add-dir`) can forge its
   own session record, the rule and the protected copy. The guard stops the ordinary mistake, not that. A
   session opened on a trusted installation folder itself could change the tools there too.

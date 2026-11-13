@@ -60,32 +60,37 @@ sequenceDiagram
 ```
 
 In words: route, open (admission), dispatch one child, record exactly the result it returned, verify it
-through the same lifecycle, then run operational QA. A Claude primary spawns a Claude child natively with
-the Agent tool instead, using spawn parameters the CLI computes.
+through the same lifecycle, then run operational QA. From either primary, every child is a separate
+read-only process that the project's own service starts, watches and stops.
 
 ## Dispatch paths
 
 | Primary | Codex child | Claude child |
 |---|---|---|
-| Claude Code | Bridged: `codex exec`, read-only | Native subagent through the Agent tool |
+| Claude Code | Bridged: `codex exec`, read-only | Bridged: `claude -p`, read-only |
 | Codex | Bridged: `codex exec`, read-only | Bridged: `claude -p`, read-only, only if the project allows it |
 
 - **Bridged children** run in a private export of the committed bytes of their granted paths, under a
   hard deadline. The bridge validates the result, fences one that does not validate or is too large to
   keep, and records a keyed digest of what it returns, never its text.
-- **Every Codex child is bridged**, from either primary, so no Codex child shares a Codex primary's
-  session or its command rule.
-- **Native Claude children** run in the Claude primary's own session and allowance. Admission still
-  applies to them as accounting and policy, not as a spend boundary.
+- **Every child is bridged**, from either primary, so no child shares the primary's session, its
+  permissions or its command rule, and every child can be watched and stopped from outside.
+- **Each project has its own service.** It starts on demand, runs that project's children and keeps
+  that project's history. While a child runs it reports the child's health (starting, active, quiet,
+  stale), stops it on request, and stops it by itself if it stays silent too long or reaches its
+  deadline. Projects do not wait for each other: one project's child, setup or attestation does not
+  hold up another's.
 - **A Codex primary reaches Claude children** only when the project sets
   `codex_primary_may_bridge_to_claude` and the session was started with `codex -p orchestrator`, the
   profile that turns sandbox network on. Ordinary Codex sessions keep network off.
 
 ## The ledger and replay
 
-Routes, admission decisions and outcomes go to a local ledger in `~/.local/state/codex-agents`, shared by
-every project on the machine through one local learning collector. It is never committed, and every
-recorded route replays exactly. A Codex primary reaches the collector through the Codex commands rule,
+Account-level facts (which provider accounts were observed and attested, admission decisions, how many
+children are running) go to a local ledger in `~/.local/state/codex-agents`, shared by every project on
+the machine through one local collector. Each project's own history (its runs, results, QA and what it
+learned from them) lives in that project's store beside it, owned by the project's service. Neither is
+ever committed, and every recorded route replays exactly. A Codex primary reaches the collector through the Codex commands rule,
 which runs a protected copy of the orchestrator outside Codex's sandbox; see the
 [security model](security-model.md#the-protected-copy-and-the-codex-rule).
 

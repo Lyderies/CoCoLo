@@ -78,9 +78,40 @@
   separately from the existing client turn-limit floor. Export rejects folded Git/context names
   and shares one absolute budget across inspection and copying; Git-command checks observe both
   process launch paths.
-- Both-provider liveness, concurrent projects, database service APIs, the remaining reported
-  usability fixes and release validation are still required. Write-capable children belong to
-  0.4.0 and are excluded from this release.
+- Each project now has its own service, started on demand, that runs the project's children and
+  owns the project's history. Children of several projects run at the same time; one project's
+  child, registration, provider observation or owner attestation no longer waits for or stops
+  another's. Normal commands talk to the project's service and the account service in the
+  collector; they do not open the shared ledger or pause the collector.
+- Every routed child is a separate read-only process, from either primary: `codex exec` or
+  `claude -p`. A Claude primary's Claude children are no longer native subagents, so they can
+  be watched and stopped from outside the session.
+- `learning-run-status` reports a running child's health (`starting`, `active`, `quiet`,
+  `stale`, `stopping`, `terminal`) and `learning-cancel-run` requests a stop. A child with no new
+  work for ten minutes is stopped without a request. Stops are immediate for an invalid client
+  start, a prohibited tool and a paid or rejected rate-limit event, with partial message
+  streaming enabled for Claude children. Replayed, blank or other-model frames do not count as
+  work.
+- Verification and operational QA of a result go through the project's service. It keeps what a
+  verifier needs only while it runs (twelve idle hours when it holds recorded results).
+- If a project's service stops while a child is claimed, the earlier run is reported as
+  unavailable, never as an outcome, and new runs proceed. Its capacity slot is freed
+  automatically one hour after the run's hard deadline, measured on both the wall clock and the
+  run's own monotonic clock.
+- Learning (case mining, analysis, inert proposals) runs on each project's own history after a
+  result or its QA is recorded, and the command reports it (compact by default,
+  `--full-report` for everything). A project's earlier learning history moves from the shared
+  ledger to its store by itself on first use after an update, when no child is running;
+  `learning-migrate-project` does it on request and can roll it back before new learning is
+  recorded. Owner feedback, case review, analysis and the orchestration report work on the
+  project's store. The candidate pipeline commands (evaluation, comparison, promotion, canary,
+  rollback, drift, calibration) refuse for a moved project and return with 0.4.0.
+- Commands that need the shared ledger to themselves refuse while any child is running instead
+  of stopping the collector under it. A project service left running by an earlier version is
+  replaced when no child is running.
+- Not yet done in this entry: testing on a real install with real provider clients (event
+  shapes and timings for both providers, two projects at once). Write-capable children belong
+  to 0.4.0 and are excluded from this release.
 
 ## 0.2.2: readiness and hook diagnostics (Codex package 0.8.12)
 

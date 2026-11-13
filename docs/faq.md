@@ -41,11 +41,12 @@ Codex's sandbox blocks the local learning collector, so the orchestrator's every
 inside it. The rule lets only those 23 commands run outside the sandbox, through a protected copy of the
 orchestrator. See [the protected copy](security-model.md#the-protected-copy-and-the-codex-rule).
 
-## Why are Claude children sometimes native and Codex children never?
+## Why is every child a separate process, never a subagent of my session?
 
-A Claude primary can spawn Claude children with its own Agent tool. A native Codex child would share the
-Codex primary's session and its command rule, so every Codex child goes through the bridge instead. See
-[dispatch paths](how-it-works.md#dispatch-paths).
+A subagent shares its parent session: its permissions, its allowance and, for Codex, its command rule,
+and nothing outside the session can stop it. A separate read-only process can be watched, stopped when it
+goes silent and cut off at its deadline whatever the primary is doing, so every child, Claude or Codex,
+from either primary, goes through the bridge. See [dispatch paths](how-it-works.md#dispatch-paths).
 
 ## I lost my owner key passphrase. What now?
 
