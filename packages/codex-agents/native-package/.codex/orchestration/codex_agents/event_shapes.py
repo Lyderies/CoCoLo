@@ -7,8 +7,11 @@ real thing. Off unless the owner creates the flag file in the state root's
 line per frame to its own file there. A line holds only names from the fixed
 lists below, counts, sizes rounded to a power of two and a time offset. No text,
 path, identifier, tool input, label outside those lists or provider timestamp
-is kept: a name this module does not know is written as ``other``. Recording
-never changes a run: any failure switches it off for that run and is not reported.
+is kept: a name this module does not know is written as ``other``. While a child
+runs its shapes are only held in memory, within fixed limits; the file is written
+once, after the child has ended, so no disk is touched on the path that reads the
+child's output. A failure switches recording off for that run and is not reported,
+and nothing is recorded once the folder holds its limit of files or bytes.
 """
 from __future__ import annotations
 
@@ -23,7 +26,10 @@ import time
 FLAG = "capture-event-shapes"
 FOLDER = "event-shapes"
 SCHEMA = 1
-MAX_LINES = 60_000
+MAX_LINES = 50_000  # Per run; more than the bridge's stream cap lets a client send.
+MAX_RUN_BYTES = 16 * 1024 * 1024
+MAX_FILES = 512  # In the folder; the owner deletes records to make room.
+MAX_FOLDER_BYTES = 256 * 1024 * 1024
 MAX_BLOCKS = 32
 _VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}")
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -202,57 +208,64 @@ def frame_shape(frame, *, requested, tools):
 
 
 class _Recorder:
-    def __init__(self, descriptor, requested, tools):
-        self._descriptor = descriptor
+    """One run's shapes, held in memory until the child has ended."""
+
+    def __init__(self, path, header, requested, tools):
+        self._path = path
         self._requested = requested
         self._tools = frozenset(tools)
         self._started = time.monotonic_ns()
-        self._lines = 0
+        self._lines = []
+        self._bytes = 0
+        self._full = False
         self._seen = set()
+        self._add(header)
 
-    def _write(self, line):
-        if self._descriptor is None:
-            return
-        try:
-            line["ms"] = (time.monotonic_ns() - self._started) // 1_000_000
-            os.write(self._descriptor, json.dumps(line, sort_keys=True, separators=(",", ":")).encode() + b"\n")
-        except Exception:
-            self.close()
+    def _add(self, line):
+        line["ms"] = (time.monotonic_ns() - self._started) // 1_000_000
+        encoded = json.dumps(line, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        self._lines.append(encoded)
+        self._bytes += len(encoded)
 
     def frame(self, frame):
-        if self._descriptor is None:
+        if self._lines is None or self._full:
             return
         try:
-            if self._lines >= MAX_LINES:
-                self._write({"kind": "truncated"})
-                self.close()
+            if len(self._lines) > MAX_LINES or self._bytes >= MAX_RUN_BYTES:
+                self._full = True
+                self._add({"kind": "truncated"})
                 return
-            self._lines += 1
             shape = frame_shape(frame, requested=self._requested, tools=self._tools)
             identity = frame.get("uuid") if type(frame) is dict else None
             if type(identity) is str:
                 seen = hashlib.sha256(identity.encode()).digest()[:8]
                 shape["uuid_repeated"] = seen in self._seen
                 self._seen.add(seen)
+            self._add({"kind": "frame", **shape})
         except Exception:
-            self.close()
-            return
-        self._write({"kind": "frame", **shape})
+            self._lines = None  # Off for this run.
 
     def finish(self, outcome):
-        self._write({"kind": "end", "outcome": _known(outcome, _OUTCOMES)})
-        self.close()
-
-    def __del__(self):
-        self.close()
-
-    def close(self):
-        descriptor, self._descriptor = self._descriptor, None
-        if descriptor is not None:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
+        """Write the record, once; called only after the child has ended."""
+        if self._lines is None:
+            return
+        descriptor = None
+        try:
+            self._add({"kind": "end", "outcome": _known(outcome, _OUTCOMES)})
+            lines, self._lines = self._lines, None
+            descriptor = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                                 | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), 0o600)
+            with os.fdopen(descriptor, "wb") as handle:
+                descriptor = None
+                handle.write(b"".join(lines))
+        except Exception:
+            self._lines = None
+        finally:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
 
 
 _OUTCOMES = frozenset({"exit", "stopped", "failed"})
@@ -266,12 +279,27 @@ def _enabled(directory):
             and stat.S_ISREG(flag.st_mode) and flag.st_uid == owner and flag.st_nlink == 1)
 
 
+def _room(folder):
+    """Whether the folder is still under its limits of files and bytes."""
+    files = size = 0
+    with os.scandir(folder) as entries:
+        for entry in entries:
+            files += 1
+            size += entry.stat(follow_symlinks=False).st_size
+            if files >= MAX_FILES or size >= MAX_FOLDER_BYTES:
+                return False
+    return True
+
+
 def recorder(provider, *, requested, effort, tools=()):
-    """A recorder for one child run, or None when the owner has not asked for shapes."""
+    """A recorder for one child run, or None when the owner has not asked for shapes.
+
+    Called before the child is launched: the few file checks here are the only
+    ones made until the child has ended.
+    """
     directory = _directory
     if directory is None or provider not in {"claude", "codex"}:
         return None
-    descriptor = None
     try:
         if not _enabled(directory):
             return None
@@ -281,23 +309,15 @@ def recorder(provider, *, requested, effort, tools=()):
         except FileExistsError:
             pass
         kept = os.lstat(folder)
-        if not stat.S_ISDIR(kept.st_mode) or kept.st_uid != os.getuid() or stat.S_IMODE(kept.st_mode) & 0o077:
+        if (not stat.S_ISDIR(kept.st_mode) or kept.st_uid != os.getuid() or stat.S_IMODE(kept.st_mode) & 0o077
+                or not _room(folder)):
             return None
         name = f"{provider}-{time.time_ns()}-{os.urandom(4).hex()}.jsonl"
-        descriptor = os.open(folder / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND
-                             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), 0o600)
-        made = _Recorder(descriptor, requested, tools)
-        descriptor = None
-        made._write({"kind": "start", "schema": SCHEMA, "provider": provider,
-                     "model": requested if type(requested) is str and _MODEL.fullmatch(requested) else "other",
-                     "effort": _known(effort, _EFFORTS)})
-        return made
+        return _Recorder(folder / name, {
+            "kind": "start", "schema": SCHEMA, "provider": provider,
+            "model": requested if type(requested) is str and _MODEL.fullmatch(requested) else "other",
+            "effort": _known(effort, _EFFORTS)}, requested, tools)
     except Exception:
-        if descriptor is not None:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
         return None
 
 

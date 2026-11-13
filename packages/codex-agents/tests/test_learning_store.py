@@ -3919,25 +3919,40 @@ class LearningStoreTests(unittest.TestCase):
             acquire(CollectorError("collector rejected request: operation_rejected", code="operation_rejected"))
         self.assertEqual("operation_rejected", other.exception.code)
 
-    def test_a_collector_that_outlives_the_wait_for_its_stop_is_started_again(self) -> None:
-        for restart in ({}, CollectorError("collector did not become healthy")):
+    def test_a_collector_that_outlives_the_wait_for_its_stop_is_reported_as_it_is(self) -> None:
+        def acquire(stops, restart):
             waits: list[float] = []
+            answers = iter(stops)
             with (
-                self.subTest(restart=restart),
                 mock.patch("codex_agents.learning_store.CollectorClient.health", return_value={}),
                 mock.patch("codex_agents.learning_store.CollectorClient.shutdown") as shutdown,
                 mock.patch("codex_agents.learning_store._wait_for_collector_shutdown",
-                           side_effect=lambda client, state, deadline: waits.append(deadline) or False),
+                           side_effect=lambda client, state, deadline: waits.append(deadline) or next(answers)),
                 mock.patch("codex_agents.learning_store._start_collector_locked", side_effect=[restart]) as start,
             ):
-                # The stop was accepted but the collector was still up when the wait ran out.
-                with self.assertRaisesRegex(CollectorError, "^collector did not stop for maintenance$"):
-                    CollectorMaintenance.acquire(self.state, ORCHESTRATION_ROOT / "cli.py", self.project_a)
-                shutdown.assert_called_once_with(only_if_drained=True)
-                # It is waited for a little longer and started again before the refusal.
-                self.assertEqual(2, len(waits))
-                self.assertGreater(waits[1], waits[0])
-                start.assert_called_once_with(self.state, ORCHESTRATION_ROOT / "cli.py", project_root=self.project_a)
+                try:
+                    return CollectorMaintenance.acquire(self.state, ORCHESTRATION_ROOT / "cli.py", self.project_a)
+                finally:
+                    shutdown.assert_called_once_with(only_if_drained=True)
+                    self.waits, self.starts = waits, start.call_args_list
+
+        # Slow to go down, but down within the extra wait: the command simply goes ahead.
+        maintenance = acquire([False, True], {})
+        self.assertEqual((2, []), (len(self.waits), self.starts))
+        self.assertGreater(self.waits[1], self.waits[0])
+        with mock.patch("codex_agents.learning_store._start_collector_locked", return_value={}) as start:
+            maintenance.resume()
+        start.assert_called_once_with(self.state, ORCHESTRATION_ROOT / "cli.py", project_root=self.project_a)
+        # Still up after both waits: it is asked to start (which finds it answering) and the
+        # refusal says it is still running; if it has gone and cannot be started, it says that.
+        for restart, said in (({}, "it is still running"),
+                              (CollectorError("collector did not become healthy"),
+                               "is not answering; the next command starts it again")):
+            with self.subTest(said=said), self.assertRaises(CollectorError) as refused:
+                acquire([False, False], restart)
+            self.assertEqual("collector did not stop for maintenance" + ("; " if said.startswith("it") else " and ")
+                             + said, str(refused.exception))
+            self.assertEqual(1, len(self.starts))
             # The maintenance lock was released either way.
             descriptor = os.open(self.state.runtime_lock, os.O_RDWR)
             try:

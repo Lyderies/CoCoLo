@@ -622,6 +622,98 @@ class LearningCliTests(unittest.TestCase):
         finally:
             self._stop_collector()
 
+    def test_a_failure_after_the_upgrade_is_not_reported_as_records_left_unchanged(self) -> None:
+        import cli
+        from tests.test_account_launch_claims import downgrade_ledger_to_six
+
+        def register(patched, effect):
+            ledger = LearningLedger(LearningState(self.state_root, create=False), allow_schema_upgrade=True)
+            downgrade_ledger_to_six(ledger)
+            ledger.close()
+            stdout = io.StringIO()
+            arguments = ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                         "--project-root", str(self.project), "--upgrade-ledger"]
+            with mock.patch.object(sys, "argv", arguments), contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(cli, patched, side_effect=effect):
+                code = cli_main()
+            self.assertEqual(2, code, stdout.getvalue())
+            return json.loads(stdout.getvalue())
+
+        try:
+            # The schema change is committed, then authorising the runtime fails.
+            after = register("authorize_collector_runtime", OSError("disk"))
+            self.assertEqual(("registration_incomplete_after_upgrade", 6), (
+                after["reason_code"], after["ledger_schema_version"]))
+            self.assertIn("were upgraded", after["error"])
+            self.assertNotIn("as the earlier version left them", after["error"])
+            self.assertTrue(Path(after["ledger_copy"]).is_file())
+            self.assertIsNone(learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
+            # The copy itself cannot be made: nothing was upgraded, and the report says so plainly.
+            stdout = io.StringIO()
+            ledger = LearningLedger(LearningState(self.state_root, create=False), allow_schema_upgrade=True)
+            downgrade_ledger_to_six(ledger)
+            ledger.close()
+            with mock.patch.object(sys, "argv", ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                                                 "--project-root", str(self.project), "--upgrade-ledger"]), \
+                    contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(cli, "copy_ledger_before_upgrade",
+                                      side_effect=learning_store.LedgerError("the ledger could not be copied before its upgrade")):
+                self.assertEqual(2, cli_main())
+            self.assertIn("could not be copied", json.loads(stdout.getvalue())["error"])
+            self.assertEqual(6, learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
+            # The migration fails inside its transaction: the earlier records are as they were.
+            initialize = LearningLedger._initialize_launch_claims_locked
+
+            def fail(ledger, **arguments):
+                initialize(ledger, **arguments)
+                raise learning_store.LedgerError("fixture migration failure")
+
+            stdout = io.StringIO()
+            with mock.patch.object(sys, "argv", ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                                                 "--project-root", str(self.project), "--upgrade-ledger"]), \
+                    contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(LearningLedger, "_initialize_launch_claims_locked", autospec=True, side_effect=fail):
+                self.assertEqual(2, cli_main())
+            before = json.loads(stdout.getvalue())
+            self.assertEqual("ledger_upgrade_failed", before["reason_code"])
+            self.assertIn("as the earlier version left them", before["error"])
+            self.assertEqual(6, learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
+        finally:
+            self._stop_collector()
+
+    def test_a_ledger_is_found_and_copied_by_its_own_path_whatever_characters_that_holds(self) -> None:
+        base = Path(self.temporary.name)
+        for folder, decoy in (("st%41te", "stAte"), ("st?mode=rwc", "st"), ("st#x", "st")):
+            root = base / folder
+            state = LearningState(root)
+            LearningLedger(state).close()
+            connection = sqlite3.connect(state.database)
+            connection.execute("PRAGMA user_version=6")
+            connection.close()
+            # What the path would name if it were read as a URI by hand: a current ledger.
+            (base / decoy).mkdir(mode=0o700, exist_ok=True)
+            other = sqlite3.connect(base / decoy / "learning.sqlite3")
+            other.execute(f"PRAGMA user_version={learning_store.LEDGER_SCHEMA_VERSION}")
+            other.execute("CREATE TABLE IF NOT EXISTS decoy(x)")
+            other.commit()
+            other.close()
+            with self.subTest(folder=folder):
+                self.assertEqual(6, learning_store.ledger_schema_behind(state))
+                copy = learning_store.copy_ledger_before_upgrade(state, 6)
+                self.assertEqual(root.resolve() / "ledger-before-upgrade", copy.parent)
+                kept = sqlite3.connect(copy)
+                try:
+                    self.assertEqual(6, kept.execute("PRAGMA user_version").fetchone()[0])
+                    self.assertIsNone(kept.execute("SELECT 1 FROM sqlite_master WHERE name='decoy'").fetchone())
+                finally:
+                    kept.close()
+        # A ledger that is there but cannot be read is an error, never taken for a current one.
+        broken = LearningState(base / "broken")
+        LearningLedger(broken).close()
+        broken.database.write_bytes(b"not a database, and long enough to be read as one" * 100)
+        with self.assertRaisesRegex(learning_store.LedgerError, "cannot be read"):
+            learning_store.ledger_schema_behind(broken)
+
     def test_concurrent_direct_commands_serialize_and_leave_collector_active(self) -> None:
         try:
             self.assertTrue(self._run("learning-status")["active"])

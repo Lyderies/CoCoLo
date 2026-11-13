@@ -2243,8 +2243,11 @@ step_collector() {
     fi
     render
     run_owner_cli "Upgrading your records and registering the collector" learning-register \
-      --project-root "$PROJECT" --upgrade-ledger
+      --project-root "$PROJECT" --upgrade-ledger ${LEGACY_ARGS[@]+"${LEGACY_ARGS[@]}"}
     rc=$?
+    # Old macOS records are moved by this second run: the first refused before moving them.
+    copy=$(pj get "$LAST_OUT" state_moved)
+    if [ "${copy:0:1}" = / ]; then moved=$copy; fi
   fi
   if [ "$rc" -ne 0 ]; then
     failure_detail "Collector registration failed"
@@ -2263,8 +2266,7 @@ step_collector() {
   fi
   # learning-register reports "state_moved": the old copy's path when it has just copied the
   # learning state from its old macOS folder (once), else null. One fixed sentence says so and
-  # names that path, with control characters removed, so it cannot drive the terminal. (It is
-  # read from the first registration: an upgrade's second one has nothing left to move.)
+  # names that path, with control characters removed, so it cannot drive the terminal.
   moved=${moved//[[:cntrl:]]/}
   if [ "${moved:0:1}" = / ]; then
     list_add info "Moved your orchestrator records once to a protected folder, ~/.local/state/codex-agents. The old copy at $moved can be deleted once you're happy."

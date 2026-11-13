@@ -155,6 +155,7 @@ from codex_agents.learning_store import (  # noqa: E402
     default_state_root,
     ensure_collector,
     ledger_schema_behind,
+    legacy_ledger_schema_behind,
     migrate_legacy_state,
     registered_project_roots,
     require_authorized_collector_runtime,
@@ -2058,6 +2059,27 @@ def main() -> int:
             report = validate_learning_record(_bounded_json_input(args.record))
         elif args.command == "learning-register":
             validate_collector_runtime(ORCHESTRATION_ROOT / "cli.py")
+
+            def upgrade_required(schema, moved):
+                # Asked before anything is stopped, moved or changed: the earlier
+                # version's collector keeps running and its projects keep working.
+                _print_command_report(args, {
+                    "ready": False,
+                    "reason_code": "ledger_upgrade_required",
+                    "ledger_schema_version": schema,
+                    "error": "these records were written by an earlier version; setup upgrades them "
+                             "when you approve it (learning-register --upgrade-ledger)",
+                    "state_moved": str(moved) if moved is not None else None,
+                })
+                return 2
+
+            # Old macOS records the owner has approved as theirs would be moved and
+            # then need the upgrade too: both decisions are collected before either
+            # is acted on, so declining the second leaves the first undone.
+            if (args.state_root is None and args.move_legacy_state is not None and not args.upgrade_ledger):
+                legacy_behind = legacy_ledger_schema_behind()
+                if legacy_behind is not None:
+                    return upgrade_required(legacy_behind, None)
             # The owner's registration copies a pre-0.8.10 macOS state folder to the
             # default location first (once) and renames the old one aside; nothing
             # else does. `state_moved` names the old copy, which the owner may delete.
@@ -2073,17 +2095,7 @@ def main() -> int:
             state = LearningState(args.state_root)
             behind = ledger_schema_behind(state)
             if behind is not None and not args.upgrade_ledger:
-                # Asked before anything is stopped or changed: the earlier version's
-                # collector keeps running and its projects keep working.
-                _print_command_report(args, {
-                    "ready": False,
-                    "reason_code": "ledger_upgrade_required",
-                    "ledger_schema_version": behind,
-                    "error": "these records were written by an earlier version; setup upgrades them "
-                             "when you approve it (learning-register --upgrade-ledger)",
-                    "state_moved": str(moved_aside) if moved_aside is not None else None,
-                })
-                return 2
+                return upgrade_required(behind, moved_aside)
             running = (_compatible_collector(state)
                        if moved_aside is None and args.move_legacy_state is None else None)
             if running is not None:
@@ -2132,13 +2144,25 @@ def main() -> int:
                     pass
                 if ledger_copy is None or not isinstance(failure, (LedgerError, StateError, OSError)):
                     raise
-                # The upgrade is one transaction: a failure leaves the records as the
-                # earlier version wrote them, and the copy says where they also are.
+                # The schema change is one transaction, but the registration that follows
+                # it is not part of it: say which side of that the failure fell on.
+                try:
+                    still_behind = ledger_schema_behind(state) is not None
+                except LedgerError:
+                    still_behind = None
                 _print_command_report(args, {
                     "ready": False,
-                    "reason_code": "ledger_upgrade_failed",
-                    "error": "the records could not be upgraded and are as the earlier version left them; "
-                             "install that version again to keep using them, and keep the copy",
+                    **({"reason_code": "ledger_upgrade_failed",
+                        "error": "the records could not be upgraded and are as the earlier version left them; "
+                                 "install that version again to keep using them, and keep the copy"}
+                       if still_behind else
+                       {"reason_code": "registration_incomplete_after_upgrade",
+                        "error": "the records were upgraded, but registering this project did not finish; "
+                                 "run setup again, and keep the copy of the records as they were"}
+                       if still_behind is False else
+                       {"reason_code": "ledger_upgrade_unknown",
+                        "error": "the upgrade stopped and the records cannot be read to see how far it got; "
+                                 "keep the copy of the records as they were and do not delete anything"}),
                     "ledger_schema_version": behind,
                     "ledger_copy": str(ledger_copy),
                 })

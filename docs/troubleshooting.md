@@ -118,6 +118,18 @@ The records could not be upgraded and are as the earlier version left them; the 
 them too. Install the earlier version in this project again to keep working, keep the copy, and report
 the problem.
 
+## `registration_incomplete_after_upgrade` or `ledger_upgrade_unknown`
+
+The first means the records were upgraded but registering the project did not finish: run `./setup.sh`
+again and repeat step 5 (Collector). The second means the upgrade stopped and the records could not be
+read afterwards: delete nothing, keep the copy the message names, and report the problem.
+
+## "collector did not stop for maintenance"
+
+A command asked the shared collector to pause and it was slow to do so. Nothing was changed. If the
+message ends "it is still running", run the command again. If it ends "is not answering", the next
+command starts the collector again; run `learning-status` (or `./setup.sh`, verify) and then repeat.
+
 ## Another project stopped working after this one was updated
 
 Every project on the machine shares one set of records and one collector. Once one project is updated,

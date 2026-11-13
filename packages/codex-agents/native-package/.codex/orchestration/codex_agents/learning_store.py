@@ -1178,20 +1178,46 @@ UPGRADE_COPY_FOLDER = "ledger-before-upgrade"
 UPGRADE_BACKUP_MS = 30 * 24 * 60 * 60 * 1000
 
 
-def ledger_schema_behind(state: "LearningState") -> int | None:
-    """The schema of a ledger an earlier version wrote, else None (current, new or unreadable here)."""
+def _schema_behind(database: Path) -> int | None:
+    """The schema of a ledger file an earlier version wrote, else None (current, newer, new or absent).
+
+    A ledger that is there but cannot be read is an error, never taken for a current one.
+    """
 
     try:
-        if not state.database.is_file() or not state.database.stat().st_size:
+        if not database.is_file() or not database.stat().st_size:
             return None
-        connection = sqlite3.connect(f"file:{state.database}?mode=ro", uri=True, timeout=5)
+        # The path goes in as a URI built from the path itself, so no character
+        # in it can name another file or an option.
+        connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=5)
         try:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         finally:
             connection.close()
-    except (OSError, sqlite3.Error, TypeError, ValueError):
-        return None
+    except (OSError, sqlite3.Error, TypeError, ValueError) as error:
+        raise LedgerError("the ledger cannot be read to check which version wrote it") from error
     return version if 5 <= version < LEDGER_SCHEMA_VERSION else None
+
+
+def ledger_schema_behind(state: "LearningState") -> int | None:
+    """The schema of this state root's ledger when an earlier version wrote it, else None."""
+
+    return _schema_behind(state.database)
+
+
+def legacy_ledger_schema_behind() -> int | None:
+    """The same for the pre-0.8.10 macOS folder while it is the only state there is.
+
+    Read only once the owner has approved that folder as theirs, so that both of
+    the owner's decisions (move it, upgrade it) are in hand before either is acted on.
+    """
+
+    from .host_paths import legacy_state_root
+
+    legacy = legacy_state_root()
+    if legacy is None or not os.path.lexists(legacy) or os.path.lexists(default_state_root()):
+        return None
+    return _schema_behind(Path(legacy) / "learning.sqlite3")
 
 
 def copy_ledger_before_upgrade(state: "LearningState", schema_version: int) -> Path:
@@ -1217,7 +1243,7 @@ def copy_ledger_before_upgrade(state: "LearningState", schema_version: int) -> P
         return {name: int(connection.execute(f'SELECT count(*) FROM "{name}"').fetchone()[0]) for name in tables}
 
     try:
-        source = sqlite3.connect(f"file:{state.database}?mode=ro", uri=True, timeout=5)
+        source = sqlite3.connect(state.database.as_uri() + "?mode=ro", uri=True, timeout=5)
         try:
             copy = sqlite3.connect(target)
             try:
@@ -11636,16 +11662,22 @@ class CollectorMaintenance:
                 if reported is None or reported >= FIRST_RUN_DRIVING_VERSION:
                     raise
                 client.shutdown()
-            if _wait_for_collector_shutdown(client, state, deadline):
+            # The stop was accepted: a collector that is slow to go down is waited
+            # for a little longer than the caller asked before this gives up.
+            if (_wait_for_collector_shutdown(client, state, deadline)
+                    or _wait_for_collector_shutdown(client, state, time.monotonic() + STOP_RECOVERY_SECONDS)):
                 transferred = True
                 return cls(state, cli_path, project_root, descriptor, True)
-            # The stop was accepted, so the collector may still go down after this
-            # gives up. Give it a little longer, then start it again before
-            # refusing, so a slow stop does not leave the machine without one.
-            _wait_for_collector_shutdown(client, state, time.monotonic() + STOP_RECOVERY_SECONDS)
+            # It may still go down after this returns. Start it again if it already
+            # has, and say which it is: nothing here can wait for it for ever, and
+            # any later command starts a collector that is missing.
+            answering = False
             with contextlib.suppress(CollectorError, StateError, OSError):
                 _start_collector_locked(state, cli_path, project_root=project_root)
-            raise CollectorError("collector did not stop for maintenance")
+                answering = True
+            raise CollectorError(
+                "collector did not stop for maintenance; it is still running" if answering else
+                "collector did not stop for maintenance and is not answering; the next command starts it again")
         finally:
             if not transferred:
                 with contextlib.suppress(OSError):

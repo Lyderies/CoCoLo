@@ -145,18 +145,48 @@ class EventShapeTests(unittest.TestCase):
         with mock.patch.object(event_shapes, "MAX_LINES", 2):
             self.record("claude", CLAUDE_FRAMES)
         lines = [json.loads(line) for line in self.runs()[0].read_text().splitlines()]
-        self.assertEqual(["start", "frame", "frame", "truncated"], [line["kind"] for line in lines])
+        self.assertEqual(["start", "frame", "frame", "truncated", "end"], [line["kind"] for line in lines])
+        with mock.patch.object(event_shapes, "MAX_RUN_BYTES", 1):
+            self.record("claude", CLAUDE_FRAMES)
+        self.assertEqual(2, len(self.runs()))
         with mock.patch.object(event_shapes, "frame_shape", side_effect=RuntimeError(CANARY)):
-            self.record("claude", CLAUDE_FRAMES)
-        with mock.patch.object(event_shapes.os, "write", side_effect=OSError(CANARY)):
-            self.record("claude", CLAUDE_FRAMES)
+            self.record("claude", CLAUDE_FRAMES)  # Off for that run: nothing is written for it.
         with mock.patch.object(event_shapes.os, "open", side_effect=OSError(CANARY)):
-            self.assertIsNone(self.record("claude", CLAUDE_FRAMES))
+            self.record("claude", CLAUDE_FRAMES)
+        self.assertEqual(2, len(self.runs()))
         for unusual in ([], None, {"type": []}, {"type": "assistant", "message": {"content": [CANARY, 3]}},
                         {"type": "stream_event", "event": {"type": [], "delta": {"type": {}}, "index": -1}}):
             self.record("claude", [unusual])
         for path in self.runs():
             self.assertNotIn(CANARY, path.read_text())
+
+    def test_no_file_is_touched_while_the_child_runs(self):
+        self.ask()
+        made = event_shapes.recorder("claude", requested=MODEL, effort="high", tools=bridge.CLAUDE_TOOLS)
+        on_frame = event_shapes.recorded(made, lambda frame: None)
+        # From here to the child's end the reader's path does no file work at all.
+        with mock.patch.object(event_shapes.os, "open", side_effect=AssertionError("opened")), \
+                mock.patch.object(event_shapes.os, "write", side_effect=AssertionError("written")), \
+                mock.patch.object(event_shapes.os, "lstat", side_effect=AssertionError("looked")), \
+                mock.patch.object(event_shapes.os, "scandir", side_effect=AssertionError("listed")):
+            for frame in CLAUDE_FRAMES * 50:
+                on_frame(frame)
+        self.assertEqual([], self.runs())
+        event_shapes.finished(made, {"abort": "work_silence"})
+        lines = [json.loads(line) for line in self.runs()[0].read_text().splitlines()]
+        self.assertEqual((len(CLAUDE_FRAMES) * 50 + 2, "stopped"), (len(lines), lines[-1]["outcome"]))
+        event_shapes.finished(made, {"abort": None})  # Written once.
+        self.assertEqual(1, len(self.runs()))
+
+    def test_recording_stops_when_the_folder_is_full(self):
+        self.ask()
+        self.record("claude", CLAUDE_FRAMES)
+        with mock.patch.object(event_shapes, "MAX_FILES", 1):
+            self.assertIsNone(self.record("claude", CLAUDE_FRAMES))
+        with mock.patch.object(event_shapes, "MAX_FOLDER_BYTES", 10):
+            self.assertIsNone(self.record("codex", CODEX_FRAMES, model="gpt-6-astra"))
+        self.assertEqual(1, len(self.runs()))
+        self.assertIsNotNone(self.record("codex", CODEX_FRAMES, model="gpt-6-astra"))
 
     def test_the_bridge_records_every_frame_before_its_fences(self):
         self.ask()
@@ -179,7 +209,20 @@ class EventShapeTests(unittest.TestCase):
         self.ask()
         self.record("claude", CLAUDE_FRAMES)
         self.record("codex", CODEX_FRAMES, model="gpt-6-astra")
-        (self.diagnostics / event_shapes.FOLDER / "note.jsonl").write_text("not a record\n")
+        folder = self.diagnostics / event_shapes.FOLDER
+        (folder / "note.jsonl").write_text("not a record\n")
+        # Files put there by hand are read as untrusted: nothing in them reaches the report.
+        genuine = sorted(folder.glob("claude-*.jsonl"))[0].read_text().splitlines()
+        crafted = json.loads(genuine[0])
+        crafted.update(provider="claude", model="\x1b[2J" + CANARY, effort=["x"])
+        frame = {"kind": "frame", "ms": 1, "type": CANARY + "\x1b]0;", "keys": [CANARY, 7], "other_keys": "many",
+                 "subtype": CANARY, "client_version": CANARY,
+                 "message": {"blocks": [CANARY, {"type": "tool_use", "tool": CANARY}]}}
+        (folder / "crafted.jsonl").write_text("\n".join([json.dumps(crafted), json.dumps(frame)]) + "\n")
+        (folder / "unhashable.jsonl").write_text("\n".join([genuine[0], json.dumps(
+            {"kind": "frame", "ms": 1, "type": "stream_event", "event": {"type": "content_block_delta", "delta": []}})]))
+        (folder / "provider.jsonl").write_text(genuine[0].replace('"claude"', '"' + CANARY + '"') + "\n")
+        os.symlink(sorted(folder.glob("codex-*.jsonl"))[0], folder / "linked.jsonl")
         output = io.StringIO()
         with redirect_stdout(output), self.assertRaises(SystemExit) as done, \
                 mock.patch("sys.argv", [str(REPORT), "--state-root", str(self.state), "--codex-version", "0.164.0"]):
@@ -193,8 +236,11 @@ class EventShapeTests(unittest.TestCase):
         self.assertIn("- Tool calls: Read x1, other x1", report)
         self.assertIn("- success, structured output present: 1", report)
         self.assertIn("| `stream_event:content_block_delta/thinking_delta` | 2 |", report)
-        self.assertIn("Files skipped because they are not shape records: 1", report)
+        self.assertIn("Files skipped because they are not shape records: 4", report)
+        self.assertIn("## claude client not reported, model other, effort other", report)  # The crafted one.
+        self.assertIn("## codex client 0.164.0, model gpt-6-astra, effort high\n\nRuns recorded: 1\n", report)
         self.assertNotIn(CANARY, report)
+        self.assertNotIn("\x1b", report)
         empty = io.StringIO()
         with redirect_stdout(empty), self.assertRaises(SystemExit) as nothing, \
                 mock.patch("sys.argv", [str(REPORT), "--state-root", str(self.state / "missing")]):

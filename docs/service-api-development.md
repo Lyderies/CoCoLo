@@ -569,11 +569,14 @@ What an update or an owner command may stop, and what it says when it may not:
   from this version, including one with an older schema, stops nothing. The release is
   the one the collector itself reports: it is not checked against the executable that
   runs, so this rests on the collector being the owner's own, as everything it answers
-  does. A collector that accepted the stop but was still up when the wait ran out is
-  waited for a little longer (`STOP_RECOVERY_SECONDS`) and started again before the
-  command refuses, so a slow stop does not leave the machine without one; any later
-  command starts a missing collector as well
-  (`LearningStoreTests.test_a_collector_that_outlives_the_wait_for_its_stop_is_started_again`).
+  does. A collector that accepted the stop but is slow to go down is waited for a little
+  longer (`STOP_RECOVERY_SECONDS`), and the command goes ahead if it stops in that time.
+  If it is still up after that, the command refuses and says which it is: "still
+  running", or, when it has gone and could not be started again, "not answering; the
+  next command starts it again". Nothing here waits for a stop for ever, so a collector
+  that goes down only after the refusal is started by whichever command next needs it
+  (every command that uses the collector starts a missing one first)
+  (`LearningStoreTests.test_a_collector_that_outlives_the_wait_for_its_stop_is_reported_as_it_is`).
   (`LearningStoreTests.test_maintenance_never_stops_a_collector_from_under_a_run`,
   `ProjectDriverTests.test_an_owner_ledger_command_is_refused_while_a_child_runs`.)
 - A project's service that another version started (the project was updated while it
@@ -638,13 +641,21 @@ against a pinned real client without keeping anything a child said:
   whether that ID was seen before, and milliseconds since launch. No text, path, identifier,
   tool input or provider timestamp is written. Every frame is noted before any fence, so a
   frame that stops the run is in the record.
-- Recording never changes a run: a failure to open, shape or write switches it off for that
-  run and is not reported; a run's record stops at 60,000 lines.
+- While the child runs, its shapes are only held in memory (at most 50,000 lines or 16 MiB
+  per run, then a `truncated` line); the file is written once, after the child has ended, so
+  the path that reads the child's output and applies the fences does no file work for the
+  record (`test_no_file_is_touched_while_the_child_runs`). What it does add there is the
+  small, bounded work of shaping each frame. A failure switches recording off for that run
+  and is not reported. Nothing is recorded once the folder holds 512 files or 256 MiB: the
+  owner deletes records to make room.
 - `scripts/event_capability_report.py [--state-root <root>] [--codex-version <v>]` turns the
   records into the report: per provider, client version, model and effort, the time to the
   first frame and the first work frame, reasoning and tool use, the longest gaps (against the
   quiet, stale and silence thresholds), how runs ended, whether partial frames carry their
-  own IDs, and the fields of each frame kind. It starts no client.
+  own IDs, and the fields of each frame kind. It starts no client. It reads the folder as
+  untrusted: no link is followed, nothing over 32 MiB is read, a file of another form is
+  skipped whole, and only names of the recorder's forms are printed (a file put there by
+  hand can at most add a short plain word; anything else prints as `other`).
 - Tests: `tests/test_event_shapes.py` (off by default, no content with a canary in every
   field, limits and failures, the bridge hook, the report).
 
@@ -670,10 +681,24 @@ run against a ledger the 0.2.2 runtime itself created.
   writes, for every active project, the same sealed and registered partition backup the
   owner's backup command writes, in the old schema's layout, and the existing migration
   gate (`_require_project_migration_backups`) restores and compares each before one
-  transaction upgrades the schema. A failure leaves schema 6 and reports
-  `ledger_upgrade_failed` with the copy's path. The per-project copies expire after
+  transaction upgrades the schema. A failure inside that transaction leaves schema 6
+  and reports `ledger_upgrade_failed` with the copy's path; a failure after it (the
+  project's registration or the runtime's authorization) reports
+  `registration_incomplete_after_upgrade`, never that the records are unchanged; if the
+  ledger cannot be read to tell, `ledger_upgrade_unknown`. The backup registrations are
+  written before the transaction and stay after a failed upgrade. The ledger is opened
+  for the check and the copy through a URI built from its own path, so no character in
+  the path can name another file. The per-project copies expire after
   thirty days; the whole-ledger copy stays until the owner deletes it. Setup's step 5
-  asks first (`approve_ledger_upgrade` in `setup.sh`). Tests:
+  asks first (`approve_ledger_upgrade` in `setup.sh`). Old macOS records that the owner
+  has approved for the move and that also need the upgrade are refused before they are
+  moved (`legacy_ledger_schema_behind`), so both answers are in hand before either is
+  acted on and declining the upgrade leaves the old folder and its collector as they
+  were. Tests:
+  `LearningCliTests.test_a_failure_after_the_upgrade_is_not_reported_as_records_left_unchanged`,
+  `::test_a_ledger_is_found_and_copied_by_its_own_path_whatever_characters_that_holds`,
+  `LegacyStateMoveTests.test_old_records_of_an_earlier_version_move_only_once_the_upgrade_is_approved_too`,
+  `WizardTerminalTests.test_old_records_that_also_need_the_upgrade_get_both_questions_before_anything_moves`,
   `AccountLaunchClaimsTests.test_the_owners_approved_upgrade_keeps_checked_copies_first`,
   `::test_a_failed_approved_upgrade_leaves_the_earlier_records_and_can_be_run_again`,
   `LearningCliTests.test_registration_upgrades_an_earlier_versions_ledger_only_when_approved`,

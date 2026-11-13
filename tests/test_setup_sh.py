@@ -1516,6 +1516,35 @@ class WizardTerminalTests(unittest.TestCase):
         self.assertEqual(1, len(asked))
         self.assertNotIn("--upgrade-ledger", asked[0])
 
+    @unittest.skipUnless(sys.platform == "darwin", "the old records folder was macOS's")
+    def test_old_records_that_also_need_the_upgrade_get_both_questions_before_anything_moves(self) -> None:
+        digest = self.plant_legacy_records()
+        project, checks = self.make_project()
+        upgraded = ('{"ready": true, "state_moved": "/somewhere/old copy", "ledger_upgraded_from": 6,'
+                    ' "ledger_copy": "/kept/old ledger"}')
+        self.drive_to_commit_menu(project, checks, {"FAKE_UPGRADE": upgraded})
+        self.send("\r")
+        self.expect("Continue")
+        self.send("\r")
+        self.expect("Register now")
+        self.send("\r")
+        self.expect("Move these records to the protected folder?")
+        self.settle()
+        self.send("\r")  # Yes, move them
+        self.expect("Upgrade the records now?")
+        self.settle()
+        asked = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(1, len(asked))  # Refused before moving: the second answer is still to come.
+        self.assertNotIn("--upgrade-ledger", asked[0])
+        self.send("\r")  # Yes, upgrade them
+        self.expect("Upgraded your orchestrator records. A copy of them as they were is at /kept/old ledger")
+        self.expect("Moved your orchestrator records once to a protected folder")
+        self.expect("Collector status: ready")
+        asked = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(2, len(asked))
+        self.assertIn("--upgrade-ledger", asked[1])
+        self.assertIn(f"--move-legacy-state {digest}", asked[1])
+
     def test_no_move_no_records_sentence(self) -> None:
         project, checks = self.make_project()
         self.drive_to_commit_menu(project, checks, {"FAKE_REGISTER": '{"ready": true, "state_moved": null}'})
