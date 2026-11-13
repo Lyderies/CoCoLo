@@ -6,6 +6,8 @@ it does not authenticate a caller or enable the new project/account service APIs
 
 from __future__ import annotations
 
+import base64
+
 import json
 import re
 from pathlib import Path
@@ -225,6 +227,32 @@ class CollectorClient:
         if type(project_id) is not str or re.fullmatch(r"prj_[0-9a-f]{32}", project_id) is None:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return project_id
+
+    def register(self, project_root: Path) -> str:
+        """Register this root on the running collector (the owner's step) and return its identifier."""
+        response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "register",
+                                  "project_root": str(project_root.resolve())})
+        project_id = response.get("project_id")
+        if type(project_id) is not str or re.fullmatch(r"prj_[0-9a-f]{32}", project_id) is None:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return project_id
+
+    def owner_record_payload(self, project_root: Path, record: dict) -> bytes:
+        response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "owner_record_payload",
+                                  "project_root": str(project_root.resolve()), "record": record})
+        try:
+            return base64.b64decode(response["signing_payload_b64"], validate=True)
+        except (KeyError, TypeError, ValueError):
+            raise CollectorError("collector response is invalid", code="response_invalid") from None
+
+    def commit_owner_record(self, project_root: Path, record: dict, signature: bytes) -> dict:
+        response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "commit_owner_record",
+                                  "project_root": str(project_root.resolve()), "record": record,
+                                  "signature_b64": base64.b64encode(signature).decode("ascii")})
+        committed = response.get("committed")
+        if type(committed) is not dict:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return committed
 
     def shutdown(self) -> None:
         self._request(

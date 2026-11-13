@@ -324,6 +324,16 @@ or learning candidates to read. They then route from policy alone
 serves other projects' running children. Routing evidence, released candidates, canary
 routes and legacy fallback receipts still use the ledger.
 
+Setup while other projects run. `learning-register` and
+`learning-record-billing-attestation` go through the running collector when it serves
+exactly this runtime (`register`, `owner_record_payload`, `commit_owner_record`
+collector operations; the ledger still verifies the owner's signature), so registering
+and attesting a project never pauses the collector or another project's account
+services. A first install, an upgrade (another runtime digest) or a pending legacy state
+move still uses owner maintenance. Tested by
+`ProjectDriverTests.test_registering_another_project_during_a_run_does_not_disturb_it`
+(C2), with the ledger constructor and collector maintenance patched to fail.
+
 Verification and operational QA on the host path. When the CLI reports a recorded
 result (`run.recorded`) it names the result's `host_outcome_digest`; the driver then
 keeps that run's originals (`HostResultContext`: binding, assignment, task, route,

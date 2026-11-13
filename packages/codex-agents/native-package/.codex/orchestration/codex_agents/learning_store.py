@@ -11254,6 +11254,28 @@ class CollectorServer:
                     request["reason_code"],
                 )
                 return {"ok": True, "receipt_id": receipt_id}
+            if request.get("op") == "register" and set(request) == {
+                "protocol", "op", "project_root",
+            }:
+                # The owner's registration on the running compatible collector, so
+                # another project's running children keep their collector.
+                return {"ok": True, "project_id": self.ledger.register_project(Path(request["project_root"]))}
+            if request.get("op") in {"owner_record_payload", "commit_owner_record"} and set(request) == {
+                "protocol", "op", "project_root", "record",
+                *({"signature_b64"} if request.get("op") == "commit_owner_record" else ()),
+            }:
+                from .learning_engine import OwnerGrantAuthority
+                project_id = self.ledger.project_for_root(Path(request["project_root"]))
+                record = request["record"]
+                if type(record) is not dict:
+                    return {"ok": False, "code": "operation_rejected"}
+                if request["op"] == "owner_record_payload":
+                    payload = OwnerGrantAuthority.for_state(self.ledger.state).owner_record_payload(project_id, record)
+                    return {"ok": True, "signing_payload_b64": base64.b64encode(payload).decode("ascii")}
+                # The owner's signature is the authority; the ledger verifies it.
+                signature = base64.b64decode(request["signature_b64"], validate=True)
+                committed = self.ledger.commit_owner_record(project_id, record=record, signature=signature)
+                return {"ok": True, "committed": committed}
             if request.get("op") == "project" and set(request) == {
                 "protocol", "op", "project_root",
             }:

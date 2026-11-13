@@ -119,7 +119,7 @@ from codex_agents.learning_engine import (  # noqa: E402
     runtime_fixture_digest,
     validate_runtime_candidate,
 )
-from codex_agents.collector_client import CollectorClient  # noqa: E402
+from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient  # noqa: E402
 from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
@@ -407,6 +407,17 @@ def _start_collector_quietly(args: argparse.Namespace) -> None:
                          project_root=args.project_root)
     except Exception:
         pass
+
+
+def _compatible_collector(state):
+    """The running collector when it serves exactly this runtime, else None (owner maintenance)."""
+    try:
+        client = CollectorClient(state.socket)
+        if client.health().get("runtime_digest") != COLLECTOR_RUNTIME_DIGEST:
+            return None
+    except Exception:
+        return None
+    return client
 
 
 def _host_qa(args):
@@ -1732,6 +1743,13 @@ def main() -> int:
                 else None
             )
             state = LearningState(args.state_root)
+            running = _compatible_collector(state) if moved_aside is None else None
+            if running is not None:
+                # Another project's children keep the collector: register through it.
+                project_id = running.register(args.project_root)
+                report = {"ready": True, "project_id": project_id, "registered_by": "collector"}
+                _print_command_report(args, report)
+                return 0
             maintenance = CollectorMaintenance.acquire(
                 state,
                 ORCHESTRATION_ROOT / "cli.py",
@@ -2067,6 +2085,20 @@ def main() -> int:
                 report = billing_probe_client(args.state_root, args.project_root, request_id=args.request_id)
             _print_command_report(args, report)
             return 0
+        elif args.command == "learning-record-billing-attestation" and _compatible_collector(
+                LearningState(args.state_root, create=False)) is not None:
+            # The owner's signed attestation through the running collector; nothing pauses it.
+            running = _compatible_collector(LearningState(args.state_root, create=False))
+            record = billing_attestation_record(_json_input(args.grant))
+            if record["provider"] != args.provider:
+                raise ContractError("billing grant provider does not match")
+            if args.signature is None:
+                report = {"ready": True, "requires_signature": True, "record": record,
+                          "signing_payload_b64": base64.b64encode(
+                              running.owner_record_payload(args.project_root, record)).decode("ascii")}
+            else:
+                report = {"ready": True, **running.commit_owner_record(
+                    args.project_root, record, args.signature.read_bytes()), "record": record}
         elif args.command == "learning-record-billing-attestation":
             ledger, project_id = _learning_ledger(args)
             try:

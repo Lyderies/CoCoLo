@@ -5,6 +5,7 @@ this process, so the fake provider clients the bridge tests trust are the ones
 they resolve. Everything else is the product path: the in-process CLI, the
 hosts' enrollment, the run driver and the original owners.
 """
+import base64
 import contextlib
 import io
 import json
@@ -415,15 +416,29 @@ class ProjectDriverTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         process = self.separate_dispatch(context, route_path, run_handle)
         self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
-        # A new project registers while the child runs; registration still takes the
-        # legacy maintenance path, which stops and restarts the collector.
+        # A new project registers, observes and completes the owner's signed billing
+        # attestation while the child runs, without ever pausing the collector.
         newcomer = Path(self.temporary.name) / 'newcomer'
         newcomer.mkdir()
         git(newcomer, 'init', '-q')
-        registered = self.cli_for(newcomer, 'learning-register')
-        self.assertRegex(registered['project_id'], '^prj_[0-9a-f]{32}$')
-        observed = self.cli_for(newcomer, 'provider-observe', '--provider', 'codex')
-        self.assertEqual('provider_identity', observed['records'][0]['record_type'])
+        with mock.patch.object(cli, 'CollectorMaintenance', side_effect=AssertionError('collector paused')), \
+                mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
+            registered = self.cli_for(newcomer, 'learning-register')
+            self.assertRegex(registered['project_id'], '^prj_[0-9a-f]{32}$')
+            observed = self.cli_for(newcomer, 'provider-observe', '--provider', 'codex')
+            identity = observed['records'][0]
+            self.assertEqual('provider_identity', identity['record_type'])
+            grant = self.write('newcomer-grant.json', {
+                'version': 1, 'provider': 'codex', 'account_fingerprint': identity['account_fingerprint'],
+                'no_paid_overage': True, 'no_usage_credits': True, 'issued_at': 2})
+            unsigned = self.cli_for(newcomer, 'learning-record-billing-attestation', '--provider', 'codex',
+                                    '--grant', grant)
+            from tests.learning_support import sign_owner_payload
+            signature = sign_owner_payload(self.owner_key, base64.b64decode(unsigned['signing_payload_b64']),
+                                           'newcomer-attestation')
+            signed = self.cli_for(newcomer, 'learning-record-billing-attestation', '--provider', 'codex',
+                                  '--grant', grant, '--signature', str(signature))
+            self.assertTrue(signed['ready'])
         status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
         self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
         output, errors = process.communicate(timeout=60)
