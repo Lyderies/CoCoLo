@@ -73,6 +73,49 @@ class ClaudeActivityTests(unittest.TestCase):
             activity.observe({"type": "assistant", "message": {"model": MODEL, "content": [text()]}})
         self.assertNotIn("PRIVATE", repr(vars(activity)))
 
+    def stream(self, kind, **event):
+        return {"type": "stream_event", "event": {"type": kind, **event}, "parent_tool_use_id": None}
+
+    def delta(self, kind="text_delta", field="text", value="PRIVATE-PARTIAL"):
+        return self.stream("content_block_delta", index=0, delta={"type": kind, field: value})
+
+    def test_partial_fragments_of_the_requested_model_count_at_most_once_per_interval(self):
+        now = [100.0]
+        activity = ClaudeActivity(MODEL, bridge.CLAUDE_TOOLS, clock=lambda: now[0])
+        activity.startup()
+        self.assertIsNone(activity.observe(self.delta()))  # No message has started.
+        self.assertIsNone(activity.observe(self.stream("message_start", message={"id": "msg_1", "model": MODEL})))
+        self.assertIsNone(activity.observe(self.stream("content_block_start", index=0, content_block={"type": "text"})))
+        self.assertEqual("activity", activity.observe(self.delta()))
+        self.assertIsNone(activity.observe(self.delta()))  # Coalesced: same interval.
+        self.assertIsNone(activity.observe(self.delta(value=" \n")))
+        now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+        self.assertIsNone(activity.observe(self.delta(value="   ")))  # Whitespace never counts.
+        self.assertEqual("activity", activity.observe(self.delta("thinking_delta", "thinking")))
+        now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+        self.assertEqual("activity", activity.observe(self.delta("input_json_delta", "partial_json", '{"a"')))
+        self.assertIsNone(activity.observe(self.stream("message_delta", delta={"stop_reason": "end_turn"})))
+        self.assertIsNone(activity.observe(self.stream("message_stop")))
+        now[0] += 10
+        self.assertIsNone(activity.observe(self.delta()))  # After the message ended.
+        self.assertNotIn("PRIVATE", repr(vars(activity)))
+
+    def test_partial_fragments_of_another_model_or_bad_shapes_never_count(self):
+        now = [5.0]
+        activity = ClaudeActivity(MODEL, bridge.CLAUDE_TOOLS, clock=lambda: now[0])
+        activity.startup()
+        activity.observe(self.stream("message_start", message={"id": "msg_1", "model": "claude-sonnet-5-5"}))
+        self.assertIsNone(activity.observe(self.delta()))
+        for frame in ({"type": "stream_event", "event": []}, self.stream("message_start", message={"model": MODEL}),
+                      self.delta(value=[]), {**self.delta(), "parent_tool_use_id": "toolu_1"}):
+            fresh = ClaudeActivity(MODEL, bridge.CLAUDE_TOOLS, clock=lambda: 1.0)
+            fresh.startup()
+            fresh.observe(self.stream("message_start", message={"id": "msg_1", "model": MODEL}))
+            with self.subTest(frame=frame), self.assertRaisesRegex(ClaudeActivityError, "^claude_activity_invalid$"):
+                fresh.observe(frame)
+        with self.assertRaises(ClaudeActivityError):
+            ClaudeActivity(MODEL, bridge.CLAUDE_TOOLS).observe(self.delta())  # Before startup.
+
     def test_metadata_billing_errors_and_other_models_do_not_refresh(self):
         activity = self.start()
         for frame in ({"type": "system", "subtype": "init"}, {"type": "result", "subtype": "success"},
@@ -175,6 +218,47 @@ class ClaudeActivityExecutionTests(unittest.TestCase):
                                     {"frame": assistant(tool_use(name="Bash"))}])
         self.finished(execution, "claude_tool_not_allowed")
         self.assertEqual(0, self.monitor._entry(execution[1]).clock._activity_events)
+
+    def test_a_prohibited_tool_stops_as_soon_as_its_call_starts_streaming(self):
+        execution = self.execution([
+            {"frame": bridge_fixtures.init_frame()},
+            {"frame": {"type": "stream_event", "event": {"type": "message_start",
+                                                         "message": {"id": "msg_1", "model": MODEL}}}},
+            {"frame": {"type": "stream_event", "event": {"type": "content_block_start", "index": 0, "content_block": {
+                "type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}}}}])
+        self.finished(execution, "claude_tool_not_allowed")
+        self.assertEqual(0, self.monitor._entry(execution[1]).clock._activity_events)
+
+    def test_a_streamed_reroute_never_counts_and_marks_the_run(self):
+        execution = self.execution([
+            {"frame": bridge_fixtures.init_frame()},
+            {"frame": {"type": "stream_event", "event": {"type": "message_start", "message": {
+                "id": "msg_1", "model": "claude-sonnet-5-5"}}}},
+            {"frame": {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {
+                "type": "text_delta", "text": "PRIVATE-PARTIAL"}}}},
+            {"exit": True}])
+        self.finished(execution, "missing_result")
+        self.assertTrue(execution[7][0][1]["rerouted"])
+        self.assertEqual(0, self.monitor._entry(execution[1]).clock._activity_events)
+
+    def test_streamed_work_keeps_a_long_message_alive(self):
+        rows = [{"frame": bridge_fixtures.init_frame()},
+                {"frame": {"type": "stream_event", "event": {"type": "message_start",
+                                                             "message": {"id": "msg_1", "model": MODEL}}}},
+                {"pause": "continue"},
+                {"frame": {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {
+                    "type": "text_delta", "text": "PRIVATE-PARTIAL"}}}}]
+        execution = self.execution(rows)
+        root, target, registry, _, entry, _, _, _, _ = execution
+        self.until(lambda: self.monitor.status(target).health == "active")
+        self.at(9)
+        (root / "continue").touch()
+        self.until(lambda: self.queued(registry, entry), tick=False)
+        with registry._lock:
+            self.assertEqual([("activity", self.origin + 9 * SECOND)], entry.activity.events)
+            self.assertNotIn("PRIVATE", repr(entry.activity.events))
+        self.request(target)
+        self.finished(execution, "cancelled")
 
     def test_rerouted_model_work_does_not_establish_activity(self):
         execution = self.execution([{"frame": bridge_fixtures.init_frame()},

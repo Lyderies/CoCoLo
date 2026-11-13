@@ -722,10 +722,18 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
         context, route_path, orchestration, run_handle = self.open_claude_run()
         paid = {**RATE_LIMIT, 'rate_limit_info': {**RATE_LIMIT['rate_limit_info'], 'isUsingOverage': True,
                                                   'overageStatus': 'allowed'}}
-        self.frames('claude', [init_frame(), paid, {'sleep': 30}, result_frame()])
+        # Mid-message, with partial streaming on: the stop is still immediate.
+        self.frames('claude', [init_frame(),
+                               {'type': 'stream_event', 'event': {'type': 'message_start', 'message': {
+                                   'id': 'msg_1', 'model': 'claude-opus-5-5'}}},
+                               {'type': 'stream_event', 'event': {'type': 'content_block_delta', 'index': 0, 'delta': {
+                                   'type': 'text_delta', 'text': 'Working'}}},
+                               paid, {'sleep': 30}, result_frame()])
         started = time.monotonic()
         dispatched = self.dispatch_claude(context, route_path, run_handle)
         self.assertLess(time.monotonic() - started, 20)
+        argv = [i for i in self.invocations('claude') if '-p' in i['argv']][-1]['argv']
+        self.assertIn('--include-partial-messages', argv)
         self.assertEqual(('paid_usage_observed', 'failed'),
                          (dispatched['bridge_report']['outcome'], dispatched['bridge_report']['terminal_state']))
         self.assertGreater(dispatched['bridge_report']['rate_limit_records_kept'], 0)

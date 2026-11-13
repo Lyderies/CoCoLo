@@ -1181,6 +1181,8 @@ def run_claude(
         "--no-session-persistence",
         "--output-format", "stream-json",
         "--verbose",
+        # Partial messages give a long message liveness; fences below apply to them too.
+        "--include-partial-messages",
         "--max-turns", str(max_turns),
         "--append-system-prompt-file", str(system_prompt),
         # The prompt starts with the assignment's objective; after `--` neither
@@ -1273,6 +1275,16 @@ def run_claude(
                         state["helper_models"].add(name)
                     else:
                         state["models"].add(name)
+        if kind == "stream_event":
+            event = frame.get("event")
+            event = event if isinstance(event, dict) else {}
+            started = event.get("message") if event.get("type") == "message_start" else None
+            if isinstance(started, dict) and started.get("model") is not None:
+                state["models"].add(str(started["model"]))
+            block = event.get("content_block") if event.get("type") == "content_block_start" else None
+            # A prohibited tool stops the child as soon as its call starts streaming.
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") not in CLAUDE_TOOLS:
+                raise _Abort("claude_tool_not_allowed")
         if kind == "assistant":
             message = frame.get("message")
             served = message.get("model") if isinstance(message, dict) else None

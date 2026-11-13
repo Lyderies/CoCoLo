@@ -277,7 +277,14 @@ immediately before launch; a mismatch never launches.
   seen before in that message (by a 16-byte digest of message ID and content), a new
   allowed tool call, and the first result of a pending call. A replayed frame or a
   finished call never counts again; at 4096 tracked items monitoring fails closed.
-  Billing, result, status and other-model frames never refresh the silence timer. Partial messages stay off. A tool call outside
+  Billing, result, status and other-model frames never refresh the silence timer.
+  Partial messages are on (`--include-partial-messages`): a streamed text, thinking or
+  tool-input fragment counts only inside a message whose `message_start` named the
+  requested model, only when non-blank, and at most once per second, so a long message
+  keeps a working child alive without flooding the monitor. A streamed
+  `message_start` from another model marks the run rerouted, and a prohibited tool
+  stops the child as soon as its `content_block_start` arrives; a paid or rejected
+  rate-limit event stops it mid-message as before. A tool call outside
   Read/Glob/Grep after init stops the child (`claude_tool_not_allowed`).
 - Rate limits: each `rate_limit_event`, reduced to the fields the account reads
   (`rate_limit_contracts.bounded_rate_limit_info`; a field it cannot carry becomes

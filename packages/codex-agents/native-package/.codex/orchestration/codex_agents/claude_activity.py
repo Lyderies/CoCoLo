@@ -1,8 +1,10 @@
 """Conservative metadata classification for the pinned Claude stream-json path.
 
-Invoke only AFTER the existing init/billing/model/tool fences. Only whole
-assistant and user frames count (the launch never asks for partial messages),
-so the silence cutoff has message granularity. The frame shapes are assumed from
+Invoke only AFTER the existing init/billing/model/tool fences. Whole assistant
+and user frames count as described below. With partial messages enabled, a
+streamed text, thinking or tool-input fragment of a message whose start named the
+requested model also counts, at most once per PARTIAL_ACTIVITY_SECONDS, so one long
+message keeps a working child alive without flooding the monitor. The frame shapes are assumed from
 the client's documented stream-json output and still need a version-pinned
 real-client capability/cadence check. No frame, message, tool input, output or
 provider timestamp is retained; repeated work is recognised by a short digest of
@@ -12,10 +14,13 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 
 MAX_ACTIVITY_ITEMS = 4096
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _TEXT_BLOCKS = {"text": "text", "thinking": "thinking"}
+PARTIAL_ACTIVITY_SECONDS = 1.0
+_DELTA_TEXT = {"text_delta": "text", "thinking_delta": "thinking", "input_json_delta": "partial_json"}
 
 
 class ClaudeActivityError(RuntimeError):
@@ -49,9 +54,12 @@ class ClaudeActivity:
     frame from another model is not work (the caller marks the run rerouted).
     """
 
-    def __init__(self, model, tools):
+    def __init__(self, model, tools, *, clock=time.monotonic):
         self._model = model
         self._tools = frozenset(tools)
+        self._clock = clock
+        self._streaming = False  # Inside a streamed message from the requested model.
+        self._last_partial = None
         self._started = False
         self._pending = set()
         self._done = set()
@@ -73,8 +81,10 @@ class ClaudeActivity:
         kind = frame.get("type")
         if type(kind) is not str:
             raise ClaudeActivityError()
+        if kind == "stream_event":
+            return self._partial(frame)
         if kind not in {"assistant", "user"}:
-            return None  # Init, result, billing, status and stream metadata are not work.
+            return None  # Init, result, billing and status are not work.
         if not self._started:
             raise ClaudeActivityError()
         message, content = _content(frame)
@@ -121,3 +131,36 @@ class ClaudeActivity:
                 self._done.add(identity)  # A completed call never counts again.
                 found = True
         return "activity" if found else None
+
+    def _partial(self, frame):
+        """One partial-message event: a fragment of a requested-model message is work, coalesced."""
+        if not self._started or frame.get("parent_tool_use_id") is not None:
+            raise ClaudeActivityError()
+        event = frame.get("event")
+        if type(event) is not dict or type(event.get("type")) is not str:
+            raise ClaudeActivityError()
+        kind = event["type"]
+        if kind == "message_start":
+            message = event.get("message")
+            if type(message) is not dict or not _identifier(message.get("id")):
+                raise ClaudeActivityError()
+            self._streaming = message.get("model") == self._model
+            return None
+        if kind == "message_stop":
+            self._streaming = False
+            return None
+        if kind != "content_block_delta" or not self._streaming:
+            return None  # Block starts/stops, message deltas and other models are not work.
+        delta = event.get("delta")
+        if type(delta) is not dict or delta.get("type") not in _DELTA_TEXT:
+            return None
+        text = delta.get(_DELTA_TEXT[delta["type"]])
+        if type(text) is not str:
+            raise ClaudeActivityError()
+        if not text.strip():
+            return None  # Whitespace never refreshes the timer.
+        now = self._clock()
+        if self._last_partial is not None and now - self._last_partial < PARTIAL_ACTIVITY_SECONDS:
+            return None
+        self._last_partial = now
+        return "activity"
