@@ -51,6 +51,14 @@ class BoundedRateLimitInfoTests(unittest.TestCase):
         self.assertEqual({'status': 'rejected', 'isUsingOverage': True, 'overageStatus': 'rejected',
                           'overageDisabledReason': None}, merged)
 
+    def test_unreadable_windows_and_integer_flags_merge_as_unknown(self):
+        merged = merged_restriction([
+            {'status': 'allowed', 'isUsingOverage': False, 'overageStatus': 'rejected'},
+            {'status': 'allowed', 'isUsingOverage': 0, 'unifiedWindows': {'a': [], 'b': {'utilization': 7}}},
+        ])
+        self.assertIsNone(merged['status'])
+        self.assertIsNone(merged['isUsingOverage'])
+
     def test_dropped_windows_never_make_the_event_less_restrictive(self):
         windows = {f'w{i:02}': {'status': 'allowed', 'utilization': 0.1} for i in range(MAX_WINDOWS)}
         windows['zz-rejected'] = {'status': 'rejected', 'utilization': 1.0, 'extra': 'x' * 10_000}

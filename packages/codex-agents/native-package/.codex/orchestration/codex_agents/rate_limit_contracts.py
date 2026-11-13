@@ -79,7 +79,19 @@ _OVERAGE_RANK = {'rejected': 0, None: 1, 'allowed_warning': 2, 'allowed': 3}
 
 
 def _worst(values, rank):
-    return max((v if v in rank else None for v in values), key=lambda v: rank[v])
+    # Exact types only: 0 and 1 are not the booleans False and True.
+    known = [v if (v is None or type(v) in {bool, str}) and v in rank else None for v in values]
+    return max(known, key=lambda v: rank[v])
+
+
+def _window_status(entry):
+    """A window the account could not read counts as unknown, never as allowed."""
+    if type(entry) is not dict:
+        return None
+    utilization = entry.get('utilization')
+    if utilization is not None and (type(utilization) not in {int, float} or not 0 <= utilization <= 1):
+        return None
+    return entry.get('status', 'allowed')
 
 
 def merged_restriction(events):
@@ -90,8 +102,7 @@ def merged_restriction(events):
     """
     events = list(events)
     windows = [entry for event in events for entry in (event.get('unifiedWindows') or {}).values()]
-    return {'status': _worst([e.get('status') for e in events] + [(w or {}).get('status', 'allowed') for w in windows],
-                             _STATUS_RANK),
+    return {'status': _worst([e.get('status') for e in events] + [_window_status(w) for w in windows], _STATUS_RANK),
             'isUsingOverage': _worst([e.get('isUsingOverage') for e in events], _USING_RANK),
             'overageStatus': _worst([e.get('overageStatus') for e in events], _OVERAGE_RANK),
             'overageDisabledReason': None}
