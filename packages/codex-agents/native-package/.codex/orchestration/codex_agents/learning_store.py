@@ -180,6 +180,9 @@ PROBE_COOLDOWN_SECONDS = 300
 # A run keeps only rate-limit events more restrictive than those it already
 # recorded, so this cap is reached only by a stream that keeps escalating.
 MAX_RUN_RATE_LIMIT_RECORDS = 64
+# How long after its hard deadline an unsettled claimed run still counts against
+# the account's active-run limits (a crashed project host never settles it).
+CRASHED_CLAIM_GRACE_MS = 3_600_000
 INSTALLED_ROUTING_POLICY = (
     Path(__file__).resolve().parent.parent / "config" / "routing-policy.json"
 )
@@ -5871,9 +5874,19 @@ class LearningLedger:
                 or (account is not None and not claim_matches(account, _CLAIM_DIGEST))):
             raise ClaimError("claim_unavailable")
         policy.__post_init__()
+        # A claimed run whose project host crashed never settles. Its hard
+        # deadline is enforced by the detached watchdog, so well past that
+        # deadline the child cannot still be running: it stops counting against
+        # the limits, while its row stays unreleased (explicitly unconfirmed) and
+        # a late terminal still settles it normally.
+        now = self._clock_ms()
+        if type(now) is not int:
+            raise ClaimError("claim_unavailable")
+        expired_before = now - CRASHED_CLAIM_GRACE_MS
         active = self._connection.execute(
             "SELECT 1 FROM active_run_capacity INDEXED BY active_capacity_machine "
-            "WHERE released_at_ms IS NULL LIMIT ?", (policy.machine,),
+            "WHERE released_at_ms IS NULL AND (deadline_at_ms IS NULL OR deadline_at_ms>=?) LIMIT ?",
+            (expired_before, policy.machine),
         ).fetchall()
         probe_active = self._connection.execute(
             "SELECT 1 FROM account_billing_probe_requests INDEXED BY billing_probe_active_machine "
@@ -5887,9 +5900,10 @@ class LearningLedger:
         # active rows even after a large conservative historical backfill.
         account_active = self._connection.execute(
             "SELECT 1 FROM active_run_capacity INDEXED BY active_capacity_account "
-            "WHERE released_at_ms IS NULL AND (provider IS NULL OR (provider=? "
+            "WHERE released_at_ms IS NULL AND (deadline_at_ms IS NULL OR deadline_at_ms>=?) "
+            "AND (provider IS NULL OR (provider=? "
             "AND (? IS NULL OR account_fingerprint IS NULL OR account_fingerprint=?))) LIMIT ?",
-            (provider, account, account, policy.account),
+            (expired_before, provider, account, account, policy.account),
         ).fetchall()
         account_probes = ([] if provider != 'claude' else self._connection.execute(
             "SELECT 1 FROM account_billing_probe_requests INDEXED BY billing_probe_active_account "

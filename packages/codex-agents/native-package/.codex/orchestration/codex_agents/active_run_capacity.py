@@ -3,6 +3,9 @@
 Only the account persistence owner uses this schema. Rows and policy digests are
 metadata, never caller authentication, launch permission or cleanup evidence.
 No timer, lost connection or model-reported terminal state releases a reservation.
+A claimed run still unsettled one hour after its hard deadline (its project host
+crashed; the detached watchdog has enforced that deadline) stops counting against
+the limits, but its row stays unreleased and a late terminal still settles it.
 """
 
 from __future__ import annotations

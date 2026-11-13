@@ -136,6 +136,23 @@ class ActiveRunCapacityTests(unittest.TestCase):
             with self.ledger._account_transaction(), self.assertRaisesRegex(ClaimError, "claim_busy"):
                 self.ledger._check_active_capacity_locked("codex", "f" * 64)
 
+    def test_an_unsettled_claim_long_past_its_hard_deadline_stops_counting_but_stays_unreleased(self):
+        self.case.claim()
+        row = self.rows()[0]
+        account = row["account_fingerprint"]
+        limit = row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS
+        with mock.patch.object(learning_store, "INSTALLED_ACTIVE_RUN_LIMITS", ActiveRunLimits(1, 1)):
+            for now, busy in ((row["deadline_at_ms"] + 1, True), (limit, True), (limit + 1, False)):
+                with self.subTest(now=now), mock.patch.object(self.ledger, "_clock_ms", return_value=now), \
+                        self.ledger._account_transaction():
+                    if busy:
+                        with self.assertRaisesRegex(ClaimError, "claim_busy"):
+                            self.ledger._check_active_capacity_locked("codex", account)
+                    else:
+                        self.ledger._check_active_capacity_locked("codex", account)
+        # Nothing was released: the crashed run stays recorded as unconfirmed.
+        self.assertEqual([row], self.rows())
+
     def test_history_expiry_clock_change_and_restart_keep_capacity_and_known_receipt(self):
         first = self.case.claim()
         rows = self.rows()

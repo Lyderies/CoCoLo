@@ -192,10 +192,12 @@ class DriverHarness(CliTestCase):
         except BaseException as error:  # Surface a service failure in the test thread.
             self.failures.append(repr(error))
 
-    def start_project_host(self, project):
+    def start_project_host(self, project, stop=None):
+        stopped = (stop or self.stop).is_set
+
         def serve():
             try:
-                report = serve_project(self.state.root, project, stopped=self.stop.is_set, bundle_root=self.bundle,
+                report = serve_project(self.state.root, project, stopped=stopped, bundle_root=self.bundle,
                                        **({} if self.liveness is None else {'liveness': self.liveness}))
                 if not report.get('ready'):
                     self.failures.append('project host refused: %r' % (report,))
@@ -451,6 +453,58 @@ class ProjectDriverTests(DriverHarness):
                  '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
         # Terminal acceptance and capacity release reached the restarted account services.
         self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
+
+
+class HostRestartTests(DriverHarness):
+    """The project host stops mid-run and starts again: nothing is claimed that is not known."""
+
+    def test_after_a_host_restart_the_run_is_reported_unavailable_and_the_primary_can_continue(self):
+        # The project host the harness started is replaced by one this test can stop alone.
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'orphan'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
+        self.assertIn(self.cli('learning-run-status', *target)['health'], {'starting', 'active', 'quiet'})
+        self.restart_host()
+        process.communicate(timeout=60)
+        # The new host does not know the old run: its state is unavailable, never a claimed outcome.
+        after = self.cli('learning-run-status', *target, expected=2)
+        self.assertFalse(after['ready'])
+        self.assertNotIn('health', after)
+        # The primary carries on: a new run in the same orchestration routes, opens and runs.
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        task = self.write('next-task.json', {**self.task(), 'id': 'task-next'})
+        route = self.cli('learning-route', '--task', task)
+        assigned = {**self.assignment_for(route), 'assignment_id': 'next', 'task_id': 'task-next'}
+        nxt = ('--task', task, '--assignment', self.write('next-assignment.json', assigned),
+               '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        nxt_route = self.write('next-route.json', route)
+        opened = self.cli('learning-open-host-run', *nxt, '--route', nxt_route, '--orchestration-handle', orchestration)
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled({**result(), 'assignment_id': 'next'})))
+        dispatched = self.cli('dispatch', *nxt, '--route', nxt_route, '--run-handle', opened['run_handle'])
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+
+    def restart_host(self):
+        """Stop the running project host and start a fresh one for the same project."""
+        host = [t for t in self.threads if t.name.startswith('test-project-host-')][0]
+        self._host_stop.set()
+        host.join(20)
+        self.assertFalse(host.is_alive())
+        self.threads.remove(host)
+        self.start_project_host(self.project)
+
+    def setUp(self):
+        self._host_stop = threading.Event()
+        original = DriverHarness.start_project_host
+
+        def first(harness, project, stop=None):
+            return original(harness, project, stop or self._host_stop)
+
+        with mock.patch.object(DriverHarness, 'start_project_host', first):
+            super().setUp()
 
 
 class HostVerificationTests(DriverHarness):

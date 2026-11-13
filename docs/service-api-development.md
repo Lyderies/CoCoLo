@@ -324,6 +324,17 @@ or learning candidates to read. They then route from policy alone
 serves other projects' running children. Routing evidence, released candidates, canary
 routes and legacy fallback receipts still use the ledger.
 
+Host crash recovery (owner decision 2026-11-13: automatic). If a project host stops
+while a run is claimed, the new host does not know the run: `learning-run-status`
+reports it unavailable, never a confirmed outcome, and new runs open and run normally.
+The account keeps the claimed row unreleased (unconfirmed), but once its hard deadline
+is more than `CRASHED_CLAIM_GRACE_MS` (one hour) past, it no longer counts against the
+machine or account active-run limits: the detached watchdog has enforced that deadline,
+and a live host would have settled it long before. A late terminal still settles the
+row normally. No owner step is needed. Tests:
+`ActiveRunCapacityTests.test_an_unsettled_claim_long_past_its_hard_deadline_stops_counting_but_stays_unreleased`
+and `HostRestartTests`.
+
 Setup while other projects run. `learning-register` and
 `learning-record-billing-attestation` go through the running collector when it serves
 exactly this runtime (`register`, `owner_record_payload`, `commit_owner_record`
