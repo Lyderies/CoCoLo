@@ -237,7 +237,7 @@ class ProjectWorkerResultTests(unittest.TestCase):
         reference = self.call()
         command = self.command()
         raw = parse_bounded_json(self.service.handle(encode_history_request(command), self.token))
-        for field, value in (('provider', 'claude'), ('host_outcome_digest', 'f'*64), ('body_size', True), ('native', True)):
+        for field, value in (('provider', 'other'), ('host_outcome_digest', 'f'*64), ('body_size', True), ('native', True)):
             changed = deepcopy(raw)
             changed['result'][field] = value
             with self.subTest(field=field), self.assertRaisesRegex(HistoryError, 'history_invalid_response'):
