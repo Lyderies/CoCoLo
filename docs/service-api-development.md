@@ -268,21 +268,33 @@ terminal, the project open scope and the usage record each accept exactly `codex
 Preparation resolves the Claude client, uses a Claude-safe private workspace, refuses
 managed settings and a metered backend (`claude_host.check_backend`) and needs no
 result schema. The worker launches `bridge.run_claude` with the route's effective
-`--max-turns`.
+`--max-turns`. The client the account observes before launch must be the one
+preparation resolved (path and digest), and the worker re-reads the executable's digest
+immediately before launch; a mismatch never launches.
 
-- Liveness: `claude_activity.ClaudeActivity` counts a clean init as startup and new
-  non-empty work from the requested model (text, thinking, an allowed tool call and
-  its result) as activity. Billing, result, status and other-model frames never
-  refresh the silence timer. Partial messages stay off. A tool call outside
+- Liveness: `claude_activity.ClaudeActivity` counts a clean init as startup and
+  unseen non-empty work from the requested model as activity: text or thinking not
+  seen before in that message (by a 16-byte digest of message ID and content), a new
+  allowed tool call, and the first result of a pending call. A replayed frame or a
+  finished call never counts again; at 4096 tracked items monitoring fails closed.
+  Billing, result, status and other-model frames never refresh the silence timer. Partial messages stay off. A tool call outside
   Read/Glob/Grep after init stops the child (`claude_tool_not_allowed`).
-- Rate limits: each `rate_limit_event` goes from the worker thread to the account
-  owner as `account.record_rate_limit_event` (role `project`, with the run's lease and
-  sealed storage evidence). The account accepts it only for a registered, unfinished
+- Rate limits: each `rate_limit_event`, reduced to the fields the account reads
+  (`rate_limit_contracts.bounded_rate_limit_info`; a field it cannot carry becomes
+  unknown, which is restrictive, and a dropped window's rejection is kept), goes from
+  the worker thread to the account owner as `account.record_rate_limit_event` (role
+  `project`, with the run's lease and sealed storage evidence). The account accepts it only for a registered, unfinished
   Claude run of that project, keeps the restrictive records account-wide (so later
   admissions on the account see them), and replies with the count kept and any stop
-  (`paid_usage_observed`, `provider_rejected`). A refused event is recorded as a lost
-  `during` reading; any failure stops the child with `rate_limit_event_invalid`.
-  Without that recorder a Claude job is never launched.
+  (`paid_usage_observed`, `provider_rejected`). Any failure stops the child with
+  `rate_limit_event_invalid`. An event the account refused is recorded there as a lost
+  `during` reading; an event that never got a reply (account unreachable) stays
+  pending in the driver and is delivered with its original request ID, retried while
+  the account is unreachable, before the terminal is submitted, so the run's capacity
+  stays charged until the restriction is kept. More than 64 pending events, or a
+  refusal at that point, stops the run with its capacity still charged. A project host
+  that dies before delivery loses the pending event (the driver keeps no state across
+  a restart). Without a recorder a Claude job is never launched.
 - Gaps: a run with no rate-limit event leaves no `no_rate_limit_event` record (the
   legacy bridge wrote one); real stream-json frame shapes and cadence still need a
   version-pinned real-client check; a native Claude child (path D) does not use this
@@ -290,8 +302,11 @@ result schema. The worker launches `bridge.run_claude` with the route's effectiv
 
 Tests: `tests/test_project_driver.py` `ClaudeChildDriverTests` (open to released
 capacity with a rate-limit event recorded; a paid-usage event stops the child and the
-next Claude open on the account is refused) and `ClaudeSilenceCutoffTests`;
-`tests/test_claude_activity.py` for the classifier on an owned execution.
+next Claude open on the account is refused), `ClaudeRestrictionDeliveryTests` (an
+oversized paid event whose first delivery fails still reaches the account before the
+terminal and refuses the next open; a client whose digest changed after observation is
+never launched) and `ClaudeSilenceCutoffTests`; `tests/test_claude_activity.py` for the
+classifier, including replays, on an owned execution; `tests/test_rate_limit_contracts.py`.
 
 ### What is and is not covered
 

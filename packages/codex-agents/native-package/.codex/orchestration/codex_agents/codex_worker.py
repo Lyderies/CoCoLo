@@ -13,6 +13,7 @@ automatic retry or production client migration is enabled here.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -96,6 +97,7 @@ class _Job:
     state: str = "prepared"
     packet: CodexWorkerPacket | None = None
     recorder: object = None
+    client_sha256: str | None = None
 
 
 class _Slot:
@@ -179,9 +181,20 @@ def _safe_report(report, provider):
     return body
 
 
-def _execute(payload, ticket, project_id, run_handle=None, recorder=None):
+def _client_digest(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1_048_576), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _execute(payload, ticket, project_id, run_handle=None, recorder=None, client_sha256=None):
     try:
         data, assignment = _decode_input(payload)
+        # The prepared client, re-read just before launch, is still the one the account observed.
+        if client_sha256 is not None and _client_digest(data["executable"]) != client_sha256:
+            raise CodexWorkerError()
         provider = data["route"]["provider"]
         deadline = max(0, (ticket.deadline_ns() - time.monotonic_ns()) / 1_000_000_000)
         common = dict(project_id=project_id, route=data["route"], assignment=assignment,
@@ -264,10 +277,11 @@ class CodexWorkerPool:
         job = self._job(handle)
         return job.state == "reserved" and job.slot.current is handle and job.slot.thread.is_alive()
 
-    def prepare(self, payload):
+    def prepare(self, payload, *, client_sha256=None):
         """Reserve local capacity before account admission; launch no work."""
         self._owner()
-        if self._closed or type(payload) is not bytes or not 0 < len(payload) <= MAX_INPUT_BYTES:
+        if (self._closed or type(payload) is not bytes or not 0 < len(payload) <= MAX_INPUT_BYTES
+                or (client_sha256 is not None and (type(client_sha256) is not str or len(client_sha256) != 64))):
             raise CodexWorkerError()
         with self._registry._lock:
             slot = next((slot for slot in self._slots if slot.current is None and not slot.fault), None)
@@ -275,7 +289,7 @@ class CodexWorkerPool:
             if slot is None or self._charged + charged > self._limits.retained_bytes:
                 raise CodexWorkerError("worker_busy")
             handle = CodexWorkerHandle()
-            job = _Job(None, payload, slot, charged)
+            job = _Job(None, payload, slot, charged, client_sha256=client_sha256)
             self._jobs[handle], slot.current = job, handle
             self._charged += charged
             return handle
@@ -407,8 +421,8 @@ class CodexWorkerPool:
                     job.state = "active"
                     payload, job.payload = job.payload, None
                     ticket, project_id = job.ticket, entry.key.project_id
-                    run_handle, recorder = entry.run_handle, job.recorder
-                packet = _execute(payload, ticket, project_id, run_handle, recorder)
+                    run_handle, recorder, client = entry.run_handle, job.recorder, job.client_sha256
+                packet = _execute(payload, ticket, project_id, run_handle, recorder, client)
                 payload = ticket = recorder = None
                 with self._registry._lock:
                     job.packet, job.state = packet, "finishing"

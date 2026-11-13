@@ -24,7 +24,8 @@ from tests.test_bridge import (
     CLEAN, PARENT_GRANT, RATE_LIMIT, CliTestCase, cli, git, init_frame, null_filled, result, result_frame,
 )
 
-from codex_agents import client_runtime, collector_runtime, learning_store, project_driver
+from codex_agents import client_runtime, codex_worker, collector_runtime, learning_store, project_driver
+from codex_agents.account_api import AccountClient, AccountError
 from codex_agents.account_host import AccountServiceHost
 from codex_agents.collector_client import CollectorClient
 from codex_agents.collector_contracts import CollectorError
@@ -493,6 +494,43 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
                            '--parent-grant', context[5], '--route', self.write('next-route.json', route),
                            '--orchestration-handle', orchestration, expected=2)
         self.assertIn('paid', refused['reason_code'])
+
+
+class ClaudeRestrictionDeliveryTests(ClaudeChildHarness):
+    def test_an_undelivered_paid_event_reaches_the_account_before_the_run_finishes(self):
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        paid = {**RATE_LIMIT, 'rate_limit_info': {**RATE_LIMIT['rate_limit_info'], 'isUsingOverage': True,
+                                                  'overageStatus': 'allowed', 'padding': 'x' * 10_000}}
+        self.frames('claude', [init_frame(), paid, {'sleep': 30}, result_frame()])
+        original, calls = AccountClient.record_rate_limit_event, []
+
+        def unreachable_once(client, *args, **options):
+            calls.append(options['request_id'])
+            if len(calls) == 1:
+                raise AccountError('account_unavailable')
+            return original(client, *args, **options)
+
+        with mock.patch.object(AccountClient, 'record_rate_limit_event', unreachable_once):
+            dispatched = self.dispatch_claude(context, route_path, run_handle)
+            self.assertEqual('rate_limit_event_invalid', dispatched['bridge_report']['outcome'])
+            self.wait_for(lambda: ('driver', 'reporting', 'terminal') in self.stopped_runs, seconds=30)
+        self.assertEqual(2, len(calls))
+        self.assertEqual(calls[0], calls[1])  # The same request, so the account keeps it once.
+        task = self.write('next-task.json', {**self.task(), 'id': 'task-2'})
+        route = self.cli('learning-route', '--task', task)
+        assigned = {**self.assignment_for(route), 'assignment_id': 'next-assignment', 'task_id': 'task-2'}
+        refused = self.cli('learning-open-host-run', '--task', task, '--assignment', self.write('next.json', assigned),
+                           '--parent-grant', context[5], '--route', self.write('next-route.json', route),
+                           '--orchestration-handle', orchestration, expected=2)
+        self.assertIn('paid', refused['reason_code'])
+
+    def test_a_client_changed_after_the_account_observed_it_is_never_launched(self):
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        self.frames('claude', [init_frame(), result_frame()])
+        with mock.patch.object(codex_worker, '_client_digest', return_value='0' * 64):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('dispatch_unavailable', refused['reason_code'])
+        self.assertFalse([i for i in self.invocations('claude') if '-p' in i['argv']])
 
 
 class ClaudeSilenceCutoffTests(ClaudeChildHarness):

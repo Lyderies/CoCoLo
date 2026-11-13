@@ -20,7 +20,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from threading import local
+from threading import Lock, local
 import time
 
 from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountClient, AccountError, AccountRequest, account_request_digest
@@ -40,7 +40,7 @@ from .learning_contracts import canonical_json, content_digest, parse_bounded_js
 from .open_scope_contracts import OpenScopeContext, open_inputs_digest
 from .orchestration_api import OrchestrationScope
 from .prepared_dispatch import DispatchAuthorization, PreparedDispatchContext
-from .rate_limit_contracts import RateLimitError
+from .rate_limit_contracts import RateLimitError, bounded_rate_limit_info
 from .result_contracts import LEASE_SCOPE_FIELDS, ResultLeaseBinding
 from .run_provenance import RunProvenanceInput
 from .service_enrollment import (
@@ -62,6 +62,7 @@ ACCOUNT_TIMEOUT_SECONDS = 60
 ACCOUNT_RETRY_SECONDS = 600  # How long an unreachable account is waited for, per call.
 ACCOUNT_RETRY_INTERVAL = 0.5
 RATE_LIMIT_TIMEOUT_SECONDS = 10  # One event; the child's stream waits for it.
+MAX_PENDING_RATE_LIMITS = 64  # The account keeps at most this many per run.
 _RETRYING = object()
 REASON_CODES = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable', 'run_abandoned',
@@ -71,7 +72,7 @@ _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 
 _PREPARE_FIELDS = {'purpose', 'expected_export_commit'}
 _ACTIVE = frozenset({'preparing', 'observing', 'leasing', 'arming', 'recording_open', 'claiming', 'binding',
                      'registering', 'provenance', 'consuming'})
-_AFTER = frozenset({'ready', 'terminal', 'acknowledging', 'cleanup', 'releasing', 'retiring', 'released'})
+_AFTER = frozenset({'ready', 'reporting', 'terminal', 'acknowledging', 'cleanup', 'releasing', 'retiring', 'released'})
 
 
 @dataclass
@@ -108,6 +109,7 @@ class _Run:
     submit_token: tuple | None = None
     result_admitted: bool = False
     released_at: float | None = None
+    recorder: object = None
 
 
 class _Call(local):
@@ -117,30 +119,45 @@ class _Call(local):
 class _RateLimitRecorder:
     """A Claude child's rate-limit events, sent from its worker thread to the account owner.
 
-    `run_claude` calls this in place of the legacy ledger. Each event is one
-    request with its own ID; any failure reaches the child as a contract error,
-    which stops it. The account records a lost `during` reading itself when it
-    refuses an event; an unreachable account leaves the run stopped with
-    `rate_limit_event_invalid` and no reading.
+    `run_claude` calls this in place of the legacy ledger. Each event is reduced
+    to the fields the account reads and sent as one request with its own ID; any
+    failure reaches the child as a contract error, which stops it. An event the
+    account did not acknowledge stays pending here, and the driver delivers it
+    before the run's terminal, so a restriction is never lost while the run's
+    capacity is still charged. The account records a lost `during` reading itself
+    when it refuses an event.
     """
 
     def __init__(self, driver, run):
         self._driver, self._project, self._host = driver, run.scope.project_id, run.host_client
         self._custody = driver._custody(run, storage=run.evidence)
         self._prefix, self._count = 'rate-' + driver._id(run) + '-', 0
+        self._lock = Lock()
+        self.pending, self.overflow = [], False  # Read by the driver after the worker returns.
+
+    def request_id(self):
+        with self._lock:
+            self._count += 1
+            return self._prefix + str(self._count)
 
     def record_claude_rate_limit_event(self, project_id, *, run_handle, rate_limit_info):
-        if project_id != self._project or self._count >= 1_000:
+        if project_id != self._project:
             raise RateLimitError('rate limit event was not recorded')
-        self._count += 1
+        facts = bounded_rate_limit_info(rate_limit_info)
+        request_id = self.request_id()
         call = self._driver._call
         call.role, call.host_client, call.context = 'project', self._host, self._custody
         try:
             client = AccountClient(self._driver._account, self._project, COLLECTOR_RUNTIME_DIGEST,
                                    timeout=RATE_LIMIT_TIMEOUT_SECONDS)
-            reply = client.record_rate_limit_event(run_handle, rate_limit_info,
-                                                   request_id=self._prefix + str(self._count))
-        except AccountError:
+            reply = client.record_rate_limit_event(run_handle, facts, request_id=request_id)
+        except AccountError as error:
+            if error.reason_code in {'account_unavailable', 'account_invalid_response'}:
+                with self._lock:
+                    if len(self.pending) < MAX_PENDING_RATE_LIMITS:
+                        self.pending.append((run_handle, facts, request_id))
+                    else:
+                        self.overflow = True
             raise RateLimitError('rate limit event was not recorded') from None
         finally:
             call.role = call.host_client = call.context = None
@@ -496,7 +513,9 @@ class RunDriver:
             if reply is None:
                 return
             identity = [r for r in reply['records'] if r.get('record_type') == 'provider_identity']
-            if len(identity) != 1:
+            # The client the account just observed must be the one prepared for launch.
+            if (len(identity) != 1 or (identity[0].get('client_path'), identity[0].get('client_sha256'))
+                    != tuple(run.prepared_inputs.client_identity)):
                 self._fail(run, 'run_unavailable')
                 return
             run.identity_digest = content_digest(identity[0])
@@ -583,12 +602,32 @@ class RunDriver:
                 return
             inputs = run.prepared_inputs
             if run.prospective.route['provider'] == 'claude':
-                self._runtime.pool.attach_recorder(inputs.worker, _RateLimitRecorder(self, run))
+                run.recorder = _RateLimitRecorder(self, run)
+                self._runtime.pool.attach_recorder(inputs.worker, run.recorder)
             run.context = PreparedDispatchContext(run.binding, run.persistence, inputs.worker,
                                                   lane.prepared_inputs_digest(run.persistence), inputs.export_info)
             run.state = 'ready'
         elif run.state == 'ready':
             if lane.snapshot(run.persistence)['state'] not in {'committed'}:
+                return
+            run.state = 'reporting'
+            self._advance(run)
+        elif run.state == 'reporting':
+            # A rate-limit event the account never acknowledged is delivered now,
+            # retried while the account is unreachable, before the terminal; a
+            # refusal or an overflow stops the run with its capacity still charged.
+            recorder = run.recorder
+            if recorder is not None and run.future is not None:
+                if self._result(run) is None:
+                    return
+                recorder.pending.pop(0)
+            if recorder is not None and recorder.overflow:
+                self._fail(run, 'run_failed')
+                return
+            if recorder is not None and recorder.pending:
+                handle, facts, request_id = recorder.pending[0]
+                self._account_call(run, 'project', 'record_rate_limit_event', handle, facts, request_id=request_id,
+                                   custody=self._custody(run, storage=run.evidence))
                 return
             delivery = lane.delivery(run.persistence)
             run.terminal_evidence = lane.terminal_evidence(run.persistence)

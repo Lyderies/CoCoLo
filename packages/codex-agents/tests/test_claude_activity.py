@@ -60,6 +60,19 @@ class ClaudeActivityTests(unittest.TestCase):
         self.assertIsNone(activity.observe(tool_result("toolu_unknown")))
         self.assertNotIn("PRIVATE", repr(vars(activity)))
 
+    def test_replayed_text_and_completed_tool_calls_never_count_again(self):
+        activity = self.start()
+        self.assertEqual("activity", activity.observe(assistant(text())))
+        self.assertIsNone(activity.observe(assistant(text())))  # The identical frame again.
+        self.assertEqual("activity", activity.observe(assistant(text("PRIVATE-MORE"))))
+        self.assertEqual("activity", activity.observe(assistant(tool_use())))
+        self.assertEqual("activity", activity.observe(tool_result()))
+        self.assertIsNone(activity.observe(assistant(tool_use())))  # A finished call replayed.
+        self.assertIsNone(activity.observe(tool_result()))
+        with self.assertRaisesRegex(ClaudeActivityError, "^claude_activity_invalid$"):
+            activity.observe({"type": "assistant", "message": {"model": MODEL, "content": [text()]}})
+        self.assertNotIn("PRIVATE", repr(vars(activity)))
+
     def test_metadata_billing_errors_and_other_models_do_not_refresh(self):
         activity = self.start()
         for frame in ({"type": "system", "subtype": "init"}, {"type": "result", "subtype": "success"},

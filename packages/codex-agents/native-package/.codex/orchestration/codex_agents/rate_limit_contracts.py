@@ -16,8 +16,46 @@ MAX_RATE_LIMIT_INFO_BYTES = 4_096
 RATE_LIMIT_STOPS = frozenset({'paid_usage_observed', 'provider_rejected'})
 
 
+_FIELDS = ('status', 'rateLimitType', 'utilization', 'resetsAt', 'isUsingOverage', 'overageStatus',
+           'overageDisabledReason')
+_WINDOW_FIELDS = ('status', 'utilization', 'resetsAt')
+MAX_WINDOWS = 16
+
+
 class RateLimitError(ContractError):
     pass
+
+
+def _scalar(value):
+    if value is None or type(value) is bool or (type(value) in {int, float} and value == value):
+        return value
+    return value if type(value) is str and len(value) <= 128 else None
+
+
+def bounded_rate_limit_info(info):
+    """Only the fields the account reads, so an event's size never decides whether it is kept.
+
+    A field it cannot carry becomes unknown, which the account treats as
+    restrictive (unknown paid usage denies admission; an unknown status is a lost
+    reading). A window beyond the limit is dropped only after its rejection, if
+    any, is carried by the event's own status.
+    """
+    if type(info) is not dict:
+        return {}
+    facts = {name: _scalar(info.get(name)) for name in _FIELDS if name in info}
+    windows = info.get('unifiedWindows')
+    if type(windows) is dict:
+        kept = {}
+        for scope in sorted(windows, key=str):
+            entry = windows[scope]
+            entry = {n: _scalar(entry.get(n)) for n in _WINDOW_FIELDS if n in entry} if type(entry) is dict else None
+            if len(kept) < MAX_WINDOWS and type(scope) is str and len(scope) <= 64:
+                kept[scope] = entry
+            elif (entry is None or entry.get('status') != 'allowed') and facts.get('status') != 'rejected':
+                # Never less restrictive than what was dropped.
+                facts['status'] = 'rejected' if (entry or {}).get('status') == 'rejected' else None
+        facts['unifiedWindows'] = kept
+    return facts
 
 
 @dataclass(frozen=True)

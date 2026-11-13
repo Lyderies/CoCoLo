@@ -300,7 +300,7 @@ class CodexPreparationLane:
                     continue
                 try:
                     self._authorize(job)
-                    worker = self._pool.prepare(job.artifact.payload)
+                    worker = self._pool.prepare(job.artifact.payload, client_sha256=job.artifact.client_identity[1])
                     job.prepared = PreparedCodexInputs(worker, job.workspace, job.artifact.export_info,
                         job.artifact.inputs_digest, job.artifact.client_identity)
                     job.prepared_snapshot = (worker, job.workspace, job.artifact.export_info,

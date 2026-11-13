@@ -5,10 +5,12 @@ assistant and user frames count (the launch never asks for partial messages),
 so the silence cutoff has message granularity. The frame shapes are assumed from
 the client's documented stream-json output and still need a version-pinned
 real-client capability/cadence check. No frame, message, tool input, output or
-provider timestamp is retained.
+provider timestamp is retained; repeated work is recognised by a short digest of
+its message ID and content, so replaying a frame never refreshes the timer.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 
 MAX_ACTIVITY_ITEMS = 4096
@@ -52,13 +54,12 @@ class ClaudeActivity:
         self._tools = frozenset(tools)
         self._started = False
         self._pending = set()
-        self._seen = 0
+        self._done = set()
+        self._work = set()
 
-    def _remember(self, identity):
-        if self._seen >= MAX_ACTIVITY_ITEMS:
+    def _count(self):
+        if len(self._pending) + len(self._done) + len(self._work) >= MAX_ACTIVITY_ITEMS:
             raise ClaudeActivityError("monitor_unavailable")
-        self._seen += 1
-        self._pending.add(identity)
 
     def startup(self):
         if self._started:
@@ -80,6 +81,9 @@ class ClaudeActivity:
         if kind == "assistant":
             if frame.get("error") is not None or message.get("model") != self._model:
                 return None
+            message_id = message.get("id")
+            if not _identifier(message_id):
+                raise ClaudeActivityError()
             found = False
             for block in content:
                 block_type = block.get("type")
@@ -87,14 +91,22 @@ class ClaudeActivity:
                     text = block.get(_TEXT_BLOCKS[block_type])
                     if type(text) is not str:
                         raise ClaudeActivityError()
-                    found = found or bool(text.strip())
+                    if not text.strip():
+                        continue
+                    work = hashlib.sha256(f"{message_id}\0{block_type}\0{text}".encode()).digest()[:16]
+                    if work in self._work:
+                        continue  # The same text again is not new work.
+                    self._count()
+                    self._work.add(work)
+                    found = True
                 elif block_type == "tool_use":
                     identity = block.get("id")
                     if not _identifier(identity) or block.get("name") not in self._tools:
                         raise ClaudeActivityError()
-                    if identity in self._pending:
+                    if identity in self._pending or identity in self._done:
                         continue
-                    self._remember(identity)
+                    self._count()
+                    self._pending.add(identity)
                     found = True
             return "activity" if found else None
         found = False
@@ -106,5 +118,6 @@ class ClaudeActivity:
                 raise ClaudeActivityError()
             if identity in self._pending:
                 self._pending.discard(identity)
+                self._done.add(identity)  # A completed call never counts again.
                 found = True
         return "activity" if found else None
