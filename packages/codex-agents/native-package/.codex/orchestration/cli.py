@@ -83,6 +83,7 @@ from codex_agents.contracts import (  # noqa: E402
     validate_assignment,
     validate_assignment_shape,
     validate_result,
+    validate_task,
 )
 from codex_agents.evaluation import evaluate, load_jsonl  # noqa: E402
 from codex_agents.learning_adapters import (  # noqa: E402
@@ -541,11 +542,15 @@ def _validated_assignment_route(
     if trusted_host:
         if project_root is None:
             raise ContractError("trusted route preflight requires a registered project")
-        ledger, project_id = _learning_ledger(args)
-        try:
-            route, _ = _trusted_host_route(ledger, project_id, project_root, task)
-        finally:
-            _close_ledger(ledger)
+        fast = _store_free_route(project_root, task)
+        if fast is not None:
+            route = fast[0]
+        else:
+            ledger, project_id = _learning_ledger(args)
+            try:
+                route, _ = _trusted_host_route(ledger, project_id, project_root, task)
+            finally:
+                _close_ledger(ledger)
         assigned = validate_assignment(
             _json_input(args.assignment), task=task, route=route,
             parent_grant=_json_input(args.parent_grant),
@@ -707,6 +712,39 @@ def _claude_host_open_checks(
 
 def _host_client_for(route: dict) -> str:
     return BRIDGE_CLIENT if route.get("dispatch") == "bridge" else _host_client()
+
+
+def _store_free_route(project_root: Path, task: dict, client_version: str | None = None):
+    """The route when it needs nothing from the ledger, else None.
+
+    Without routing evidence and with an empty release registry there are no
+    trusted references or learning candidates to read, so routing is pure
+    policy: the CLI routes without opening the ledger or pausing the shared
+    collector, which serves other projects' running children. A verifier's
+    worker outcome is bound by its open, not here.
+    """
+    if validate_task(task)["routing_evidence_refs"]:
+        return None
+    try:
+        if load_released_candidate_digests(RELEASES_PATH, verify_signature=None):
+            return None
+    except ContractError:
+        return None  # A registry that needs the owner's signature check: the ledger path.
+    policy = load_effective_policy(
+        project_root,
+        ORCHESTRATION_ROOT / "config" / "routing-policy.json",
+        ORCHESTRATION_ROOT / "config" / "discovery-policy.json",
+    )
+    route = route_task(task, policy, trusted_routing_evidence_refs=frozenset(),
+                       primary_provider=_host_primary_provider())
+    clients = load_client_capabilities(ORCHESTRATION_ROOT / "config" / "learning-clients.json")
+    capability = clients[client_version or _host_client_for(route)]
+    route["execution_configuration"] = installed_execution_configuration(
+        BUNDLE_ROOT, route, client_capability=capability
+    )
+    route["learning_candidate_digests"] = []
+    route["ready"] = True
+    return route, capability
 
 
 def _trusted_host_route(
@@ -1476,6 +1514,12 @@ def main() -> int:
                     "client version is not in the validated capability matrix"
                 )
             selection_slice = model_selection_slice(task)
+            fast = (_store_free_route(args.project_root, task, explicit_client)
+                    if args.fallback_from_run_handle is None else None)
+            if fast is not None:
+                report = fast[0]
+                _print_command_report(args, report)
+                return 0
             ledger, project_id = _learning_ledger(args)
             try:
                 trusted = ledger.trusted_routing_evidence_refs(project_id, task)

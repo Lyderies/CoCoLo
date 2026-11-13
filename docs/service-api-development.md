@@ -316,6 +316,14 @@ from outside its session, so it could not meet the silence cutoff, deadline or
 cleanup guarantees. Tests: `ClaudePrimaryClaudeChildTests` (the Claude-child tests
 with a Claude primary).
 
+Routing without the ledger. `learning-route`, and the trusted route behind
+`validate-assignment`/`result-preflight`, need nothing from the ledger when the task has
+no routing evidence and the release registry is empty: there are no trusted references
+or learning candidates to read. They then route from policy alone
+(`cli._store_free_route`), never opening the ledger or pausing the shared collector that
+serves other projects' running children. Routing evidence, released candidates, canary
+routes and legacy fallback receipts still use the ledger.
+
 Verification and operational QA on the host path. When the CLI reports a recorded
 result (`run.recorded`) it names the result's `host_outcome_digest`; the driver then
 keeps that run's originals (`HostResultContext`: binding, assignment, task, route,

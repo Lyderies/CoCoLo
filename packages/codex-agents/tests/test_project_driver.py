@@ -332,6 +332,25 @@ class ProjectDriverTests(DriverHarness):
         self.assertTrue(settled['stop_requested'])
         self.assertEqual('cancel_requested', settled['stop_reason'])
 
+    def test_routing_and_preflight_never_open_the_ledger_or_pause_the_collector(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'running-child'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+        task = self.write('other-task.json', {**self.task(), 'id': 'task-other'})
+        with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')), \
+                mock.patch.object(cli, 'CollectorMaintenance', side_effect=AssertionError('collector paused')):
+            route = self.cli('learning-route', '--task', task)
+            assigned = {**self.assignment_for(route), 'assignment_id': 'other', 'task_id': 'task-other'}
+            other = ('--task', task, '--assignment', self.write('other-assignment.json', assigned),
+                     '--parent-grant', self.write('grant.json', PARENT_GRANT))
+            self.assertEqual(assigned, self.cli('validate-assignment', *other))
+            self.assertTrue(self.cli('result-preflight', *other)['ready'])
+        self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
+        process.communicate(timeout=30)
+
     def test_only_the_opening_host_class_can_prepare_and_dispatch_its_run(self):
         context, route_path, orchestration, run_handle = self.open_run()
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
