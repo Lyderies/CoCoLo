@@ -352,6 +352,16 @@ move still uses owner maintenance. Tested by
 `ProjectDriverTests.test_registering_another_project_during_a_run_does_not_disturb_it`
 (C2), with the ledger constructor and collector maintenance patched to fail.
 
+Route integrity and recording on the host path. A host-driven open now refuses a
+supplied route that is not exactly the installed route for the task (`cli._installed_route`;
+the legacy ledger path always did this), so model, effort, agent and sandbox cannot be
+substituted by the primary. `learning-record-host-result` derives that route itself for a
+run the project host holds, so `--route` is optional again as the skills say; the other
+host class gets `host_client_mismatch` and an undispatched run "must be dispatched".
+The record report carries `dispatch_diagnostics` (the validator's safe reason and client
+diagnostics) from the durable terminal record. It does not yet carry `learning_cycle`:
+see the learning rebuild plan.
+
 Verification and operational QA on the host path. When the CLI reports a recorded
 result (`run.recorded`) it names the result's `host_outcome_digest`; the driver then
 keeps that run's originals (`HostResultContext`: binding, assignment, task, route,

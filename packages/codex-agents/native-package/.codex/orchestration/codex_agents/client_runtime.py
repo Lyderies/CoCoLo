@@ -385,11 +385,11 @@ class HostOutcomeUnknown(RuntimeError):
 
 def _host_pair(state_root, project_root, host_outcome_digest, verifier_host_outcome_digest, *, host_client):
     """Both recorded runs' bindings from this project's host, or HostOutcomeUnknown."""
-    state = CollectorPaths(state_root)
     try:
+        state = CollectorPaths(state_root)
         scope, endpoint, result_endpoint = read_runtime_hint(state, project_root)
     except Exception:
-        raise HostOutcomeUnknown() from None
+        raise HostOutcomeUnknown() from None  # No state or no running host: nothing it recorded.
     history = HistoryClient(result_endpoint, scope.project_id, scope.runtime_digest, timeout=10)
     pair = []
     for digest in (host_outcome_digest, verifier_host_outcome_digest):
@@ -505,8 +505,12 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
                              'host_outcome_digest': admitted['admission']['host_outcome_digest']}, timeout=5)
         except Exception:
             pass  # The host keeps custody for its grace period instead.
+        # The validator's safe reason and the client's diagnostics, from the durable terminal record.
+        diagnostics = {name: record[name] for name in ('result_validation_reason_code', 'client_diagnostics')
+                       if record.get(name) is not None}
         return {'ready': True, **admitted, **records,
-                'host_outcome_digest': admitted['admission']['host_outcome_digest'], 'capacity_state': 'retained'}
+                'host_outcome_digest': admitted['admission']['host_outcome_digest'], 'capacity_state': 'retained',
+                **({'dispatch_diagnostics': diagnostics} if diagnostics else {})}
     except (DispatchError, HistoryError, HostClientMismatch) as error:
         raise RuntimeResultError(error.reason_code) from None
     except Exception:

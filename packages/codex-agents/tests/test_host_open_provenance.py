@@ -221,16 +221,12 @@ class OriginalVerifierOpenTests(unittest.TestCase):
 
         self.native.admit('claude')
         task = self.native.task()
-        # A native Claude worker, as a route from an older policy still opens it:
-        # current routing bridges every child, but these account-owner checks
-        # concern its verifier's dependency, not how the worker ran.
-        from codex_agents import routing
-        with mock.patch.object(routing, '_dispatch', return_value='native'):
-            route, assigned, arguments, _ = self.native.lifecycle_inputs(task)
+        # A native Claude worker (the fixture class keeps the pre-0.3.0 dispatch): these
+        # account-owner checks concern its verifier's dependency, not how the worker ran.
+        route, assigned, arguments, _ = self.native.lifecycle_inputs(task)
         self.assertEqual(('claude', 'native'), (route['provider'], route['dispatch']))
         self.assertTrue(assigned['verification_required'])
-        with mock.patch.object(routing, '_dispatch', return_value='native'):
-            self.native.cli('validate-assignment', *arguments)
+        self.native.cli('validate-assignment', *arguments)
         with closing(LearningLedger(self.native.state, client_capabilities=self.native.clients)) as ledger:
             orchestration = ledger.open_orchestration(self.native.project_id, client_version='claude-host-v1')
             opened = self.open_fixture(ledger, task, route, assigned, orchestration)
@@ -242,11 +238,11 @@ class OriginalVerifierOpenTests(unittest.TestCase):
         return {'recorded': recorded, 'orchestration': orchestration}
 
     def setUp(self):
-        from tests.test_bridge import VerifierHandoffTests
+        from tests.test_bridge import LegacyWorkerResultStoreTests
         from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST, LearningLedger
         from codex_agents.project_history import ProjectHistory
         from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity, ResultLeaseBinding
-        self.native = VerifierHandoffTests(methodName='runTest')
+        self.native = LegacyWorkerResultStoreTests(methodName='runTest')
         self.native.setUp()
         self.addCleanup(self.native.doCleanups)
         self.addCleanup(self.native.tearDown)

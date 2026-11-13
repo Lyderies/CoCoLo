@@ -120,7 +120,7 @@ from codex_agents.learning_engine import (  # noqa: E402
     validate_runtime_candidate,
 )
 from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient  # noqa: E402
-from codex_agents.collector_paths import CollectorPaths  # noqa: E402
+from codex_agents.collector_paths import UNMOVED_STATE, CollectorPaths  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
@@ -128,6 +128,7 @@ from codex_agents.client_runtime import (  # noqa: E402
     run_control_client, bridged_run_owner, abandon_bridged_run,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
+from codex_agents.history_contracts import HistoryError  # noqa: E402
 from codex_agents.project_host_client import ensure_project_host  # noqa: E402
 from codex_agents.admission_metadata import api_keys_present  # noqa: E402
 from codex_agents.host_paths import PYTHON_ISOLATION_FLAGS  # noqa: E402
@@ -405,6 +406,11 @@ def _start_collector_quietly(args: argparse.Namespace) -> None:
     try:
         ensure_collector(CollectorPaths(args.state_root), ORCHESTRATION_ROOT / "cli.py",
                          project_root=args.project_root)
+    except StateError as error:
+        # State that still sits in the old macOS folder needs the owner's setup
+        # step; say so instead of reporting services that cannot exist yet.
+        if str(error) == UNMOVED_STATE:
+            raise
     except Exception:
         pass
 
@@ -425,7 +431,7 @@ def _host_qa(args):
     try:
         _host_pair(args.state_root, args.project_root, args.host_outcome_digest, args.host_outcome_digest,
                    host_client=_host_client())
-    except HostOutcomeUnknown:
+    except (HostOutcomeUnknown, HostClientUnknown):
         return False
     return True
 
@@ -758,6 +764,18 @@ def _store_free_route(project_root: Path, task: dict, client_version: str | None
     return route, capability
 
 
+def _installed_route(args: argparse.Namespace, task: dict) -> dict:
+    """The route the installed policy gives this task, from the ledger only when it must be."""
+    fast = _store_free_route(args.project_root, task)
+    if fast is not None:
+        return fast[0]
+    ledger, project_id = _learning_ledger(args)
+    try:
+        return _trusted_host_route(ledger, project_id, args.project_root, task)[0]
+    finally:
+        _close_ledger(ledger)
+
+
 def _trusted_host_route(
     ledger: LearningLedger,
     project_id: str,
@@ -777,7 +795,12 @@ def _trusted_host_route(
     # A verifier bound to a worker outcome is routed only when that outcome is
     # this project's, from the named provider and family, in an active boundary.
     # Open and dispatch read the result itself; recording needs only the binding.
-    ledger.verification_worker_result(project_id, task, with_result=False)
+    try:
+        ledger.verification_worker_result(project_id, task, with_result=False)
+    except LedgerError as error:
+        # A worker the project host recorded is bound by its verifier's open instead.
+        if str(error) != "verification_for_outcome is not a recorded host outcome":
+            raise
     primary_route = route_task(
         task,
         policy,
@@ -1743,11 +1766,21 @@ def main() -> int:
                 else None
             )
             state = LearningState(args.state_root)
-            running = _compatible_collector(state) if moved_aside is None else None
+            running = (_compatible_collector(state)
+                       if moved_aside is None and args.move_legacy_state is None else None)
             if running is not None:
                 # Another project's children keep the collector: register through it.
                 project_id = running.register(args.project_root)
-                report = {"ready": True, "project_id": project_id, "registered_by": "collector"}
+                health = running.health()
+                report = {
+                    "ready": True,
+                    "active": True,
+                    "project_id": project_id,
+                    "collector_schema_version": health["schema_version"],
+                    "collector_runtime_version": health["runtime_version"],
+                    "collector_runtime_digest": health["runtime_digest"],
+                    "state_moved": None,
+                }
                 _print_command_report(args, report)
                 return 0
             maintenance = CollectorMaintenance.acquire(
@@ -1926,6 +1959,9 @@ def main() -> int:
             validate_assignment(assignment, task=task, route=supplied_route,
                                 parent_grant=parent_grant)
             if _host_driven(supplied_route):
+                # Model, effort, agent and sandbox come only from the installed route.
+                if args.fallback_receipt is None and supplied_route != _installed_route(args, task):
+                    raise ContractError("supplied route does not match the installed route")
                 ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)
                 host = _host_client()  # Consistency only; native identity is independently checked.
                 if host == CLAUDE_HOST_CLIENT:
@@ -2275,8 +2311,18 @@ def main() -> int:
                 )
             assignment = _json_input(args.assignment)
             supplied_route = None if args.route is None else _json_input(args.route)
+            derived_route = False
+            if (trusted_host and supplied_route is None and args.fallback_receipt is None
+                    and args.evaluation_assignment_digest is None):
+                owner = bridged_run_owner(args.state_root, args.project_root, observation.get('run_handle'),
+                                          host_client=host)
+                if owner == 'other':
+                    raise HostClientMismatch("host_client_mismatch")
+                if owner == 'owned':
+                    # A run the project host drives: the command derives its route itself.
+                    supplied_route, derived_route = _installed_route(args, task), True
             if trusted_host and (provider_for_model(assignment.get('model')) == 'codex' or _host_driven(supplied_route)):
-                if args.route is None:
+                if supplied_route is None:
                     _refuse_bridged_run(args, observation['run_handle'], "a bridged run must be dispatched before its result")
                     raise RuntimeResultError('history_invalid_input')
                 if args.evaluation_assignment_digest is not None or args.fallback_receipt is not None:
@@ -2284,8 +2330,15 @@ def main() -> int:
                 route = supplied_route
                 parent_grant = _json_input(args.parent_grant)
                 assignment = validate_assignment(assignment, task=task, route=route, parent_grant=parent_grant)
-                report = record_codex_result_client(args.state_root, args.project_root, task, route, assignment,
-                    parent_grant, result, observation, host_client=host)
+                try:
+                    report = record_codex_result_client(args.state_root, args.project_root, task, route, assignment,
+                        parent_grant, result, observation, host_client=host)
+                except RuntimeResultError as error:
+                    # The run is this host's (checked above), so no published dispatch means it never ran.
+                    if derived_route and error.reason_code in {
+                            'history_result_not_ready', 'dispatch_not_found', 'dispatch_not_authorized'}:
+                        raise LedgerError("a bridged run must be dispatched before its result") from None
+                    raise
                 _print_command_report(args, report)
                 return 0
             if args.route is not None:
@@ -2467,18 +2520,29 @@ def main() -> int:
                 )
             finally:
                 _close_ledger(ledger)
-        elif args.command == "learning-run-operational-checks" and _host_qa(args):
+        elif args.command in {"learning-run-operational-checks", "learning-record-operational-qa"} and _host_qa(args):
             # A worker and verifier this project's host recorded: QA through the project API.
-            report = operational_checks_client(
-                args.state_root, args.project_root, args.host_outcome_digest, args.verifier_host_outcome_digest,
-                lambda diagnostics: run_operational_check_suite(
-                    args.project_root, scratch_root=CollectorPaths(args.state_root).root, diagnostics=diagnostics),
-                host_client=_host_client())
-        elif args.command == "learning-record-operational-qa" and _host_qa(args):
-            report = record_operational_qa_client(
-                args.state_root, args.project_root, args.host_outcome_digest, args.verifier_host_outcome_digest,
-                args.check_receipt, _json_input(args.evaluator_assignment), _json_input(args.evaluator_result),
-                _json_input(args.verifier_assignment), _json_input(args.verifier_result), host_client=_host_client())
+            try:
+                if args.command == "learning-run-operational-checks":
+                    report = operational_checks_client(
+                        args.state_root, args.project_root, args.host_outcome_digest,
+                        args.verifier_host_outcome_digest,
+                        lambda diagnostics: run_operational_check_suite(
+                            args.project_root, scratch_root=CollectorPaths(args.state_root).root,
+                            diagnostics=diagnostics),
+                        host_client=_host_client())
+                else:
+                    report = record_operational_qa_client(
+                        args.state_root, args.project_root, args.host_outcome_digest,
+                        args.verifier_host_outcome_digest, args.check_receipt,
+                        _json_input(args.evaluator_assignment), _json_input(args.evaluator_result),
+                        _json_input(args.verifier_assignment), _json_input(args.verifier_result),
+                        host_client=_host_client())
+            except (HostOutcomeUnknown, HistoryError, DispatchError) as error:
+                # The project refused the pair, the files or the receipt; nothing was committed.
+                _print({"ready": False, "error": "operational QA admission rejected",
+                        "reason_code": getattr(error, "reason_code", "history_not_authorized")})
+                return 2
         elif args.command == "learning-run-operational-checks":
             ledger, project_id = _learning_ledger(args)
             try:

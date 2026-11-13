@@ -6,8 +6,6 @@ they resolve. Everything else is the product path: the in-process CLI, the
 hosts' enrollment, the run driver and the original owners.
 """
 import base64
-import contextlib
-import io
 import json
 import os
 import socket
@@ -21,28 +19,20 @@ from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT
 from tests.learning_support import attest_provider
+from tests.service_harness import ServiceHarness
 from tests.test_bridge import (
     CLEAN, PARENT_GRANT, RATE_LIMIT, CliTestCase, cli, git, init_frame, null_filled, result, result_frame,
 )
 
-from codex_agents import client_runtime, codex_worker, collector_runtime, learning_store, project_driver
+from codex_agents import codex_worker, learning_store, project_driver
 from codex_agents.account_api import AccountClient, AccountError
-from codex_agents.account_host import AccountServiceHost
-from codex_agents.collector_client import CollectorClient
-from codex_agents.collector_contracts import CollectorError
-from codex_agents.client_runtime import runtime_hint_path
-from codex_agents.collector_paths import CollectorPaths
-from codex_agents.learning_store import CollectorServer, LearningLedger
 from codex_agents.liveness_clock import LivenessLimits
-from codex_agents.project_service import serve_project
-from codex_agents.service_enrollment import capability_path
 
 SECOND = 1_000_000_000
 
 
-class DriverHarness(CliTestCase):
+class DriverHarness(ServiceHarness, CliTestCase):
     """In-process collector, account and project hosts; the CLI and run driver are the product."""
-    liveness = None  # The installed provisional policy unless a test narrows it.
     primary = 'codex'  # Which primary host class drives the CLI.
 
     def setUp(self):
@@ -55,177 +45,7 @@ class DriverHarness(CliTestCase):
             os.environ.pop('CODEX_SESSION_ID', None)
             os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='claude-primary')
         self.admit('codex')
-        self.ledger.close()
-        self.paths = CollectorPaths(self.state.root)
-        self.stop, self.restart = threading.Event(), threading.Event()
-        self.restart.set()
-        self.failures = []
-        # Legacy routing still stops the collector for maintenance. Its restart is
-        # this thread's in-process collector, so the trusted fake clients still apply.
-        for module in (collector_runtime, learning_store):
-            patcher = mock.patch.object(module, '_start_collector_locked', self.start_collector)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        # Where a run stopped, for the failure message; the driver itself keeps only a reason code.
-        self.stopped_runs, original_fail = [], project_driver.RunDriver._fail
-
-        def record(driver, run, reason):
-            self.stopped_runs.append((run.state, reason))
-            return original_fail(driver, run, reason)
-
-        patcher = mock.patch.object(project_driver.RunDriver, '_fail', record)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        original_exchange = client_runtime._run_driver
-
-        def exchange(*args, **options):
-            try:
-                reply = original_exchange(*args, **options)
-            except Exception as error:
-                self.stopped_runs.append(('client', args[1], repr(error)))
-                raise
-            self.stopped_runs.append(('client', args[1], reply))
-            return reply
-
-        patcher = mock.patch.object(client_runtime, '_run_driver', exchange)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        from codex_agents import dispatch_api
-        original_call = dispatch_api.DispatchClient.call
-
-        def call(client, operation, *args, **options):
-            try:
-                view = original_call(client, operation, *args, **options)
-            except Exception as error:
-                self.stopped_runs.append((operation, repr(error)))
-                raise
-            self.stopped_runs.append((operation, view.get('state')))
-            return view
-
-        patcher = mock.patch.object(dispatch_api.DispatchClient, 'call', call)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        from codex_agents import prepared_dispatch
-        original_advance = prepared_dispatch.PreparedDispatchService._advance
-
-        def advance(service, job):
-            before = job.state
-            try:
-                return original_advance(service, job)
-            except Exception as error:
-                self.stopped_runs.append(('dispatch-drive', before, repr(error)))
-                raise
-
-        patcher = mock.patch.object(prepared_dispatch.PreparedDispatchService, '_advance', advance)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        original_driver_advance = project_driver.RunDriver._advance
-
-        def driver_advance(driver, run):
-            before = run.state
-            try:
-                return original_driver_advance(driver, run)
-            finally:
-                if run.state != before:
-                    self.stopped_runs.append(('driver', before, run.state))
-
-        patcher = mock.patch.object(project_driver.RunDriver, '_advance', driver_advance)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        self.threads = [threading.Thread(target=self.collector, name='test-collector')]
-        self.threads[0].start()
-        self.wait_for(lambda: capability_path(self.paths, None, 'account').exists())
-        self.start_project_host(self.project)
-
-    def tearDown(self):
-        # Before the base class removes the state these services own.
-        try:
-            self.stop_services()
-        finally:
-            super().tearDown()
-
-    def wait_for(self, condition, seconds=20):
-        end = time.monotonic() + seconds
-        while not condition():
-            if self.failures:
-                self.fail(self.failures[0])
-            self.assertLess(time.monotonic(), end, 'service did not become ready')
-            time.sleep(.01)
-
-    def start_collector(self, state, cli_path, *, project_root, timeout=1.0):
-        self.restart.set()
-        end = time.monotonic() + 10
-        while True:
-            try:
-                return CollectorClient(self.paths.socket).health()
-            except CollectorError:
-                if time.monotonic() >= end:
-                    raise
-                time.sleep(.01)
-
-    def collector(self):
-        """collector_host.py's loop, restarted in this thread whenever maintenance asks."""
-        try:
-            while not self.stop.is_set():
-                if not self.restart.wait(.05):
-                    continue
-                self.restart.clear()
-                ledger = LearningLedger(self.state, client_capabilities=self.clients)
-                server, account = CollectorServer(ledger), None
-                try:
-                    server.start()
-                    account = AccountServiceHost(ledger, self.paths)
-                    while not self.stop.is_set() and not server.wait(.002):
-                        account.serve_once()
-                finally:
-                    try:
-                        if account is not None:
-                            account.close()
-                            end = time.monotonic() + 10
-                            while not account.drained() and time.monotonic() < end:
-                                time.sleep(.01)
-                            if not account.drained():
-                                self.failures.append('account services did not drain')
-                    finally:
-                        server.stop()
-                        ledger.close()
-        except BaseException as error:  # Surface a service failure in the test thread.
-            self.failures.append(repr(error))
-
-    def start_project_host(self, project, stop=None):
-        stopped = (stop or self.stop).is_set
-
-        def serve():
-            try:
-                report = serve_project(self.state.root, project, stopped=stopped, bundle_root=self.bundle,
-                                       **({} if self.liveness is None else {'liveness': self.liveness}))
-                if not report.get('ready'):
-                    self.failures.append('project host refused: %r' % (report,))
-            except BaseException as error:
-                self.failures.append(repr(error))
-
-        thread = threading.Thread(target=serve, name='test-project-host-' + project.name)
-        self.threads.append(thread)
-        thread.start()
-        self.wait_for(lambda: runtime_hint_path(self.paths, project).exists())
-
-    def cli_for(self, project, command, *arguments, expected=0):
-        stdout = io.StringIO()
-        argv = ['cli.py', command, '--state-root', str(self.state.root), '--project-root', str(project), *arguments]
-        with mock.patch.object(sys, 'argv', argv), mock.patch.object(cli, 'BUNDLE_ROOT', self.bundle), \
-                contextlib.redirect_stdout(stdout):
-            code = cli.main()
-        self.assertEqual(expected, code, stdout.getvalue())
-        return json.loads(stdout.getvalue())
-
-    def stop_services(self):
-        self.stop.set()
-        for thread in reversed(self.threads):
-            thread.join(20)
-            self.assertFalse(thread.is_alive(), thread.name + ' did not stop')
-        self.assertEqual([], self.failures)
-        workers = {'account-observation', 'signature-fixed-worker', 'codex-agents-collector', 'account-ingress'}
-        self.assertEqual([], [t.name for t in threading.enumerate() if t.name in workers and t.is_alive()])
+        self.start_services()
 
     def open_run(self, project=None):
         project = project or self.project
@@ -553,6 +373,8 @@ class HostVerificationTests(DriverHarness):
         self.assertEqual(['.orchestration-input/worker-result.json', 'source.txt'], invocation['files'])
         placed = invocation['reserved_inputs']['worker-result.json']
         self.assertEqual(worker_result, json.loads(placed['content']))
+        self.assertEqual('0o400', placed['mode'])  # Read-only, and the prompt names it.
+        self.assertIn('.orchestration-input/worker-result.json', invocation['argv'][-1])
         observation = self.write('verifier-observation.json', {'run_handle': opened['run_handle'], 'result_attempts': [
             {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
         recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
@@ -582,6 +404,13 @@ class HostVerificationTests(DriverHarness):
                       *[item for pair in files.items() for item in pair])
         self.assertTrue(qa['ready'])
         self.assertIn('accepted', json.dumps(qa))
+        # A verifier assignment that is not the recorded one (here relabelled) is refused.
+        relabelled = {**files, '--verifier-assignment': self.write('relabelled.json', {
+            **verifier_assignment, 'role': 'another_verification_worker'})}
+        refused = self.cli('learning-record-operational-qa', '--host-outcome-digest', worker,
+                           '--verifier-host-outcome-digest', verifier, '--check-receipt', checks['check_receipt'],
+                           *[item for pair in relabelled.items() for item in pair], expected=2)
+        self.assertFalse(refused['ready'])
         with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('legacy ledger')):
             again = self.cli('learning-record-operational-qa', '--host-outcome-digest', worker,
                              '--verifier-host-outcome-digest', verifier, '--check-receipt', checks['check_receipt'],
@@ -589,6 +418,104 @@ class HostVerificationTests(DriverHarness):
         # A repeat is the same committed QA, now reported as known; no legacy ledger is opened.
         self.assertEqual((False, True), (qa['known'], again['known']))
         self.assertEqual({k: v for k, v in qa.items() if k != 'known'}, {k: v for k, v in again.items() if k != 'known'})
+
+    def recorded_worker(self, orchestration, task_id):
+        """One more Codex worker in the same orchestration, dispatched and recorded."""
+        task = {**self.task(), 'id': task_id}
+        task_path = self.write(task_id + '.json', task)
+        route = self.cli('learning-route', '--task', task_path)
+        assigned = {**self.assignment_for(route), 'assignment_id': task_id + '-assignment', 'task_id': task_id}
+        context = ('--task', task_path, '--assignment', self.write(task_id + '-assignment.json', assigned),
+                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        route_path = self.write(task_id + '-route.json', route)
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration)
+        worker_result = {**result(), 'assignment_id': assigned['assignment_id']}
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(worker_result)))
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
+        observation = self.write(task_id + '-observation.json', {'run_handle': opened['run_handle'], 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write(task_id + '-result.json', dispatched['result']),
+                            '--observation', observation)
+        return {'digest': recorded['host_outcome_digest'], 'assignment': assigned, 'result': dispatched['result']}
+
+    def bound_verifier(self, orchestration, task_id, worker, *, context_digest=None, expected=0):
+        task = {**self.task(), 'id': task_id, 'objective': 'Independently verify the research result',
+                'family': 'verification', 'verification_for_family': 'research',
+                'verification_for_provider': 'codex', 'verification_for_outcome': worker['digest'],
+                'owned_paths': ['source.txt']}
+        task_path = self.write(task_id + '.json', task)
+        route = self.cli('learning-route', '--task', task_path)
+        assigned = self.assignment_for(route, assignment_id=task_id + '-assignment', task_id=task_id,
+                                       objective=task['objective'], context=[context_digest or worker['digest']],
+                                       owned_paths=['source.txt'], verification_required=False)
+        context = ('--task', task_path, '--assignment', self.write(task_id + '-assignment.json', assigned),
+                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        route_path = self.write(task_id + '-route.json', route)
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration, expected=expected)
+        if expected:
+            return opened
+        verifier_result = {**result(), 'assignment_id': assigned['assignment_id']}
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(verifier_result)))
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
+        observation = self.write(task_id + '-observation.json', {'run_handle': opened['run_handle'], 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write(task_id + '-result.json', dispatched['result']),
+                            '--observation', observation)
+        return {'digest': recorded['host_outcome_digest'], 'assignment': assigned, 'result': dispatched['result']}
+
+    def checks(self, worker, verifier, expected=0):
+        from tests.test_bridge import passing_check_report
+        with mock.patch.object(cli, 'run_operational_check_suite',
+                               side_effect=lambda _root, **_scratch: passing_check_report()):
+            return self.cli('learning-run-operational-checks', '--host-outcome-digest', worker['digest'],
+                            '--verifier-host-outcome-digest', verifier['digest'], expected=expected)
+
+    def record_qa(self, worker, verifier, receipt, expected=0):
+        files = {'--evaluator-assignment': self.write('qa-worker-assignment.json', worker['assignment']),
+                 '--evaluator-result': self.write('qa-worker-result.json', worker['result']),
+                 '--verifier-assignment': self.write('qa-verifier-assignment.json', verifier['assignment']),
+                 '--verifier-result': self.write('qa-verifier-result.json', verifier['result'])}
+        return self.cli('learning-record-operational-qa', '--host-outcome-digest', worker['digest'],
+                        '--verifier-host-outcome-digest', verifier['digest'], '--check-receipt', receipt,
+                        *[item for pair in files.items() for item in pair], expected=expected)
+
+    def test_qa_binds_the_verifier_to_the_outcome_it_was_opened_for(self):
+        orchestration = self.cli('learning-open-orchestration')['orchestration_handle']
+        worker_a = self.recorded_worker(orchestration, 'task-a')
+        worker_b = self.recorded_worker(orchestration, 'task-b')
+        # Bound to A, but its assignment names B: refused before anything opens.
+        refused = self.bound_verifier(orchestration, 'verify-x', worker_a, context_digest=worker_b['digest'],
+                                      expected=2)
+        self.assertFalse(refused['ready'])
+        verifier_a = self.bound_verifier(orchestration, 'verify-a', worker_a)
+        # The verifier opened for A cannot stand in for B's verification.
+        self.assertFalse(self.checks(worker_b, verifier_a, expected=2)['ready'])
+        checks = self.checks(worker_a, verifier_a)
+        self.assertTrue(checks['checks_passed'])
+        # Nor can A's receipt be spent on B's QA.
+        self.assertFalse(self.record_qa(worker_b, verifier_a, checks['check_receipt'], expected=2)['ready'])
+        self.assertTrue(self.record_qa(worker_a, verifier_a, checks['check_receipt'])['ready'])
+
+    def test_a_verifier_bound_to_the_wrong_provider_family_or_orchestration_is_refused(self):
+        orchestration, _, digest = self.worker()
+        for name, changes in {'provider': {'verification_for_provider': 'claude'},
+                              'family': {'verification_for_family': 'coding'}}.items():
+            with self.subTest(wrong=name):
+                route, assigned, context, route_path = self.verifier(orchestration, digest, **changes)
+                refused = self.cli('learning-open-host-run', *context, '--route', route_path,
+                                   '--orchestration-handle', orchestration, expected=2)
+                self.assertNotEqual('admitted', refused.get('admission'))
+        other = self.cli('learning-open-orchestration')['orchestration_handle']
+        route, assigned, context, route_path = self.verifier(orchestration, digest)
+        refused = self.cli('learning-open-host-run', *context, '--route', route_path,
+                           '--orchestration-handle', other, expected=2)
+        self.assertNotEqual('admitted', refused.get('admission'))
+        self.assertFalse([i for i in self.invocations('codex') if 'exec' in i['argv']][1:])  # Only the worker ran.
 
     def test_a_verifier_of_an_unknown_or_unrecorded_outcome_is_refused(self):
         orchestration, _, digest = self.worker()
@@ -750,6 +677,66 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
 class ClaudePrimaryClaudeChildTests(ClaudeChildDriverTests):
     """Path D: a Claude primary's Claude child is a separate `claude -p` process run by the same host."""
     primary = 'claude'
+
+
+class ClaudeOnlyVerificationTests(ClaudeChildHarness):
+    """With Codex disabled, a Claude worker's verifier is Claude too, which QA does not accept."""
+
+    def admit(self, provider):
+        fingerprint = super().admit(provider)
+        if provider == 'codex':
+            from tests.test_bridge import FIXTURES_ROOT
+            name = 'claude_agents_verification_worker'
+            (self.bundle / f'.claude/agents/{name}.md').write_text(
+                (FIXTURES_ROOT / f'claude/{name}.md').read_text().replace('\n---\n', '\nmaxTurns: 8\n---\n', 1))
+        return fingerprint
+
+    def run_claude(self, context, route_path, orchestration, assignment_id):
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration)
+        self.frames('claude', [init_frame(), RATE_LIMIT, result_frame(json.dumps(
+            {**result(), 'assignment_id': assignment_id}))])
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        observation = self.write(assignment_id + '-observation.json', {
+            'run_handle': opened['run_handle'],
+            'result_attempts': [{'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write(assignment_id + '-result.json', dispatched['result']),
+                            '--observation', observation)
+        return recorded['host_outcome_digest']
+
+    def test_a_same_provider_claude_verifier_is_refused_by_qa(self):
+        orchestration = self.cli('learning-open-orchestration')['orchestration_handle']
+        task = self.write('task.json', self.task())
+        route = self.cli('learning-route', '--task', task)
+        self.assertEqual(('claude', 'bridge'), (route['provider'], route['dispatch']))
+        assigned = self.assignment_for(route)
+        context = ('--task', task, '--assignment', self.write('assignment.json', assigned),
+                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        worker = self.run_claude(context, self.write('route.json', route), orchestration, assigned['assignment_id'])
+        verify = {**self.task(), 'id': 'verify-1', 'objective': 'Independently verify the research result',
+                  'family': 'verification', 'verification_for_family': 'research',
+                  'verification_for_provider': 'claude', 'verification_for_outcome': worker,
+                  'owned_paths': ['source.txt']}
+        verify_path = self.write('verify-task.json', verify)
+        verifier_route = self.cli('learning-route', '--task', verify_path)
+        self.assertEqual(('claude', 'bridge', 'claude_agents_verification_worker'),
+                         (verifier_route['provider'], verifier_route['dispatch'], verifier_route['role']))
+        verifier_assigned = self.assignment_for(
+            verifier_route, assignment_id='verify-assignment-1', task_id='verify-1', objective=verify['objective'],
+            context=[worker], owned_paths=['source.txt'], verification_required=False)
+        verifier_context = ('--task', verify_path,
+                            '--assignment', self.write('verify-assignment.json', verifier_assigned),
+                            '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        verifier = self.run_claude(verifier_context, self.write('verify-route.json', verifier_route), orchestration,
+                                   'verify-assignment-1')
+        from tests.test_bridge import passing_check_report
+        with mock.patch.object(cli, 'run_operational_check_suite',
+                               side_effect=lambda _root, **_scratch: passing_check_report()):
+            refused = self.cli('learning-run-operational-checks', '--host-outcome-digest', worker,
+                               '--verifier-host-outcome-digest', verifier, expected=2)
+        self.assertEqual('operational QA admission rejected', refused['error'])
 
 
 class ClaudeRestrictionDeliveryTests(ClaudeChildHarness):

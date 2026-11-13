@@ -29,6 +29,10 @@ _FIELDS = ('project_id', 'request_key', 'parameters_digest', 'runtime_digest', '
     'created_at_ms', 'deadline_at_ms', 'state', 'account_fingerprint', 'admission_record_id',
     'admission_digest', 'references_json')
 
+# Billing this recent is reused instead of probing; an admitted probe reserves its account this long.
+PROBE_REUSE_MS = 300_000
+PROBE_COOLDOWN_MS = 300_000
+
 
 @dataclass(frozen=True, repr=False, eq=False)
 class _Reservation:
@@ -308,7 +312,7 @@ class AccountBillingAdmission:
             fingerprint = identity['account_fingerprint']
             latest = max((r for r, _ in prepared['billing'] if r['account_fingerprint'] == fingerprint),
                          key=lambda r: r['observed_at_ms'], default=None)
-            if latest is not None and 0 <= now-latest['observed_at_ms'] < 300_000:
+            if latest is not None and 0 <= now-latest['observed_at_ms'] < PROBE_REUSE_MS:
                 heads = [r for r, _ in prepared['headroom'] if r['account_fingerprint'] == fingerprint]
                 selected = [identity, *heads[-1:], latest]
                 final = self._commit_reply(row, 'reused', None, selected, result.prepared.rows)
@@ -316,7 +320,7 @@ class AccountBillingAdmission:
             else:
                 cooldown = any(r.record['record_type'] == 'probe_admission'
                     and r.record['provider'] == 'claude' and r.record['decision'] == 'pass'
-                    and r.record['account_fingerprint'] == fingerprint and r.record['observed_at_ms'] > now-300_000
+                    and r.record['account_fingerprint'] == fingerprint and r.record['observed_at_ms'] > now-PROBE_COOLDOWN_MS
                     for r in result.prepared.rows)
                 decision = ({'provider': 'claude', 'decision': 'deny', 'reason_code': 'probe_cooldown',
                     'admission_basis': None, 'account_fingerprint': fingerprint, 'evidence_digests': [], 'observed_at_ms': now}

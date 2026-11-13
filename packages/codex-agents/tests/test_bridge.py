@@ -23,9 +23,10 @@ from pathlib import Path
 from unittest import mock
 
 from tests.support import FIXTURES_ROOT, ORCHESTRATION_ROOT, TEMP_ROOT
+from tests.service_harness import ServiceHarness
 
 import cli
-from codex_agents import bridge, claude_host, learning_store, process_tree
+from codex_agents import account_billing_admission, bridge, claude_host, learning_store, process_tree, routing
 from codex_agents.active_run_capacity import ActiveRunLimits
 from codex_agents.bridge import (
     BridgeRefused,
@@ -2265,34 +2266,8 @@ class CodexBridgeTests(BridgeTestCase):
         self.assertEqual("failed", output["result"]["execution_state"])
 
 
-class BridgeLifecycleTests(CliTestCase):
-    def test_unknown_codex_labels_never_reach_returned_or_retained_fences(self) -> None:
-        self.admit("codex")
-        marker = "CANARY_EVENT_SECRET"
-        for frame in ({"type": marker}, {"type": "item.started", "item": {"type": marker}}):
-            with self.subTest(frame=frame):
-                route = self.bridged_route("codex")
-                assigned = self.assignment_for(route)
-                handle = self.open(route, assigned)
-                self.frames("codex", [frame, {"type": "turn.completed", "usage": {}}])
-                (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(result())))
-                output = self.dispatch(route, assigned, handle)
-                self.assertEqual("failed", output["result"]["execution_state"])
-                self.assertEqual([], self.workspace_entries())
-                committed = self.commit(route, assigned, handle, output["result"], "failed")
-                self.assertFalse(committed["outcome"]["accepted"])
-                verification = {
-                    **self.task(), "family": "verification",
-                    "verification_for_family": self.task()["family"],
-                    "verification_for_provider": "codex",
-                    "verification_for_outcome": committed["host_outcome_digest"],
-                }
-                stored = self.ledger.verification_worker_result(self.project_id, verification)
-                with self.ledger.repository(self.project_id) as repository:
-                    records = repository.records("dispatch_result")
-                self.assertNotIn(marker, json.dumps([output, stored, records]))
-                self.assertEqual("codex_tool_not_allowed:unknown", output["bridge_report"]["outcome"])
-                self.assertEqual(output["result"], stored["worker_result"])
+class BridgeCliLifecycleTests(ServiceHarness, CliTestCase):
+    """A Codex primary's bridged children through the CLI and the in-process services."""
 
     def test_claude_open_dispatch_validate_and_record_through_the_cli(self) -> None:
         config = self.project / ".codex/orchestration/provider-routing.json"
@@ -2304,10 +2279,8 @@ class BridgeLifecycleTests(CliTestCase):
         }))
         git(self.project, "add", ".")
         git(self.project, "commit", "-qm", "bridge configuration")
-        self.ledger.close()
-        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         self.admit("claude")
-        self.ledger.close()
+        self.start_services()
         task = self.write("task.json", self.task())
         route = self.cli("learning-route", "--task", task)
         self.assertEqual(("claude", "bridge"), (route["provider"], route["dispatch"]))
@@ -2329,11 +2302,12 @@ class BridgeLifecycleTests(CliTestCase):
             "--run-handle", opened["run_handle"],
         )
         self.assertEqual("result", dispatched["bridge_report"]["outcome"])
-        refused = self.cli(
-            "dispatch", *context, "--route", route_path,
-            "--run-handle", opened["run_handle"], expected=2,
+        # Dispatching the handle again returns the same published result; nothing is launched twice.
+        again = self.cli(
+            "dispatch", *context, "--route", route_path, "--run-handle", opened["run_handle"],
         )
-        self.assertIn("already dispatched", refused["error"])
+        self.assertEqual(dispatched["result"], again["result"])
+        self.assertEqual(1, len([i for i in self.invocations("claude") if "-p" in i["argv"]]))
         result_path = self.write("result.json", dispatched["result"])
         validated = self.cli("validate-result", *context, "--result", result_path)
         self.assertEqual(dispatched["result"]["assignment_id"], validated["assignment_id"])
@@ -2368,7 +2342,7 @@ class BridgeLifecycleTests(CliTestCase):
         # A native Codex child would share the primary's session and command
         # rule, so a Codex primary dispatches its Codex children like Claude's.
         self.admit("codex")
-        self.ledger.close()
+        self.start_services()
         task = self.write("task.json", self.task())
         route = self.cli("learning-route", "--task", task)
         self.assertEqual(("codex", "bridge"), (route["provider"], route["dispatch"]))
@@ -2408,7 +2382,7 @@ class BridgeLifecycleTests(CliTestCase):
             "--result", self.write("made-up.json", made_up),
             "--observation", observation, expected=2,
         )
-        self.assertIn("differs from the bridged child's result", refused["error"])
+        self.assertEqual("history_conflict", refused["reason_code"])
         recorded = self.cli(
             "learning-record-host-result", *context,
             "--result", self.write("result.json", dispatched["result"]),
@@ -2419,35 +2393,9 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertEqual("available", recorded["learning_cycle"]["summary_state"])
         self.assertNotIn("analysis", recorded["learning_cycle"])
 
-    def test_codex_open_dispatch_validate_and_record(self) -> None:
-        # The same lifecycle through the ledger, as a Claude primary bridges it.
-        self.admit("codex")
-        route = self.bridged_route("codex")
-        assigned = self.assignment_for(route)
-        handle = self.open(route, assigned)
-        self.frames("codex", [{"type": "turn.completed", "usage": {"input_tokens": 1}}])
-        (self.tools / "codex-last-message.json").write_text(
-            json.dumps(null_filled(result()))
-        )
-        output = self.dispatch(route, assigned, handle)
-        validate_result(output["result"], assignment=assigned)
-        committed = self.ledger.commit_host_result(
-            self.project_id,
-            assignment=assigned, task=self.task(), route=route,
-            result=output["result"],
-            observation={
-                "run_handle": handle,
-                "result_attempts": [
-                    {"status": "accepted", "reason_code": None, "receipt_id": None}
-                ],
-            },
-            execution_configuration=route["execution_configuration"],
-        )
-        self.assertEqual("gpt-6.1-sol", committed["outcome"]["model"])
-
     def test_invalid_result_reason_survives_cli_dispatch_and_host_commit(self) -> None:
         self.admit("codex")
-        self.ledger.close()
+        self.start_services()
         task = self.write("task.json", self.task())
         route = self.cli("learning-route", "--task", task)
         self.assertEqual(("codex", "bridge"), (route["provider"], route["dispatch"]))
@@ -2482,7 +2430,64 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertEqual({"result_validation_reason_code": "missing_evidence"}, recorded["dispatch_diagnostics"])
         self.assertFalse(recorded["outcome"]["accepted"])
         self.assertNotIn("CANARY", json.dumps([dispatched, recorded]))
-        self.assertEqual([], self.workspace_entries())
+        # The host removes the child's private workspace once its cleanup is confirmed.
+        self.wait_for(lambda: not self.workspace_entries(), seconds=30)
+
+
+class BridgeLifecycleTests(CliTestCase):
+    def test_unknown_codex_labels_never_reach_returned_or_retained_fences(self) -> None:
+        self.admit("codex")
+        marker = "CANARY_EVENT_SECRET"
+        for frame in ({"type": marker}, {"type": "item.started", "item": {"type": marker}}):
+            with self.subTest(frame=frame):
+                route = self.bridged_route("codex")
+                assigned = self.assignment_for(route)
+                handle = self.open(route, assigned)
+                self.frames("codex", [frame, {"type": "turn.completed", "usage": {}}])
+                (self.tools / "codex-last-message.json").write_text(json.dumps(null_filled(result())))
+                output = self.dispatch(route, assigned, handle)
+                self.assertEqual("failed", output["result"]["execution_state"])
+                self.assertEqual([], self.workspace_entries())
+                committed = self.commit(route, assigned, handle, output["result"], "failed")
+                self.assertFalse(committed["outcome"]["accepted"])
+                verification = {
+                    **self.task(), "family": "verification",
+                    "verification_for_family": self.task()["family"],
+                    "verification_for_provider": "codex",
+                    "verification_for_outcome": committed["host_outcome_digest"],
+                }
+                stored = self.ledger.verification_worker_result(self.project_id, verification)
+                with self.ledger.repository(self.project_id) as repository:
+                    records = repository.records("dispatch_result")
+                self.assertNotIn(marker, json.dumps([output, stored, records]))
+                self.assertEqual("codex_tool_not_allowed:unknown", output["bridge_report"]["outcome"])
+                self.assertEqual(output["result"], stored["worker_result"])
+
+    def test_codex_open_dispatch_validate_and_record(self) -> None:
+        # The same lifecycle through the ledger, as a Claude primary bridges it.
+        self.admit("codex")
+        route = self.bridged_route("codex")
+        assigned = self.assignment_for(route)
+        handle = self.open(route, assigned)
+        self.frames("codex", [{"type": "turn.completed", "usage": {"input_tokens": 1}}])
+        (self.tools / "codex-last-message.json").write_text(
+            json.dumps(null_filled(result()))
+        )
+        output = self.dispatch(route, assigned, handle)
+        validate_result(output["result"], assignment=assigned)
+        committed = self.ledger.commit_host_result(
+            self.project_id,
+            assignment=assigned, task=self.task(), route=route,
+            result=output["result"],
+            observation={
+                "run_handle": handle,
+                "result_attempts": [
+                    {"status": "accepted", "reason_code": None, "receipt_id": None}
+                ],
+            },
+            execution_configuration=route["execution_configuration"],
+        )
+        self.assertEqual("gpt-6.1-sol", committed["outcome"]["model"])
 
     def commit(self, route: dict, assigned: dict, handle: str, result_value: dict,
                terminal_state: str | None = None) -> dict:
@@ -3182,11 +3187,27 @@ class BridgeLifecycleTests(CliTestCase):
 CLAUDE_HOST = {"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "claude-session"}
 
 
-class ClaudePrimaryCase(CliTestCase):
-    """A Claude Code primary: native Claude children and bridged Codex children."""
+def legacy_dispatch(primary_provider: str, provider: str) -> str:
+    """Routing before 0.3.0 bridged every child: a Claude primary spawned Claude children natively."""
+    return "native" if provider == primary_provider == "claude" else "bridge"
+
+
+class ClaudePrimaryCase(ServiceHarness, CliTestCase):
+    """A Claude Code primary with in-process services.
+
+    `native_claude` keeps the pre-0.3.0 dispatch, so the native lifecycle the
+    ledger still implements (open, bind, record, verify) stays covered; current
+    routing bridges every child (see tests/test_project_driver.py).
+    """
+    native_claude = False
+    services = True  # A fixture that owns the ledger itself turns this off.
 
     def setUp(self) -> None:
         super().setUp()
+        if self.native_claude:
+            dispatch = mock.patch.object(routing, "_dispatch", legacy_dispatch)
+            dispatch.start()
+            self.addCleanup(dispatch.stop)
         host = mock.patch.dict(os.environ, CLAUDE_HOST)
         host.start()
         self.addCleanup(host.stop)
@@ -3201,10 +3222,15 @@ class ClaudePrimaryCase(CliTestCase):
         }))
         git(self.project, "add", ".")
         git(self.project, "commit", "-qm", "provider configuration")
-        # The CLI takes the ledger for maintenance, so the test holds none open.
-        self.ledger.close()
+        # The collector thread owns the ledger; `self.ledger` reads through it.
+        if self.services:
+            self.start_services()
+        else:
+            self.ledger.close()
 
     def admit(self, provider: str) -> str:
+        if self.services:
+            return super().admit(provider)
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         try:
             return super().admit(provider)
@@ -3237,7 +3263,7 @@ class ClaudePrimaryCase(CliTestCase):
         return route, assigned, context, self.write("route.json", route)
 
     def record(self, context: tuple[str, ...], handle: str, result_value: dict,
-               terminal_state: str | None = None) -> dict:
+               terminal_state: str | None = None, route_path: str | None = None) -> dict:
         observation = {
             "run_handle": handle,
             "result_attempts": [
@@ -3248,9 +3274,11 @@ class ClaudePrimaryCase(CliTestCase):
             observation["terminal_state"] = terminal_state
         result_path = self.write("result.json", result_value)
         self.cli("validate-result", *context, "--result", result_path)
+        # A run the project host dispatched is recorded with its route.
         return self.cli(
             "learning-record-host-result", *context, "--result", result_path,
             "--observation", self.write("observation.json", observation),
+            *(() if route_path is None else ("--route", route_path)),
         )
 
 
@@ -3258,7 +3286,7 @@ class ClaudePrimaryTests(ClaudePrimaryCase):
     def test_routes_follow_the_claude_primary(self) -> None:
         exploratory = self.cli("learning-route", "--task", self.write("e.json", self.exploratory()))
         self.assertEqual(
-            ("claude", "native", "claude-opus-5-5", "medium",
+            ("claude", "bridge", "claude-opus-5-5", "medium",
              "claude_agents_implementation_worker"),
             (exploratory["provider"], exploratory["dispatch"], exploratory["model"],
              exploratory["effort"], exploratory["agent_type"]),
@@ -3280,28 +3308,33 @@ class ClaudePrimaryTests(ClaudePrimaryCase):
             )
         self.assertEqual("host_client_unknown", both["reason_code"])
 
-    def test_native_claude_child_lifecycle_binds_its_agent_id(self) -> None:
+    def test_bridged_claude_child_lifecycle_never_binds_a_native_agent(self) -> None:
         self.admit("claude")
-        route, _, context, route_path = self.lifecycle_inputs(self.exploratory())
+        route, assigned, context, route_path = self.lifecycle_inputs(self.exploratory())
+        self.assertEqual(("claude", "bridge"), (route["provider"], route["dispatch"]))
         orchestration = self.cli("learning-open-orchestration")
         opened = self.cli(
             "learning-open-host-run", *context, "--route", route_path,
             "--orchestration-handle", orchestration["orchestration_handle"],
         )
-        self.assertEqual("advisory", opened["read_containment"])
-        for agent_id in ("not an id", "x" * 129, "../a"):
-            with self.subTest(agent_id=agent_id):
-                rejected = self.cli(
-                    "learning-bind-host-agent", "--run-handle", opened["run_handle"],
-                    "--agent-id", agent_id, expected=2,
-                )
-                self.assertIn("identifier is invalid", rejected["error"])
-        bound = self.cli(
+        self.assertEqual("enforced", opened["read_containment"])
+        self.assertNotIn("native_spawn", opened)
+        # The host runs the child itself: no agent of this session can be bound to the run.
+        refused = self.cli(
             "learning-bind-host-agent", "--run-handle", opened["run_handle"],
-            "--agent-id", "a73de21371ae8b7ab",
+            "--agent-id", "a73de21371ae8b7ab", expected=2,
         )
-        self.assertTrue(bound["bound"])
-        recorded = self.record(context, opened["run_handle"], result())
+        self.assertIn("bridged run", refused["error"])
+        self.frames("claude", [init_frame(), RATE_LIMIT, result_frame()])
+        dispatched = self.cli(
+            "dispatch", *context, "--route", route_path, "--run-handle", opened["run_handle"],
+        )
+        self.assertEqual(
+            ("result", "enforced"),
+            (dispatched["bridge_report"]["outcome"], dispatched["bridge_report"]["read_containment"]),
+        )
+        recorded = self.record(context, opened["run_handle"], dispatched["result"],
+                               dispatched["bridge_report"]["terminal_state"], route_path)
         self.assertEqual(
             ("claude-opus-5-5", "claude_agents_implementation_worker"),
             (recorded["outcome"]["model"], recorded["outcome"]["role"]),
@@ -3332,9 +3365,44 @@ class ClaudePrimaryTests(ClaudePrimaryCase):
         )
         recorded = self.record(
             context, opened["run_handle"], dispatched["result"],
-            dispatched["bridge_report"]["terminal_state"],
+            dispatched["bridge_report"]["terminal_state"], route_path,
         )
         self.assertEqual("gpt-6.1-sol", recorded["outcome"]["model"])
+
+
+    def test_provider_observe_shows_an_attested_credits_waiver(self) -> None:
+        rate_limits = json.loads((self.tools / "codex-result.json").read_text())
+        rate_limits["rateLimits"]["credits"]["hasCredits"] = True
+        (self.tools / "codex-result.json").write_text(json.dumps(rate_limits))
+
+        def billing() -> dict:
+            records = self.cli("provider-observe", "--provider", "codex")["records"]
+            return next(r for r in records if r["record_type"] == "provider_billing")
+
+        self.assertIs(False, billing()["paid_usage_waived_by_attestation"])
+        fingerprint = self.admit("codex")
+        reading = billing()
+        self.assertEqual(
+            (True, False), (reading["paid_usage_usable"],
+                            reading["paid_usage_waived_by_attestation"]),
+        )
+        with self.assertRaisesRegex(AdmissionDenied, "paid_usage_usable"):
+            self.ledger.evaluate_admission(self.project_id, provider="codex", environ=CLEAN)
+        attest_provider(
+            self.ledger, self.project_id, self.owner_key, "codex", fingerprint,
+            issued_at=2, credits_spending_disabled=True,
+        )
+        reading = billing()
+        self.assertEqual(
+            (True, True), (reading["paid_usage_usable"],
+                           reading["paid_usage_waived_by_attestation"]),
+        )
+        # The field shows what admission decides by the same rule; it decides
+        # nothing itself.
+        decision = self.ledger.evaluate_admission(
+            self.project_id, provider="codex", environ=CLEAN
+        )
+        self.assertEqual("admitted", decision["reason_code"])
 
 
 PROBE_INIT = init_frame(model="claude-haiku-5-5", tools=[])
@@ -3345,10 +3413,17 @@ OVERAGE = {**RATE_LIMIT, "rate_limit_info": {
 
 
 class ClaudeHostReviewTests(ClaudePrimaryCase):
-    """Round-one review findings for a Claude primary."""
+    """Claude admission and billing probes through the services, from a Claude primary.
 
-    def open_native(self, expected: int = 0) -> dict:
-        _, _, context, route_path = self.lifecycle_inputs(self.exploratory())
+    The probe's own mechanics (reuse, bootstrap, restrictions kept from failed
+    probes, lost replies) are covered by tests/test_account_billing_*.py,
+    tests/test_billing_probe_worker.py and tests/test_cli_billing_runtime.py;
+    these check how probes and opens of a bridged Claude child interact.
+    """
+
+    def open_claude(self, expected: int = 0) -> dict:
+        route, _, context, route_path = self.lifecycle_inputs(self.exploratory())
+        self.assertEqual(("claude", "bridge"), (route["provider"], route["dispatch"]))
         orchestration = self.cli("learning-open-orchestration")
         return self.cli(
             "learning-open-host-run", *context, "--route", route_path,
@@ -3363,7 +3438,17 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
             expected=expected,
         )
 
-    def test_alternate_backends_deny_native_claude_opens(self) -> None:
+    def launches(self) -> int:
+        return len([i for i in self.invocations("claude") if "-p" in i["argv"]])
+
+    @contextlib.contextmanager
+    def stale_evidence(self):
+        # Neither reuse nor the per-account cooldown applies, so each call probes.
+        with mock.patch.object(account_billing_admission, "PROBE_REUSE_MS", 0), \
+                mock.patch.object(account_billing_admission, "PROBE_COOLDOWN_MS", 0):
+            yield
+
+    def test_alternate_backends_deny_claude_opens(self) -> None:
         self.admit("claude")
         project_settings = self.project / ".claude/settings.json"
         cases = (
@@ -3395,65 +3480,18 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
                     written.append(path)
                 try:
                     with mock.patch.dict(os.environ, environment):
-                        denied = self.open_native(expected=2)
+                        denied = self.open_claude(expected=2)
                 finally:
                     for path in written:
                         path.unlink()
                 self.assertEqual("claude_backend_not_subscription", denied["reason_code"])
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            with ledger.repository(self.project_id) as repository:
-                reasons = [
-                    record["reason_code"]
-                    for record in repository.records("admission_decision")
-                ]
-        finally:
-            ledger.close()
-        self.assertEqual(len(cases), reasons.count("claude_backend_not_subscription"))
+        # Refused by the checked CLI before any request: nothing was admitted.
+        with self.ledger.repository(self.project_id) as repository:
+            self.assertEqual([], [r for r in repository.records("admission_decision") if r["decision"] == "pass"])
         # The same session without those switches opens normally.
-        self.assertIn("run_handle", self.open_native())
+        self.assertIn("run_handle", self.open_claude())
 
-    def test_native_spawn_parameters_come_from_code(self) -> None:
-        self.admit("claude")
-        for name in claude_host.MODEL_OVERRIDE_VARIABLES:
-            with self.subTest(name=name), mock.patch.dict(os.environ, {name: "sonnet"}):
-                self.assertEqual(
-                    "claude_model_override_present",
-                    self.open_native(expected=2)["reason_code"],
-                )
-        opened = self.open_native()
-        self.assertEqual(
-            {"subagent_type": "claude_agents_implementation_worker",
-             "model_alias": "opus", "effort": "medium"},
-            opened["native_spawn"],
-        )
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            with ledger.repository(self.project_id) as repository:
-                profile = repository.records("host_run_profile")[-1]
-        finally:
-            ledger.close()
-        self.assertEqual(
-            ("claude-host-v1", "passed", "alias", "opus"),
-            (profile["host_client"], profile["backend_check"], profile["model_pin"],
-             profile["model_alias"]),
-        )
-        with self.assertRaisesRegex(ContractError, "native Claude spawn"):
-            claude_host.native_spawn(
-                {"model": "claude-other-1", "effort": "high", "agent_type": "x"}
-            )
-
-    def launches(self) -> int:
-        return len([i for i in self.invocations("claude") if "-p" in i["argv"]])
-
-    @contextlib.contextmanager
-    def stale_evidence(self):
-        # Neither reuse nor the per-account cooldown applies, so each call probes.
-        with mock.patch.object(learning_store, "PROBE_REUSE_SECONDS", 0), \
-                mock.patch.object(learning_store, "PROBE_COOLDOWN_SECONDS", 0):
-            yield
-
-    def test_billing_probe_admits_consecutive_native_children(self) -> None:
+    def test_billing_probe_admits_consecutive_claude_children(self) -> None:
         self.admit("claude")
         with self.stale_evidence():
             observed = self.probe(FAVOURABLE)
@@ -3469,44 +3507,31 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
                  argv[argv.index("--tools") + 1]),
             )
             self.assertNotIn("--bare", argv)
-            self.assertIn("run_handle", self.open_native())
+            self.assertIn("run_handle", self.open_claude())
             self.probe(FAVOURABLE)
-            self.assertIn("run_handle", self.open_native())
-            self.probe(OVERAGE)
+            self.assertIn("run_handle", self.open_claude())
+            # A probe that sees paid usage stops at once and reports itself incomplete;
+            # what it saw still denies the next child.
+            self.assertEqual("probe_incomplete", self.probe(OVERAGE, expected=2)["reason_code"])
             self.assertEqual(
-                "paid_usage_usable", self.open_native(expected=2)["reason_code"]
+                "paid_usage_usable", self.open_claude(expected=2)["reason_code"]
             )
 
     def test_probe_is_admitted_like_a_run(self) -> None:
         # Without an owner attestation nothing is launched.
-        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         self.ledger.observe_provider(
             self.project_id, "claude", project_root=self.tools, environ=CLEAN
         )
-        self.ledger.close()
         denied = self.probe(FAVOURABLE, expected=2)
         self.assertEqual("billing_attestation_missing", denied["reason_code"])
         self.assertEqual(0, self.launches())
         self.admit("claude")
-        for environment, reason in (
-            ({"ANTHROPIC_API_KEY": "key"}, "claude_backend_not_subscription"),
-            ({"CLAUDE_CODE_USE_BEDROCK": "1"}, "claude_backend_not_subscription"),
-        ):
-            with self.subTest(environment=environment), \
-                    mock.patch.dict(os.environ, environment):
-                self.assertEqual(reason, self.probe(FAVOURABLE, expected=2)["reason_code"])
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "key"}):
+            self.assertEqual("provider_api_key_present", self.probe(FAVOURABLE, expected=2)["reason_code"])
         self.assertEqual(0, self.launches())
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            with ledger.repository(self.project_id) as repository:
-                decisions = repository.records("probe_admission")
-        finally:
-            ledger.close()
-        self.assertEqual(
-            ["billing_attestation_missing", "claude_backend_not_subscription",
-             "claude_backend_not_subscription"],
-            [record["reason_code"] for record in decisions],
-        )
+        with self.ledger.repository(self.project_id) as repository:
+            decisions = repository.records("probe_admission")
+        self.assertEqual(["billing_attestation_missing"], [record["reason_code"] for record in decisions])
 
     def test_probe_denials_from_existing_evidence(self) -> None:
         self.admit("claude")
@@ -3516,111 +3541,26 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
             ({**RATE_LIMIT, "rate_limit_info": {
                 **RATE_LIMIT["rate_limit_info"], "status": "rejected",
                 "rateLimitType": "seven_day", "resetsAt": future}},
-             "provider_exhausted"),
+             # The stopped probe spent the bootstrap and left no clean billing, which
+             # is checked before the rejection it kept.
+             "billing_unverified"),
         )
         for event, reason in cases:
             with self.subTest(reason=reason):
                 self.setUp_fresh_project()
                 with self.stale_evidence():
-                    self.assertEqual("launched", self.probe(event)["probe"])
+                    # The restrictive probe stops itself; its restriction is kept.
+                    self.assertEqual("probe_incomplete", self.probe(event, expected=2)["reason_code"])
                     before = self.launches()
                     denied = self.probe(FAVOURABLE, expected=2)
                 self.assertEqual(reason, denied["reason_code"])
                 self.assertEqual(before, self.launches())
-
-    def test_probe_keeps_every_event_as_one_conservative_merge(self) -> None:
-        self.admit("claude")
-        self.frames("claude", [PROBE_INIT, FAVOURABLE, OVERAGE, result_frame("OK")])
-        observed = self.cli("provider-observe", "--provider", "claude", "--billing-probe")
-        self.assertEqual("launched", observed["probe"])
-        billing = observed["records"][-1]
-        self.assertEqual(
-            ("provider_billing", True, True),
-            (billing["record_type"], billing["is_using_overage"], billing["paid_usage_usable"]),
-        )
-        self.assertEqual("paid_usage_usable", self.open_native(expected=2)["reason_code"])
-
-    def test_a_failed_probe_keeps_the_restrictions_it_saw(self) -> None:
-        malformed = {"type": "rate_limit_event", "rate_limit_info": {"status": "bogus"}}
-        missing = {"type": "rate_limit_event"}
-        cases = {
-            "malformed": [PROBE_INIT, OVERAGE, malformed, result_frame("OK")],
-            "missing": [PROBE_INIT, OVERAGE, missing, result_frame("OK")],
-            "overflow": [PROBE_INIT, OVERAGE,
-                         *[FAVOURABLE] * (bridge.MAX_PROBE_EVENTS + 5), result_frame("OK")],
-            "timeout": [PROBE_INIT, OVERAGE, {"sleep": 30}, result_frame("OK")],
-        }
-        for name, frames in cases.items():
-            with self.subTest(case=name):
-                self.fresh_account()
-                # A clean reading from earlier would otherwise admit runs.
-                with self.stale_evidence():
-                    self.assertEqual("launched", self.probe(FAVOURABLE)["probe"])
-                    self.assertIn("run_handle", self.open_native())
-                    self.frames("claude", frames)
-                    with mock.patch.object(bridge, "PROBE_DEADLINE_SECONDS", 1):
-                        failed = self.cli(
-                            "provider-observe", "--provider", "claude", "--billing-probe",
-                            expected=2,
-                        )
-                self.assertIn("billing probe", failed["reason"])
-                self.assertEqual(
-                    "paid_usage_usable", self.open_native(expected=2)["reason_code"]
-                )
-        # An incomplete probe never refreshes clean evidence: a clean event plus
-        # a malformed one stores nothing, and the probe still fails.
-        self.fresh_account()
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            with ledger.repository(self.project_id) as repository:
-                counts = (len(repository.records("provider_billing")),
-                          len(repository.records("provider_headroom")))
-        finally:
-            ledger.close()
-        self.frames("claude", [PROBE_INIT, FAVOURABLE, malformed, result_frame("OK")])
-        failed = self.cli(
-            "provider-observe", "--provider", "claude", "--billing-probe", expected=2
-        )
-        self.assertIn("invalid rate-limit event", failed["reason"])
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            with ledger.repository(self.project_id) as repository:
-                self.assertEqual(counts, (len(repository.records("provider_billing")),
-                                          len(repository.records("provider_headroom"))))
-        finally:
-            ledger.close()
-        # The probe used the account's bootstrap and left no billing, so the
-        # next open is refused rather than admitted on a clean reading.
-        self.assertEqual("billing_unverified", self.open_native(expected=2)["reason_code"])
-        # A probe whose events are all invalid stores nothing and still fails.
-        self.fresh_account()
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            with ledger.repository(self.project_id) as repository:
-                before = len(repository.records("provider_billing"))
-        finally:
-            ledger.close()
-        self.frames("claude", [PROBE_INIT, malformed, result_frame("OK")])
-        failed = self.cli(
-            "provider-observe", "--provider", "claude", "--billing-probe", expected=2
-        )
-        self.assertIn("no valid rate-limit event", failed["reason"])
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            with ledger.repository(self.project_id) as repository:
-                self.assertEqual(before, len(repository.records("provider_billing")))
-        finally:
-            ledger.close()
-
-    def fresh_account(self) -> None:
-        """Switch the fake client to a new account and attest it in this project."""
-
-        status_path = self.tools / "claude-status.json"
-        status = json.loads(status_path.read_text())
-        self.accounts = getattr(self, "accounts", 0) + 1
-        status["email"] = f"fixture-account-{self.accounts}@example.invalid"
-        status_path.write_text(json.dumps(status))
-        self.admit("claude")
+                with self.ledger.repository(self.project_id) as repository:
+                    kept = [*repository.records("provider_billing"), *repository.records("provider_headroom")]
+                self.assertTrue(any(
+                    record.get("paid_usage_usable") is True or record.get("status") == "rejected"
+                    for record in kept
+                ))
 
     def test_a_probe_reserves_its_account_for_five_minutes(self) -> None:
         self.admit("claude")
@@ -3629,7 +3569,7 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
         failed = self.cli(
             "provider-observe", "--provider", "claude", "--billing-probe", expected=2
         )
-        self.assertIn("no rate-limit event", failed["reason"])
+        self.assertEqual("probe_no_events", failed["reason_code"])
         self.assertEqual(1, self.launches())
         self.assertEqual("probe_cooldown", self.probe(FAVOURABLE, expected=2)["reason_code"])
         self.assertEqual(1, self.launches())
@@ -3643,22 +3583,11 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
         self.assertEqual("launched", self.probe(FAVOURABLE)["probe"])
         self.setUp_fresh_project(new_account=False)
         self.assertEqual("reused", self.probe(FAVOURABLE)["probe"])
-        with mock.patch.object(learning_store, "PROBE_REUSE_SECONDS", 0):
+        with mock.patch.object(account_billing_admission, "PROBE_REUSE_MS", 0):
             self.assertEqual(
                 "probe_cooldown", self.probe(FAVOURABLE, expected=2)["reason_code"]
             )
         self.assertEqual(1, self.launches())
-
-    def test_day_old_claude_billing_is_denied_until_a_fresh_probe(self) -> None:
-        self.admit("claude")
-        self.assertEqual("launched", self.probe(FAVOURABLE)["probe"])
-        self.assertIn("run_handle", self.open_native())
-        later = time.time_ns() // 1_000_000 + 24 * 60 * 60 * 1000
-        with mock.patch.object(learning_store.LearningLedger, "_clock_ms", return_value=later):
-            self.cli("provider-observe", "--provider", "claude")
-            self.assertEqual("billing_unverified", self.open_native(expected=2)["reason_code"])
-            self.assertEqual("launched", self.probe(FAVOURABLE)["probe"])
-            self.assertIn("run_handle", self.open_native())
 
     def setUp_fresh_project(self, new_account: bool = True) -> None:
         # Each case needs its own account history. Billing and headroom are
@@ -3677,11 +3606,7 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
         git(project, "add", ".")
         git(project, "commit", "-qm", "project")
         self.project = project
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            self.project_id = ledger.register_project(project, now_ms=1)
-        finally:
-            ledger.close()
+        self.project_id = self.ledger.register_project(project, now_ms=1)
         self.admit("claude")
 
     def test_exhausted_window_blocks_probes_at_ninety_percent(self) -> None:
@@ -3704,17 +3629,17 @@ class ClaudeHostReviewTests(ClaudePrimaryCase):
             failed = self.cli(
                 "provider-observe", "--provider", "claude", "--billing-probe", expected=2
             )
-            self.assertIn("no rate-limit event", failed["reason"])
+            self.assertEqual("probe_no_events", failed["reason_code"])
             self.assertEqual(1, self.launches())
             denied = self.probe(FAVOURABLE, expected=2)
         self.assertEqual("billing_unverified", denied["reason_code"])
         self.assertEqual(1, self.launches())
         # A run cannot take the spent bootstrap either.
-        self.assertEqual("billing_unverified", self.open_native(expected=2)["reason_code"])
+        self.assertEqual("billing_unverified", self.open_claude(expected=2)["reason_code"])
 
     def test_a_bootstrap_run_spends_the_probe_allowance(self) -> None:
         self.admit("claude")
-        self.assertIn("run_handle", self.open_native())
+        self.assertIn("run_handle", self.open_claude())
         with self.stale_evidence():
             denied = self.probe(FAVOURABLE, expected=2)
         self.assertEqual("billing_unverified", denied["reason_code"])
@@ -3874,18 +3799,20 @@ def passing_check_report() -> dict:
     }
 
 
-class VerifierHandoffTests(ClaudePrimaryCase):
-    """A worker's recorded result reaches its cross-provider verifier, then QA."""
+class LegacyWorkerResultStoreTests(ClaudePrimaryCase):
+    """Worker results an earlier version kept in the ledger for their verifiers.
 
-    def setUp(self) -> None:
-        super().setUp()
-        # A native Claude verifier needs its installed agent definition.
-        name = "claude_agents_verification_worker"
-        (self.bundle / f".claude/agents/{name}.md").write_text(
-            (FIXTURES_ROOT / f"claude/{name}.md")
-            .read_text()
-            .replace("\n---\n", "\nmaxTurns: 8\n---\n", 1)
-        )
+    Since 0.3.0 every child is bridged and its result lives in project history;
+    tests/test_project_driver.py covers verification and QA there. The ledger
+    still holds results that native workers of earlier versions left behind and
+    must keep bounding, sweeping and refusing them. The worker here is seeded as
+    such a version recorded it: a native Claude run, through the ledger owner.
+    """
+    native_claude = True
+    services = False
+
+    def open_ledger(self) -> LearningLedger:
+        return LearningLedger(self.state, client_capabilities=self.clients)
 
     def cli_without_project(self, command: str, *arguments: str, expected: int = 0) -> dict:
         stdout = io.StringIO()
@@ -3897,35 +3824,38 @@ class VerifierHandoffTests(ClaudePrimaryCase):
         self.assertEqual(expected, code, stdout.getvalue())
         return json.loads(stdout.getvalue())
 
-    def run_native_worker(self, *, probe: bool = False) -> dict:
-        """A native Claude research worker, opened, bound and recorded."""
+    def native_run(self, ledger: LearningLedger) -> dict:
+        """A native Claude research worker, opened and bound, not yet recorded."""
 
-        self.admit("claude")
-        if probe:
-            # Fresh billing, so later Claude runs are admitted after the worker.
-            self.frames("claude", [PROBE_INIT, FAVOURABLE, result_frame("OK")])
-            self.cli("provider-observe", "--provider", "claude", "--billing-probe")
         task = self.task()
-        route, assigned, context, route_path = self.lifecycle_inputs(task)
+        route, assigned, context, _ = self.lifecycle_inputs(task)
         self.assertEqual(("claude", "native"), (route["provider"], route["dispatch"]))
         self.assertTrue(assigned["verification_required"])
-        self.cli("validate-assignment", *context)
-        orchestration = self.cli("learning-open-orchestration")
-        opened = self.cli(
-            "learning-open-host-run", *context, "--route", route_path,
-            "--orchestration-handle", orchestration["orchestration_handle"],
-        )
-        self.assertNotIn("verification_input", opened)
-        self.cli(
-            "learning-bind-host-agent", "--run-handle", opened["run_handle"],
-            "--agent-id", WORKER_AGENT_ID,
-        )
+        orchestration = ledger.open_orchestration(self.project_id, client_version="claude-host-v1")
+        profile, _ = cli._claude_host_open_checks(
+            ledger, self.project_id, "claude-host-v1", route, self.project)
+        opened = ledger.open_host_run(
+            self.project_id, assignment=assigned, task=task, route=route,
+            execution_configuration=route["execution_configuration"], client_version="claude-host-v1",
+            orchestration_handle=orchestration["orchestration_handle"], host_profile=profile)
+        ledger.bind_host_agent(self.project_id, run_handle=opened["run_handle"], agent_id=WORKER_AGENT_ID)
+        return {"task": task, "route": route, "assignment": assigned, "context": context,
+                "orchestration": orchestration, "run_handle": opened["run_handle"]}
+
+    def record_native(self, ledger: LearningLedger, run: dict, worker_result: dict) -> dict:
+        return ledger.commit_host_result(
+            self.project_id, assignment=run["assignment"], task=run["task"], route=run["route"],
+            result=worker_result, observation={"run_handle": run["run_handle"], "result_attempts": ACCEPTED},
+            execution_configuration=run["route"]["execution_configuration"])
+
+    def run_native_worker(self) -> dict:
+        self.admit("claude")
         worker_result = result()
-        recorded = self.record(context, opened["run_handle"], worker_result)
-        return {
-            "task": task, "assignment": assigned, "result": worker_result,
-            "recorded": recorded, "orchestration": orchestration,
-        }
+        with contextlib.closing(self.open_ledger()) as ledger:
+            run = self.native_run(ledger)
+            recorded = self.record_native(ledger, run, worker_result)
+        self.assertTrue(recorded["worker_result_stored"])
+        return {**run, "result": worker_result, "recorded": recorded}
 
     def verifier_task(self, digest: str, **changes) -> dict:
         return {
@@ -3955,154 +3885,29 @@ class VerifierHandoffTests(ClaudePrimaryCase):
         )
         return route, assigned, context, self.write("verifier-route.json", route)
 
-    def test_bridged_verifier_gets_the_recorded_worker_result_then_qa_passes(self) -> None:
-        worker = self.run_native_worker()
-        recorded = worker["recorded"]
-        digest = recorded["host_outcome_digest"]
-        # The printed digest is the one QA and verification accept, and it is
-        # not the record identifier.
-        self.assertEqual(content_digest(recorded["outcome"]), digest)
-        self.assertTrue(recorded["outcome"]["record_id"].startswith("out:"))
-        self.assertTrue(recorded["worker_result_stored"])
-
-        self.admit("codex")
-        task = self.verifier_task(digest)
-        route, assigned, context, route_path = self.verifier_inputs(task, digest)
-        self.assertEqual(
-            ("codex", "bridge", "codex_agents_verification_worker", False),
-            (route["provider"], route["dispatch"], route["role"],
-             route["verification_required"]),
-        )
-        # validate-assignment uses the project's effective policy, like
-        # result-preflight, so this cross-provider route validates.
-        self.assertEqual(assigned, self.cli("validate-assignment", *context))
-        self.assertTrue(self.cli("result-preflight", *context)["ready"])
-        opened = self.cli(
-            "learning-open-host-run", *context, "--route", route_path,
-            "--orchestration-handle", worker["orchestration"]["orchestration_handle"],
-        )
-        # A bridged verifier receives the result from dispatch, not from open.
-        self.assertNotIn("verification_input", opened)
-        verifier_result = {**result(), "assignment_id": assigned["assignment_id"]}
-        self.frames("codex", [
-            {"type": "thread.started", "thread_id": "t1"},
-            {"type": "turn.completed",
-             "usage": {"input_tokens": 50, "cached_input_tokens": 5,
-                       "output_tokens": 9, "reasoning_output_tokens": 3}},
-        ])
-        (self.tools / "codex-last-message.json").write_text(
-            json.dumps(null_filled(verifier_result))
-        )
-        dispatched = self.cli(
-            "dispatch", *context, "--route", route_path,
-            "--run-handle", opened["run_handle"],
-        )
-        report = dispatched["bridge_report"]
-        self.assertEqual(
-            ("result", True, ".orchestration-input/worker-result.json"),
-            (report["outcome"], report["usage_recorded"], report["verification_input"]),
-        )
-        invocation = [i for i in self.invocations("codex") if "exec" in i["argv"]][-1]
-        self.assertEqual(
-            [".orchestration-input/worker-result.json", "source.txt"], invocation["files"]
-        )
-        placed = invocation["reserved_inputs"]["worker-result.json"]
-        self.assertEqual(worker["result"], json.loads(placed["content"]))
-        self.assertEqual("0o400", placed["mode"])
-        self.assertIn(".orchestration-input/worker-result.json", invocation["argv"][-1])
-        self.assertEqual([], self.workspace_entries())
-
-        verified = self.record(
-            context, opened["run_handle"], dispatched["result"],
-            report["terminal_state"],
-        )
-        # The bridge's ledger-recorded usage is the outcome's usage.
-        usage = verified["outcome"]["usage"]
-        self.assertEqual(
-            (50, 5, 9, 3),
-            (usage["input_tokens"], usage["cached_tokens"], usage["output_tokens"],
-             usage["reasoning_tokens"]),
-        )
-        self.assertEqual(
-            "client_observed", verified["outcome"]["usage_sources"]["input_tokens"]["source"]
-        )
-        self.assertFalse(verified["worker_result_stored"])
-        verifier_digest = verified["host_outcome_digest"]
-
-        # Operational QA through the documented commands, with every argument.
-        worker_files = (
-            "--evaluator-assignment", self.write("worker-assignment.json", worker["assignment"]),
-            "--evaluator-result", self.write("worker-result.json", worker["result"]),
-            "--verifier-assignment", self.write("verifier-assignment.json", assigned),
-            "--verifier-result", self.write("verifier-result.json", dispatched["result"]),
-        )
-        with mock.patch.object(
-            cli, "run_operational_check_suite", side_effect=lambda _root, **_scratch: passing_check_report()
-        ):
-            refused = self.cli(
-                "learning-run-operational-checks",
-                "--host-outcome-digest", recorded["outcome"]["record_id"],
-                "--verifier-host-outcome-digest", verifier_digest, expected=2,
-            )
-            self.assertIn("host_outcome_digest", refused["error"])
-            checks = self.cli(
-                "learning-run-operational-checks",
-                "--host-outcome-digest", digest,
-                "--verifier-host-outcome-digest", verifier_digest,
-            )
-        self.assertTrue(checks["checks_passed"])
-        qa = self.cli(
-            "learning-record-operational-qa",
-            "--host-outcome-digest", digest,
-            "--verifier-host-outcome-digest", verifier_digest,
-            "--check-receipt", checks["check_receipt"], *worker_files,
-        )
-        self.assertTrue(qa["qa"]["accepted"])
-        self.assertFalse(qa["attention_required"])
-        orchestration_id = self.ledger_value(
-            lambda ledger: ledger._connection.execute(
-                "SELECT orchestration_id FROM orchestrations"
-            ).fetchone()[0]
-        )
-        summary = self.cli(
-            "learning-orchestration-report", "--orchestration-id", orchestration_id
-        )
-        # Only the native worker's usage is unknown now; the bridged run's is not.
-        self.assertEqual(1, summary["usage"]["unknown_runs"]["input_tokens"])
-        self.assertEqual(1, summary["qa"]["passed"])
-        # Both the native worker and the bridged verifier count as agent-bound.
-        self.assertEqual(2, summary["runs"]["agent_bound"])
-        self.assertNotIn("native_agent_bound", summary["runs"])
-
-    def ledger_value(self, read):
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            return read(ledger)
-        finally:
-            ledger.close()
-
-    def test_the_router_refuses_a_binding_it_cannot_resolve(self) -> None:
+    def test_the_ledger_refuses_a_binding_it_cannot_resolve(self) -> None:
         worker = self.run_native_worker()
         digest = worker["recorded"]["host_outcome_digest"]
-        self.admit("codex")
-        cases = {
-            "unknown outcome": (self.verifier_task("0" * 64), "not a recorded host outcome"),
-            "other provider": (
-                self.verifier_task(digest, verification_for_provider="codex"),
-                "another provider",
-            ),
-            "other family": (
-                self.verifier_task(digest, verification_for_family="coding"),
-                "not a worker outcome",
-            ),
-        }
-        for name, (task, message) in cases.items():
-            with self.subTest(case=name):
-                refused = self.cli(
-                    "learning-route", "--task", self.write("bad.json", task), expected=2
-                )
-                self.assertIn(message, refused["error"])
-        for name, task in {
+        self.assertEqual(content_digest(worker["recorded"]["outcome"]), digest)
+        task = self.verifier_task(digest)
+        with contextlib.closing(self.open_ledger()) as ledger:
+            for name, (bad, message) in {
+                "unknown outcome": (self.verifier_task("0" * 64), "not a recorded host outcome"),
+                "other provider": (self.verifier_task(digest, verification_for_provider="codex"),
+                                   "another provider"),
+                "other family": (self.verifier_task(digest, verification_for_family="coding"),
+                                 "not a worker outcome"),
+            }.items():
+                with self.subTest(case=name), self.assertRaisesRegex(LedgerError, message):
+                    ledger.verification_worker_result(self.project_id, bad)
+            other = ledger.open_orchestration(self.project_id, client_version="claude-host-v1")
+            with self.assertRaisesRegex(LedgerError, "another orchestration"):
+                ledger.verification_worker_result(
+                    self.project_id, task, orchestration_handle=other["orchestration_handle"])
+            self.assertEqual(worker["result"], ledger.verification_worker_result(
+                self.project_id, task,
+                orchestration_handle=worker["orchestration"]["orchestration_handle"])["worker_result"])
+        for name, bad in {
             "record identifier": self.verifier_task(worker["recorded"]["outcome"]["record_id"]),
             "worker task": {**self.task(), "verification_for_outcome": digest},
             "no provider": {
@@ -4112,27 +3917,21 @@ class VerifierHandoffTests(ClaudePrimaryCase):
         }.items():
             with self.subTest(case=name):
                 refused = self.cli(
-                    "learning-route", "--task", self.write("bad.json", task), expected=2
+                    "learning-route", "--task", self.write("bad.json", bad), expected=2
                 )
                 self.assertEqual("input validation failed", refused["error"])
-        task = self.verifier_task(digest)
-        _, _, context, route_path = self.verifier_inputs(task, digest)
+        _, _, context, _ = self.verifier_inputs(task, digest)
         refused = self.cli_without_project("validate-assignment", *context, expected=2)
         self.assertIn("requires --project-root", refused["error"])
-        other = self.cli("learning-open-orchestration")
-        refused = self.cli(
-            "learning-open-host-run", *context, "--route", route_path,
-            "--orchestration-handle", other["orchestration_handle"], expected=2,
-        )
-        self.assertIn("another orchestration", refused["error"])
         # A worker result changed on disk is refused, never handed on.
         stored = next(self.state.artifacts.rglob(f"host_result_{digest}.json"))
         stored.write_bytes(stored.read_bytes().replace(b"sensitive", b"Sensitive"))
-        refused = self.cli("learning-route", "--task", self.write("v.json", task), expected=2)
-        self.assertIn("worker result for verification_for_outcome is invalid", refused["error"])
-        stored.unlink()
-        refused = self.cli("learning-route", "--task", self.write("v.json", task), expected=2)
-        self.assertIn("is unavailable", refused["error"])
+        with contextlib.closing(self.open_ledger()) as ledger:
+            with self.assertRaisesRegex(LedgerError, "worker result for verification_for_outcome is invalid"):
+                ledger.verification_worker_result(self.project_id, task)
+            stored.unlink()
+            with self.assertRaisesRegex(LedgerError, "is unavailable"):
+                ledger.verification_worker_result(self.project_id, task)
 
     def stored_worker_results(self) -> list:
         ledger = LearningLedger(self.state, client_capabilities=self.clients)
@@ -4156,10 +3955,11 @@ class VerifierHandoffTests(ClaudePrimaryCase):
         week = 7 * 24 * 60 * 60 * 1000
         self.assertLessEqual(int(rows[0]["expires_at_ms"]), time.time_ns() // 1_000_000 + week)
         self.assertGreaterEqual(int(rows[0]["expires_at_ms"]), before + week)
-        self.cli(
-            "learning-close-orchestration", "--orchestration-handle",
-            worker["orchestration"]["orchestration_handle"], "--status", "completed",
-        )
+        with contextlib.closing(self.open_ledger()) as ledger:
+            ledger.close_orchestration(
+                self.project_id, status="completed",
+                orchestration_handle=worker["orchestration"]["orchestration_handle"],
+            )
         # The raw result is gone with its registration; the outcome keeps its digest.
         self.assertFalse(stored.exists())
         self.assertEqual([], self.stored_worker_results())
@@ -4179,11 +3979,8 @@ class VerifierHandoffTests(ClaudePrimaryCase):
         self.assertTrue(stored.exists())
         self.assertEqual([], self.stored_worker_results())
         self.assertFalse(stored.exists())
-        refused = self.cli(
-            "learning-route", "--task", self.write("v.json", self.verifier_task(digest)),
-            expected=2,
-        )
-        self.assertIn("is unavailable", refused["error"])
+        with contextlib.closing(self.open_ledger()) as ledger, self.assertRaisesRegex(LedgerError, "is unavailable"):
+            ledger.verification_worker_result(self.project_id, self.verifier_task(digest))
 
     def test_a_result_kept_under_the_old_retention_is_clamped_and_swept(self) -> None:
         worker = self.run_native_worker()
@@ -4318,340 +4115,18 @@ class VerifierHandoffTests(ClaudePrimaryCase):
         self.assertLess(elapsed, 2.0)
         self.assertTrue(replies and b"request_timeout" in replies[0], replies)
 
-    def test_a_native_claude_verifier_of_codex_work_passes_qa(self) -> None:
-        # A bridged Codex worker, then a native Claude verifier for it.
-        self.admit("codex")
-        route, assigned, context, route_path = self.lifecycle_inputs(self.bounded())
-        self.assertEqual(("codex", "bridge"), (route["provider"], route["dispatch"]))
-        orchestration = self.cli("learning-open-orchestration")
-        opened = self.cli(
-            "learning-open-host-run", *context, "--route", route_path,
-            "--orchestration-handle", orchestration["orchestration_handle"],
-        )
-        self.frames("codex", [{"type": "turn.completed", "usage": {"input_tokens": 3}}])
-        worker_result = {**result(), "summary": "codex worker summary"}
-        (self.tools / "codex-last-message.json").write_text(
-            json.dumps(null_filled(worker_result))
-        )
-        dispatched = self.cli(
-            "dispatch", *context, "--route", route_path,
-            "--run-handle", opened["run_handle"],
-        )
-        recorded = self.record(
-            context, opened["run_handle"], dispatched["result"],
-            dispatched["bridge_report"]["terminal_state"],
-        )
-        self.assertEqual(3, recorded["outcome"]["usage"]["input_tokens"])
-        digest = recorded["host_outcome_digest"]
+    def test_an_oversized_canonical_result_is_refused_before_the_run_is_consumed(self) -> None:
         self.admit("claude")
-        task = self.verifier_task(
-            digest, verification_for_family="coding", verification_for_provider="codex",
-        )
-        verifier_route, verifier_assigned, verifier_context, verifier_route_path = (
-            self.verifier_inputs(task, digest)
-        )
-        self.assertEqual(
-            ("claude", "native"), (verifier_route["provider"], verifier_route["dispatch"])
-        )
-        verifier_opened = self.cli(
-            "learning-open-host-run", *verifier_context, "--route", verifier_route_path,
-            "--orchestration-handle", orchestration["orchestration_handle"],
-        )
-        self.assertEqual(
-            {"host_outcome_digest": digest, "worker_result": dispatched["result"]},
-            verifier_opened["verification_input"],
-        )
-        # The native Claude verifier runs and is recorded; QA then accepts it.
-        self.cli(
-            "learning-bind-host-agent", "--run-handle", verifier_opened["run_handle"],
-            "--agent-id", "b84ef32482bf9c8bc",
-        )
-        verifier_result = {**result(), "assignment_id": verifier_assigned["assignment_id"]}
-        verified = self.record(verifier_context, verifier_opened["run_handle"], verifier_result)
-        self.assertEqual(
-            "claude_agents_verification_worker", verified["outcome"]["role"]
-        )
-        files = {
-            "--evaluator-assignment": self.write("worker-assignment.json", assigned),
-            "--evaluator-result": self.write("worker-result.json", dispatched["result"]),
-            "--verifier-assignment": self.write(
-                "verifier-assignment.json", verifier_assigned
-            ),
-            "--verifier-result": self.write("verifier-result.json", verifier_result),
-        }
-        checks = self.run_checks(digest, verified["host_outcome_digest"])
-        # A verifier assignment whose role is not the one its route named is
-        # refused, here the Codex verification role for a Claude verifier run.
-        relabelled = self.qa(
-            digest, verified["host_outcome_digest"], checks["check_receipt"],
-            {**files, "--verifier-assignment": self.write(
-                "relabelled.json",
-                {**verifier_assigned, "role": "codex_agents_verification_worker"},
-            )},
-            expected=2,
-        )
-        self.assertEqual("operational QA admission rejected", relabelled["error"])
-        qa = self.qa(digest, verified["host_outcome_digest"], checks["check_receipt"], files)
-        self.assertTrue(qa["qa"]["accepted"])
-
-    def run_checks(self, worker: str, verifier: str, expected: int = 0) -> dict:
-        with mock.patch.object(
-            cli, "run_operational_check_suite", side_effect=lambda _root, **_scratch: passing_check_report()
-        ):
-            return self.cli(
-                "learning-run-operational-checks", "--host-outcome-digest", worker,
-                "--verifier-host-outcome-digest", verifier, expected=expected,
-            )
-
-    def qa(self, worker: str, verifier: str, receipt: str, files: dict,
-           expected: int = 0) -> dict:
-        return self.cli(
-            "learning-record-operational-qa", "--host-outcome-digest", worker,
-            "--verifier-host-outcome-digest", verifier, "--check-receipt", receipt,
-            *[item for pair in files.items() for item in pair], expected=expected,
-        )
-
-    def test_a_same_provider_claude_verifier_is_refused_by_qa(self) -> None:
-        worker = self.run_native_worker(probe=True)
-        digest = worker["recorded"]["host_outcome_digest"]
-        # With Codex disabled, the verifier falls back to the worker's provider.
-        config = self.project / ".codex/orchestration/provider-routing.json"
-        config.write_text(json.dumps({
-            "version": 1,
-            "providers": {"codex": {"enabled": False}, "claude": {"enabled": True}},
-            "codex_primary_may_bridge_to_claude": False,
-        }))
-        git(self.project, "commit", "-qam", "Claude only")
-        task = self.verifier_task(digest)
-        route, assigned, context, route_path = self.verifier_inputs(task, digest)
-        self.assertEqual(
-            ("claude", "native", "claude_agents_verification_worker"),
-            (route["provider"], route["dispatch"], route["role"]),
-        )
-        opened = self.cli(
-            "learning-open-host-run", *context, "--route", route_path,
-            "--orchestration-handle", worker["orchestration"]["orchestration_handle"],
-        )
-        self.cli(
-            "learning-bind-host-agent", "--run-handle", opened["run_handle"],
-            "--agent-id", "c95fa43593ca0d9cd",
-        )
-        verifier_result = {**result(), "assignment_id": assigned["assignment_id"]}
-        verified = self.record(context, opened["run_handle"], verifier_result)
-        refused = self.run_checks(digest, verified["host_outcome_digest"], expected=2)
-        self.assertIn("other provider than the worker", refused["error"])
-
-    def codex_worker(self, orchestration: dict, task_id: str) -> dict:
-        """A bridged Codex coding worker in the given orchestration, recorded."""
-
-        task = {**self.bounded(), "id": task_id}
-        route, assigned, context, route_path = self.lifecycle_inputs(task)
-        assigned = {**assigned, "assignment_id": f"{task_id}-assignment", "task_id": task_id}
-        context = (
-            "--task", context[1],
-            "--assignment", self.write(f"{task_id}-assignment.json", assigned),
-            "--parent-grant", context[5],
-        )
-        opened = self.cli(
-            "learning-open-host-run", *context, "--route", route_path,
-            "--orchestration-handle", orchestration["orchestration_handle"],
-        )
-        worker_result = {**result(), "assignment_id": assigned["assignment_id"]}
-        self.frames("codex", [{"type": "turn.completed", "usage": {"input_tokens": 3}}])
-        (self.tools / "codex-last-message.json").write_text(
-            json.dumps(null_filled(worker_result))
-        )
-        dispatched = self.cli(
-            "dispatch", *context, "--route", route_path,
-            "--run-handle", opened["run_handle"],
-        )
-        recorded = self.record(
-            context, opened["run_handle"], dispatched["result"],
-            dispatched["bridge_report"]["terminal_state"],
-        )
-        return {
-            "digest": recorded["host_outcome_digest"], "assignment": assigned,
-            "result": dispatched["result"],
-        }
-
-    def native_verifier(self, orchestration: dict, task: dict, context_digest: str,
-                        agent_id: str, expected: int = 0) -> dict:
-        task_path = self.write(f"{task['id']}.json", task)
-        route = self.cli("learning-route", "--task", task_path)
-        self.assertEqual(("claude", "native"), (route["provider"], route["dispatch"]))
-        assigned = self.assignment_for(
-            route, assignment_id=f"{task['id']}-assignment", task_id=task["id"],
-            objective=task["objective"], context=[context_digest],
-            owned_paths=["source.txt"], verification_required=False,
-        )
-        context = (
-            "--task", task_path,
-            "--assignment", self.write(f"{task['id']}-assignment.json", assigned),
-            "--parent-grant", self.write("grant.json", PARENT_GRANT),
-        )
-        opened = self.cli(
-            "learning-open-host-run", *context,
-            "--route", self.write(f"{task['id']}-route.json", route),
-            "--orchestration-handle", orchestration["orchestration_handle"],
-            expected=expected,
-        )
-        if expected:
-            return opened
-        self.cli(
-            "learning-bind-host-agent", "--run-handle", opened["run_handle"],
-            "--agent-id", agent_id,
-        )
-        verifier_result = {**result(), "assignment_id": assigned["assignment_id"]}
-        recorded = self.record(context, opened["run_handle"], verifier_result)
-        return {
-            "digest": recorded["host_outcome_digest"], "assignment": assigned,
-            "result": verifier_result,
-        }
-
-    def qa_files(self, worker: dict, verifier: dict) -> dict:
-        return {
-            "--evaluator-assignment": self.write("qa-worker-assignment.json",
-                                                 worker["assignment"]),
-            "--evaluator-result": self.write("qa-worker-result.json", worker["result"]),
-            "--verifier-assignment": self.write("qa-verifier-assignment.json",
-                                                verifier["assignment"]),
-            "--verifier-result": self.write("qa-verifier-result.json", verifier["result"]),
-        }
-
-    def test_qa_binds_the_verifier_to_the_outcome_it_was_opened_for(self) -> None:
-        self.admit("codex")
-        self.admit("claude")
-        # Fresh Claude billing, so more than one Claude verifier is admitted.
-        self.frames("claude", [PROBE_INIT, FAVOURABLE, result_frame("OK")])
-        self.cli("provider-observe", "--provider", "claude", "--billing-probe")
-        orchestration = self.cli("learning-open-orchestration")
-        worker_a = self.codex_worker(orchestration, "task-a")
-        worker_b = self.codex_worker(orchestration, "task-b")
-
-        def bound(task_id: str, digest: str) -> dict:
-            return self.verifier_task(
-                digest, id=task_id, verification_for_family="coding",
-                verification_for_provider="codex",
-            )
-
-        # Bound to A, but its assignment names B: refused at open.
-        refused = self.native_verifier(
-            orchestration, bound("verify-a", worker_a["digest"]), worker_b["digest"],
-            "d06ab54604db1e0de", expected=2,
-        )
-        self.assertIn("must be exactly its verification_for_outcome", refused["error"])
-        verifier_a = self.native_verifier(
-            orchestration, bound("verify-a", worker_a["digest"]), worker_a["digest"],
-            "e17bc65715ec2f1ef",
-        )
-        # A verifier opened without the binding names A in its context only.
-        unbound_task = {
-            key: value for key, value in bound("verify-u", worker_a["digest"]).items()
-            if key != "verification_for_outcome"
-        }
-        unbound = self.native_verifier(
-            orchestration, unbound_task, worker_a["digest"], "f28cd76826fd3a2f0",
-        )
-        for worker, verifier, message in (
-            (worker_b, verifier_a, "opened for another worker outcome"),
-            (worker_a, unbound, "requires a verifier opened with verification_for_outcome"),
-        ):
-            with self.subTest(message=message):
-                refused = self.run_checks(worker["digest"], verifier["digest"], expected=2)
-                self.assertIn(message, refused["error"])
-        # The verifier opened for A is accepted for A.
-        checks = self.run_checks(worker_a["digest"], verifier_a["digest"])
-        qa = self.qa(
-            worker_a["digest"], verifier_a["digest"], checks["check_receipt"],
-            self.qa_files(worker_a, verifier_a),
-        )
-        self.assertTrue(qa["qa"]["accepted"])
-        # A receipt for A cannot be spent on B's QA either.
-        refused = self.qa(
-            worker_b["digest"], verifier_a["digest"], checks["check_receipt"],
-            self.qa_files(worker_b, verifier_a), expected=2,
-        )
-        self.assertIn("opened for another worker outcome", refused["error"])
-
-    def test_an_oversized_canonical_result_is_refused_before_the_run_is_consumed(
-        self,
-    ) -> None:
-        self.admit("claude")
-        route, assigned, context, route_path = self.lifecycle_inputs(self.task())
-        self.assertTrue(assigned["verification_required"])
-        orchestration = self.cli("learning-open-orchestration")
-        opened = self.cli(
-            "learning-open-host-run", *context, "--route", route_path,
-            "--orchestration-handle", orchestration["orchestration_handle"],
-        )
-        self.cli(
-            "learning-bind-host-agent", "--run-handle", opened["run_handle"],
-            "--agent-id", WORKER_AGENT_ID,
-        )
-        # 400 KB of UTF-8 input, but 1.2 MB as canonical JSON, which escapes it.
-        emoji = {**result(), "summary": "\U0001F600" * 100_000}
-        emoji_path = Path(self.temporary.name) / "emoji-result.json"
-        emoji_path.write_text(json.dumps(emoji, ensure_ascii=False), encoding="utf-8")
-        self.assertLess(emoji_path.stat().st_size, 1_048_576)
-        self.cli("validate-result", *context, "--result", str(emoji_path))
-        observation = self.write("observation.json", {
-            "run_handle": opened["run_handle"], "result_attempts": ACCEPTED,
-        })
-        refused = self.cli(
-            "learning-record-host-result", *context, "--result", str(emoji_path),
-            "--observation", observation, expected=2,
-        )
-        self.assertIn("too large to keep for its verifier", refused["error"])
-        self.assertEqual([], list(self.state.artifacts.rglob("*.json")))
-        # The run is still open, and records a result that fits.
-        recorded = self.record(context, opened["run_handle"], result())
-        self.assertTrue(recorded["worker_result_stored"])
-
-    def test_provider_observe_shows_an_attested_credits_waiver(self) -> None:
-        rate_limits = json.loads((self.tools / "codex-result.json").read_text())
-        rate_limits["rateLimits"]["credits"]["hasCredits"] = True
-        (self.tools / "codex-result.json").write_text(json.dumps(rate_limits))
-
-        def billing() -> dict:
-            records = self.cli("provider-observe", "--provider", "codex")["records"]
-            return next(r for r in records if r["record_type"] == "provider_billing")
-
-        self.assertIs(False, billing()["paid_usage_waived_by_attestation"])
-        fingerprint = self.admit("codex")
-        reading = billing()
-        self.assertEqual(
-            (True, False), (reading["paid_usage_usable"],
-                            reading["paid_usage_waived_by_attestation"]),
-        )
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            with self.assertRaisesRegex(AdmissionDenied, "paid_usage_usable"):
-                ledger.evaluate_admission(self.project_id, provider="codex", environ=CLEAN)
-        finally:
-            ledger.close()
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            attest_provider(
-                ledger, self.project_id, self.owner_key, "codex", fingerprint,
-                issued_at=2, credits_spending_disabled=True,
-            )
-        finally:
-            ledger.close()
-        reading = billing()
-        self.assertEqual(
-            (True, True), (reading["paid_usage_usable"],
-                           reading["paid_usage_waived_by_attestation"]),
-        )
-        # The field shows what admission decides by the same rule; it decides
-        # nothing itself.
-        ledger = LearningLedger(self.state, client_capabilities=self.clients)
-        try:
-            decision = ledger.evaluate_admission(
-                self.project_id, provider="codex", environ=CLEAN
-            )
-        finally:
-            ledger.close()
-        self.assertEqual("admitted", decision["reason_code"])
+        with contextlib.closing(self.open_ledger()) as ledger:
+            run = self.native_run(ledger)
+            # 400 KB of UTF-8 input, but 1.2 MB as canonical JSON, which escapes it.
+            emoji = {**result(), "summary": "\U0001F600" * 100_000}
+            self.assertLess(len(json.dumps(emoji, ensure_ascii=False).encode()), 1_048_576)
+            with self.assertRaisesRegex(LedgerError, "too large to keep for its verifier"):
+                self.record_native(ledger, run, emoji)
+            self.assertEqual([], list(self.state.artifacts.rglob("*.json")))
+            # The run is still open, and records a result that fits.
+            self.assertTrue(self.record_native(ledger, run, result())["worker_result_stored"])
 
 
 class OperationalVerifierProviderTests(BridgeTestCase):
