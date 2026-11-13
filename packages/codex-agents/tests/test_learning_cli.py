@@ -5,6 +5,7 @@ import io
 import json
 import base64
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,7 @@ from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 
+from codex_agents import learning_store
 from codex_agents.contracts import ContractError
 from codex_agents.learning_contracts import (
     candidate_base_digest,
@@ -583,6 +585,42 @@ class LearningCliTests(unittest.TestCase):
         encoded = json.dumps(report["ingestion"])
         self.assertNotIn(str(unregistered), encoded)
         self.assertNotIn("project_id", encoded)
+
+    def test_registration_upgrades_an_earlier_versions_ledger_only_when_approved(self) -> None:
+        from tests.test_account_launch_claims import downgrade_ledger_to_six
+
+        ledger = LearningLedger(LearningState(self.state_root, create=False))
+        records = ledger._connection.execute("SELECT count(*) FROM records").fetchone()[0]
+        downgrade_ledger_to_six(ledger)
+        ledger.close()
+        try:
+            # Asked first: nothing is stopped, copied or changed until the owner approves.
+            refused = self._run("learning-register", expected=2)
+            self.assertEqual(("ledger_upgrade_required", 6, False), (
+                refused["reason_code"], refused["ledger_schema_version"], refused["ready"]))
+            self.assertIn("--upgrade-ledger", refused["error"])
+            self.assertFalse((self.state_root / "ledger-before-upgrade").exists())
+            self.assertEqual(6, learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
+            upgraded = self._run("learning-register", "--upgrade-ledger")
+            self.assertEqual((True, 6, learning_store.LEDGER_SCHEMA_VERSION, self.project_id), (
+                upgraded["ready"], upgraded["ledger_upgraded_from"], upgraded["collector_schema_version"],
+                upgraded["project_id"]))
+            copy = Path(upgraded["ledger_copy"])
+            self.assertEqual(self.state_root.resolve() / "ledger-before-upgrade", copy.parent)
+            kept = sqlite3.connect(copy)
+            try:
+                self.assertEqual((6, records), (kept.execute("PRAGMA user_version").fetchone()[0],
+                                                kept.execute("SELECT count(*) FROM records").fetchone()[0]))
+            finally:
+                kept.close()
+            self.assertEqual(1, len(list((self.state_root / "backups" / self.project_id).glob("upgrade_schema6_*.json"))))
+            # Approving again when there is nothing left to upgrade changes nothing.
+            again = self._run("learning-register", "--upgrade-ledger")
+            self.assertEqual((True, None, None), (again["ready"], again["ledger_upgraded_from"], again["ledger_copy"]))
+            self.assertEqual([copy], list(copy.parent.iterdir()))
+            self.assertTrue(self._run("learning-status")["active"])
+        finally:
+            self._stop_collector()
 
     def test_concurrent_direct_commands_serialize_and_leave_collector_active(self) -> None:
         try:

@@ -2186,8 +2186,27 @@ review_legacy_state() {
   return 0
 }
 
+# approve_ledger_upgrade : the orchestrator records were written by an earlier version.
+# learning-register has refused without stopping or changing anything; say what the upgrade
+# does and ask before running it again with the approval it needs. Returns 1 when declined.
+approve_ledger_upgrade() {
+  list_add warn "Your orchestrator records were written by an earlier version of the orchestrator."
+  list_sub "Setup can upgrade them now. It first keeps a checked copy of everything as it is, in the same protected folder."
+  list_sub "Every project on this machine shares these records. After the upgrade the other projects stop working with the orchestrator until you run this setup for each of them."
+  list_sub "Do this while no child agent is running in any project."
+  body "Upgrade the records now? [Y/n]"
+  menu 0 "Yes, upgrade them" "No, leave them as they are"
+  screen_reset; begin_step 5
+  if [ "$MENU_IDX" -ne 0 ]; then
+    list_add skip "The records were not upgraded, so the collector was not registered. Nothing was changed."
+    list_sub "This project cannot use the orchestrator until you upgrade them (run setup again) or install the earlier version here again."
+    return 1
+  fi
+  return 0
+}
+
 step_collector() {
-  local cli ready moved
+  local cli ready moved rc copy
   begin_step 5
   cli="$PROJECT/.codex/orchestration/cli.py"
   if [ ! -f "$cli" ]; then
@@ -2215,17 +2234,37 @@ step_collector() {
   render
   run_owner_cli "Registering the collector" learning-register --project-root "$PROJECT" \
     ${LEGACY_ARGS[@]+"${LEGACY_ARGS[@]}"}
-  if [ "$?" -ne 0 ]; then
+  rc=$?
+  moved=$(pj get "$LAST_OUT" state_moved)
+  if [ "$rc" -ne 0 ] && [ "$(pj get "$LAST_OUT" reason_code)" = ledger_upgrade_required ]; then
+    if ! approve_ledger_upgrade; then
+      mark_step 5 skip "records not upgraded"
+      pause; return 0
+    fi
+    render
+    run_owner_cli "Upgrading your records and registering the collector" learning-register \
+      --project-root "$PROJECT" --upgrade-ledger
+    rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
     failure_detail "Collector registration failed"
     version_hint
+    copy=$(pj get "$LAST_OUT" ledger_copy); copy=${copy//[[:cntrl:]]/}
+    if [ "${copy:0:1}" = / ]; then
+      list_sub "Your records are as the earlier version left them. A copy of them is also at $copy."
+    fi
     mark_step 5 fail "registration failed"
     pause; return 1
   fi
   list_add ok "Collector registered"
+  copy=$(pj get "$LAST_OUT" ledger_copy); copy=${copy//[[:cntrl:]]/}
+  if [ "${copy:0:1}" = / ]; then
+    list_add info "Upgraded your orchestrator records. A copy of them as they were is at $copy; delete it once you're happy."
+  fi
   # learning-register reports "state_moved": the old copy's path when it has just copied the
   # learning state from its old macOS folder (once), else null. One fixed sentence says so and
-  # names that path, with control characters removed, so it cannot drive the terminal.
-  moved=$(pj get "$LAST_OUT" state_moved)
+  # names that path, with control characters removed, so it cannot drive the terminal. (It is
+  # read from the first registration: an upgrade's second one has nothing left to move.)
   moved=${moved//[[:cntrl:]]/}
   if [ "${moved:0:1}" = / ]; then
     list_add info "Moved your orchestrator records once to a protected folder, ~/.local/state/codex-agents. The old copy at $moved can be deleted once you're happy."

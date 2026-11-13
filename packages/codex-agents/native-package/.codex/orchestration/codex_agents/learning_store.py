@@ -1172,6 +1172,78 @@ def _inside_git_tree(path: Path) -> bool:
 
 # The folder setup keeps for itself in the state root (scripts/install.py OwnerState.FOLDER).
 INSTALLER_FOLDER = "installer"
+# Where the whole ledger is copied before the owner's approved upgrade, and how long
+# the per-project copies taken with it are kept.
+UPGRADE_COPY_FOLDER = "ledger-before-upgrade"
+UPGRADE_BACKUP_MS = 30 * 24 * 60 * 60 * 1000
+
+
+def ledger_schema_behind(state: "LearningState") -> int | None:
+    """The schema of a ledger an earlier version wrote, else None (current, new or unreadable here)."""
+
+    try:
+        if not state.database.is_file() or not state.database.stat().st_size:
+            return None
+        connection = sqlite3.connect(f"file:{state.database}?mode=ro", uri=True, timeout=5)
+        try:
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return None
+    return version if 5 <= version < LEDGER_SCHEMA_VERSION else None
+
+
+def copy_ledger_before_upgrade(state: "LearningState", schema_version: int) -> Path:
+    """Copy the whole ledger, checked, before an upgrade changes it; the copy's path.
+
+    Called with the collector stopped. The copy is what puts everything back as it
+    was: SQLite writes it page by page from a consistent view, and it is accepted
+    only if it is sound, names the same schema and holds the same number of rows in
+    every table. It stays until the owner deletes it.
+    """
+
+    folder = state.root / UPGRADE_COPY_FOLDER
+    folder.mkdir(mode=0o700, exist_ok=True)
+    _assert_no_symlink_components(folder)
+    _check_owner_mode(folder, directory=True)
+    target = folder / f"learning-schema{schema_version}-{time.time_ns() // 1_000_000}.sqlite3"
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    os.close(descriptor)
+
+    def counts(connection: sqlite3.Connection) -> dict[str, int]:
+        tables = [str(row[0]) for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        return {name: int(connection.execute(f'SELECT count(*) FROM "{name}"').fetchone()[0]) for name in tables}
+
+    try:
+        source = sqlite3.connect(f"file:{state.database}?mode=ro", uri=True, timeout=5)
+        try:
+            copy = sqlite3.connect(target)
+            try:
+                source.backup(copy)
+                sound = (copy.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+                         and int(copy.execute("PRAGMA user_version").fetchone()[0]) == schema_version
+                         and counts(copy) == counts(source))
+            finally:
+                copy.close()
+        finally:
+            source.close()
+        if not sound:
+            raise LedgerError("the ledger could not be copied before its upgrade; nothing was changed")
+        os.chmod(target, 0o600)
+        descriptor = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except BaseException as error:
+        with contextlib.suppress(OSError):
+            target.unlink()
+        if isinstance(error, (OSError, sqlite3.Error)):
+            raise LedgerError("the ledger could not be copied before its upgrade; nothing was changed") from error
+        raise
+    return target
 
 
 class LearningState:
@@ -1738,10 +1810,15 @@ class LearningLedger:
         client_capabilities: dict[str, dict[str, Any]] | None = None,
         admission_policy: dict[str, Any] | None = None,
         allow_schema_upgrade: bool = False,
+        backup_before_upgrade: bool = False,
     ) -> None:
-        if type(allow_schema_upgrade) is not bool:
+        if type(allow_schema_upgrade) is not bool or type(backup_before_upgrade) is not bool or (
+                backup_before_upgrade and not allow_schema_upgrade):
             raise LedgerError('ledger schema upgrade option is invalid')
         self._allow_schema_upgrade = allow_schema_upgrade
+        # The owner's approved upgrade (setup's registration): each active project's
+        # records are first kept as they are, then the migration checks those copies.
+        self._backup_before_upgrade = backup_before_upgrade
         self.state = state
         # Admission settings come from the installed routing policy, read at
         # each decision; a caller-supplied policy is for tests only.
@@ -2027,6 +2104,10 @@ class LearningLedger:
         projects = self._connection.execute(
             "SELECT project_id FROM projects WHERE status='active' ORDER BY project_id"
         ).fetchall()
+        if self._backup_before_upgrade:
+            taken_at_ms = time.time_ns() // 1_000_000
+            for project in projects:
+                self._write_upgrade_backup(str(project["project_id"]), schema_version, taken_at_ms)
         for project in projects:
             project_id = str(project["project_id"])
             registrations = self._connection.execute(
@@ -2080,6 +2161,30 @@ class LearningLedger:
                     f"schema {target_version} migration requires a registered verified schema {schema_version} "
                     "project backup"
                 )
+
+    def _write_upgrade_backup(self, project_id: str, schema_version: int, taken_at_ms: int) -> None:
+        """Keep one project's records exactly as the earlier version left them.
+
+        The same sealed, registered copy the owner's backup command writes, in the
+        layout of the schema being left; the check that follows restores and
+        compares it like any other. It expires like any other backup.
+        """
+
+        body = _snapshot_project_partition(self._connection, project_id, ledger_schema_version=schema_version)
+        payload = canonical_json({"backup_sha256": hashlib.sha256(canonical_json(body)).hexdigest(), "body": body})
+        if len(payload) > 128 * 1024 * 1024:
+            raise LedgerError("sanitized backup is oversized")
+        file_id = f"upgrade_schema{schema_version}_{taken_at_ms}"
+        path = self._write_owner_file("backup", project_id, file_id, payload)
+        try:
+            self._register_stored_file(
+                project_id, file_id=file_id, kind="backup", path=path,
+                digest=hashlib.sha256(payload).hexdigest(), expires_at_ms=taken_at_ms + UPGRADE_BACKUP_MS,
+            )
+        except Exception:
+            with contextlib.suppress(OSError):
+                path.unlink()
+            raise
 
     def _initialize_launch_claims_locked(self, *, backfill: bool) -> None:
         """Owner-only schema step within the caller's migration transaction.

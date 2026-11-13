@@ -50,6 +50,17 @@ def drop_active_capacity_for_legacy_fixture(ledger):
     ledger._connection.execute("DROP INDEX active_capacity_parent")
 
 
+def downgrade_ledger_to_six(ledger):
+    """Leave a ledger as release 0.2.x (schema 6) wrote it."""
+    with ledger._account_transaction():
+        drop_active_capacity_for_legacy_fixture(ledger)
+        ledger._connection.execute("DROP TRIGGER cleanup_launch_operation_state")
+        for name in ("launch_inputs", "launch_observations", "launch_receipts"):
+            ledger._connection.execute("DROP TABLE " + name)
+        ledger._connection.execute("DROP TABLE IF EXISTS launch_claims")
+        ledger._connection.execute("PRAGMA user_version=6")
+
+
 class AccountLaunchClaimsTests(unittest.TestCase):
     def setUp(self):
         self.fixture = bridge_fixture.BridgeTestCase()
@@ -202,13 +213,7 @@ class AccountLaunchClaimsTests(unittest.TestCase):
         self.assertEqual(1, len(self.markers()))
 
     def downgrade_to_six(self):
-        with self.ledger._account_transaction():
-            drop_active_capacity_for_legacy_fixture(self.ledger)
-            self.ledger._connection.execute("DROP TRIGGER cleanup_launch_operation_state")
-            for name in ("launch_inputs", "launch_observations", "launch_receipts"):
-                self.ledger._connection.execute("DROP TABLE " + name)
-            self.ledger._connection.execute("DROP TABLE IF EXISTS launch_claims")
-            self.ledger._connection.execute("PRAGMA user_version=6")
+        downgrade_ledger_to_six(self.ledger)
 
     def backup_six(self):
         body = learning_store._snapshot_project_partition(self.ledger._connection, self.project, ledger_schema_version=6)
@@ -278,6 +283,69 @@ class AccountLaunchClaimsTests(unittest.TestCase):
             LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.assert_six_unmodified()
         self.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
+        self.addCleanup(self.ledger.close)
+        self.assertEqual("legacy_fenced", self.markers()[0][2])
+
+    def test_the_owners_approved_upgrade_keeps_checked_copies_first(self):
+        self.downgrade_to_six()
+        records_before = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid").fetchall()]
+        self.ledger.close()
+        state = self.fixture.state
+        self.assertEqual(6, learning_store.ledger_schema_behind(state))
+        for options in ({"backup_before_upgrade": True}, {"backup_before_upgrade": 1, "allow_schema_upgrade": True}):
+            with self.subTest(options=options), self.assertRaisesRegex(LedgerError, "upgrade option is invalid"):
+                LearningLedger(state, client_capabilities=self.fixture.clients, **options)
+        self.assert_six_unmodified()
+        # The whole ledger first: sound, the same schema, the same rows.
+        copy = learning_store.copy_ledger_before_upgrade(state, 6)
+        self.assertEqual((state.root / "ledger-before-upgrade", 0o600, 0o700), (
+            copy.parent, copy.stat().st_mode & 0o777, copy.parent.stat().st_mode & 0o777))
+        copied = sqlite3.connect(copy)
+        try:
+            self.assertEqual(6, copied.execute("PRAGMA user_version").fetchone()[0])
+            self.assertEqual(records_before, copied.execute("SELECT * FROM records ORDER BY rowid").fetchall())
+        finally:
+            copied.close()
+        with mock.patch.object(learning_store.sqlite3, "connect", side_effect=sqlite3.OperationalError("disk")), \
+                self.assertRaisesRegex(LedgerError, "nothing was changed"):
+            learning_store.copy_ledger_before_upgrade(state, 6)
+        with self.assertRaisesRegex(LedgerError, "nothing was changed"):
+            learning_store.copy_ledger_before_upgrade(state, 7)  # Not the schema it was told to expect.
+        self.assertEqual([copy], sorted(copy.parent.iterdir()))
+        self.assert_six_unmodified()
+        # Then each project's records, sealed and registered, which the migration checks like any other.
+        self.ledger = LearningLedger(state, client_capabilities=self.fixture.clients,
+                                     allow_schema_upgrade=True, backup_before_upgrade=True)
+        self.addCleanup(self.ledger.close)
+        self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
+        self.assertIsNone(learning_store.ledger_schema_behind(state))
+        self.assertEqual(records_before, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid").fetchall()])
+        kept = self.ledger._connection.execute(
+            "SELECT project_id,file_id,expires_at_ms FROM stored_files WHERE kind='backup' AND file_id LIKE 'upgrade_schema6_%'").fetchall()
+        self.assertEqual({self.project}, {row["project_id"] for row in kept} & {self.project})
+        active = [row[0] for row in self.ledger._connection.execute("SELECT project_id FROM projects WHERE status='active'")]
+        self.assertEqual(sorted(active), sorted(row["project_id"] for row in kept))
+        for row in kept:
+            body = json.loads((state.backups / row["project_id"] / (row["file_id"] + ".json")).read_bytes())["body"]
+            self.assertEqual(6, body["ledger_schema_version"])
+            self.assertGreater(row["expires_at_ms"], time.time_ns() // 1_000_000 + 29 * 24 * 60 * 60 * 1000)
+
+    def test_a_failed_approved_upgrade_leaves_the_earlier_records_and_can_be_run_again(self):
+        self.downgrade_to_six()
+        self.ledger.close()
+        initialize = LearningLedger._initialize_launch_claims_locked
+
+        def fail(ledger, **arguments):
+            initialize(ledger, **arguments)
+            raise RuntimeError("fixture migration failure")
+
+        options = dict(client_capabilities=self.fixture.clients, allow_schema_upgrade=True, backup_before_upgrade=True)
+        with mock.patch.object(LearningLedger, "_initialize_launch_claims_locked", autospec=True, side_effect=fail), \
+                self.assertRaisesRegex(RuntimeError, "fixture migration failure"):
+            LearningLedger(self.fixture.state, **options)
+        self.assert_six_unmodified()
+        self.assertEqual(6, learning_store.ledger_schema_behind(self.fixture.state))
+        self.ledger = LearningLedger(self.fixture.state, **options)
         self.addCleanup(self.ledger.close)
         self.assertEqual("legacy_fenced", self.markers()[0][2])
 

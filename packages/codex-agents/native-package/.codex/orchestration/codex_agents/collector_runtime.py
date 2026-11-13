@@ -438,7 +438,7 @@ def _start_collector_locked(
         pass
     from .host_paths import PYTHON_ISOLATION_FLAGS
 
-    subprocess.Popen(
+    collector = subprocess.Popen(
         [
             sys.executable,
             # Isolated, no bytecode in managed paths (isolated mode ignores
@@ -460,6 +460,9 @@ def _start_collector_locked(
         env={"PATH": os.defpath, "xcrun_nocache": "1"},
         start_new_session=True,
     )
+    # A detached service that outlives this client: nothing waits for it, so its
+    # handle is given up here instead of being reported as a leak when dropped.
+    collector.returncode = 0
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:

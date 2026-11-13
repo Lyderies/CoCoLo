@@ -413,7 +413,23 @@ class ProjectServiceHost:
                 value.update(schema_version=2, account_endpoint=str(account))
         except OSError:
             pass
-        write_owner_file(self._hint, canonical_json(value))
+        # Publication and a client's withdrawal of another version's hint take this
+        # lock in turn, so a hint published here is never the one being withdrawn.
+        descriptor = os.open(self._endpoints['control'].parent / 'hint.lock',
+                             os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            for attempt in range(500):
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if attempt == 499:
+                        raise HistoryError('history_writer_busy') from None
+                    time.sleep(0.01)
+            write_owner_file(self._hint, canonical_json(value))
+        finally:
+            os.close(descriptor)
         self._published = True
 
     def _authorize_ingress(self, raw, token, phase):

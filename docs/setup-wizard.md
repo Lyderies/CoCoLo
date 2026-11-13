@@ -53,6 +53,14 @@ private log, shown only if something fails. `NO_COLOR=1` gives plain output. Pat
    - After the move it says once where the old copy went, `codex-agents.moved-<time>` beside the old
      folder, and that you can delete it once you're happy. Until you do, it stays readable, digest key
      included.
+   - **Records from an earlier version.** If the records were written by an earlier version of the
+     orchestrator (release 0.2.x), nothing is stopped or changed until the step has asked "Upgrade the
+     records now?". "Yes" first keeps a checked copy of the whole ledger in `ledger-before-upgrade`
+     inside the records folder, and of each project's records among its backups for thirty days, then
+     upgrades them and registers; the step says where the copy is. The records are shared, so the other
+     projects on the machine stop working with the orchestrator until you run setup for each of them.
+     Do it while no child is running in any project. "No" changes nothing and skips registration: this
+     project cannot use the orchestrator until you upgrade, or install the earlier version here again.
 6. **Billing.** Hands the terminal to `scripts/attest.py`; the wizard never touches its screens.
 7. **Profile.** Only when Codex sessions may orchestrate Claude children: creates
    `~/.codex/orchestrator.config.toml` with network on, for sessions started with `codex -p orchestrator`.

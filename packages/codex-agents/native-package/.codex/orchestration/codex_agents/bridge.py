@@ -28,6 +28,7 @@ from .owned_execution import ExecutionCustodyError, ExecutionTicket
 from .catalog import CatalogError, parse_claude_agent
 from .claude_activity import ClaudeActivity, ClaudeActivityError
 from .codex_activity import CodexActivity, CodexActivityError
+from . import event_shapes
 from .contracts import (
     ONE_EVIDENCE_ENTRY_RULE,
     effective_dispatch_bounds,
@@ -1309,15 +1310,22 @@ def run_claude(
                 raise _Abort(error.reason_code) from None
             publish(category)
 
+    # Off unless the owner asked for frame shapes; then every frame is noted before any fence.
+    shapes = event_shapes.recorder("claude", requested=model, effort=route["effort"], tools=CLAUDE_TOOLS)
     started = time.monotonic()
-    outcome = run_child(
-        arguments,
-        environment=client_environment(environ, control.parent / "tmp"),
-        cwd=export,
-        deadline_seconds=deadline_seconds,
-        on_frame=on_frame,
-        **({"_execution": _execution} if _execution is not None else {}),
-    )
+    try:
+        outcome = run_child(
+            arguments,
+            environment=client_environment(environ, control.parent / "tmp"),
+            cwd=export,
+            deadline_seconds=deadline_seconds,
+            on_frame=event_shapes.recorded(shapes, on_frame),
+            **({"_execution": _execution} if _execution is not None else {}),
+        )
+    except BaseException:
+        event_shapes.finished(shapes)
+        raise
+    event_shapes.finished(shapes, outcome)
     report: dict[str, Any] = {
         "provider": "claude",
         "requested_model": model,
@@ -1483,15 +1491,21 @@ def run_codex(
                 except ExecutionCustodyError:
                     raise _Abort("monitor_unavailable") from None
 
+    shapes = event_shapes.recorder("codex", requested=route["model"], effort=route["effort"])
     started = time.monotonic()
-    outcome = run_child(
-        arguments,
-        environment=client_environment(environ, control.parent / "tmp"),
-        cwd=export,
-        deadline_seconds=deadline_seconds,
-        on_frame=on_frame,
-        **({"_execution": _execution} if _execution is not None else {}),
-    )
+    try:
+        outcome = run_child(
+            arguments,
+            environment=client_environment(environ, control.parent / "tmp"),
+            cwd=export,
+            deadline_seconds=deadline_seconds,
+            on_frame=event_shapes.recorded(shapes, on_frame),
+            **({"_execution": _execution} if _execution is not None else {}),
+        )
+    except BaseException:
+        event_shapes.finished(shapes)
+        raise
+    event_shapes.finished(shapes, outcome)
     report = {
         "provider": "codex",
         "requested_model": model,

@@ -289,10 +289,10 @@ immediately before launch; a mismatch never launches.
   before is not counted again in any message or order, with or without its block start,
   while ordinary output that repeats the same words keeps counting. A fragment frame
   without a usable `uuid` cannot be told from a replay and never counts (the whole
-  `assistant` frame at the end of the message still does). 65,536 fragment frames are
-  followed per run; the 8 MiB stream cap ends a run before a client can send that many,
-  and reaching it stops the run with `monitor_unavailable` rather than reading as
-  silence. A stream that keeps producing new frames
+  `assistant` frame at the end of the message still does). 131,072 fragment frames are
+  followed per run; the smallest frame that takes a place is over 80 bytes, so the 8 MiB
+  stream cap ends a run first, and reaching the bound anyway stops the run with
+  `monitor_unavailable` rather than reading as silence. A stream that keeps producing new frames
   is indistinguishable from work and is bounded by the hard deadline. That the pinned
   client puts a `uuid` on every partial frame is assumed from its documented output
   and is one of the things the event capability report (L1) has to confirm. A streamed
@@ -589,11 +589,10 @@ What an update or an owner command may stop, and what it says when it may not:
   second withdraws nothing and this version's service stays up; a collector that does
   not start again afterwards fails the command instead of being passed over
   (`ProjectDriverTests.test_a_replacement_that_lost_the_race_leaves_the_current_service_alone`).
-  Publication and withdrawal share no lock, so the last read and the withdrawal are not
-  one step: an old service that dies by itself in that instant, with another command
-  starting its successor in the same instant, could still see the successor's hint
-  withdrawn. That successor is idle (no run can be claimed while the collector is down)
-  and the next command starts another.
+  A service publishes its hint, and a client withdraws one, under the same lock
+  (`hint.lock` beside the service's `host.lock`): the hint is read again under it, so a
+  successor either published first and is left alone, or publishes after the old hint is
+  gone.
   Independently, a service of this version whose hint is withdrawn finishes any run it
   holds before it stops
   (`ProjectDriverTests.test_a_service_asked_to_stop_finishes_the_run_it_holds`).
@@ -620,6 +619,77 @@ What an update or an owner command may stop, and what it says when it may not:
 Not covered by a test here: an old runtime's CLI driven against this collector as a
 separate installed tree (the refusal rests on the runtime authorization tests), and a
 real update performed while a real child runs.
+
+## Event capability report (L1)
+
+The liveness rules assume frame shapes from the clients' documented output. To check them
+against a pinned real client without keeping anything a child said:
+
+- The owner creates the flag file `<state root>/diagnostics/capture-event-shapes` (a plain
+  file in an owner-only folder; anything else is ignored). While it exists, each child run
+  that a project's service starts writes one file in `<state root>/diagnostics/event-shapes/`:
+  a first line with provider, routed model and effort, one line per frame the client sent,
+  and a last line saying whether the child exited by itself or was stopped.
+- A frame's line (`event_shapes.frame_shape`) holds only names from fixed lists (frame, event,
+  delta, block, item and field names; a name outside them is written `other` and counted),
+  whether the model is the requested one, a tool's name only if it is one of the three
+  allowed, counts, sizes as the power of two that bounds them, the client's version from the
+  init frame when it has the form of a version, whether the frame has a UUID of its own and
+  whether that ID was seen before, and milliseconds since launch. No text, path, identifier,
+  tool input or provider timestamp is written. Every frame is noted before any fence, so a
+  frame that stops the run is in the record.
+- Recording never changes a run: a failure to open, shape or write switches it off for that
+  run and is not reported; a run's record stops at 60,000 lines.
+- `scripts/event_capability_report.py [--state-root <root>] [--codex-version <v>]` turns the
+  records into the report: per provider, client version, model and effort, the time to the
+  first frame and the first work frame, reasoning and tool use, the longest gaps (against the
+  quiet, stale and silence thresholds), how runs ended, whether partial frames carry their
+  own IDs, and the fields of each frame kind. It starts no client.
+- Tests: `tests/test_event_shapes.py` (off by default, no content with a canary in every
+  field, limits and failures, the bridge hook, the report).
+
+The records and the report are not committed. The report for the pinned clients comes from
+the real-install runs; until then the frame shapes remain an assumption.
+
+## Installing over release 0.2.x, and on a new machine
+
+Both were broken until this section's changes and are now covered by tests and by a
+run against a ledger the 0.2.2 runtime itself created.
+
+- **Upgrade.** A 0.2.x ledger is schema 6; this release is 13, and a ledger never
+  upgrades itself on open (`ledger schema upgrade requires explicit drained-owner
+  authorization and verified backups`). The owner's registration is where it happens:
+  `learning-register` first reads the schema (`ledger_schema_behind`) and, without
+  `--upgrade-ledger`, refuses with `ledger_upgrade_required` before it stops or changes
+  anything, so the earlier version's collector keeps serving. With the approval it
+  takes maintenance (an earlier release's collector is stopped the old way; this
+  release's only when drained), copies the whole ledger with SQLite's backup into
+  `<state root>/ledger-before-upgrade/` and accepts the copy only if it is sound, names
+  the same schema and holds the same rows per table (`copy_ledger_before_upgrade`), then
+  opens the ledger with `allow_schema_upgrade` and `backup_before_upgrade`. The latter
+  writes, for every active project, the same sealed and registered partition backup the
+  owner's backup command writes, in the old schema's layout, and the existing migration
+  gate (`_require_project_migration_backups`) restores and compares each before one
+  transaction upgrades the schema. A failure leaves schema 6 and reports
+  `ledger_upgrade_failed` with the copy's path. The per-project copies expire after
+  thirty days; the whole-ledger copy stays until the owner deletes it. Setup's step 5
+  asks first (`approve_ledger_upgrade` in `setup.sh`). Tests:
+  `AccountLaunchClaimsTests.test_the_owners_approved_upgrade_keeps_checked_copies_first`,
+  `::test_a_failed_approved_upgrade_leaves_the_earlier_records_and_can_be_run_again`,
+  `LearningCliTests.test_registration_upgrades_an_earlier_versions_ledger_only_when_approved`,
+  `WizardTerminalTests.test_an_earlier_versions_records_are_upgraded_only_when_approved`
+  and `::test_declining_the_upgrade_changes_nothing`.
+- **Other projects after an upgrade.** The ledger and the collector's authorization are
+  machine-wide. Projects still on the earlier runtime are refused (their runtime is not
+  the authorized one, and the ledger is newer) until setup is run for each.
+- **New machine.** Setup installs a project before it first registers one, and the
+  installer keeps its own folder (`installer/`) in the state root, so the root is not
+  empty when the ledger is first created. The bootstrap guard accepts that folder and a
+  client's health counters and nothing else
+  (`test_a_new_owners_root_that_setup_already_wrote_to_can_still_begin`).
+- Not covered: a 0.2.x ledger with years of real records (the fixtures' rows are
+  preserved byte for byte, and a rehearsal on a copy of the owner's ledger is part of
+  the real-install runbook), and ledgers older than schema 5, which are refused.
 
 ## Storage decision for 0.3.0 (C15)
 

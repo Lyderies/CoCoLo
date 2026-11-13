@@ -105,6 +105,25 @@ The command needs the shared ledger to itself, and a child is running (or ended 
 less than an hour ago) in some project. Nothing was stopped. Wait for the child to finish, or ask the
 primary to cancel it, and run the command again.
 
+## `ledger_upgrade_required`, or "these records were written by an earlier version"
+
+Your orchestrator records come from an earlier version. Nothing was stopped or changed. Run `./setup.sh`
+for the project, choose "Update the install and walk through every step", and answer "Yes, upgrade them"
+in step 5 (Collector). It keeps a checked copy first and says where. Then run setup for every other
+project on this machine: they share the records and need this version too.
+
+## `ledger_upgrade_failed`
+
+The records could not be upgraded and are as the earlier version left them; the message names a copy of
+them too. Install the earlier version in this project again to keep working, keep the copy, and report
+the problem.
+
+## Another project stopped working after this one was updated
+
+Every project on the machine shares one set of records and one collector. Once one project is updated,
+the others are refused (the collector "differs from the owner-authorized runtime", or a newer ledger)
+until you run `./setup.sh` for each of them and choose "Update the install and walk through every step".
+
 ## "collector did not become healthy"
 
 The shared collector was started and did not answer within eight seconds, which happens only on a very

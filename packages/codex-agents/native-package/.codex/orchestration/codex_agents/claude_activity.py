@@ -29,9 +29,10 @@ _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _TEXT_BLOCKS = {"text": "text", "thinking": "thinking"}
 PARTIAL_ACTIVITY_SECONDS = 1.0
 MAX_STREAM_BLOCKS = 256
-# Partial frames remembered per run. The bridge's stream cap ends a run before a
-# client can send this many; reaching it is reported, never taken for silence.
-MAX_STREAM_EVENTS = 65_536
+# Fragment frames remembered per run. The smallest frame that takes a place is over
+# 80 bytes, so the bridge's 8 MiB stream cap ends a run before a client can send this
+# many; reaching it anyway is reported, never taken for silence.
+MAX_STREAM_EVENTS = 131_072
 _DELTA_TEXT = {"text_delta": "text", "thinking_delta": "thinking", "input_json_delta": "partial_json"}
 
 

@@ -17,6 +17,7 @@ from pathlib import Path
 ORCHESTRATION_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ORCHESTRATION_ROOT))
 
+from codex_agents import event_shapes  # noqa: E402
 from codex_agents.collector_contracts import CollectorError  # noqa: E402
 from codex_agents.collector_paths import CollectorPaths, StateError  # noqa: E402
 from codex_agents.collector_runtime import ensure_collector, require_authorized_collector_runtime  # noqa: E402
@@ -34,6 +35,8 @@ def main(argv: list[str] | None = None) -> int:
         require_authorized_collector_runtime(state)
         # The registry lookup needs the collector; start it the usual way if it is down.
         ensure_collector(state, ORCHESTRATION_ROOT / "cli.py", project_root=args.project_root)
+        # Frame shapes are recorded only while the owner's flag file is in this folder.
+        event_shapes.configure(state.root / "diagnostics")
         report = serve_project(args.state_root, args.project_root)
     except (CollectorError, StateError):
         report = {"ready": False, "reason_code": "runtime_unauthorized"}

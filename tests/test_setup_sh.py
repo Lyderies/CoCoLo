@@ -1070,6 +1070,15 @@ class WizardTerminalTests(unittest.TestCase):
             f' exec "{TRUSTED_PY}" -I -B -S "{self.fakes / "fake_client_tool.py"}" "$@";; esac; fi\n'
             'if [ -n "$FAKE_SCAN" ]; then case "$*" in *"cli.py codex-session-scan "*)'
             ' echo "$FAKE_SCAN"; exit 0;; esac; fi\n'
+            # An earlier version's records: refused until approved, then upgraded.
+            'if [ -n "$FAKE_UPGRADE" ]; then case "$*" in *"cli.py learning-register "*"--upgrade-ledger"*)'
+            f' printf "%s\\n" "$*" >> "{self.base / "register.log"}"; echo "$FAKE_UPGRADE"; exit 0;;'
+            ' *"cli.py learning-register "*)'
+            f' printf "%s\\n" "$*" >> "{self.base / "register.log"}";'
+            ' echo \'{"ready": false, "reason_code": "ledger_upgrade_required", "ledger_schema_version": 6,'
+            ' "state_moved": null}\'; exit 2;;'
+            ' *"cli.py learning-status "*)'
+            ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;; esac; fi\n'
             'if [ -n "$FAKE_REGISTER" ]; then case "$*" in *"cli.py learning-register "*)'
             f' printf "%s\\n" "$*" >> "{self.base / "register.log"}"; echo "$FAKE_REGISTER"; exit 0;;'
             ' *"cli.py learning-status "*)'
@@ -1467,6 +1476,45 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\x1b[B\r")  # No
         self.expect("The old records were not moved")
         self.assertFalse((self.base / "register.log").exists())
+
+    def drive_to_upgrade_question(self, upgraded: str) -> None:
+        project, checks = self.make_project()
+        self.drive_to_commit_menu(project, checks, {"FAKE_UPGRADE": upgraded})
+        self.send("\r")
+        self.expect("Continue")
+        self.send("\r")
+        self.expect("Register now")
+        self.send("\r")
+        self.expect("Upgrade the records now?")
+        self.expect("No, leave them as they are")
+        self.settle()
+
+    def test_an_earlier_versions_records_are_upgraded_only_when_approved(self) -> None:
+        self.drive_to_upgrade_question(
+            '{"ready": true, "state_moved": null, "ledger_upgraded_from": 6, "ledger_copy": "/kept/old ledger"}')
+        last = self.screen.split("\x1b[2J")[-1]
+        plain = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", last))
+        self.assertIn("written by an earlier version of the orchestrator", plain)
+        self.assertIn("keeps a checked copy of everything as it is", plain)
+        self.assertIn("until you run this setup for each of them", plain)
+        asked = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(1, len(asked))
+        self.assertNotIn("--upgrade-ledger", asked[0])
+        self.send("\r")  # Yes, upgrade them
+        self.expect("Upgraded your orchestrator records. A copy of them as they were is at /kept/old ledger")
+        self.expect("Collector status: ready")
+        asked = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(2, len(asked))
+        self.assertIn("--upgrade-ledger", asked[1])
+
+    def test_declining_the_upgrade_changes_nothing(self) -> None:
+        self.drive_to_upgrade_question('{"ready": true}')
+        self.send("\x1b[B\r")  # No
+        self.expect("The records were not upgraded")
+        self.expect("install the earlier version here again")
+        asked = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(1, len(asked))
+        self.assertNotIn("--upgrade-ledger", asked[0])
 
     def test_no_move_no_records_sentence(self) -> None:
         project, checks = self.make_project()

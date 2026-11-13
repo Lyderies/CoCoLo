@@ -375,6 +375,17 @@ class ProjectDriverTests(DriverHarness):
         self.assertTrue(withdraw_project_host(self.state.root, self.project, directory))
         self.assertEqual(published, hint.read_bytes())
         self.assertTrue(project_host_serving(self.state.root, self.project))
+        # The service published under the lock a withdrawal takes: while one holds it the
+        # other waits, so a hint is never withdrawn in the instant it is published.
+        import fcntl
+        from codex_agents.project_host_client import HINT_LOCK
+        held = os.open(directory / HINT_LOCK, os.O_RDWR)
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            self.assertFalse(withdraw_project_host(self.state.root, self.project, directory, timeout=0.3))
+        finally:
+            os.close(held)
+        self.assertEqual(published, hint.read_bytes())
         # A collector that does not start again is reported, not passed over.
         maintenance = mock.Mock()
         maintenance.resume.side_effect = CollectorError('collector did not become healthy')

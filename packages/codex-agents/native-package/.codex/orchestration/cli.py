@@ -151,8 +151,10 @@ from codex_agents.learning_store import (  # noqa: E402
     StateError,
     authorize_collector_runtime,
     client_health_clear,
+    copy_ledger_before_upgrade,
     default_state_root,
     ensure_collector,
+    ledger_schema_behind,
     migrate_legacy_state,
     registered_project_roots,
     require_authorized_collector_runtime,
@@ -1241,6 +1243,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="approve moving the pre-0.8.10 macOS state: the SHA-256 of its "
         "owner-allowed-signers file as reviewed, or 'none'",
     )
+    learning_register.add_argument(
+        "--upgrade-ledger", action="store_true",
+        help="approve upgrading records an earlier version wrote; a checked copy is kept first",
+    )
 
     learning_serve = subparsers.add_parser(
         "learning-serve", help="run the single-writer local collector"
@@ -2065,6 +2071,19 @@ def main() -> int:
                 else None
             )
             state = LearningState(args.state_root)
+            behind = ledger_schema_behind(state)
+            if behind is not None and not args.upgrade_ledger:
+                # Asked before anything is stopped or changed: the earlier version's
+                # collector keeps running and its projects keep working.
+                _print_command_report(args, {
+                    "ready": False,
+                    "reason_code": "ledger_upgrade_required",
+                    "ledger_schema_version": behind,
+                    "error": "these records were written by an earlier version; setup upgrades them "
+                             "when you approve it (learning-register --upgrade-ledger)",
+                    "state_moved": str(moved_aside) if moved_aside is not None else None,
+                })
+                return 2
             running = (_compatible_collector(state)
                        if moved_aside is None and args.move_legacy_state is None else None)
             if running is not None:
@@ -2079,6 +2098,8 @@ def main() -> int:
                     "collector_runtime_version": health["runtime_version"],
                     "collector_runtime_digest": health["runtime_digest"],
                     "state_moved": None,
+                    "ledger_upgraded_from": None,
+                    "ledger_copy": None,
                 }
                 _print_command_report(args, report)
                 return 0
@@ -2088,8 +2109,15 @@ def main() -> int:
                 args.project_root,
                 owner_registration=True,
             )
+            ledger_copy = None
             try:
-                ledger = LearningLedger(state)
+                # Looked at again now that nothing else can write: only what is
+                # still an earlier version's ledger is copied and upgraded.
+                behind = ledger_schema_behind(state) if args.upgrade_ledger else None
+                if behind is not None:
+                    ledger_copy = copy_ledger_before_upgrade(state, behind)
+                ledger = LearningLedger(state, allow_schema_upgrade=behind is not None,
+                                        backup_before_upgrade=behind is not None)
                 try:
                     project_id = ledger.register_project(args.project_root)
                 finally:
@@ -2097,12 +2125,24 @@ def main() -> int:
                 authorize_collector_runtime(
                     state, ORCHESTRATION_ROOT / "cli.py"
                 )
-            except Exception:
+            except Exception as failure:
                 try:
                     maintenance.resume()
                 except CollectorError:
                     pass
-                raise
+                if ledger_copy is None or not isinstance(failure, (LedgerError, StateError, OSError)):
+                    raise
+                # The upgrade is one transaction: a failure leaves the records as the
+                # earlier version wrote them, and the copy says where they also are.
+                _print_command_report(args, {
+                    "ready": False,
+                    "reason_code": "ledger_upgrade_failed",
+                    "error": "the records could not be upgraded and are as the earlier version left them; "
+                             "install that version again to keep using them, and keep the copy",
+                    "ledger_schema_version": behind,
+                    "ledger_copy": str(ledger_copy),
+                })
+                return 2
             try:
                 maintenance.resume()
             except CollectorError as exc:
@@ -2123,6 +2163,8 @@ def main() -> int:
                 "collector_runtime_version": health["runtime_version"],
                 "collector_runtime_digest": health["runtime_digest"],
                 "state_moved": str(moved_aside) if moved_aside is not None else None,
+                "ledger_upgraded_from": behind,
+                "ledger_copy": str(ledger_copy) if ledger_copy is not None else None,
             }
         elif args.command == "learning-serve":
             # The collector and the account services run from their own entry,

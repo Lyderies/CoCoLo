@@ -193,8 +193,16 @@ class ClaudeActivityTests(unittest.TestCase):
                 activity.observe(self.delta())
 
     def test_the_stream_cap_ends_a_run_before_fragment_tracking_runs_out(self):
-        smallest = json.dumps(self.delta(value="x"), separators=(",", ":")).encode() + b"\n"
-        self.assertLess(bridge.MAX_STREAM_BYTES // len(smallest), claude_activity.MAX_STREAM_EVENTS)
+        # The smallest frame that takes a place: no delta, no other field, a one-character ID.
+        smallest = {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0}, "uuid": "a"}
+        now = [100.0]
+        activity = self.streaming(now)
+        with mock.patch.object(claude_activity, "MAX_STREAM_EVENTS", 1):
+            self.assertIsNone(activity.observe(smallest))
+            with self.assertRaisesRegex(ClaudeActivityError, "^monitor_unavailable$"):
+                activity.observe({**smallest, "uuid": "b"})
+        line = json.dumps(smallest, separators=(",", ":")).encode() + b"\n"
+        self.assertLess(bridge.MAX_STREAM_BYTES // len(line), claude_activity.MAX_STREAM_EVENTS)
 
     def test_partial_fragments_of_another_model_or_bad_shapes_never_count(self):
         now = [5.0]

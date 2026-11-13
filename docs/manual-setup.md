@@ -124,6 +124,11 @@ python3 -I -B -S -X pycache_prefix=/dev/null "$CLI" learning-register --project-
 python3 -I -B -S -X pycache_prefix=/dev/null "$CLI" learning-status --project-root /path/to/project
 ```
 
+When the records were written by an earlier version (release 0.2.x), `learning-register` refuses with
+`ledger_upgrade_required` and changes nothing. Run it again with `--upgrade-ledger` while no child is
+running in any project: it keeps a checked copy of the ledger (`ledger_copy` in its reply), upgrades
+the records and registers. Every other project on the machine then needs this release too.
+
 One collector is shared by every project on the machine. Your orchestrator records (the learning state)
 live in `~/.local/state/codex-agents`, or `$XDG_STATE_HOME/codex-agents` when `XDG_STATE_HOME` is inside a
 hidden folder of your home such as `~/.local/state` (any other value is refused); on macOS, the first

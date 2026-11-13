@@ -19,6 +19,7 @@ START_TIMEOUT_SECONDS = 8.0
 WITHDRAW_TIMEOUT_SECONDS = 5.0
 HOST_ENTRY = 'project_host.py'
 HOST_LOCK = 'host.lock'
+HINT_LOCK = 'hint.lock'  # Taken in turn by a host publishing its hint and a client withdrawing one.
 
 
 def _host_alive(directory):
@@ -78,19 +79,33 @@ def withdraw_project_host(state_root, project_root, directory, *, timeout=WITHDR
 
     The caller has confirmed that no run is active: a host stops whatever it
     holds when its hint is withdrawn. Its journals are durable. The hint is
-    read again first, so a host of this version that took the project's place
-    since the caller looked is left alone.
+    read again under the lock a host publishes under, so a host of this version
+    that took the project's place since the caller looked is left alone, and
+    one that takes it now publishes only after the old hint is gone.
     """
-    current = other_version_host(state_root, project_root)
-    if current is None:
-        return True
-    if current != directory:
-        return False
+    deadline = time.monotonic() + timeout
+    descriptor = None
     try:
+        descriptor = os.open(directory / HINT_LOCK, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.01)
+        current = other_version_host(state_root, project_root)
+        if current is None:
+            return True
+        if current != directory:
+            return False
         runtime_hint_path(CollectorPaths(state_root), Path(project_root)).unlink(missing_ok=True)
     except (DispatchError, StateError, OSError):
         return False
-    deadline = time.monotonic() + timeout
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     while _host_alive(directory) is True:
         if time.monotonic() >= deadline:
             return False

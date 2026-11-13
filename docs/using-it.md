@@ -177,6 +177,9 @@ the [documented Claude message types](https://code.claude.com/docs/en/agent-sdk/
 
 - Run `./setup.sh` again to update the install, verify it, re-run the billing attestation or change the
   owner key passphrase.
+- Updating from release 0.2.x: step 5 of the wizard asks before it upgrades your records, keeps a checked
+  copy of them first, and says where it is. All projects on the machine share those records, so update
+  every project, one after the other, while no child is running.
 - After an update, the first use of each project moves that project's learning history from the shared
   ledger into the project's own store. It happens by itself when no child is running anywhere, and
   waits for the next use otherwise. `learning-status` shows `learning_migration`: `complete`, `pending`

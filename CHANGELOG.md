@@ -2,6 +2,12 @@
 
 ## Unreleased: 0.3.0 (in progress)
 
+- Updating from 0.2.x: the wizard's Collector step asks before it upgrades your orchestrator records,
+  keeps a checked copy of them first and says where it is. Every project on the machine shares those
+  records and needs this release. Until this change the step failed on existing installs, and on a
+  new machine it refused to create the records at all.
+- Commands wait up to eight seconds for the shared collector to start (it used to be one, which a busy
+  machine exceeds), and wait their turn when another command has the collector paused.
 - Result-contract failures retain a bounded validator reason in the bridge report and durable
   dispatch metadata. The failed fence and exact result binding remain in force; rejected content
   is discarded. Host-result reporting obtains the reason from the trusted dispatch record.
