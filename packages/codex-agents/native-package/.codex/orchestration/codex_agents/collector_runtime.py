@@ -364,12 +364,21 @@ def client_health_clear(state: CollectorPaths, project_root: Path) -> None:
         os.close(descriptor)
 
 
+# How long a started collector is given to answer. It starts as two interpreters
+# (the CLI entry, then the collector's own) and opens the account services, which
+# takes over a second on a busy machine; the wait ends as soon as it answers.
+COLLECTOR_START_SECONDS = 8.0
+# A hook runs inside the client's own session and never holds it up that long: the
+# collector it started keeps starting, and a later event finds it.
+HOOK_START_SECONDS = 1.0
+
+
 def ensure_collector(
     state: CollectorPaths,
     cli_path: Path,
     *,
     project_root: Path,
-    timeout: float = 1.0,
+    timeout: float = COLLECTOR_START_SECONDS,
 ) -> dict[str, Any]:
     """Ensure one detached collector is healthy without storing its project path."""
 
@@ -414,7 +423,7 @@ def _start_collector_locked(
     cli_path: Path,
     *,
     project_root: Path,
-    timeout: float = 1.0,
+    timeout: float = COLLECTOR_START_SECONDS,
 ) -> dict[str, Any]:
     """Start the collector while the caller owns the runtime maintenance lock."""
 

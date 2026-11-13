@@ -104,6 +104,7 @@ def _record(args: argparse.Namespace, raw: bytes, checkout_root: Path | None) ->
     from codex_agents.learning_contracts import parse_bounded_json
     from codex_agents.collector_paths import CollectorPaths, StateError
     from codex_agents.collector_runtime import (
+        HOOK_START_SECONDS,
         client_health_clear,
         client_health_increment,
         ensure_collector,
@@ -139,6 +140,7 @@ def _record(args: argparse.Namespace, raw: bytes, checkout_root: Path | None) ->
             state,
             ORCHESTRATION_ROOT / "cli.py",
             project_root=project_root,
+            timeout=HOOK_START_SECONDS,
         )
         client = CollectorClient(state.socket)
         try:

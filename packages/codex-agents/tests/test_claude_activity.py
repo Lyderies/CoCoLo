@@ -76,8 +76,18 @@ class ClaudeActivityTests(unittest.TestCase):
     def stream(self, kind, **event):
         return {"type": "stream_event", "event": {"type": kind, **event}, "parent_tool_use_id": None}
 
-    def delta(self, kind="text_delta", field="text", value="PRIVATE-PARTIAL"):
-        return self.stream("content_block_delta", index=0, delta={"type": kind, field: value})
+    def delta(self, kind="text_delta", field="text", value="PRIVATE-PARTIAL", *, uuid=None, index=0):
+        """One fragment frame; each has its own frame ID, as the client's do, unless one is replayed."""
+        self.frames_made = getattr(self, "frames_made", 0) + 1
+        return {**self.stream("content_block_delta", index=index, delta={"type": kind, field: value}),
+                "uuid": uuid or f"00000000-0000-4000-8000-{self.frames_made:012d}"}
+
+    def streaming(self, now):
+        activity = ClaudeActivity(MODEL, bridge.CLAUDE_TOOLS, clock=lambda: now[0])
+        activity.startup()
+        activity.observe(self.stream("message_start", message={"id": "msg_1", "model": MODEL}))
+        activity.observe(self.stream("content_block_start", index=0, content_block={"type": "text"}))
+        return activity
 
     def test_partial_fragments_of_the_requested_model_count_at_most_once_per_interval(self):
         now = [100.0]
@@ -93,24 +103,23 @@ class ClaudeActivityTests(unittest.TestCase):
         self.assertIsNone(activity.observe(self.delta(value="   ")))  # Whitespace never counts.
         self.assertEqual("activity", activity.observe(self.delta("thinking_delta", "thinking")))
         now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
-        self.assertEqual("activity", activity.observe(self.delta("input_json_delta", "partial_json", '{"a"')))
-        # The same fragment replayed, interval after interval, is never new work.
+        first = self.delta("input_json_delta", "partial_json", '{"a"')
+        self.assertEqual("activity", activity.observe(first))
+        # The same frame replayed, interval after interval, is never new work.
         for _ in range(5):
             now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
-            self.assertIsNone(activity.observe(self.delta("input_json_delta", "partial_json", '{"a"')))
-        self.assertEqual("activity", activity.observe(self.delta("input_json_delta", "partial_json", ': 1}')))
-        # Nor are earlier fragments replayed in turn, or a replayed block start followed by them.
-        for value in ('{"a"', ': 1}', '{"a"', ': 1}'):
+            self.assertIsNone(activity.observe(first))
+        second = self.delta("input_json_delta", "partial_json", ': 1}')
+        self.assertEqual("activity", activity.observe(second))
+        # Nor are earlier frames replayed in turn, or a replayed block start followed by them.
+        for frame in (first, second, first, second):
             now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
-            self.assertIsNone(activity.observe(self.delta("input_json_delta", "partial_json", value)))
+            self.assertIsNone(activity.observe(frame))
         now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
         self.assertIsNone(activity.observe(self.stream("content_block_start", index=0, content_block={"type": "text"})))
-        self.assertIsNone(activity.observe(self.delta("input_json_delta", "partial_json", '{"a"')))
-        self.assertIsNone(activity.observe(self.delta()))
+        self.assertIsNone(activity.observe(first))
         # A fragment for a block that never started, or that has stopped, is not work.
-        now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
-        self.assertIsNone(activity.observe(self.stream(
-            "content_block_delta", index=1, delta={"type": "text_delta", "text": "PRIVATE-OTHER"})))
+        self.assertIsNone(activity.observe(self.delta(value="PRIVATE-OTHER", index=1)))
         self.assertIsNone(activity.observe(self.stream("content_block_stop", index=0)))
         self.assertIsNone(activity.observe(self.delta(value="PRIVATE-AFTER-STOP")))
         self.assertIsNone(activity.observe(self.stream("message_delta", delta={"stop_reason": "end_turn"})))
@@ -125,6 +134,67 @@ class ClaudeActivityTests(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertEqual(expected, activity.observe(self.delta(value="PRIVATE-REPLAY")))
         self.assertNotIn("PRIVATE", repr(vars(activity)))
+
+    def test_fragment_frames_of_an_earlier_message_replayed_inside_a_later_one_never_count(self):
+        now = [100.0]
+        activity = self.streaming(now)
+        earlier = [self.delta(value=f"PRIVATE-{n}") for n in range(4)]
+        ignored = self.delta(value="PRIVATE-OUTSIDE", index=3)  # Its block never started: it did not count.
+        for frame in (*earlier, ignored):
+            now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+            activity.observe(frame)
+        activity.observe(self.stream("content_block_stop", index=0))
+        activity.observe(self.stream("message_stop"))
+        # A later message of the requested model is streaming, with its blocks open.
+        activity.observe(self.stream("message_start", message={"id": "msg_2", "model": MODEL}))
+        for index in (0, 3):
+            activity.observe(self.stream("content_block_start", index=index, content_block={"type": "text"}))
+        for frame in (*earlier, ignored, *reversed(earlier)):
+            now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+            with self.subTest(frame=frame["uuid"]):
+                self.assertIsNone(activity.observe(frame))
+        now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+        self.assertEqual("activity", activity.observe(self.delta(value="PRIVATE-0")))  # The later message's own.
+        self.assertNotIn("PRIVATE", repr(vars(activity)))
+
+    def test_ordinary_output_that_repeats_itself_keeps_counting(self):
+        now = [100.0]
+        activity = self.streaming(now)
+        # A long table or list: the same few fragments, over and over, each in its own frame.
+        for turn in range(600):
+            now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+            with self.subTest(turn=turn):
+                self.assertEqual("activity", activity.observe(self.delta(value=("| ok ", "| - ")[turn % 2])))
+
+    def test_a_fragment_frame_without_its_own_id_is_never_work(self):
+        now = [100.0]
+        activity = self.streaming(now)
+        for identity in (None, "", 7, "PRIVATE/INVALID", "x" * 129):
+            now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+            frame = self.delta()
+            frame["uuid"] = identity
+            with self.subTest(identity=identity):
+                self.assertIsNone(activity.observe(frame))
+        frame = self.delta()
+        del frame["uuid"]
+        self.assertIsNone(activity.observe(frame))
+        self.assertEqual("activity", activity.observe(self.delta()))
+        self.assertNotIn("PRIVATE", repr(vars(activity)))
+
+    def test_more_fragment_frames_than_can_be_followed_is_a_monitoring_failure_not_silence(self):
+        now = [100.0]
+        activity = self.streaming(now)
+        with mock.patch.object(claude_activity, "MAX_STREAM_EVENTS", 3):
+            for _ in range(3):
+                activity.observe(self.delta())
+            replayed = self.delta(uuid="00000000-0000-4000-8000-000000000001")
+            self.assertIsNone(activity.observe(replayed))  # A frame already seen is still recognised.
+            with self.assertRaisesRegex(ClaudeActivityError, "^monitor_unavailable$"):
+                activity.observe(self.delta())
+
+    def test_the_stream_cap_ends_a_run_before_fragment_tracking_runs_out(self):
+        smallest = json.dumps(self.delta(value="x"), separators=(",", ":")).encode() + b"\n"
+        self.assertLess(bridge.MAX_STREAM_BYTES // len(smallest), claude_activity.MAX_STREAM_EVENTS)
 
     def test_partial_fragments_of_another_model_or_bad_shapes_never_count(self):
         now = [5.0]
@@ -261,8 +331,9 @@ class ClaudeActivityExecutionTests(unittest.TestCase):
             {"frame": bridge_fixtures.init_frame()},
             {"frame": {"type": "stream_event", "event": {"type": "message_start", "message": {
                 "id": "msg_1", "model": "claude-sonnet-5-5"}}}},
-            {"frame": {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {
-                "type": "text_delta", "text": "PRIVATE-PARTIAL"}}}},
+            {"frame": {"type": "stream_event", "uuid": "00000000-0000-4000-8000-000000000001",
+                       "event": {"type": "content_block_delta", "index": 0, "delta": {
+                           "type": "text_delta", "text": "PRIVATE-PARTIAL"}}}},
             {"exit": True}])
         self.finished(execution, "missing_result")
         self.assertTrue(execution[7][0][1]["rerouted"])
@@ -275,8 +346,9 @@ class ClaudeActivityExecutionTests(unittest.TestCase):
                 {"frame": {"type": "stream_event", "event": {"type": "content_block_start", "index": 0,
                                                              "content_block": {"type": "text", "text": ""}}}},
                 {"pause": "continue"},
-                {"frame": {"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {
-                    "type": "text_delta", "text": "PRIVATE-PARTIAL"}}}}]
+                {"frame": {"type": "stream_event", "uuid": "00000000-0000-4000-8000-000000000001",
+                           "event": {"type": "content_block_delta", "index": 0, "delta": {
+                               "type": "text_delta", "text": "PRIVATE-PARTIAL"}}}}]
         execution = self.execution(rows)
         root, target, registry, _, entry, _, _, _, _ = execution
         self.until(lambda: self.monitor.status(target).health == "active")

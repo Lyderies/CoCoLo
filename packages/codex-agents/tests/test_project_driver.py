@@ -10,6 +10,7 @@ import io
 import contextlib
 import sqlite3
 import json
+import argparse
 import os
 import socket
 import subprocess
@@ -351,6 +352,36 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, json.loads(hint.read_text())['scope']['runtime_digest'])
         self.assertEqual('active', self.cli('learning-orchestration-status', '--orchestration-handle',
                                             opened['orchestration_handle'])['status'])
+
+    def test_a_replacement_that_lost_the_race_leaves_the_current_service_alone(self):
+        from codex_agents.client_runtime import runtime_hint_path
+        from codex_agents.collector_contracts import CollectorError, CollectorRestartError
+        from codex_agents.project_host_client import project_host_serving, withdraw_project_host
+
+        self.cli('learning-open-orchestration')  # This version's service serves the project.
+        hint = runtime_hint_path(self.paths, self.project)
+        published = hint.read_bytes()
+        directory = Path(json.loads(published)['dispatch_endpoint']).parent
+        arguments = argparse.Namespace(state_root=self.state.root, project_root=self.project)
+        # Two commands saw another version's service; the first replaced it. The second
+        # looks again once it holds maintenance, and withdraws nothing.
+        maintenance = mock.Mock()
+        with mock.patch.object(cli.CollectorMaintenance, 'acquire', return_value=maintenance), \
+                mock.patch.object(cli, 'withdraw_project_host', side_effect=AssertionError('withdrawn')), \
+                mock.patch.object(cli.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
+            self.assertTrue(cli._replace_other_version_host(arguments))
+        maintenance.resume.assert_called_once_with()
+        # The withdrawal itself reads the hint again, whatever its caller saw.
+        self.assertTrue(withdraw_project_host(self.state.root, self.project, directory))
+        self.assertEqual(published, hint.read_bytes())
+        self.assertTrue(project_host_serving(self.state.root, self.project))
+        # A collector that does not start again is reported, not passed over.
+        maintenance = mock.Mock()
+        maintenance.resume.side_effect = CollectorError('collector did not become healthy')
+        with mock.patch.object(cli.CollectorMaintenance, 'acquire', return_value=maintenance), \
+                self.assertRaises(CollectorRestartError) as stopped:
+            cli._replace_other_version_host(arguments)
+        self.assertIn('did not start again', str(stopped.exception))
 
     def test_a_service_asked_to_stop_finishes_the_run_it_holds(self):
         from codex_agents.client_runtime import runtime_hint_path

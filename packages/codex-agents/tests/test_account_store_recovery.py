@@ -125,6 +125,32 @@ class AccountStoreRecoveryTests(unittest.TestCase):
         with self.assertRaises(StateError):
             LearningState(state.root)
 
+    def test_a_new_owners_root_that_setup_already_wrote_to_can_still_begin(self):
+        # Setup installs a project (and keeps its own record in the state root) before it
+        # first registers one; a client may also have counted a collector it did not find.
+        root = Path(self.fixture.temporary.name) / "setup-first"
+        root.mkdir(mode=0o700)
+        (root / "installer").mkdir(mode=0o700)
+        (root / "installer" / ("claude-settings-" + "a" * 32 + ".json")).write_text("{}")
+        for name in ("collector-client-health.json", "collector-client-health.lock"):
+            (root / name).touch(mode=0o600)
+        ledger = LearningLedger(LearningState(root), client_capabilities=self.fixture.clients)
+        self.addCleanup(ledger.close)
+        self.assertTrue(ledger.state.initialized.is_file())
+        self.assertEqual("{}", (root / "installer" / ("claude-settings-" + "a" * 32 + ".json")).read_text())
+        # Anything else there, or a setup folder that is not a plain owner-only folder, is still refused.
+        for case, (name, make) in enumerate((
+                ("other", lambda path: path.mkdir(mode=0o700)),
+                ("installer", lambda path: path.symlink_to(root)),
+                ("installer", lambda path: path.mkdir(mode=0o755)),
+                ("installer", lambda path: path.touch(mode=0o600)))):
+            other = Path(self.fixture.temporary.name) / f"refused-{case}"
+            other.mkdir(mode=0o700)
+            make(other / name)
+            with self.subTest(case=case), self.assertRaises((StateError, OSError)):
+                LearningState(other)
+            self.assertFalse((other / "ledger-initializing").exists())
+
     def test_empty_legacy_store_with_authority_material_is_not_treated_as_new(self):
         state = self.fresh_state()
         state.initializing.unlink()

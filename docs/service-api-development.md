@@ -281,14 +281,21 @@ immediately before launch; a mismatch never launches.
   Partial messages are on (`--include-partial-messages`): a streamed text, thinking or
   tool-input fragment counts only inside a message whose `message_start` named the
   requested model, only inside a content block that was started in that message, only
-  when non-blank and not already seen in that block, and at most once
+  when non-blank, and at most once
   per second, so a long message keeps a working child alive without flooding the
-  monitor. A block starts once in its message, a fragment a block already carried in
-  that message is not counted again (up to 65,536 remembered per message; beyond that
-  nothing more counts), and a message whose stream already started is not counted
-  again. Replaying partial frames, in any order and with or without their block starts,
-  therefore does not refresh the silence timer; a stream that keeps producing new text
-  is indistinguishable from work and is bounded by the hard deadline. A streamed
+  monitor. A block starts once in its message, and a message whose stream already
+  started is not counted again. A fragment frame is told from a replay by the frame's
+  own `uuid` (an 8-byte digest is kept for the run), never by its text: a frame seen
+  before is not counted again in any message or order, with or without its block start,
+  while ordinary output that repeats the same words keeps counting. A fragment frame
+  without a usable `uuid` cannot be told from a replay and never counts (the whole
+  `assistant` frame at the end of the message still does). 65,536 fragment frames are
+  followed per run; the 8 MiB stream cap ends a run before a client can send that many,
+  and reaching it stops the run with `monitor_unavailable` rather than reading as
+  silence. A stream that keeps producing new frames
+  is indistinguishable from work and is bounded by the hard deadline. That the pinned
+  client puts a `uuid` on every partial frame is assumed from its documented output
+  and is one of the things the event capability report (L1) has to confirm. A streamed
   `message_start` from another model marks the run rerouted, and a prohibited tool
   stops the child as soon as its `content_block_start` arrives; a paid or rejected
   rate-limit event stops it mid-message as before. A tool call outside
@@ -559,7 +566,14 @@ What an update or an owner command may stop, and what it says when it may not:
   the account service), and only for the owner's registration, may answer
   `operation_invalid` and be stopped as before: those releases drive no runs, their CLIs
   run children themselves and pause the collector for every command. The same answer
-  from this version, including one with an older schema, stops nothing.
+  from this version, including one with an older schema, stops nothing. The release is
+  the one the collector itself reports: it is not checked against the executable that
+  runs, so this rests on the collector being the owner's own, as everything it answers
+  does. A collector that accepted the stop but was still up when the wait ran out is
+  waited for a little longer (`STOP_RECOVERY_SECONDS`) and started again before the
+  command refuses, so a slow stop does not leave the machine without one; any later
+  command starts a missing collector as well
+  (`LearningStoreTests.test_a_collector_that_outlives_the_wait_for_its_stop_is_started_again`).
   (`LearningStoreTests.test_maintenance_never_stops_a_collector_from_under_a_run`,
   `ProjectDriverTests.test_an_owner_ledger_command_is_refused_while_a_child_runs`.)
 - A project's service that another version started (the project was updated while it
@@ -570,11 +584,31 @@ What an update or an owner command may stop, and what it says when it may not:
   service's hint is withdrawn, and the collector is started again. If the collector
   refuses, the command reports `project_service_other_version` and nothing is stopped
   (`ProjectDriverTests.test_a_service_left_by_another_version_is_replaced_only_when_no_run_is_active`).
+  Which service holds the project is read only once the command holds maintenance, and
+  again by the withdrawal itself, so of two commands that both saw the old service the
+  second withdraws nothing and this version's service stays up; a collector that does
+  not start again afterwards fails the command instead of being passed over
+  (`ProjectDriverTests.test_a_replacement_that_lost_the_race_leaves_the_current_service_alone`).
+  Publication and withdrawal share no lock, so the last read and the withdrawal are not
+  one step: an old service that dies by itself in that instant, with another command
+  starting its successor in the same instant, could still see the successor's hint
+  withdrawn. That successor is idle (no run can be claimed while the collector is down)
+  and the next command starts another.
   Independently, a service of this version whose hint is withdrawn finishes any run it
   holds before it stops
   (`ProjectDriverTests.test_a_service_asked_to_stop_finishes_the_run_it_holds`).
   Commands that do not start a service (status of a run, dispatch, record) still report
   the service as unavailable in that situation.
+- Starting the collector: it starts as two interpreters (the CLI entry, which checks the
+  runtime's authorization, then `collector_host.py`) and opens the account services, so on
+  a busy machine it answers after one to three seconds. A command waits up to
+  `COLLECTOR_START_SECONDS` (8) for it, and stops waiting as soon as it answers; before
+  0.3.0 the wait was one second, which a loaded machine now exceeds (measured 1.6 to 2.5 s
+  on the development machine under load, with the migration command then reporting
+  "collector did not become healthy" after a move that had completed). A hook still waits
+  only `HOOK_START_SECONDS` (1): it runs inside the client's session, the collector it
+  started keeps starting, and a later event finds it
+  (`LearningStoreTests.test_a_collector_that_takes_seconds_to_start_is_waited_for_except_by_a_hook`).
 - Clients and collectors of different versions: a client refuses a collector with an
   older or newer ledger schema, orders versions without downgrade, and only the
   owner's registration may replace an older runtime's collector (the existing

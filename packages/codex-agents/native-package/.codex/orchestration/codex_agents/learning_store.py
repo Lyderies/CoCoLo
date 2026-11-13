@@ -1170,6 +1170,10 @@ def _inside_git_tree(path: Path) -> bool:
 
 
 
+# The folder setup keeps for itself in the state root (scripts/install.py OwnerState.FOLDER).
+INSTALLER_FOLDER = "installer"
+
+
 class LearningState:
     """Validated paths and the local keyed-digest secret."""
 
@@ -1257,6 +1261,18 @@ class LearningState:
     def _initial_bootstrap_entry(self, path: Path) -> bool:
         if path in (self.artifacts, self.exports, self.backups):
             return path.is_dir() and not any(path.iterdir())
+        if path == self.root / INSTALLER_FOLDER:
+            # Setup's own folder (which deny rules it added to each project). Setup
+            # installs a project before it first registers one, so a new owner's
+            # root already holds it. It is no part of a ledger and is never read here.
+            _assert_no_symlink_components(path)
+            _check_owner_mode(path, directory=True)
+            return path.is_dir()
+        if path in (self.client_health, self.client_health_lock):
+            # Counters a client kept when it found no collector yet: not authority either.
+            _assert_no_symlink_components(path)
+            _check_owner_mode(path, directory=False)
+            return path.is_file()
         if re.fullmatch(r"\.ledger-initializing\.[0-9a-f]{16}\.tmp", path.name):
             # A crash before initial publication can leave this untrusted
             # scratch file. Preserve it; never read it or treat it as proof.
@@ -11411,6 +11427,15 @@ def _wait_for_collector_shutdown(
     return False
 
 
+# How long a collector that accepted a stop but outlived the caller's wait is
+# given before it is started again.
+STOP_RECOVERY_SECONDS = 3.0
+# How long a command waits for another command's maintenance to end. The other
+# one stops the collector, does its work and waits for the collector to start
+# again, so this is longer than a start; the wait ends as soon as the lock is free.
+MAINTENANCE_LOCK_SECONDS = 20.0
+
+
 class CollectorMaintenance:
     """Temporarily quiesce an active collector for one direct ledger command."""
 
@@ -11436,6 +11461,7 @@ class CollectorMaintenance:
         project_root: Path,
         *,
         timeout: float = 2.0,
+        lock_timeout: float = MAINTENANCE_LOCK_SECONDS,
         owner_registration: bool = False,
     ) -> "CollectorMaintenance":
         """Stop the collector for one direct ledger command, never from under a run.
@@ -11454,7 +11480,7 @@ class CollectorMaintenance:
             0o600,
         )
         os.fchmod(descriptor, 0o600)
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + lock_timeout
         while True:
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -11464,6 +11490,8 @@ class CollectorMaintenance:
                     os.close(descriptor)
                     raise CollectorError("collector maintenance lock is busy") from exc
                 time.sleep(0.02)
+        # The collector's stop is timed from here, whatever the lock took.
+        deadline = time.monotonic() + timeout
         transferred = False
         try:
             client = CollectorClient(state.socket)
@@ -11506,6 +11534,12 @@ class CollectorMaintenance:
             if _wait_for_collector_shutdown(client, state, deadline):
                 transferred = True
                 return cls(state, cli_path, project_root, descriptor, True)
+            # The stop was accepted, so the collector may still go down after this
+            # gives up. Give it a little longer, then start it again before
+            # refusing, so a slow stop does not leave the machine without one.
+            _wait_for_collector_shutdown(client, state, time.monotonic() + STOP_RECOVERY_SECONDS)
+            with contextlib.suppress(CollectorError, StateError, OSError):
+                _start_collector_locked(state, cli_path, project_root=project_root)
             raise CollectorError("collector did not stop for maintenance")
         finally:
             if not transferred:

@@ -308,6 +308,10 @@ def _add_learning_project(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-root", required=True, type=Path)
 
 
+_COLLECTOR_RESTART_ERROR = (
+    "the collector was stopped for a moment and did not start again; "
+    "run learning-status for a registered project"
+)
 _COMPLETED_LEDGER_RESTART_ERROR = (
     "ledger operation completed; collector restart failed; "
     "run learning-status for a registered project"
@@ -443,33 +447,45 @@ class ProjectServiceOtherVersion(Exception):
     """A live service of another version holds the project and could not be replaced."""
 
 
-def _replace_other_version_host(args, directory):
-    """Withdraw a project service that another version started; whether it stopped.
+def _replace_other_version_host(args):
+    """Withdraw a project service that another version started; whether none is left.
 
     Done with the collector stopped (it stops only when no run is active or
     unsettled, and no run can be claimed while it is down) and the ledger
     checked drained, so the service holds no run and cannot be given one,
-    whatever version its clients are. The collector is started again either way.
+    whatever version its clients are. The service is looked up only once this
+    command holds maintenance: another command may have replaced it meanwhile,
+    and the one serving now must not be the one withdrawn. The collector is
+    started again either way, and a failure to start it is reported.
     """
     try:
         state = LearningState(args.state_root, create=False)
         maintenance = CollectorMaintenance.acquire(state, ORCHESTRATION_ROOT / "cli.py", args.project_root)
     except (CollectorError, StateError, OSError):
         return False
+    replaced = False
     try:
-        ledger = LearningLedger(state)
-        try:
-            drained = ledger.drained()
-        finally:
-            ledger.close()
-        return drained and withdraw_project_host(args.state_root, args.project_root, directory)
+        directory = other_version_host(args.state_root, args.project_root)
+        if directory is None:
+            replaced = True
+        else:
+            ledger = LearningLedger(state)
+            try:
+                drained = ledger.drained()
+            finally:
+                ledger.close()
+            replaced = drained and withdraw_project_host(args.state_root, args.project_root, directory)
     except (LedgerError, StateError, OSError):
-        return False
-    finally:
-        try:
+        replaced = False
+    except BaseException:
+        with contextlib.suppress(CollectorError):
             maintenance.resume()
-        except CollectorError:
-            pass
+        raise
+    try:
+        maintenance.resume()
+    except CollectorError as error:
+        raise CollectorRestartError(_COLLECTOR_RESTART_ERROR) from error
+    return replaced
 
 
 def _start_project_host(args):
@@ -485,8 +501,7 @@ def _start_project_host(args):
     otherwise it stays pending and the next start tries again. Any failure
     leaves the project as it was: its service starts either way.
     """
-    outdated = other_version_host(args.state_root, args.project_root)
-    if outdated is not None and not _replace_other_version_host(args, outdated):
+    if other_version_host(args.state_root, args.project_root) is not None and not _replace_other_version_host(args):
         raise ProjectServiceOtherVersion()
     try:
         if not project_host_serving(args.state_root, args.project_root):

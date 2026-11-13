@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -3644,6 +3645,42 @@ class LearningStoreTests(unittest.TestCase):
         health.assert_not_called()
         popen.assert_not_called()
 
+    def test_a_collector_that_takes_seconds_to_start_is_waited_for_except_by_a_hook(self) -> None:
+        from codex_agents import collector_runtime
+
+        def start(**arguments):
+            clock = [0.0]
+            answers = iter([CollectorError("down")] * 6)  # Down, then five polls before it answers.
+
+            def health(_client):
+                clock[0] += 0.5
+                failure = next(answers, None)
+                if failure is not None:
+                    raise failure
+                return {"ready": True}
+
+            with (
+                mock.patch("codex_agents.collector_runtime.subprocess.Popen") as popen,
+                mock.patch("codex_agents.collector_runtime.CollectorClient.health", health),
+                mock.patch("codex_agents.collector_runtime.time.monotonic", lambda: clock[0]),
+                mock.patch("codex_agents.collector_runtime.time.sleep"),
+            ):
+                try:
+                    return ensure_collector(
+                        self.state, ORCHESTRATION_ROOT / "cli.py", project_root=self.project_a, **arguments)
+                finally:
+                    popen.assert_called_once()
+
+        # Two interpreters and the account services: it answered after three seconds.
+        self.assertEqual({"ready": True}, start())
+        self.assertGreaterEqual(collector_runtime.COLLECTOR_START_SECONDS, 5)
+        # A hook does not hold its session up that long; the collector it started keeps starting.
+        with self.assertRaisesRegex(CollectorError, "^collector did not become healthy$"):
+            start(timeout=collector_runtime.HOOK_START_SECONDS)
+        hook = (ORCHESTRATION_ROOT / "learning_hook.py").read_text()
+        self.assertEqual(1, hook.count("timeout=HOOK_START_SECONDS"))
+        self.assertEqual(1, hook.count("ensure_collector("))
+
     def test_upgrade_quiescence_blocks_restart_until_owner_registration(self) -> None:
         authorization = json.loads(self.state.collector_authorization.read_bytes())
         authorization["quiesced_for_upgrade"] = True
@@ -3881,6 +3918,32 @@ class LearningStoreTests(unittest.TestCase):
         with self.assertRaises(CollectorError) as other:
             acquire(CollectorError("collector rejected request: operation_rejected", code="operation_rejected"))
         self.assertEqual("operation_rejected", other.exception.code)
+
+    def test_a_collector_that_outlives_the_wait_for_its_stop_is_started_again(self) -> None:
+        for restart in ({}, CollectorError("collector did not become healthy")):
+            waits: list[float] = []
+            with (
+                self.subTest(restart=restart),
+                mock.patch("codex_agents.learning_store.CollectorClient.health", return_value={}),
+                mock.patch("codex_agents.learning_store.CollectorClient.shutdown") as shutdown,
+                mock.patch("codex_agents.learning_store._wait_for_collector_shutdown",
+                           side_effect=lambda client, state, deadline: waits.append(deadline) or False),
+                mock.patch("codex_agents.learning_store._start_collector_locked", side_effect=[restart]) as start,
+            ):
+                # The stop was accepted but the collector was still up when the wait ran out.
+                with self.assertRaisesRegex(CollectorError, "^collector did not stop for maintenance$"):
+                    CollectorMaintenance.acquire(self.state, ORCHESTRATION_ROOT / "cli.py", self.project_a)
+                shutdown.assert_called_once_with(only_if_drained=True)
+                # It is waited for a little longer and started again before the refusal.
+                self.assertEqual(2, len(waits))
+                self.assertGreater(waits[1], waits[0])
+                start.assert_called_once_with(self.state, ORCHESTRATION_ROOT / "cli.py", project_root=self.project_a)
+            # The maintenance lock was released either way.
+            descriptor = os.open(self.state.runtime_lock, os.O_RDWR)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(descriptor)
 
     def test_client_rejects_older_or_newer_schema_with_matching_runtime(self) -> None:
         client = CollectorClient(self.state.socket)

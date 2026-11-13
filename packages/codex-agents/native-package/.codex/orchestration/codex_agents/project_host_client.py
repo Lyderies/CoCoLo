@@ -74,11 +74,18 @@ def other_version_host(state_root, project_root):
 
 
 def withdraw_project_host(state_root, project_root, directory, *, timeout=WITHDRAW_TIMEOUT_SECONDS):
-    """Ask a project's idle host to stop by withdrawing its published hint; whether it stopped.
+    """Ask another version's idle host to stop by withdrawing its published hint; whether none is left.
 
     The caller has confirmed that no run is active: a host stops whatever it
-    holds when its hint is withdrawn. Its journals are durable.
+    holds when its hint is withdrawn. Its journals are durable. The hint is
+    read again first, so a host of this version that took the project's place
+    since the caller looked is left alone.
     """
+    current = other_version_host(state_root, project_root)
+    if current is None:
+        return True
+    if current != directory:
+        return False
     try:
         runtime_hint_path(CollectorPaths(state_root), Path(project_root)).unlink(missing_ok=True)
     except (DispatchError, StateError, OSError):

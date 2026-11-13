@@ -105,6 +105,13 @@ The command needs the shared ledger to itself, and a child is running (or ended 
 less than an hour ago) in some project. Nothing was stopped. Wait for the child to finish, or ask the
 primary to cancel it, and run the command again.
 
+## "collector did not become healthy"
+
+The shared collector was started and did not answer within eight seconds, which happens only on a very
+busy machine or when it cannot start at all. It keeps starting by itself: run the command again. If it
+keeps failing, run `./setup.sh` and choose "Update the install and walk through every step"; step 5
+(Collector) says what is wrong.
+
 ## `project_service_other_version`
 
 The project was updated while its service was still running from before the update, and a child is
