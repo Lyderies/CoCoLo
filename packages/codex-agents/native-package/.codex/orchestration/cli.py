@@ -125,15 +125,17 @@ from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
     HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client, learning_cycle_client,
-    routing_evidence_client,
+    routing_evidence_client, owner_learning_client, orchestration_report_client, runtime_hint_path,
     run_control_client, bridged_run_owner, abandon_bridged_run,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.history_contracts import HistoryError  # noqa: E402
-from codex_agents.project_host_client import ensure_project_host  # noqa: E402
+from codex_agents.project_host_client import (  # noqa: E402
+    ensure_project_host, other_version_host, project_host_serving, withdraw_project_host,
+)
 from codex_agents.admission_metadata import api_keys_present  # noqa: E402
 from codex_agents.host_paths import PYTHON_ISOLATION_FLAGS  # noqa: E402
-from codex_agents.cli_reports import command_report  # noqa: E402
+from codex_agents.cli_reports import command_report, unavailable_cycle  # noqa: E402
 from codex_agents.collector_contracts import (  # noqa: E402
     CollectorError,
     CollectorTransportError,
@@ -160,6 +162,7 @@ from codex_agents.hosts import (  # noqa: E402
     CODEX_HOST_CLIENT,
     CODEX_THREAD_MARKERS,
     HOST_CLIENTS,
+    OWNER_CLIENT,
     HostClientMismatch,
     HostClientUnknown,
     resolve_host_client,
@@ -429,11 +432,141 @@ def _compatible_collector(state):
 
 _MIGRATION_MESSAGES = {
     "migration_not_drained": "a child run is still active or unsettled; nothing was changed, try again when none is running",
-    "migration_project_service_running": "this project's service is running; nothing was changed, "
-                                         "try again after it has been idle for fifteen minutes",
+    "migration_project_service_running": "this project's service did not stop; nothing was changed, try again",
     "migration_source_changed": "the ledger changed while it was being copied; nothing was changed, run it again",
     "migration_reconciliation_required": "learning was recorded after the move; going back would drop it",
     "migration_too_large": "the project's learning history is larger than a migration can copy",
+}
+
+
+class ProjectServiceOtherVersion(Exception):
+    """A live service of another version holds the project and could not be replaced."""
+
+
+def _start_project_host(args):
+    """Start this project's service unless one serves; first settle where its learning lives.
+
+    A service that another version started (the project was updated while it was
+    idle) is replaced, but only when no run is active anywhere; otherwise the
+    command says so instead of reporting a service that cannot answer it.
+
+    A project with no learning history in the shared ledger is simply marked as
+    living in its own store. One with history is migrated here, before its
+    service first holds the store, but only when no run is active anywhere;
+    otherwise it stays pending and the next start tries again. Any failure
+    leaves the project as it was: its service starts either way.
+    """
+    outdated = other_version_host(args.state_root, args.project_root)
+    if outdated is not None:
+        _start_collector_quietly(args)
+        try:
+            client = _compatible_collector(CollectorPaths(args.state_root))
+            drained = client is not None and client.learning_migration(args.project_root)["drained"]
+        except (CollectorError, StateError, OSError):
+            drained = False
+        if not drained or not withdraw_project_host(args.state_root, args.project_root, outdated):
+            raise ProjectServiceOtherVersion()
+    try:
+        if not project_host_serving(args.state_root, args.project_root):
+            _start_collector_quietly(args)
+            client = _compatible_collector(CollectorPaths(args.state_root))
+            if client is not None:
+                snapshot = client.learning_migration(args.project_root)
+                if not snapshot["moved"] and not snapshot["has_learning"]:
+                    client.learning_moved_if_empty(args.project_root)
+                elif not snapshot["moved"] and snapshot["drained"]:
+                    _migrate_learning(argparse.Namespace(
+                        state_root=args.state_root, project_root=args.project_root, status=False, rollback=False))
+    except Exception:
+        pass
+    return ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)
+
+
+_MOVED_LEARNING_COMMANDS = frozenset({
+    "learning-run-cycle", "learning-analyze", "learning-record-feedback", "learning-review-case",
+    "learning-mine-case",
+})
+
+
+def _learning_moved(args):
+    """Whether this project's learning history lives in its own store, asked of the collector."""
+    _start_collector_quietly(args)
+    try:
+        client = _compatible_collector(CollectorPaths(args.state_root))
+        return client is not None and client.learning_migration(args.project_root)["moved"]
+    except (CollectorError, StateError, OSError):
+        return False
+
+
+def _moved_learning_command(args):
+    """An owner learning command for a project whose learning lives in its own store.
+
+    The project's service does the work; the shared ledger is not opened and
+    the collector is never paused.
+    """
+    if args.command == "learning-mine-case":
+        raise ContractError(
+            "cases are mined automatically for this project; run learning-run-cycle to mine now")
+    _start_project_host(args)
+
+    def cycle(seconds):
+        report = learning_cycle_client(
+            args.state_root, args.project_root, host_client=OWNER_CLIENT, full=True,
+            **({"max_age_ms": args.max_age_ms} if getattr(args, "max_age_ms", None) else {}), seconds=seconds)
+        return None if report.get("summary_state") == "unavailable" else report, report.get("reason_code")
+
+    def unavailable(reason):
+        return {"ready": False, "reason_code": reason, "error": "the project's learning service did not answer"}
+
+    try:
+        if args.command in {"learning-run-cycle", "learning-analyze"}:
+            if args.max_age_ms < 1:
+                raise ContractError("max age must be positive")
+            report, reason = cycle(120.0)
+            if report is None:
+                return unavailable(reason)
+            if args.command == "learning-analyze":
+                # The cycle's own analysis, as of now.
+                return {"ready": True, "analysis": report["analysis"]}
+            # Nothing is deleted from the project store: retention is applied when it is read.
+            return {"ready": True, **report, "expired_records": 0}
+        if args.command == "learning-record-feedback":
+            state = LearningState(args.state_root, create=False)
+            record = build_feedback(
+                digest_key=state.digest_key(), run_id=args.run_id, label=args.label,
+                reason_code=args.reason_code, observed_at_ms=args.observed_at_ms,
+                correction=args.correction_file.read_bytes() if args.correction_file is not None else None)
+            if args.signature is None:
+                project_id = CollectorClient(state.socket).project(args.project_root)
+                return {"ready": True, "requires_signature": True, "record": record,
+                        "signing_payload_b64": base64.b64encode(
+                            OwnerGrantAuthority.owner_record_payload(project_id, record)).decode("ascii")}
+            answer = owner_learning_client(args.state_root, args.project_root, "feedback",
+                                           record=record, signature=args.signature.read_bytes())
+        else:
+            answer = owner_learning_client(
+                args.state_root, args.project_root, "review_case", case_id=args.case_id,
+                review_digest=args.review_digest, similarity_group_digest=args.similarity_group_digest,
+                destination=args.destination, freeze=args.freeze)
+            record = answer["record"]
+    except HistoryError as error:
+        if error.reason_code == "history_not_authorized" and args.command == "learning-record-feedback":
+            return {"ready": False, "error": "owner record signature is invalid"}
+        return unavailable(error.reason_code)
+    if answer["refused"] is not None:
+        return {"ready": False, "reason_code": answer["refused"],
+                "error": answer["detail"] or _OWNER_REFUSALS[answer["refused"]]}
+    report = {"ready": True, "stored": answer["stored"], "record": record}
+    if args.command == "learning-review-case":
+        report["learning_cycle"] = cycle(20.0)[0] or unavailable_cycle("learning_pending")
+    return report
+
+
+_OWNER_REFUSALS = {
+    "feedback_run_unknown": "owner feedback run is not admitted",
+    "case_unknown": "evaluation case is unavailable",
+    "case_review_refused": "the review is not allowed for this case",
+    "owner_record_conflict": "a different record already has this identity",
 }
 
 
@@ -464,8 +597,7 @@ def _migrate_learning(args):
 
     with _collector_contact():
         try:
-            maintenance = CollectorMaintenance.acquire(
-                state, ORCHESTRATION_ROOT / "cli.py", args.project_root, only_if_drained=True)
+            maintenance = CollectorMaintenance.acquire(state, ORCHESTRATION_ROOT / "cli.py", args.project_root)
         except CollectorError as error:
             if getattr(error, "code", None) == "collector_busy":
                 return refused("migration_not_drained")
@@ -474,7 +606,25 @@ def _migrate_learning(args):
     try:
         ledger = LearningLedger(state, allow_schema_upgrade=True)
         project_id = ledger.project_for_root(args.project_root)
-        history = open_offline_history(state, project_id)
+        try:
+            history = open_offline_history(state, project_id)
+        except HistoryError as error:
+            if error.reason_code != "history_writer_busy" or args.status:
+                raise
+            if not ledger.drained():
+                return refused("migration_not_drained")
+            # No run is active anywhere, so this project's idle service is asked to
+            # stop: it exits once its published hint is withdrawn, and the next
+            # command starts another. Its journals are durable.
+            runtime_hint_path(CollectorPaths(args.state_root), args.project_root).unlink(missing_ok=True)
+            deadline = time.monotonic() + 5
+            while history is None:
+                time.sleep(0.2)
+                try:
+                    history = open_offline_history(state, project_id)
+                except HistoryError as retry:
+                    if retry.reason_code != "history_writer_busy" or time.monotonic() >= deadline:
+                        raise
         if args.status:
             report = migration_status(ledger, history, project_id)
         elif args.rollback:
@@ -2050,7 +2200,7 @@ def main() -> int:
                 # Model, effort, agent and sandbox come only from the installed route.
                 if args.fallback_receipt is None and supplied_route != _installed_route(args, task):
                     raise ContractError("supplied route does not match the installed route")
-                ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)
+                _start_project_host(args)
                 host = _host_client()  # Consistency only; native identity is independently checked.
                 if host == CLAUDE_HOST_CLIENT:
                     check_backend(os.environ, args.project_root.resolve())
@@ -2262,7 +2412,7 @@ def main() -> int:
             operation = ('status' if args.command == 'learning-orchestration-status'
                          else args.command.removeprefix('learning-').removesuffix('-orchestration'))
             # Best effort: a client that still finds no service reports it unavailable.
-            ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)
+            _start_project_host(args)
             report = orchestration_client(args.state_root, args.project_root, 'orchestration.'+operation,
                 host_client=_host_client(), orchestration_handle=getattr(args, 'orchestration_handle', None),
                 request_id=args.request_id, expected_sequence=getattr(args, 'expected_sequence', None),
@@ -2277,16 +2427,28 @@ def main() -> int:
             _print_command_report(args, report)
             return 0 if report['ready'] else 2
         elif args.command == "learning-orchestration-report":
-            ledger, project_id = _learning_ledger(args)
+            # The project's own service reports the orchestrations it ran; the
+            # ledger still answers for those an earlier version kept there.
+            _start_project_host(args)
             try:
-                report = {
-                    "ready": True,
-                    **ledger.orchestration_report(
-                        project_id, args.orchestration_id
-                    ),
-                }
-            finally:
-                _close_ledger(ledger)
+                label = _host_client()
+            except HostClientUnknown:
+                label = OWNER_CLIENT
+            held = orchestration_report_client(
+                args.state_root, args.project_root, args.orchestration_id, host_client=label)
+            if held is not None:
+                report = {"ready": True, **held}
+            else:
+                ledger, project_id = _learning_ledger(args)
+                try:
+                    report = {
+                        "ready": True,
+                        **ledger.orchestration_report(
+                            project_id, args.orchestration_id
+                        ),
+                    }
+                finally:
+                    _close_ledger(ledger)
         elif args.command == "learning-bind-host-agent":
             _refuse_bridged_run(args, args.run_handle, "a bridged run binds only its dispatched child")
             ledger, project_id = _learning_ledger(args)
@@ -2725,6 +2887,11 @@ def main() -> int:
                     }
             finally:
                 _close_ledger(ledger)
+        elif args.command in _MOVED_LEARNING_COMMANDS and _learning_moved(args):
+            report = _moved_learning_command(args)
+            if not report["ready"]:
+                _print(report)
+                return 2
         elif args.command == "learning-expire":
             ledger, project_id = _learning_ledger(args)
             try:
@@ -3452,6 +3619,14 @@ def main() -> int:
         _print(_with_codex_hint(
             args.command, {"ready": False, "error": "filesystem operation failed"}
         ))
+        return 2
+    except ProjectServiceOtherVersion:
+        _print({
+            "ready": False,
+            "error": "this project's service was started by another version and a child run is still active "
+                     "or unsettled; try again when none is running",
+            "reason_code": "project_service_other_version",
+        })
         return 2
     except HostClientMismatch:
         _print({

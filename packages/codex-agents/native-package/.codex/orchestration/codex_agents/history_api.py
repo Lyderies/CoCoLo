@@ -7,6 +7,7 @@ back to SQLite, and never retries an ambiguously delivered mutation automaticall
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import re
 from dataclasses import dataclass
@@ -38,9 +39,11 @@ HISTORY_OPERATIONS = frozenset({
     "history.issue_qa_checks",
     "history.commit_qa", "history.qa_details", "history.open_scope", "history.worker_input",
     "history.learning_cycle", "history.learning_report", "history.routing_evidence",
+    "history.learning_feedback", "history.learning_review_case", "history.orchestration_report",
 })
 # Replies that may carry more than the ordinary metadata reply.
 LARGE_REPLY_OPERATIONS = frozenset({"history.read_record", "history.qa_details", "history.worker_input",
+                                    "history.orchestration_report",
                                     "history.learning_report"})
 LEARNING_CYCLE_STATES = frozenset({"pending", "ready", "failed"})
 HISTORY_RECORD_TYPES = frozenset({*_RECORD_OPERATIONS.values(), "host_result_admission",
@@ -116,6 +119,23 @@ def _validate_request(request: HistoryRequest) -> None:
     elif operation == 'history.worker_input':
         if (not _closed(payload, {'host_outcome_digest'}) or not matches(payload['host_outcome_digest'], _DIGEST)
                 or request.request_id != payload['host_outcome_digest']):
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.orchestration_report':
+        if (not _closed(payload, {'orchestration_id'}) or type(payload['orchestration_id']) is not str
+                or re.fullmatch(r'orc:[0-9a-f]{64}', payload['orchestration_id']) is None
+                or request.request_id != payload['orchestration_id']):
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.learning_feedback':
+        if (not _closed(payload, {'record', 'signature_b64'}) or type(payload['record']) is not dict
+                or type(payload['signature_b64']) is not str or not 0 < len(payload['signature_b64']) <= 24_000
+                or request.request_id != payload['record'].get('record_id')):
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.learning_review_case':
+        if (not _closed(payload, {'case_id', 'review_digest', 'similarity_group_digest', 'destination', 'freeze'})
+                or not matches(payload['case_id'], _ID) or not matches(payload['review_digest'], _DIGEST)
+                or not matches(payload['similarity_group_digest'], _DIGEST)
+                or payload['destination'] not in ('promotion_holdout', 'canary') or type(payload['freeze']) is not bool
+                or request.request_id != hashlib.sha256(canonical_json(payload)).hexdigest()):
             raise HistoryError('history_invalid_request')
     elif operation == 'history.routing_evidence':
         if (not _closed(payload, {'host_outcome_digest', 'task_id', 'family'})
@@ -295,6 +315,22 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
             raise HistoryError('history_invalid_response')
     elif operation == 'history.routing_evidence':
         if not _closed(result, {'trusted'}) or type(result['trusted']) is not bool:
+            raise HistoryError('history_invalid_response')
+    elif operation == 'history.orchestration_report':
+        if (type(result) is not dict or result.get('orchestration_id') != request.payload['orchestration_id']
+                or type(result.get('runs')) is not dict or type(result.get('qa')) is not dict
+                or type(result.get('usage')) is not dict or type(result.get('checkpoints')) is not list):
+            raise HistoryError('history_invalid_response')
+    elif operation in {'history.learning_feedback', 'history.learning_review_case'}:
+        from .project_learning_owner import OWNER_REASONS
+        review = operation == 'history.learning_review_case'
+        if (not _closed(result, {'stored', 'refused', 'detail', *(('record',) if review else ())})
+                or type(result['stored']) is not bool
+                or (result['refused'] is not None and (result['refused'] not in OWNER_REASONS or result['stored']))
+                or (result['detail'] is not None and (
+                    type(result['detail']) is not str or len(result['detail']) > 200 or result['refused'] is None))
+                or (review and (result['record'] is None) != (result['refused'] is not None))
+                or (review and result['record'] is not None and type(result['record']) is not dict)):
             raise HistoryError('history_invalid_response')
     elif operation == 'history.worker_input':
         if (not _closed(result, {'worker', 'reference'}) or type(result['worker']) is not dict
@@ -538,6 +574,22 @@ class HistoryClient:
     def learning_report(self, cycle_id: str, offset: int) -> dict:
         """One slice of a finished cycle's full report."""
         return self._call('history.learning_report', cycle_id, {'offset': offset})
+
+    def orchestration_report(self, orchestration_id: str) -> dict:
+        """Content-free statistics for one orchestration this project's service ran."""
+        return self._call('history.orchestration_report', orchestration_id, {'orchestration_id': orchestration_id})
+
+    def learning_feedback(self, record: dict, signature: bytes) -> dict:
+        """Store the owner's signed feedback on one run; the service has the signature checked."""
+        return self._call('history.learning_feedback', record.get('record_id'), {
+            'record': record, 'signature_b64': base64.b64encode(signature).decode('ascii')})
+
+    def learning_review_case(self, case_id: str, *, review_digest: str, similarity_group_digest: str,
+                             destination: str, freeze: bool) -> dict:
+        """Move one development case into a controlled corpus."""
+        payload = {'case_id': case_id, 'review_digest': review_digest,
+                   'similarity_group_digest': similarity_group_digest, 'destination': destination, 'freeze': freeze}
+        return self._call('history.learning_review_case', hashlib.sha256(canonical_json(payload)).hexdigest(), payload)
 
     def routing_evidence(self, host_outcome_digest: str, *, task_id: str, family: str) -> bool:
         """Whether this recorded outcome is accepted reconnaissance for the named task."""

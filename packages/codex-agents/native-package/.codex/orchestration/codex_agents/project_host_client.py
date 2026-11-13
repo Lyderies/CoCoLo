@@ -9,12 +9,14 @@ from pathlib import Path
 import sys
 import time
 
-from .client_runtime import read_runtime_hint
+from .client_runtime import _read_runtime_endpoints, read_runtime_hint, runtime_hint_path
+from .collector_client import COLLECTOR_RUNTIME_DIGEST
 from .collector_paths import CollectorPaths, StateError, _canonical_project_root
 from .dispatch_api import DispatchError
 from .host_paths import PYTHON_ISOLATION_FLAGS
 
 START_TIMEOUT_SECONDS = 8.0
+WITHDRAW_TIMEOUT_SECONDS = 5.0
 HOST_ENTRY = 'project_host.py'
 HOST_LOCK = 'host.lock'
 
@@ -43,6 +45,50 @@ def _host_alive(directory):
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def project_host_serving(state_root, project_root):
+    """Whether a live host serves this project now; any failure is a plain False."""
+    try:
+        state = CollectorPaths(state_root)
+        _, control, _ = read_runtime_hint(state, _canonical_project_root(Path(project_root)))
+    except (DispatchError, StateError, OSError, ValueError):
+        return False
+    return _host_alive(control.parent) is not False
+
+
+def other_version_host(state_root, project_root):
+    """The lock directory of a live host that another runtime version started, else None.
+
+    Such a host cannot serve this version's commands, and while it lives no
+    host of this version can start for the project.
+    """
+    try:
+        state = CollectorPaths(state_root)
+        scope, endpoints = _read_runtime_endpoints(
+            state, _canonical_project_root(Path(project_root)), any_runtime=True)
+    except (DispatchError, StateError, OSError, ValueError):
+        return None
+    directory = endpoints[0].parent
+    return directory if scope.runtime_digest != COLLECTOR_RUNTIME_DIGEST and _host_alive(directory) is True else None
+
+
+def withdraw_project_host(state_root, project_root, directory, *, timeout=WITHDRAW_TIMEOUT_SECONDS):
+    """Ask a project's idle host to stop by withdrawing its published hint; whether it stopped.
+
+    The caller has confirmed that no run is active: a host stops whatever it
+    holds when its hint is withdrawn. Its journals are durable.
+    """
+    try:
+        runtime_hint_path(CollectorPaths(state_root), Path(project_root)).unlink(missing_ok=True)
+    except (DispatchError, StateError, OSError):
+        return False
+    deadline = time.monotonic() + timeout
+    while _host_alive(directory) is True:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
 
 
 def ensure_project_host(state_root, orchestration_root, project_root, *, timeout=START_TIMEOUT_SECONDS):

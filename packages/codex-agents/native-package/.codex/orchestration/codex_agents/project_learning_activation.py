@@ -28,12 +28,20 @@ CREATE TABLE project_learning_activation(
  qa_count INTEGER NOT NULL,live_sequence INTEGER NOT NULL,activated_at_ms INTEGER NOT NULL,
  activation_seal TEXT NOT NULL,
  FOREIGN KEY(project_id) REFERENCES history_identity(project_id));
+CREATE TABLE project_owner_attestations(
+ project_id TEXT NOT NULL,subject_record_id TEXT NOT NULL,signature BLOB NOT NULL,
+ signature_digest TEXT NOT NULL,observed_at_ms INTEGER NOT NULL,
+ PRIMARY KEY(project_id,subject_record_id),
+ FOREIGN KEY(project_id,subject_record_id) REFERENCES records(project_id,record_id));
 """
 ACTIVATION_COLUMNS = {
     "project_learning_activation": (
         "project_id", "import_id", "source_identity_digest", "records_manifest_digest",
         "qa_manifest_digest", "record_count", "qa_count", "live_sequence", "activated_at_ms",
         "activation_seal"),
+    # The owner's detached signatures over live owner records (feedback).
+    "project_owner_attestations": (
+        "project_id", "subject_record_id", "signature", "signature_digest", "observed_at_ms"),
 }
 _FIELDS = ACTIVATION_COLUMNS["project_learning_activation"]
 _SEAL_DOMAIN = b"project-learning-activation-v1\0"

@@ -108,7 +108,9 @@ from .learning_contracts import (
     validate_execution_configuration,
 )
 from .learning_adapters import HOOK_EVENTS, empty_usage, load_client_capabilities, reconcile_run
-from .learning_eligibility import EligibilityError, check_candidate_eligibility
+from .learning_eligibility import (
+    EligibilityError, check_candidate_eligibility, check_evaluation_case,
+)
 from .admission_metadata import EVIDENCE_HORIZON_MS as EVIDENCE_HORIZON_MS
 from .provider_restrictions import (
     BILLING_RANK as BILLING_RANK,
@@ -3026,6 +3028,28 @@ class LearningLedger:
                 _drained(self._connection, self._clock_ms())
             except HistoryError:
                 return False
+            return True
+
+    def mark_learning_moved_if_empty(self, project_id: str) -> bool:
+        """Retire the ledger for a project that has no learning history in it.
+
+        There is nothing to copy, so this needs no drain and no offline owner:
+        the running collector may do it. Returns whether the project is moved.
+        """
+
+        with self._lock, self._connection:
+            project = self._connection.execute(
+                "SELECT status FROM projects WHERE project_id=?", (project_id,)
+            ).fetchone()
+            if not project or project["status"] != "active":
+                raise LedgerError("project binding is not active")
+            if self._learning_moved_locked(project_id):
+                return True
+            if self.has_learning_history(project_id):
+                return False
+            self._connection.execute(
+                "INSERT INTO additive_migrations VALUES(?)", (LEARNING_MOVED_KEY + project_id,)
+            )
             return True
 
     def learning_moved(self, project_id: str) -> bool:
@@ -8498,81 +8522,27 @@ class LearningLedger:
                 "AND record_type='outcome'",
                 (project_id, checked["source_outcome_id"]),
             ).fetchone()
-            if not source:
-                raise LedgerError("evaluation case source outcome is missing")
-            source_record = json.loads(bytes(source["content"]))
-            if (
-                source_record["task_slice"] != checked["task_slice"]
-                or source_record["fixture_digest"] != checked["fixture_digest"]
-            ):
-                raise LedgerError("evaluation case differs from its source outcome")
-            if source_record["run_id"] in self._owner_invalidated_run_ids_locked(
-                project_id
-            ):
-                raise LedgerError("evaluation case source was invalidated by owner feedback")
             previous_id = checked["supersedes_case_id"]
-            if previous_id is None:
-                if checked["corpus_state"] != "development":
-                    raise LedgerError("controlled evaluation case must supersede a development case")
-            else:
-                previous = self._connection.execute(
-                    "SELECT content FROM records WHERE project_id=? AND record_id=? "
-                    "AND record_type='evaluation_case'",
-                    (project_id, previous_id),
-                ).fetchone()
-                if not previous:
-                    raise LedgerError("superseded evaluation case is missing")
-                previous_record = json.loads(bytes(previous["content"]))
-                immutable = {
-                    "source_outcome_id", "task_slice", "fixture_digest",
-                    "criteria_digest", "lineage_digest",
-                }
-                if any(previous_record[field] != checked[field] for field in immutable):
-                    raise LedgerError("evaluation case revision changes immutable evidence")
-                if previous_record["similarity_group_digest"] not in {
-                    None, checked["similarity_group_digest"]
-                }:
-                    raise LedgerError("evaluation case revision changes its similarity group")
+            previous = None if previous_id is None else self._connection.execute(
+                "SELECT content FROM records WHERE project_id=? AND record_id=? "
+                "AND record_type='evaluation_case'",
+                (project_id, previous_id),
+            ).fetchone()
             related_rows = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? "
                 "AND record_type='evaluation_case' AND record_id<>?",
                 (project_id, previous_id or checked["record_id"]),
             ).fetchall()
-            related = [json.loads(bytes(row["content"])) for row in related_rows]
-            controlled = [
-                record for record in related
-                if record["corpus_state"] != "development"
-                and record["record_id"] != checked["record_id"]
-            ]
-            if previous_id is not None and any(
-                record["supersedes_case_id"] == previous_id for record in controlled
-            ):
-                raise LedgerError("development case already entered a controlled corpus")
-            split_key = (
-                checked["source_outcome_id"], checked["fixture_digest"],
-                checked["criteria_digest"], checked["lineage_digest"],
-            )
-            if checked["corpus_state"] != "development" and any(
-                (
-                    record["source_outcome_id"], record["fixture_digest"],
-                    record["criteria_digest"], record["lineage_digest"],
-                ) == split_key
-                for record in controlled
-            ):
-                raise LedgerError("evaluation evidence already belongs to a controlled corpus")
-            same_group = [
-                record for record in related
-                if record["similarity_group_digest"] is not None
-                if record["similarity_group_digest"]
-                == checked["similarity_group_digest"]
-            ]
-            if any(
-                record["corpus_state"] != checked["corpus_state"]
-                for record in same_group
-            ):
-                raise LedgerError(
-                    "reviewed similarity group already exists in the project corpus"
+            try:
+                check_evaluation_case(
+                    checked,
+                    source_outcome=json.loads(bytes(source["content"])) if source else None,
+                    previous_case=json.loads(bytes(previous["content"])) if previous else None,
+                    related_cases=(json.loads(bytes(row["content"])) for row in related_rows),
+                    invalidated_run_ids=self._owner_invalidated_run_ids_locked(project_id),
                 )
+            except EligibilityError as error:
+                raise LedgerError(str(error)) from None
             return
         if checked["record_type"] == "evaluation_assignment":
             candidate_rows = self._connection.execute(
@@ -11223,9 +11193,11 @@ class CollectorServer:
                 # The owner's registration on the running compatible collector, so
                 # another project's running children keep their collector.
                 return {"ok": True, "project_id": self.ledger.register_project(Path(request["project_root"]))}
-            if request.get("op") in {"owner_record_payload", "commit_owner_record"} and set(request) == {
+            if request.get("op") in {
+                "owner_record_payload", "commit_owner_record", "verify_owner_record",
+            } and set(request) == {
                 "protocol", "op", "project_root", "record",
-                *({"signature_b64"} if request.get("op") == "commit_owner_record" else ()),
+                *({"signature_b64"} if request.get("op") != "owner_record_payload" else ()),
             }:
                 from .learning_engine import OwnerGrantAuthority
                 project_id = self.ledger.project_for_root(Path(request["project_root"]))
@@ -11235,6 +11207,14 @@ class CollectorServer:
                 if request["op"] == "owner_record_payload":
                     payload = OwnerGrantAuthority.for_state(self.ledger.state).owner_record_payload(project_id, record)
                     return {"ok": True, "signing_payload_b64": base64.b64encode(payload).decode("ascii")}
+                if request["op"] == "verify_owner_record":
+                    # For a project's own service, which stores the record itself: the
+                    # owner key and its check stay with this owner. Nothing is stored here.
+                    checked = validate_learning_record(record)
+                    signature = base64.b64decode(request["signature_b64"], validate=True)
+                    return {"ok": True, "valid": checked["record_type"] == "feedback" and bool(
+                        OwnerGrantAuthority.for_state(self.ledger.state).verify_owner_record(
+                            project_id, checked, signature))}
                 # The owner's signature is the authority; the ledger verifies it.
                 signature = base64.b64decode(request["signature_b64"], validate=True)
                 committed = self.ledger.commit_owner_record(project_id, record=record, signature=signature)
@@ -11284,6 +11264,11 @@ class CollectorServer:
                     "has_learning": self.ledger.has_learning_history(project_id),
                     "drained": self.ledger.drained(),
                 }
+            if request.get("op") == "learning_moved_if_empty" and set(request) == {
+                "protocol", "op", "project_root",
+            }:
+                project_id = self.ledger.project_for_root(Path(request["project_root"]))
+                return {"ok": True, "moved": self.ledger.mark_learning_moved_if_empty(project_id)}
             if request.get("op") == "shutdown_if_drained" and set(request) == {"protocol", "op"}:
                 # For a migration tool: never taken away from under an active run.
                 if not self.ledger.drained():
@@ -11402,8 +11387,13 @@ class CollectorMaintenance:
         *,
         timeout: float = 2.0,
         owner_registration: bool = False,
-        only_if_drained: bool = False,
     ) -> "CollectorMaintenance":
+        """Stop the collector for one direct ledger command, never from under a run.
+
+        The collector stops only if no run is active or unsettled anywhere;
+        otherwise this raises with code `collector_busy` and everything keeps
+        running. A collector from before that check existed drives no runs.
+        """
         if not owner_registration:
             require_authorized_collector_runtime(state)
         if fcntl is None:
@@ -11439,9 +11429,16 @@ class CollectorMaintenance:
                     transferred = True
                     return cls(state, cli_path, project_root, descriptor, False)
                 raise CollectorError("collector writer did not stop for maintenance")
-            if only_if_drained:
+            try:
                 client.shutdown(only_if_drained=True)
-            else:
+            except CollectorError as error:
+                if error.code == "collector_busy":
+                    raise CollectorError(
+                        "a child run is active; nothing was changed, try again when none is running",
+                        code="collector_busy",
+                    ) from None
+                if error.code != "operation_invalid":
+                    raise
                 client.shutdown()
             if _wait_for_collector_shutdown(client, state, deadline):
                 transferred = True

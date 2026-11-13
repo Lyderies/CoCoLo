@@ -1,7 +1,6 @@
 """One project's learning history moves from the legacy ledger to its project store."""
 from __future__ import annotations
 
-import json
 import sqlite3
 import time
 import unittest
@@ -18,7 +17,7 @@ from codex_agents import learning_source_image as image
 from codex_agents import learning_store
 from codex_agents import project_learning_live as live
 from codex_agents.history_contracts import HistoryError
-from codex_agents.learning_store import LEARNING_MOVED_ERROR, LearningState, LedgerError
+from codex_agents.learning_store import LEARNING_MOVED_ERROR, LearningLedger, LearningState, LedgerError
 from codex_agents.project_service import history_directory
 from codex_agents.project_history import ProjectHistory
 from codex_agents.project_learning_activation import activation, staged_imports
@@ -180,6 +179,54 @@ class LearningMigrationTests(unittest.TestCase):
         self.assertTrue(self.source.learning_moved(self.project))
         self.assertEqual(again, self.status())
 
+    def test_owner_feedback_and_case_review_reach_the_imported_history(self):
+        from codex_agents.learning_engine import build_feedback
+        from codex_agents.project_learning_owner import (
+            OwnerRecordRefused, corpus_records, record_feedback, rejected_run_ids, review_case,
+        )
+
+        self.migrate()
+        already = rejected_run_ids(self.target)
+        outcome = next(item for item in corpus_records(self.target, "outcome", 10_000)
+                       if item["run_id"] not in already)
+        record = build_feedback(digest_key=self.key, run_id=outcome["run_id"], label="rejected",
+                                reason_code="incorrect", observed_at_ms=5)
+        # The signature was checked by the service adapter; here it is kept with the record.
+        self.assertTrue(record_feedback(self.target, record, b"signature", now_ms=400)["stored"])
+        self.assertFalse(record_feedback(self.target, record, b"signature", now_ms=401)["stored"])
+        self.assertEqual(already | {outcome["run_id"]}, rejected_run_ids(self.target))
+        for changed, signature, reason in (
+                (record, b"another signature", "owner_record_conflict"),
+                (build_feedback(digest_key=self.key, run_id="run-nobody-ran", label="rejected",
+                                reason_code="incorrect", observed_at_ms=5), b"signature", "feedback_run_unknown")):
+            with self.subTest(reason=reason), self.assertRaises(OwnerRecordRefused) as refused:
+                record_feedback(self.target, changed, signature, now_ms=402)
+            self.assertEqual(reason, refused.exception.owner_reason)
+        self.assertEqual([(record["record_id"], b"signature")], [(a, bytes(b)) for a, b in self.rows(
+            "SELECT subject_record_id,signature FROM project_owner_attestations")])
+        with self.assertRaises(HistoryError):
+            record_feedback(self.target, outcome, b"signature", now_ms=403)  # Not a feedback record.
+        # A development case the ledger mined is reviewed here, and the review is a live record.
+        cases = corpus_records(self.target, "evaluation_case", 20_000)
+        superseded = {case["supersedes_case_id"] for case in cases}
+        sources = {item["record_id"]: item for item in corpus_records(self.target, "outcome", 10_000)}
+        development = [case for case in cases if case["corpus_state"] == "development"
+                       and case["record_id"] not in superseded
+                       and sources[case["source_outcome_id"]]["run_id"] not in rejected_run_ids(self.target)]
+        if development:
+            arguments = {"review_digest": "d" * 64, "similarity_group_digest": "e" * 64,
+                         "destination": "promotion_holdout", "freeze": True}
+            reviewed = review_case(self.target, development[0]["record_id"], now_ms=404, **arguments)
+            self.assertEqual((True, development[0]["record_id"]), (
+                reviewed["stored"], reviewed["record"]["supersedes_case_id"]))
+            self.assertFalse(review_case(self.target, development[0]["record_id"], now_ms=405, **arguments)["stored"])
+            self.assertEqual([(reviewed["record"]["record_id"],)], self.rows(
+                "SELECT record_id FROM records WHERE record_type='evaluation_case'"))
+        with self.assertRaises(OwnerRecordRefused) as refused:
+            review_case(self.target, "no-such-case", review_digest="d" * 64,
+                        similarity_group_digest="e" * 64, destination="canary", freeze=False, now_ms=406)
+        self.assertEqual("case_unknown", refused.exception.owner_reason)
+
     def test_project_without_learning_history_only_retires_the_ledger(self):
         other = self.fixture.project_b_id
         directory = Path(self.fixture.temporary.name) / "empty-target-history"
@@ -231,12 +278,45 @@ class MigrationCliTests(unittest.TestCase):
         self.assertGreater(moved["imported_records"], 0)
         self.assertEqual(moved, self._run("learning-migrate-project"))
         self.assertEqual("complete", self._run("learning-migrate-project", "--status")["state"])
-        # The old commands say where the history went instead of writing beside it.
-        refused = self._run("learning-run-cycle", expected=2)
-        self.assertIn("project learning has moved to its project store", json.dumps(refused))
+        # Straight back: nothing was learned on the project store yet.
         rolled = self._run("learning-migrate-project", "--rollback")
         self.assertEqual(("rolled_back", False), (rolled["state"], rolled["ledger_retired"]))
+        ledger_cycle = self._run("learning-run-cycle")
+        self.assertTrue(ledger_cycle["ready"])
+        self.assertEqual("complete", self._run("learning-migrate-project")["state"])
+        # The owner's cycle now runs on the project's own service, over the imported
+        # history; the command stops that idle service itself when it has to.
+        store_cycle = self._run("learning-run-cycle")
+        self.assertTrue(store_cycle["ready"])
+        self.assertEqual(0, store_cycle["expired_records"])
+        # (The fixture's outcomes carry a 1970 timestamp, long past retention.)
+        self.assertEqual(set(ledger_cycle["analysis"]), set(store_cycle["analysis"]))
+        refused = self._run("learning-mine-case", "--source-outcome-id", "x", "--task", "missing.json",
+                            "--criteria-digest", "a" * 64, "--lineage-digest", "b" * 64, expected=2)
+        self.assertFalse(refused["ready"])
+        self.assertEqual("complete", self._run("learning-migrate-project")["state"])
+
+    def test_first_start_of_the_project_service_moves_the_history_by_itself(self):
+        self.assertEqual("pending", self._run("learning-migrate-project", "--status")["state"])
+        opened = self._run("learning-open-orchestration")
+        self.assertRegex(opened["orchestration_handle"], "^orc_[0-9a-f]{48}$")
+        self.assertEqual("complete", self._run("learning-status")["learning_migration"])
+        # Its service is running and the history is in its store: the owner's cycle reads it there.
         self.assertTrue(self._run("learning-run-cycle")["ready"])
+        ledger_records = self._stopped_ledger_count("records")
+        moved = self._run("learning-migrate-project")
+        self.assertEqual(("complete", True), (moved["state"], moved["ledger_retired"]))
+        self.assertGreater(moved["imported_records"], 0)
+        self.assertLessEqual(moved["imported_records"], ledger_records)
+
+    def _stopped_ledger_count(self, table):
+        self._stop_collector()
+        ledger = LearningLedger(LearningState(self.state_root, create=False))
+        try:
+            return ledger._connection.execute(
+                "SELECT COUNT(*) FROM " + table + " WHERE project_id=?", (self.project_id,)).fetchone()[0]
+        finally:
+            ledger.close()
 
 
 for _name in dir(cli_fixture.LearningCliTests):

@@ -9,6 +9,7 @@ not proof. Disposable process fixtures may supply explicitly fake server context
 
 from __future__ import annotations
 
+import base64
 import os
 import threading
 import time
@@ -377,6 +378,29 @@ class HistoryService:
 
                 entry = self._store.record_host_open(expected, open_request, proof, **captured, before_commit=authorize_open)
                 result = {'record': parse_bounded_json(entry.content), 'metadata': _metadata(entry)}
+            elif request.operation in {'history.learning_feedback', 'history.learning_review_case'}:
+                from .project_learning_owner import OwnerRecordRefused, record_feedback, review_case
+                self._history()
+                review = request.operation == 'history.learning_review_case'
+                try:
+                    if review:
+                        result = {'refused': None, 'detail': None,
+                                  **review_case(self._store, now_ms=self._clock(), **request.payload)}
+                    else:
+                        # The adapter authorised this request only after the account
+                        # owner confirmed the owner's signature over this exact record.
+                        stored = record_feedback(
+                            self._store, request.payload['record'],
+                            base64.b64decode(request.payload['signature_b64'], validate=True), now_ms=self._clock())
+                        result = {'stored': stored['stored'], 'refused': None, 'detail': None}
+                except OwnerRecordRefused as refusal:
+                    result = {'stored': False, 'refused': refusal.owner_reason,
+                              'detail': None if refusal.detail is None else refusal.detail[:200],
+                              **({'record': None} if review else {})}
+            elif request.operation == 'history.orchestration_report':
+                from .project_orchestration_report import orchestration_report
+                self._history()
+                result = orchestration_report(self._store, request.payload['orchestration_id'])
             elif request.operation == 'history.routing_evidence':
                 if authorization.host_result_context is None:
                     raise HistoryError('history_not_authorized')

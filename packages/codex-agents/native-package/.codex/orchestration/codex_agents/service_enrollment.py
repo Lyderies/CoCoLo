@@ -22,7 +22,7 @@ import threading
 import time
 
 from .collector_paths import CollectorPaths, StateError, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
-from .hosts import HOST_CLIENTS
+from .hosts import HOST_CLIENTS, OWNER_CLIENT
 from .learning_contracts import canonical_json, keyed_digest, parse_bounded_json
 
 ENROLLMENT_VERSION = 1
@@ -292,7 +292,8 @@ def enrollment_preamble(key, role, host_client, generation, message, proofs, *, 
               'generation': generation, 'issued_at_ms': time.time_ns() // 1_000_000 if now_ms is None else now_ms,
               'nonce': secrets.token_hex(16) if nonce is None else nonce, 'request_digest': request_digest(message),
               'subject': subject, 'context_digest': None if context is None else hashlib.sha256(context).hexdigest()}
-    if (type(key) is not bytes or len(key) != KEY_BYTES or role not in ROLES or host_client not in HOST_CLIENTS
+    if (type(key) is not bytes or len(key) != KEY_BYTES or role not in ROLES
+            or not (host_client in HOST_CLIENTS or (host_client == OWNER_CLIENT and role == 'host'))
             or not _integer(generation, minimum=1) or not _integer(fields['issued_at_ms']) or not _hex(fields['nonce'], 32)
             or not _subject(subject) or (subject is None) != (role == 'host')):
         raise EnrollmentError('enrollment_invalid')
@@ -341,7 +342,9 @@ class EnrollmentVerifier:
         if (value.keys() != set(_FIELDS) | {'mac'} or value['enrollment_version'] != ENROLLMENT_VERSION
                 or type(value['enrollment_version']) is not int
                 or type(value['role']) is not str or type(value['host_client']) is not str
-                or value['host_client'] not in HOST_CLIENTS or not _integer(value['generation'], minimum=1)
+                or not (value['host_client'] in HOST_CLIENTS
+                        or (value['host_client'] == OWNER_CLIENT and value['role'] == 'host'))
+                or not _integer(value['generation'], minimum=1)
                 or not _subject(value['subject'])
                 or (value['context_digest'] is not None and not _hex(value['context_digest'], 64))
                 or not _integer(value['issued_at_ms']) or not _hex(value['nonce'], 32)

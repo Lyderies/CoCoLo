@@ -412,8 +412,7 @@ live cycle on a copy and must produce the same report bytes and the same stored
 records), `tests/test_history_api.py` for the two operations, and the CLI lifecycle
 tests for the attached report. Limits: the corpus is this project's own records
 plus its migrated ledger history (see "Moving a project's learning history to its
-project store"). `learning-run-cycle` and the other owner learning commands still read
-the ledger; a host restart forgets a finished cycle's report (the records it wrote are
+project store"). A host restart forgets a finished cycle's report (the records it wrote are
 durable). The
 sandboxed helper-process stack that an earlier design planned for this calculation
 (`learning_cycle_execution`, `_worker`, `_process`, `_input`) was removed by owner
@@ -503,6 +502,91 @@ deadline, startup cleanup, and the read-versus-write authority overstatement tha
 led to the proof of write). The corrected code has not been independently reviewed
 again and is not accepted.
 
+## Updating while things run (C11)
+
+What an update or an owner command may stop, and what it says when it may not:
+
+- A command that needs the shared ledger to itself (`CollectorMaintenance.acquire`:
+  backup, project deletion, owner-key replacement, the candidate pipeline, the ledger
+  fallbacks, registration over an older runtime, migration) asks the collector to stop
+  with `shutdown_if_drained`. With any run active or unsettled the collector answers
+  `collector_busy`, keeps running, and the command reports "a child run is active;
+  nothing was changed, try again when none is running". A collector from before that
+  operation existed answers `operation_invalid`; it drives no runs and is stopped as
+  before. (`LearningStoreTests.test_maintenance_never_stops_a_collector_from_under_a_run`,
+  `ProjectDriverTests.test_an_owner_ledger_command_is_refused_while_a_child_runs`.)
+- A project's service that another version started (the project was updated while it
+  idled) cannot answer this version's commands, and holds the project's store.
+  `cli._start_project_host` replaces it by withdrawing its hint, but only when the
+  collector reports no run active anywhere; otherwise the command reports
+  `project_service_other_version` and nothing is stopped
+  (`ProjectDriverTests.test_a_service_left_by_another_version_is_replaced_only_when_no_run_is_active`).
+  Commands that do not start a service (status of a run, dispatch, record) still report
+  the service as unavailable in that situation.
+- Clients and collectors of different versions: a client refuses a collector with an
+  older or newer ledger schema, orders versions without downgrade, and only the
+  owner's registration may replace an older runtime's collector (the existing
+  `LearningStoreTests` for upgrade quiescence, schema and version ordering). A runtime that
+  is not the one authorized for the state root refuses itself before any request.
+- Nothing is replayed: a restarted service reports an earlier run as unavailable
+  ("Host crash recovery"), and setup opens no run.
+
+Not covered by a test here: an old runtime's CLI driven against this collector as a
+separate installed tree (the refusal rests on the runtime authorization tests), and a
+real update performed while a real child runs.
+
+## Storage decision for 0.3.0 (C15)
+
+Decision. Each project has its own history store, owned by that project's service
+(`<state root>/projects/<project id>/history.sqlite3`, schema 16, WAL, one writer held
+by an exclusive lock). The shared ledger stays the account store, owned by the
+collector: project registry, owner key history, provider observations, billing
+attestations, admission decisions, launch claims, active-run capacity and their
+receipts (ledger schema 13, unchanged). There is no transaction across the two.
+
+Why not keep one shared history. In the shared-history baseline every project's
+events, results, QA and learning cycle take the one ledger writer; 0.2.x ran each
+command as an exclusive ledger owner and paused the collector for it, so a busy or
+failing project delayed every other. With split history a project's writes, its
+result bodies and its learning cycle touch only its own store, and the shared writer
+only sees short account calls.
+
+What the tests show for that claim. Two projects run children at the same time and
+cancelling one leaves the other (`TwoProjectTests`); a project registers, observes and
+completes an owner attestation while another's child runs, with the ledger constructor
+and collector pause made to fail (`ProjectDriverTests.test_registering_another_project_during_a_run_does_not_disturb_it`);
+a whole orchestration runs with the ledger unreachable from the commands
+(`HostVerificationTests.test_a_complete_orchestration_never_opens_the_ledger_or_pauses_the_collector`);
+migration refuses to stop the collector under a run. This is evidence from in-process
+services with fake provider clients; it is not a measurement under real load.
+
+Commit order across the two stores, and what a crash leaves:
+
+- Open: the account claim commits first, then the project store records the open with
+  the claim reference, then the child is prepared and launched. A crash in between
+  leaves a claimed slot and no child; it is never a second launch.
+- Finish: the project store commits the terminal and result, then the account accepts
+  the terminal and releases capacity. A crash in between keeps the slot claimed.
+- Recovery is conservative and automatic (owner decision 2026-11-13): a restarted
+  project service does not know the earlier run and reports it unavailable, never as an
+  outcome; the claim stops counting against the limits one hour after its hard
+  deadline, which the detached watchdog enforces; a late terminal still settles it
+  (`HostRestartTests`, the capacity tests named under host crash recovery).
+- Not done: a terminal that was published but not acknowledged before a crash is not
+  resubmitted after restart; its result stays in the project store and the slot ages
+  out as above.
+
+Migration and schema. A project's learning history moves from the ledger to its store
+by `learning-migrate-project` (stage, retire, activate; automatic before the project's
+service starts when no run is active); see "Moving a project's learning history to its
+project store". The ledger keeps its schema; the only ledger addition is one
+`additive_migrations` row per moved project. Rollback is possible until new learning is
+recorded. Account data does not move.
+
+Left for a later release: the candidate pipeline on the project store (0.4.0),
+deleting expired records from project stores (retention is applied at read), keeping a
+recorded run's originals across a service restart, and measurements under real load.
+
 ## Historical learning corpus staging (uninstalled source)
 
 The drained migration owner can stage original records, ingestion metadata and
@@ -585,18 +669,55 @@ staged copy is kept. It is refused with `migration_reconciliation_required` once
 case, candidate or feedback was written to the project store after the cutover,
 because those may rest on the imported history.
 
+When it happens. `cli._start_project_host` runs before a command starts a project's
+service (not when one already serves). A project with no learning history in the
+ledger is marked moved by the running collector (`learning_moved_if_empty`; nothing to
+copy, nothing paused). A project with history is migrated there and then if no run is
+active anywhere; otherwise it stays pending and the next start tries again. Any failure
+leaves the project as it was and its service starts regardless. The explicit command
+does the same on request and, because it has confirmed no run is active, withdraws the
+project's idle service (its published hint) so that it can hold the store; the next
+command starts the service again.
+
+Owner commands on a moved project (`cli._moved_learning_command`; the ledger is not
+opened and the collector is not paused). They enroll with the label `owner-cli-v1`
+(`hosts.OWNER_CLIENT`), which a project's service accepts only on its project endpoint
+and only for `OWNER_HISTORY_OPERATIONS`; it owns no run or orchestration. As in every
+earlier version, "owner-only" is a convention kept by the installed deny rules, not an
+identity check; feedback alone carries its own authority, the owner's signature.
+
+- `learning-run-cycle`, `learning-analyze`: the project's live cycle (full report;
+  the analysis is as of now). `expired_records` is 0: retention is applied when the
+  corpus is read and nothing is deleted from the project store yet.
+- `learning-record-feedback`: `history.learning_feedback`. The service adapter has
+  the account owner check the signature (`verify_owner_record` on the collector, which
+  holds the owner key; the project's service never reads it), then
+  `project_learning_owner.record_feedback` stores the record with source `owner` and
+  the signature in `project_owner_attestations`. The run must be an outcome of the
+  corpus (live or imported).
+- `learning-review-case`: `history.learning_review_case`; the ledger's corpus rules,
+  now `learning_eligibility.check_evaluation_case` and shared with the ledger, decide.
+  The reviewed case is a live record even when the case it supersedes was imported.
+- `learning-mine-case`: refused; cases are mined by the cycle.
+- `learning-orchestration-report`: `history.orchestration_report` gives the same
+  content-free statistics for an orchestration the project's service ran (any host
+  class or the owner label); the ledger still answers for orchestrations it holds.
+- `learning-expire` still applies the ledger's retention to the ledger.
+- The candidate pipeline commands (evaluation assignments, trials, comparison,
+  promotion, canary, rollback, drift, grader calibration, grants) are refused by the
+  ledger with "project learning has moved to its project store"; they return with
+  release 0.4.0.
+
 Limits. Owner signatures are preserved as bytes and chained; the ledger verified
-them when it admitted the records and they are not verified again. The owner
-learning commands other than the cycle still read the ledger, so for a migrated
-project they see history frozen at the cutover and their writes are refused, until
-they are moved to the project store. Migration is not yet started automatically; a
-project registered on this runtime with no ledger history is not yet marked moved at
-registration. An old runtime cannot write the ledger at all once the new runtime is
-authorized for the state root (runtime authorization, not this marker). Tests:
+them when it admitted the records and they are not verified again. An old runtime
+cannot write the ledger at all once the new runtime is authorized for the state root
+(runtime authorization, not this marker). Tests:
 `tests/test_learning_migration.py` (byte equality of records and signatures, the
 ledger partition unchanged, each failure point, refusals, rollback, the command as a
-separate process, the drained rule, the schema 15 to 16 upgrade) and
-`ProjectDriverTests.test_learning_migration_never_takes_the_collector_from_under_a_run`.
+separate process, the drained rule, the schema 15 to 16 upgrade, owner writes over
+imported history),
+`ProjectDriverTests.test_learning_migration_never_takes_the_collector_from_under_a_run`
+and `HostVerificationTests.test_owner_learning_commands_work_on_a_project_whose_learning_lives_in_its_own_store`.
 
 ## Complete registered source rows (uninstalled offline owner)
 

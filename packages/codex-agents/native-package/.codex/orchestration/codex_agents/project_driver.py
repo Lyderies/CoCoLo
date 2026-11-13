@@ -814,6 +814,10 @@ class RunDriver:
     def busy(self):
         return any(run.state not in {'registered', 'failed', 'released'} for run in self._runs.values())
 
+    def retaining(self):
+        """Whether recorded runs' originals are kept here for their verifiers and QA."""
+        return bool(self._workers)
+
     def exhausted(self):
         """No room for another run in this host's lifetime; a fresh host has it all."""
         return not self.busy() and (len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS)

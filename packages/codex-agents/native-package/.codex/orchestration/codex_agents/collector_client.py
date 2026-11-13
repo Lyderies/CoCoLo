@@ -245,6 +245,15 @@ class CollectorClient:
         except (KeyError, TypeError, ValueError):
             raise CollectorError("collector response is invalid", code="response_invalid") from None
 
+    def verify_owner_record(self, project_root: Path, record: dict, signature: bytes) -> bool:
+        """Whether this is the owner's signature over that feedback record for this project."""
+        response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "verify_owner_record",
+                                  "project_root": str(project_root.resolve()), "record": record,
+                                  "signature_b64": base64.b64encode(signature).decode("ascii")})
+        if type(response.get("valid")) is not bool:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return response["valid"]
+
     def commit_owner_record(self, project_root: Path, record: dict, signature: bytes) -> dict:
         response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "commit_owner_record",
                                   "project_root": str(project_root.resolve()), "record": record,
@@ -262,6 +271,14 @@ class CollectorClient:
         if any(type(response.get(name)) is not bool for name in names):
             raise CollectorError("collector response is invalid", code="response_invalid")
         return {name: response[name] for name in names}
+
+    def learning_moved_if_empty(self, project_root: Path) -> bool:
+        """Mark a project with no ledger learning history as living in its own store; whether it is moved."""
+        response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "learning_moved_if_empty",
+                                  "project_root": str(project_root.resolve())})
+        if type(response.get("moved")) is not bool:
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return response["moved"]
 
     def shutdown(self, *, only_if_drained: bool = False) -> None:
         """Stop the collector; with `only_if_drained` it refuses (`collector_busy`) while any run is active."""

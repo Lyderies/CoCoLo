@@ -37,6 +37,10 @@ MAX_ACTIVE_ATTEMPTS = 4
 # A host is started on demand, so one with no run and no client for this long
 # stops; the next command starts another. Its journals and scope are durable.
 IDLE_STOP_NS = 900 * SECOND
+# Recorded runs' originals for verification and QA are kept in this process only,
+# so a host that holds any waits much longer before it stops: a primary may take
+# its time between recording a worker and verifying it.
+RETAINING_IDLE_STOP_NS = 12 * 3600 * SECOND
 ORCHESTRATIONS = OrchestrationLimits(256, 4_096)
 
 
@@ -92,7 +96,7 @@ def open_offline_history(state, project_id):
 
 
 def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None,
-                  liveness=LIVENESS):
+                  liveness=LIVENESS, retaining_idle_stop_ns=RETAINING_IDLE_STOP_NS):
     """Run the host until a signal, idleness or withdrawal; return a closed report."""
     from .project_history import ProjectHistory
 
@@ -134,7 +138,8 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         if time.monotonic() - checked[0] >= 1:
             checked[0] = time.monotonic()
             # Stop when idle, or when the state under this host has been removed.
-            return host.withdrawn() or host.exhausted() or host.idle_ns() >= idle_stop_ns
+            limit = max(idle_stop_ns, retaining_idle_stop_ns) if host.retaining() else idle_stop_ns
+            return host.withdrawn() or host.exhausted() or host.idle_ns() >= limit
         return False
 
     try:

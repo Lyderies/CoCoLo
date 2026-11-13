@@ -158,9 +158,11 @@ says `dispatch: native`, stop and report it.
    `<path>:read` permissions). The context must be exactly that one digest, or the
    open is refused, and operational QA accepts only a verifier opened with
    `verification_for_outcome` for that worker. The worker's result reaches the verifier
-   only from the ledger: the bridged verifier finds it read-only at
-   `.orchestration-input/worker-result.json` in its export. The ledger keeps that result
-   only while the orchestration is open (and at most seven days), so verify before
+   only from the project's own service: the bridged verifier finds it read-only at
+   `.orchestration-input/worker-result.json` in its export. That service keeps what it
+   needs to verify a recorded worker only while it runs (it stops after twelve idle
+   hours, or when the owner migrates or updates the project), and the result at most
+   seven days, so verify and run operational QA in the same working session, before
    closing. The router refuses an outcome that is unknown, from another provider or
    family, or from another orchestration. Open, dispatch, and finish the verifier
    through the same host lifecycle.

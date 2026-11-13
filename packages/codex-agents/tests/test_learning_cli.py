@@ -766,6 +766,9 @@ class LearningCliTests(unittest.TestCase):
         self.assertTrue(calibrated["record"]["ready"])
         self.assertEqual(content_digest(labels), calibrated["record"]["labels_digest"])
 
+        # The owner commands that ask where the project's learning lives leave the
+        # shared collector running; it owns the ledger until it is stopped.
+        self._stop_collector()
         ledger = LearningLedger(LearningState(self.state_root, create=False))
         try:
             with ledger.repository(self.project_id) as repository:

@@ -18,30 +18,10 @@ from .contracts import ContractError
 from .history_contracts import HistoryError, _DIGEST, _ID, matches
 from .host_result_contracts import HostResultContext
 from .learning_contracts import MAX_RECORD_BYTES, content_digest, parse_bounded_json
-from .project_learning_activation import activation
+from .project_learning_owner import rejected_run_ids
 from .project_worker_result import current_input_reference
 
-MAX_FEEDBACK = 20_000
 _POSITIVE = frozenset({"pass", "ready", "ready-with-corrections"})
-
-
-def _rejected_by_owner(history, run_id):
-    cutover = activation(history)
-    sources = [("SELECT content FROM records WHERE project_id=? AND record_type='feedback' LIMIT ?",
-                (history.project_id, MAX_FEEDBACK + 1))]
-    if cutover is not None and cutover["import_id"] is not None:
-        sources.append((
-            "SELECT content FROM project_learning_records WHERE project_id=? AND import_id=? "
-            "AND record_type='feedback' LIMIT ?", (history.project_id, cutover["import_id"], MAX_FEEDBACK + 1)))
-    for statement, parameters in sources:
-        rows = history._connection.execute(statement, parameters).fetchall()
-        if len(rows) > MAX_FEEDBACK:
-            raise HistoryError("history_learning_capacity")
-        for (content,) in rows:
-            feedback = parse_bounded_json(history._stored_blob(content, maximum=MAX_RECORD_BYTES))
-            if feedback.get("run_id") == run_id and feedback.get("label") in {"rejected", "corrected"}:
-                return True
-    return False
 
 
 def trusted_reconnaissance(history, context, host_outcome_digest, *, task_id, family):
@@ -74,6 +54,6 @@ def trusted_reconnaissance(history, context, host_outcome_digest, *, task_id, fa
                 and outcome.get("execution_state", "completed") == "completed"
                 and outcome.get("semantic_verdict", "pass") in _POSITIVE
                 and len(parts) == 7 and parts[0] == family and "unknown" in (parts[4], parts[5])
-                and not _rejected_by_owner(history, outcome["run_id"]))
+                and outcome["run_id"] not in rejected_run_ids(history))
     except (ContractError, KeyError, TypeError, ValueError, AttributeError):
         raise HistoryError("history_incompatible") from None

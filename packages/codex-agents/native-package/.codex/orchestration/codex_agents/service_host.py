@@ -11,6 +11,7 @@ that a frontend binds role, host class, generation, freshness and, on project
 endpoints, the exact request. It does not identify a process. Hints stay hints.
 """
 from dataclasses import dataclass
+import base64
 import fcntl
 import hashlib
 import os
@@ -22,9 +23,10 @@ import sys
 import threading
 import time
 
-from .collector_client import COLLECTOR_RUNTIME_DIGEST
+from .collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient
 from .collector_paths import CollectorPaths, StateError, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
 from .history_contracts import AttemptBinding, HistoryError, valid_integer
+from .hosts import OWNER_CLIENT
 from .learning_contracts import canonical_json, keyed_digest
 from .orchestration_api import ORCHESTRATION_OPERATIONS, OrchestrationScope, orchestration_request_digest
 from .orchestration_service import OrchestrationAuthorization
@@ -47,6 +49,10 @@ from .service_enrollment import (
 
 MAX_SOCKET_PATH_BYTES = 100  # Below the smallest supported sun_path, including its terminator.
 _KINDS = ('control', 'project', 'driver')
+# What the owner's terminal label may ask of a project's service.
+OWNER_HISTORY_OPERATIONS = frozenset({'history.learning_cycle', 'history.learning_report',
+                                      'history.learning_feedback', 'history.learning_review_case',
+                                      'history.orchestration_report'})
 DRIVER_ENDPOINT = 'run.sock'  # Beside the control socket; client_runtime uses the same name.
 
 
@@ -367,6 +373,9 @@ class ProjectServiceHost:
             raise HistoryError('history_wrong_owner')
 
     def _attach(self, kind, connection, token):
+        if kind != 'project' and self._frontend.context(token).enrolled.host_client == OWNER_CLIENT:
+            # The owner's terminal has learning commands only; it controls and drives no run.
+            raise HistoryError('history_not_authorized')
         if kind == 'control':
             self._runtime.attach_control(connection, token)
         elif kind == 'project':
@@ -415,7 +424,8 @@ class ProjectServiceHost:
 
     def _authorize_orchestration(self, request, token):
         entry = self._frontend.context(token) if self._frontend is not None else None
-        if entry is None or entry.kind != 'project' or entry.enrolled.role != 'host':
+        if (entry is None or entry.kind != 'project' or entry.enrolled.role != 'host'
+                or entry.enrolled.host_client == OWNER_CLIENT):
             return None
         return OrchestrationAuthorization(self._scope, orchestration_request_digest(request),
                                           entry.enrolled.host_client, ORCHESTRATION_OPERATIONS)
@@ -424,6 +434,7 @@ class ProjectServiceHost:
         """A run's own result, read by the host class that dispatched it."""
         entry = self._frontend.context(token) if self._frontend is not None else None
         if (entry is None or entry.kind != 'project' or entry.enrolled.role != 'host' or self._driver is None
+                or entry.enrolled.host_client == OWNER_CLIENT
                 or not (self._driver.owns_binding(request.binding, entry.enrolled.host_client)
                         or self._driver.retains_worker(request.binding, entry.enrolled.host_client))):
             return None
@@ -433,6 +444,8 @@ class ProjectServiceHost:
         """Open scope from the originals sent with the request; a run's records and result admission."""
         entry = self._frontend.context(token) if self._frontend is not None else None
         if entry is None or entry.kind != 'project' or entry.enrolled.role != 'host':
+            return None
+        if entry.enrolled.host_client == OWNER_CLIENT and request.operation not in OWNER_HISTORY_OPERATIONS:
             return None
         if request.operation == 'history.read_record':
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
@@ -448,8 +461,24 @@ class ProjectServiceHost:
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
                                         frozenset({'history.admit_host_result', 'history.read_record'}),
                                         host_result_context=original)
-        if request.operation in {'history.learning_cycle', 'history.learning_report'}:
-            # The project's own learning: any enrolled primary of this project may run and read it.
+        if request.operation in {'history.learning_cycle', 'history.learning_report', 'history.learning_review_case',
+                                 'history.orchestration_report'}:
+            # The project's own learning: any enrolled primary of this project may run and
+            # read it. Reviewing a case is the owner's command, by the same convention as
+            # every earlier version (the installed deny rules keep it from model sessions).
+            return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
+                                        frozenset({request.operation}))
+        if request.operation == 'history.learning_feedback':
+            # The authority is the owner's signature over this record, checked by the
+            # account owner that holds the owner key; this process never reads that key.
+            try:
+                valid = CollectorClient(self._state.socket, timeout=10).verify_owner_record(
+                    self._project_root, request.payload['record'],
+                    base64.b64decode(request.payload['signature_b64'], validate=True))
+            except Exception:
+                return None
+            if valid is not True:
+                return None
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
                                         frozenset({request.operation}))
         if request.operation in {'history.worker_input', 'history.routing_evidence'}:
@@ -536,6 +565,10 @@ class ProjectServiceHost:
     def exhausted(self):
         self._owner()
         return self._driver is not None and self._driver.exhausted()
+
+    def retaining(self):
+        self._owner()
+        return self._driver is not None and self._driver.retaining()
 
     def idle_ns(self):
         """Time since the last enrolled connection, or 0 while any run is held."""

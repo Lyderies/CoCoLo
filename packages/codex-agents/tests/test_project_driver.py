@@ -6,6 +6,7 @@ they resolve. Everything else is the product path: the in-process CLI, the
 hosts' enrollment, the run driver and the original owners.
 """
 import base64
+import sqlite3
 import json
 import os
 import socket
@@ -313,6 +314,56 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual((1, 1, 0), (lifecycle['host_runs_opened'], lifecycle['host_runs_terminal'],
                                      lifecycle['host_runs_pending']))
 
+    def test_a_service_left_by_another_version_is_replaced_only_when_no_run_is_active(self):
+        from codex_agents.client_runtime import runtime_hint_path
+        from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
+
+        # The project was updated while its service idled: the running service is another version's.
+        hint = runtime_hint_path(self.paths, self.project)
+        value = json.loads(hint.read_text())
+        value['scope']['runtime_digest'] = 'f' * 64
+        replacement = hint.with_suffix('.tmp')
+        replacement.write_text(json.dumps(value, sort_keys=True, separators=(',', ':')))
+        replacement.chmod(0o600)
+        os.replace(replacement, hint)
+        busy = mock.Mock()
+        busy.learning_migration.return_value = {'moved': False, 'has_learning': False, 'drained': False}
+        with mock.patch.object(cli, '_compatible_collector', return_value=busy):
+            refused = self.cli_for(self.project, 'learning-open-orchestration', expected=2)
+        self.assertEqual('project_service_other_version', refused['reason_code'])
+        self.assertIn('try again when none is running', refused['error'])
+        self.assertTrue(hint.exists())  # Nothing was stopped.
+        # With no run active anywhere it is asked to stop, and this version's service takes over.
+        opened = self.cli('learning-open-orchestration')
+        self.assertRegex(opened['orchestration_handle'], '^orc_[0-9a-f]{48}$')
+        self.assertEqual(COLLECTOR_RUNTIME_DIGEST, json.loads(hint.read_text())['scope']['runtime_digest'])
+        self.assertEqual('active', self.cli('learning-orchestration-status', '--orchestration-handle',
+                                            opened['orchestration_handle'])['status'])
+
+    def test_an_owner_ledger_command_is_refused_while_a_child_runs(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 3},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+        # A command that needs the ledger to itself says why it cannot have it; the
+        # shared services and the child keep running.
+        refused = self.cli_for(self.project, 'learning-backup-project', '--file-id', 'while_running',
+                               '--expires-in-seconds', '3600', expected=2)
+        self.assertIn('a child run is active; nothing was changed', refused['error'])
+        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
+        self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
+        output, errors = process.communicate(timeout=60)
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        dispatched = json.loads(output)
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        observation = self.write('busy-observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        self.cli('learning-record-host-result', *context, '--route', route_path,
+                 '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
+
 
 class HostRestartTests(DriverHarness):
     """The project host stops mid-run and starts again: nothing is claimed that is not known."""
@@ -508,6 +559,133 @@ class HostVerificationTests(DriverHarness):
         unknown = self.write('unknown-task.json', {**hard, 'routing_evidence_refs': ['outcome:' + 'f' * 64]})
         with mock.patch.object(cli, '_learning_ledger', side_effect=learning_store.LedgerError("routing evidence is not QA accepted")):
             self.assertFalse(self.cli('learning-route', '--task', unknown, expected=2)['ready'])
+
+    def test_a_complete_orchestration_never_opens_the_ledger_or_pauses_the_collector(self):
+        from tests.test_bridge import passing_check_report
+
+        with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')), \
+                mock.patch.object(cli, 'CollectorMaintenance', side_effect=AssertionError('collector paused')), \
+                mock.patch.object(cli, '_learning_ledger', side_effect=AssertionError('ledger path')):
+            self.assertTrue(self.cli('learning-status')['active'])
+            worker, verifier, verifier_assignment, verifier_result = self.verified()
+            with mock.patch.object(cli, 'run_operational_check_suite',
+                                   side_effect=lambda _root, **_scratch: passing_check_report()):
+                checks = self.cli('learning-run-operational-checks', '--host-outcome-digest', worker,
+                                  '--verifier-host-outcome-digest', verifier)
+            qa = self.cli('learning-record-operational-qa', '--host-outcome-digest', worker,
+                          '--verifier-host-outcome-digest', verifier, '--check-receipt', checks['check_receipt'],
+                          '--evaluator-assignment', self.write('eval-assignment.json', json.loads(
+                              Path(self.temporary.name, 'project-assignment.json').read_text())),
+                          '--evaluator-result', str(Path(self.temporary.name, 'worker-result.json')),
+                          '--verifier-assignment', self.write('ver-assignment.json', verifier_assignment),
+                          '--verifier-result', self.write('ver-result.json', verifier_result))
+            self.assertEqual('available', qa['learning_cycle']['summary_state'])
+            store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3')))
+                                    + '?mode=ro', uri=True)
+            self.addCleanup(store.close)
+            orchestration = json.loads(store.execute(
+                'SELECT content FROM project_orchestration_checkpoints ORDER BY sequence DESC LIMIT 1').fetchone()[0])['snapshot']
+            handle = orchestration['orchestration_handle']
+            self.assertEqual('active', self.cli('learning-orchestration-status', '--orchestration-handle', handle)[
+                'current']['snapshot']['status'])
+            report = self.cli('learning-orchestration-report', '--orchestration-id', orchestration['orchestration_id'])
+            self.assertEqual(1, report['qa']['passed'])
+            closed = self.cli('learning-close-orchestration', '--orchestration-handle', handle, '--status', 'completed')
+            self.assertEqual('completed', closed['current']['snapshot']['status'])
+
+    def test_owner_learning_commands_work_on_a_project_whose_learning_lives_in_its_own_store(self):
+        from codex_agents.collector_client import CollectorClient
+        from tests.learning_support import sign_owner_payload
+        from tests.test_bridge import passing_check_report
+
+        worker, verifier, verifier_assignment, verifier_result = self.verified()
+        with mock.patch.object(cli, 'run_operational_check_suite',
+                               side_effect=lambda _root, **_scratch: passing_check_report()):
+            checks = self.cli('learning-run-operational-checks', '--host-outcome-digest', worker,
+                              '--verifier-host-outcome-digest', verifier)
+        self.cli('learning-record-operational-qa', '--host-outcome-digest', worker,
+                 '--verifier-host-outcome-digest', verifier, '--check-receipt', checks['check_receipt'],
+                 '--evaluator-assignment', self.write('eval-assignment.json', json.loads(
+                     Path(self.temporary.name, 'project-assignment.json').read_text())),
+                 '--evaluator-result', str(Path(self.temporary.name, 'worker-result.json')),
+                 '--verifier-assignment', self.write('ver-assignment.json', verifier_assignment),
+                 '--verifier-result', self.write('ver-result.json', verifier_result))
+        # Nothing to copy from the ledger: the project is simply marked as living in its own store.
+        client = CollectorClient(self.state.socket, timeout=5)
+        self.assertTrue(client.learning_moved_if_empty(self.project))
+        self.assertEqual('complete', self.cli('learning-status')['learning_migration'])
+        with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')), \
+                mock.patch.object(cli, 'CollectorMaintenance', side_effect=AssertionError('collector paused')):
+            cycle = self.cli('learning-run-cycle')  # An explicit cycle reports in full.
+            self.assertTrue(cycle['ready'])
+            self.assertEqual(([], 0), (cycle['mined_case_ids'], cycle['expired_records']))
+            self.assertEqual(0, cycle['analysis']['owner_feedback_excluded'])
+            analysis = self.cli('learning-analyze', '--as-of-ms', '1', '--max-age-ms', '86400000')
+            self.assertEqual(set(cycle['analysis']), set(analysis['analysis']))
+            mined = self.cli_for(self.project, 'learning-mine-case', '--source-outcome-id', 'x', '--task', 'missing.json',
+                                 '--criteria-digest', 'a' * 64, '--lineage-digest', 'b' * 64, expected=2)
+            self.assertFalse(mined['ready'])
+            # The verified worker outcome and the case mined from it.
+            store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3')))
+                                    + '?mode=ro', uri=True)
+            self.addCleanup(store.close)
+            cases = [json.loads(row[0]) for row in store.execute(
+                "SELECT content FROM records WHERE record_type='evaluation_case'")]
+            self.assertEqual(1, len(cases))
+            outcome = json.loads(store.execute("SELECT content FROM records WHERE record_id=?",
+                                               (cases[0]['source_outcome_id'],)).fetchone()[0])
+            review = ('learning-review-case', '--case-id', cases[0]['record_id'], '--review-digest', 'd' * 64,
+                      '--similarity-group-digest', 'e' * 64, '--destination', 'promotion_holdout', '--freeze')
+            reviewed = self.cli(*review)
+            self.assertEqual((True, 'promotion_holdout', True, cases[0]['record_id']), (
+                reviewed['stored'], reviewed['record']['corpus_state'], reviewed['record']['frozen'],
+                reviewed['record']['supersedes_case_id']))
+            self.assertEqual('available', reviewed['learning_cycle']['summary_state'])
+            self.assertFalse(self.cli(*review)['stored'])  # The same review again is the same record.
+            # A development case enters a controlled corpus once.
+            again = self.cli_for(self.project, 'learning-review-case', '--case-id', cases[0]['record_id'],
+                                 '--review-digest', 'f' * 64, '--similarity-group-digest', 'e' * 64,
+                                 '--destination', 'canary', expected=2)
+            self.assertEqual('case_review_refused', again['reason_code'])
+            self.assertIn('controlled corpus', again['error'])
+            missing = self.cli_for(self.project, 'learning-review-case', '--case-id', 'no-such-case',
+                                   '--review-digest', 'd' * 64, '--similarity-group-digest', 'e' * 64,
+                                   '--destination', 'canary', expected=2)
+            self.assertEqual('case_unknown', missing['reason_code'])
+            # The owner rejects the run: signed, checked by the account owner, kept with its signature.
+            feedback = ('learning-record-feedback', '--run-id', outcome['run_id'], '--label', 'rejected',
+                        '--reason-code', 'incorrect', '--observed-at-ms', '5')
+            unsigned = self.cli(*feedback)
+            self.assertTrue(unsigned['requires_signature'])
+            payload = base64.b64decode(unsigned['signing_payload_b64'])
+            forged = self.write('forged.sig', 'not a signature')
+            refused = self.cli_for(self.project, *feedback, '--signature', forged, expected=2)
+            self.assertEqual('owner record signature is invalid', refused['error'])
+            signature = sign_owner_payload(self.owner_key, payload, 'feedback-signature')
+            stored = self.cli(*feedback, '--signature', str(signature))
+            self.assertEqual((True, 'rejected'), (stored['stored'], stored['record']['label']))
+            self.assertFalse(self.cli(*feedback, '--signature', str(signature))['stored'])
+            unknown = ('learning-record-feedback', '--run-id', 'run-nobody-ran', '--label', 'rejected',
+                       '--reason-code', 'incorrect', '--observed-at-ms', '5')
+            unknown_signature = sign_owner_payload(
+                self.owner_key, base64.b64decode(self.cli(*unknown)['signing_payload_b64']), 'unknown-signature')
+            self.assertEqual('feedback_run_unknown', self.cli_for(
+                self.project, *unknown, '--signature', str(unknown_signature), expected=2)['reason_code'])
+            after = self.cli('learning-run-cycle')
+            self.assertEqual(1, after['analysis']['owner_feedback_excluded'])
+            # Statistics of the orchestration, from the project's own records.
+            orchestration = json.loads(store.execute(
+                'SELECT content FROM project_orchestration_checkpoints ORDER BY sequence DESC LIMIT 1').fetchone()[0])['snapshot']
+            statistics = self.cli('learning-orchestration-report', '--orchestration-id', orchestration['orchestration_id'])
+            self.assertEqual(('active', 2, 2, 0), (statistics['status'], statistics['runs']['opened'],
+                                                   statistics['runs']['terminal'], statistics['runs']['pending']))
+            self.assertEqual({'passed': 1, 'failed': 0, 'pending': 0, 'attention_required': False}, statistics['qa'])
+            self.assertEqual(2, sum(statistics['by_role'].values()))
+            self.assertEqual({'bridge': 2}, statistics['by_agent_type'])
+            self.assertNotIn('source.txt', json.dumps(statistics))
+        self.assertEqual(1, store.execute('SELECT COUNT(*) FROM project_owner_attestations').fetchone()[0])
+        self.assertEqual(1, store.execute("SELECT COUNT(*) FROM records WHERE record_type='feedback'").fetchone()[0])
+        self.assertTrue(self.ledger.learning_moved(self.project_id))
 
     def recorded_worker(self, orchestration, task_id):
         """One more Codex worker in the same orchestration, dispatched and recorded."""

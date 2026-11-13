@@ -3822,12 +3822,44 @@ class LearningStoreTests(unittest.TestCase):
                 owner_registration=True,
             )
             maintenance.resume()
-        shutdown.assert_called_once_with()
+        shutdown.assert_called_once_with(only_if_drained=True)
         start.assert_called_once_with(
             self.state,
             ORCHESTRATION_ROOT / "cli.py",
             project_root=self.project_a,
         )
+
+    def test_maintenance_never_stops_a_collector_from_under_a_run(self) -> None:
+        def acquire(shutdown_effect):
+            with (
+                mock.patch("codex_agents.learning_store.CollectorClient.health", return_value={}),
+                mock.patch("codex_agents.learning_store.CollectorClient.shutdown",
+                           side_effect=shutdown_effect) as shutdown,
+                mock.patch("codex_agents.learning_store._wait_for_collector_shutdown", return_value=True),
+                mock.patch("codex_agents.learning_store._start_collector_locked", return_value={}) as start,
+            ):
+                try:
+                    CollectorMaintenance.acquire(
+                        self.state, ORCHESTRATION_ROOT / "cli.py", self.project_a, owner_registration=True,
+                    ).resume()
+                finally:
+                    calls = [call.kwargs for call in shutdown.call_args_list]
+                return calls, start.call_count
+
+        # A collector with an active run refuses; nothing is stopped or restarted.
+        with self.assertRaises(CollectorError) as busy:
+            acquire(CollectorError("collector rejected request: collector_busy", code="collector_busy"))
+        self.assertEqual("collector_busy", busy.exception.code)
+        self.assertIn("nothing was changed", str(busy.exception))
+        # The maintenance lock was released: the next command can take it.
+        self.assertEqual(([{"only_if_drained": True}], 1), acquire(None))
+        # A collector from before the check existed drives no runs and is stopped as before.
+        older = iter([CollectorError("collector rejected request: operation_invalid", code="operation_invalid"), None])
+        self.assertEqual(([{"only_if_drained": True}, {}], 1), acquire(lambda **_: _raise_or_return(next(older))))
+        # Any other refusal is not treated as permission.
+        with self.assertRaises(CollectorError) as other:
+            acquire(CollectorError("collector rejected request: operation_rejected", code="operation_rejected"))
+        self.assertEqual("operation_rejected", other.exception.code)
 
     def test_client_rejects_older_or_newer_schema_with_matching_runtime(self) -> None:
         client = CollectorClient(self.state.socket)
@@ -3978,6 +4010,12 @@ class LearningStoreTests(unittest.TestCase):
         with self.ledger.repository(self.project_a_id) as repository:
             records = repository.records("event")
         self.assertEqual("turn_started", records[0]["event_code"])
+
+
+def _raise_or_return(value):
+    if isinstance(value, BaseException):
+        raise value
+    return value
 
 
 if __name__ == "__main__":

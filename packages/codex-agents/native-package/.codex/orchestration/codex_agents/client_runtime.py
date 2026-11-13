@@ -26,7 +26,7 @@ from .dispatch_api import DISPATCH_REASONS, DispatchClient, DispatchError
 from .history_api import HistoryClient
 from .history_contracts import HISTORY_REASON_CODES, AttemptBinding, HistoryError, _ID, matches
 from .host_result_contracts import HostResultReference
-from .hosts import HOST_CLIENTS, HostClientMismatch, HostClientUnknown, detect_host_client
+from .hosts import HOST_CLIENTS, OWNER_CLIENT, HostClientMismatch, HostClientUnknown, detect_host_client
 from .learning_contracts import ADMISSION_REASON_CODES, canonical_json, content_digest, keyed_digest, parse_bounded_json
 from .billing_probe_contracts import BILLING_PROBE_REASONS, PROBE_COMPLETION_REASONS
 from .open_scope_contracts import open_inputs_digest
@@ -52,7 +52,7 @@ def runtime_hint_path(state, project_root):
     return state.root / 'client-runtimes' / (keyed_digest(state.digest_key(), str(root)) + '.json')
 
 
-def _read_runtime_endpoints(state, project_root, *, account=False, account_only=False):
+def _read_runtime_endpoints(state, project_root, *, account=False, account_only=False, any_runtime=False):
     descriptor = None
     try:
         root = _canonical_project_root(project_root)
@@ -83,7 +83,7 @@ def _read_runtime_endpoints(state, project_root, *, account=False, account_only=
                 or type(value['scope']) is not dict):
             raise ValueError()
         scope = ControlScope(**value['scope'])
-        if scope.runtime_digest != COLLECTOR_RUNTIME_DIGEST:
+        if scope.runtime_digest != COLLECTOR_RUNTIME_DIGEST and not any_runtime:
             raise ValueError()
         endpoints = []
         for name in (('dispatch_endpoint', 'result_endpoint', 'account_endpoint') if version == 2
@@ -432,6 +432,36 @@ def learning_cycle_client(state_root, project_root, *, host_client, full=False,
         return parse_bounded_json(''.join(chunks).encode('ascii'), max_bytes=view['report_bytes'])
     except Exception:
         return unavailable_cycle('learning_unavailable')
+
+
+def owner_learning_client(state_root, project_root, operation, **arguments):
+    """One owner learning write on this project's own service: 'feedback' or 'review_case'.
+
+    Enrolled under the owner's terminal label. Returns the service's answer; a
+    refused signature or an unreachable service raises HistoryError.
+    """
+    try:
+        state = CollectorPaths(state_root)
+        scope, _, endpoint = read_runtime_hint(state, project_root)
+    except (DispatchError, StateError, OSError):
+        raise HistoryError('history_service_unavailable') from None
+    history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=30)
+    enroll_clients(state, project_root, scope, (endpoint,), host_client=OWNER_CLIENT)
+    if operation == 'feedback':
+        return history.learning_feedback(arguments['record'], arguments['signature'])
+    return history.learning_review_case(**arguments)
+
+
+def orchestration_report_client(state_root, project_root, orchestration_id, *, host_client):
+    """The statistics of an orchestration this project's service ran, or None if it holds none by that name."""
+    try:
+        state = CollectorPaths(state_root)
+        scope, _, endpoint = read_runtime_hint(state, project_root)
+        history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=30)
+        enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+        return history.orchestration_report(orchestration_id)
+    except (HistoryError, DispatchError, StateError, OSError):
+        return None
 
 
 def routing_evidence_client(state_root, project_root, task, *, host_client):

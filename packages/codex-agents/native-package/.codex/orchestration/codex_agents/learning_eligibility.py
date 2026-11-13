@@ -142,3 +142,63 @@ def check_candidate_eligibility(
     roots = {retry_root(outcome, sequence) for outcome, sequence in evidence}
     if len(roots) != len(evidence) or len(roots) < MIN_INDEPENDENT_ROOTS:
         raise EligibilityError("candidate evidence is not independently retry-deduplicated")
+
+
+def check_evaluation_case(
+    case: dict[str, Any],
+    *,
+    source_outcome: dict[str, Any] | None,
+    previous_case: dict[str, Any] | None,
+    related_cases: Iterable[dict[str, Any]],
+    invalidated_run_ids: frozenset[str] | set[str],
+) -> None:
+    """Raise `EligibilityError` unless the case may join the project's corpus.
+
+    `source_outcome` is the outcome the case names, `previous_case` the case it
+    supersedes (both None when absent), and `related_cases` every other case of
+    the project: all but the superseded one, or all but this one when it
+    supersedes nothing.
+    """
+
+    if source_outcome is None:
+        raise EligibilityError("evaluation case source outcome is missing")
+    if (
+        source_outcome["task_slice"] != case["task_slice"]
+        or source_outcome["fixture_digest"] != case["fixture_digest"]
+    ):
+        raise EligibilityError("evaluation case differs from its source outcome")
+    if source_outcome["run_id"] in invalidated_run_ids:
+        raise EligibilityError("evaluation case source was invalidated by owner feedback")
+    previous_id = case["supersedes_case_id"]
+    if previous_id is None:
+        if case["corpus_state"] != "development":
+            raise EligibilityError("controlled evaluation case must supersede a development case")
+    else:
+        if previous_case is None:
+            raise EligibilityError("superseded evaluation case is missing")
+        immutable = ("source_outcome_id", "task_slice", "fixture_digest", "criteria_digest", "lineage_digest")
+        if any(previous_case[field] != case[field] for field in immutable):
+            raise EligibilityError("evaluation case revision changes immutable evidence")
+        if previous_case["similarity_group_digest"] not in {None, case["similarity_group_digest"]}:
+            raise EligibilityError("evaluation case revision changes its similarity group")
+    related = list(related_cases)
+    controlled = [
+        record for record in related
+        if record["corpus_state"] != "development" and record["record_id"] != case["record_id"]
+    ]
+    if previous_id is not None and any(record["supersedes_case_id"] == previous_id for record in controlled):
+        raise EligibilityError("development case already entered a controlled corpus")
+    split_key = (case["source_outcome_id"], case["fixture_digest"], case["criteria_digest"], case["lineage_digest"])
+    if case["corpus_state"] != "development" and any(
+        (record["source_outcome_id"], record["fixture_digest"], record["criteria_digest"],
+         record["lineage_digest"]) == split_key
+        for record in controlled
+    ):
+        raise EligibilityError("evaluation evidence already belongs to a controlled corpus")
+    if any(
+        record["corpus_state"] != case["corpus_state"]
+        for record in related
+        if record["similarity_group_digest"] is not None
+        and record["similarity_group_digest"] == case["similarity_group_digest"]
+    ):
+        raise EligibilityError("reviewed similarity group already exists in the project corpus")
