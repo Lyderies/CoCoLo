@@ -203,7 +203,7 @@ def _execute(payload, ticket, project_id, run_handle=None, recorder=None, client
                       worker_result_path=data["worker_result_path"], deadline_seconds=deadline, _execution=ticket)
         if provider == "claude":
             # Without its recorder a Claude child could not report a restriction: never launch it.
-            if recorder is None or type(run_handle) is not str:
+            if recorder is None or type(run_handle) is not str or client_sha256 is None:
                 raise CodexWorkerError()
             _, max_turns = bridge.effective_dispatch_limits(data["route"], assignment)
             result, report = _RUN_CLAUDE(ledger=recorder, run_handle=run_handle, max_turns=max_turns, **common)

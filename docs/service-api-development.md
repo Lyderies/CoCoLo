@@ -288,13 +288,18 @@ immediately before launch; a mismatch never launches.
   admissions on the account see them), and replies with the count kept and any stop
   (`paid_usage_observed`, `provider_rejected`). Any failure stops the child with
   `rate_limit_event_invalid`. An event the account refused is recorded there as a lost
-  `during` reading; an event that never got a reply (account unreachable) stays
-  pending in the driver and is delivered with its original request ID, retried while
-  the account is unreachable, before the terminal is submitted, so the run's capacity
-  stays charged until the restriction is kept. More than 64 pending events, or a
-  refusal at that point, stops the run with its capacity still charged. A project host
-  that dies before delivery loses the pending event (the driver keeps no state across
-  a restart). Without a recorder a Claude job is never launched.
+  `during` reading. Every event without an accepted reply stays pending in the driver
+  and is delivered with its original request ID before the terminal is submitted,
+  retried for as long as the account is unreachable, so the run's capacity stays
+  charged until the restriction is kept. The reduced event is at most about 3 KiB (8
+  windows, 64-character strings, finite numbers), always within the 4 KiB request.
+  More than 64 pending events, more than 1000 events in a run, or a refusal at
+  delivery stops the run with its capacity still charged. Limits: pending events live
+  in driver memory, so a project host that dies before delivery loses them (the driver
+  keeps no state across a restart), and nothing fences other admissions on the
+  account while an event is pending; an unreachable account refuses those admissions
+  too, which leaves only the short window between its recovery and redelivery. Without
+  a recorder and the prepared client digest a Claude job is never launched.
 - Gaps: a run with no rate-limit event leaves no `no_rate_limit_event` record (the
   legacy bridge wrote one); real stream-json frame shapes and cadence still need a
   version-pinned real-client check; a native Claude child (path D) does not use this

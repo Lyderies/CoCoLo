@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from threading import Lock, local
@@ -63,6 +64,7 @@ ACCOUNT_RETRY_SECONDS = 600  # How long an unreachable account is waited for, pe
 ACCOUNT_RETRY_INTERVAL = 0.5
 RATE_LIMIT_TIMEOUT_SECONDS = 10  # One event; the child's stream waits for it.
 MAX_PENDING_RATE_LIMITS = 64  # The account keeps at most this many per run.
+MAX_RUN_RATE_LIMIT_EVENTS = 1_000
 _RETRYING = object()
 REASON_CODES = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable', 'run_abandoned',
@@ -141,7 +143,7 @@ class _RateLimitRecorder:
             return self._prefix + str(self._count)
 
     def record_claude_rate_limit_event(self, project_id, *, run_handle, rate_limit_info):
-        if project_id != self._project:
+        if project_id != self._project or self._count >= MAX_RUN_RATE_LIMIT_EVENTS:
             raise RateLimitError('rate limit event was not recorded')
         facts = bounded_rate_limit_info(rate_limit_info)
         request_id = self.request_id()
@@ -151,13 +153,14 @@ class _RateLimitRecorder:
             client = AccountClient(self._driver._account, self._project, COLLECTOR_RUNTIME_DIGEST,
                                    timeout=RATE_LIMIT_TIMEOUT_SECONDS)
             reply = client.record_rate_limit_event(run_handle, facts, request_id=request_id)
-        except AccountError as error:
-            if error.reason_code in {'account_unavailable', 'account_invalid_response'}:
-                with self._lock:
-                    if len(self.pending) < MAX_PENDING_RATE_LIMITS:
-                        self.pending.append((run_handle, facts, request_id))
-                    else:
-                        self.overflow = True
+        except AccountError:
+            # Whatever the failure, the driver tries this exact request again
+            # before the terminal; a refusal then stops the run, capacity charged.
+            with self._lock:
+                if len(self.pending) < MAX_PENDING_RATE_LIMITS:
+                    self.pending.append((run_handle, facts, request_id))
+                else:
+                    self.overflow = True
             raise RateLimitError('rate limit event was not recorded') from None
         finally:
             call.role = call.host_client = call.context = None
@@ -628,6 +631,8 @@ class RunDriver:
                 handle, facts, request_id = recorder.pending[0]
                 self._account_call(run, 'project', 'record_rate_limit_event', handle, facts, request_id=request_id,
                                    custody=self._custody(run, storage=run.evidence))
+                # The restriction is retried for as long as this run holds its capacity.
+                run.retry_until = math.inf
                 return
             delivery = lane.delivery(run.persistence)
             run.terminal_evidence = lane.terminal_evidence(run.persistence)

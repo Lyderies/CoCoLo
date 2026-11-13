@@ -7,6 +7,7 @@ The reply says only what the bridge must act on: how many records were kept
 and whether one of them stops the run.
 """
 from dataclasses import dataclass
+import math
 
 from .contracts import ContractError
 from .history_contracts import _RUN, matches
@@ -19,7 +20,8 @@ RATE_LIMIT_STOPS = frozenset({'paid_usage_observed', 'provider_rejected'})
 _FIELDS = ('status', 'rateLimitType', 'utilization', 'resetsAt', 'isUsingOverage', 'overageStatus',
            'overageDisabledReason')
 _WINDOW_FIELDS = ('status', 'utilization', 'resetsAt')
-MAX_WINDOWS = 16
+MAX_WINDOWS = 8
+MAX_TEXT = 64  # Per string field; with these bounds the reduced event stays well under 4 KiB.
 
 
 class RateLimitError(ContractError):
@@ -27,9 +29,13 @@ class RateLimitError(ContractError):
 
 
 def _scalar(value):
-    if value is None or type(value) is bool or (type(value) in {int, float} and value == value):
+    if value is None or type(value) is bool:
         return value
-    return value if type(value) is str and len(value) <= 128 else None
+    if type(value) is int:
+        return value if -(1 << 53) <= value <= 1 << 53 else None
+    if type(value) is float:
+        return value if math.isfinite(value) else None
+    return value if type(value) is str and len(value) <= MAX_TEXT else None
 
 
 def bounded_rate_limit_info(info):
@@ -49,7 +55,7 @@ def bounded_rate_limit_info(info):
         for scope in sorted(windows, key=str):
             entry = windows[scope]
             entry = {n: _scalar(entry.get(n)) for n in _WINDOW_FIELDS if n in entry} if type(entry) is dict else None
-            if len(kept) < MAX_WINDOWS and type(scope) is str and len(scope) <= 64:
+            if len(kept) < MAX_WINDOWS and type(scope) is str and len(scope) <= MAX_TEXT // 2:
                 kept[scope] = entry
             elif (entry is None or entry.get('status') != 'allowed') and facts.get('status') != 'rejected':
                 # Never less restrictive than what was dropped.

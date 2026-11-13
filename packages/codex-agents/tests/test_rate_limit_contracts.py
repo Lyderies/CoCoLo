@@ -3,19 +3,33 @@ from __future__ import annotations
 import unittest
 
 import tests.support  # noqa: F401
+from codex_agents.learning_contracts import canonical_json
 from codex_agents.rate_limit_contracts import (
-    MAX_WINDOWS, RateLimitEventInput, bounded_rate_limit_info, checked_rate_limit_reply,
+    MAX_RATE_LIMIT_INFO_BYTES, MAX_TEXT, MAX_WINDOWS, RateLimitEventInput, bounded_rate_limit_info,
+    checked_rate_limit_reply,
 )
 
 
 class BoundedRateLimitInfoTests(unittest.TestCase):
     def test_size_never_drops_a_restriction(self):
         info = {'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed', 'padding': 'x' * 100_000,
-                'overageDisabledReason': 'y' * 1_000}
+                'overageDisabledReason': 'y' * (MAX_TEXT + 1)}
         facts = bounded_rate_limit_info(info)
         self.assertEqual({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed',
                           'overageDisabledReason': None}, facts)
         RateLimitEventInput('hrn_' + 'a' * 48, facts)  # Always fits the request.
+
+    def test_the_largest_reduced_event_always_fits_the_request(self):
+        text = 'x' * MAX_TEXT
+        fields = ('status', 'rateLimitType', 'utilization', 'resetsAt', 'isUsingOverage', 'overageStatus',
+                  'overageDisabledReason')
+        windows = {('s%02d' % i).ljust(MAX_TEXT // 2, 'x'): {'status': text, 'utilization': text, 'resetsAt': text}
+                   for i in range(MAX_WINDOWS * 3)}
+        facts = bounded_rate_limit_info({**{name: text for name in fields}, 'unifiedWindows': windows,
+                                         'utilization': float('inf')})
+        self.assertLessEqual(len(canonical_json(facts)), MAX_RATE_LIMIT_INFO_BYTES)
+        self.assertIsNone(facts['utilization'])  # Non-finite numbers become unknown.
+        RateLimitEventInput('hrn_' + 'a' * 48, facts)
 
     def test_dropped_windows_never_make_the_event_less_restrictive(self):
         windows = {f'w{i:02}': {'status': 'allowed', 'utilization': 0.1} for i in range(MAX_WINDOWS)}
