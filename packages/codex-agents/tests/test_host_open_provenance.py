@@ -221,10 +221,16 @@ class OriginalVerifierOpenTests(unittest.TestCase):
 
         self.native.admit('claude')
         task = self.native.task()
-        route, assigned, arguments, _ = self.native.lifecycle_inputs(task)
+        # A native Claude worker, as a route from an older policy still opens it:
+        # current routing bridges every child, but these account-owner checks
+        # concern its verifier's dependency, not how the worker ran.
+        from codex_agents import routing
+        with mock.patch.object(routing, '_dispatch', return_value='native'):
+            route, assigned, arguments, _ = self.native.lifecycle_inputs(task)
         self.assertEqual(('claude', 'native'), (route['provider'], route['dispatch']))
         self.assertTrue(assigned['verification_required'])
-        self.native.cli('validate-assignment', *arguments)
+        with mock.patch.object(routing, '_dispatch', return_value='native'):
+            self.native.cli('validate-assignment', *arguments)
         with closing(LearningLedger(self.native.state, client_capabilities=self.native.clients)) as ledger:
             orchestration = ledger.open_orchestration(self.native.project_id, client_version='claude-host-v1')
             opened = self.open_fixture(ledger, task, route, assigned, orchestration)

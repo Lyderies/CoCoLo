@@ -36,7 +36,7 @@ HISTORY_OPERATIONS = frozenset({
     *_RECORD_OPERATIONS, "history.pending_terminals", "history.acknowledge_terminal", "history.read_record",
     "history.admit_host_result", "history.record_host_open", "history.worker_reference", "history.qa_scope",
     "history.issue_qa_checks",
-    "history.commit_qa", "history.qa_details", "history.open_scope",
+    "history.commit_qa", "history.qa_details", "history.open_scope", "history.worker_input",
 })
 HISTORY_RECORD_TYPES = frozenset({*_RECORD_OPERATIONS.values(), "host_result_admission",
                                   "provider_usage", "observation_unavailable", "execution_provenance", "host_open_provenance"})
@@ -102,6 +102,10 @@ def _validate_request(request: HistoryRequest) -> None:
             identity = binding.claim_id
         if request.request_id != identity:
             raise HistoryError("history_invalid_request")
+    elif operation == 'history.worker_input':
+        if (not _closed(payload, {'host_outcome_digest'}) or not matches(payload['host_outcome_digest'], _DIGEST)
+                or request.request_id != payload['host_outcome_digest']):
+            raise HistoryError('history_invalid_request')
     elif operation == 'history.open_scope':
         decode_open_scope_request(payload, request.project_id, request.runtime_digest)
         if request.request_id != hashlib.sha256(canonical_json(payload)).hexdigest():
@@ -257,7 +261,19 @@ def _validate_host_reference(result, binding, digest, *, verification):
 
 def _validate_result(request: HistoryRequest, result: object) -> None:
     operation = request.operation
-    if operation == 'history.open_scope':
+    if operation == 'history.worker_input':
+        if (not _closed(result, {'worker', 'reference'}) or type(result['worker']) is not dict
+                or not _closed(result['reference'], {'terminal_record_id', 'result_digest'})
+                or not matches(result['reference']['terminal_record_id'], _ID)
+                or not matches(result['reference']['result_digest'], _DIGEST)):
+            raise HistoryError('history_invalid_response')
+        from .host_result_contracts import HostResultContext
+        worker = result['worker']
+        context = HostResultContext(**{**worker, 'binding': AttemptBinding(**worker['binding'])})
+        if (context.snapshot()[1] != worker or context.binding.project_id != request.project_id
+                or context.binding.runtime_digest != request.runtime_digest):
+            raise HistoryError('history_invalid_response')
+    elif operation == 'history.open_scope':
         checked_open_scope(result, *decode_open_scope_request(request.payload, request.project_id, request.runtime_digest))
     elif operation in {'history.commit_qa', 'history.qa_details'}:
         summary = result
@@ -439,7 +455,8 @@ class HistoryClient:
         failure = False
         try:
             raw = exchange_frame(self._endpoint, encoded, timeout=self._timeout,
-                                 response_limit=MAX_FRAME_BYTES if operation in {"history.read_record", 'history.qa_details'}
+                                 response_limit=MAX_FRAME_BYTES if operation in {"history.read_record", 'history.qa_details',
+                                                                                 'history.worker_input'}
                                  else MAX_HISTORY_REPLY_BYTES)
         except ServiceTransportError:
             failure = True
@@ -479,6 +496,10 @@ class HistoryClient:
     def original_open_scope(self, scope, orchestration_handle: str, inputs_digest: str) -> dict:
         payload = {'scope': scope.as_data(), 'orchestration_handle': orchestration_handle, 'inputs_digest': inputs_digest}
         return self._call('history.open_scope', hashlib.sha256(canonical_json(payload)).hexdigest(), payload)
+
+    def worker_input(self, host_outcome_digest: str) -> dict:
+        """A run this host recorded: its exact originals and where its terminal and result are."""
+        return self._call('history.worker_input', host_outcome_digest, {'host_outcome_digest': host_outcome_digest})
 
     def verification_worker_reference(self, binding: AttemptBinding, host_outcome_digest: str) -> dict:
         """Resolve metadata before verifier open; private bytes use ResultReadClient.

@@ -123,6 +123,7 @@ from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
+    HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client,
     run_control_client, bridged_run_owner, abandon_bridged_run,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
@@ -405,6 +406,16 @@ def _start_collector_quietly(args: argparse.Namespace) -> None:
                          project_root=args.project_root)
     except Exception:
         pass
+
+
+def _host_qa(args):
+    """Whether this project's host recorded the worker outcome QA names (else the legacy ledger did)."""
+    try:
+        _host_pair(args.state_root, args.project_root, args.host_outcome_digest, args.host_outcome_digest,
+                   host_client=_host_client())
+    except HostOutcomeUnknown:
+        return False
+    return True
 
 
 def _host_driven(route):
@@ -1468,7 +1479,13 @@ def main() -> int:
             ledger, project_id = _learning_ledger(args)
             try:
                 trusted = ledger.trusted_routing_evidence_refs(project_id, task)
-                ledger.verification_worker_result(project_id, task)
+                try:
+                    ledger.verification_worker_result(project_id, task)
+                except LedgerError as error:
+                    # A worker the project host recorded lives in project history,
+                    # not this ledger; its verifier's open binds and checks it there.
+                    if str(error) != "verification_for_outcome is not a recorded host outcome":
+                        raise
                 base_route = route_task(
                     task,
                     policy,
@@ -2374,6 +2391,18 @@ def main() -> int:
                 )
             finally:
                 _close_ledger(ledger)
+        elif args.command == "learning-run-operational-checks" and _host_qa(args):
+            # A worker and verifier this project's host recorded: QA through the project API.
+            report = operational_checks_client(
+                args.state_root, args.project_root, args.host_outcome_digest, args.verifier_host_outcome_digest,
+                lambda diagnostics: run_operational_check_suite(
+                    args.project_root, scratch_root=CollectorPaths(args.state_root).root, diagnostics=diagnostics),
+                host_client=_host_client())
+        elif args.command == "learning-record-operational-qa" and _host_qa(args):
+            report = record_operational_qa_client(
+                args.state_root, args.project_root, args.host_outcome_digest, args.verifier_host_outcome_digest,
+                args.check_receipt, _json_input(args.evaluator_assignment), _json_input(args.evaluator_result),
+                _json_input(args.verifier_assignment), _json_input(args.verifier_result), host_client=_host_client())
         elif args.command == "learning-run-operational-checks":
             ledger, project_id = _learning_ledger(args)
             try:

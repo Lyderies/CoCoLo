@@ -375,6 +375,18 @@ class HistoryService:
 
                 entry = self._store.record_host_open(expected, open_request, proof, **captured, before_commit=authorize_open)
                 result = {'record': parse_bounded_json(entry.content), 'metadata': _metadata(entry)}
+            elif request.operation == 'history.worker_input':
+                # A recorded worker's exact originals, for the account open of its
+                # verifier: checked against the worker's consumed grant first.
+                if authorization.host_result_context is None:
+                    raise HistoryError('history_not_authorized')
+                from .project_worker_result import current_input_reference
+                worker_context = authorization.host_result_context
+                _, worker_snapshot = worker_context.snapshot()
+                self._history()
+                reference = current_input_reference(self._store, worker_context, request.payload['host_outcome_digest'])[0]
+                result = {'worker': worker_snapshot, 'reference': {
+                    'terminal_record_id': reference['terminal_record_id'], 'result_digest': reference['result_digest']}}
             elif request.operation == "history.admit_host_result":
                 if authorization.host_result_context is None:
                     raise HistoryError("history_not_authorized")
@@ -414,7 +426,8 @@ class HistoryService:
                         result["deliveries"][-1]["delivery_sequence"] if result["deliveries"] else None
                     )
                     reply = self._reply(identity, request_digest=digest, project_id=project, runtime_digest=runtime, result=result)
-            limit = MAX_FRAME_BYTES if request.operation in {"history.read_record", 'history.qa_details'} else MAX_HISTORY_REPLY_BYTES
+            limit = (MAX_FRAME_BYTES if request.operation in {"history.read_record", 'history.qa_details', 'history.worker_input'}
+                     else MAX_HISTORY_REPLY_BYTES)
             if len(reply) + 1 > limit:
                 raise HistoryError("history_service_unavailable")
             decode_history_response(reply, request)

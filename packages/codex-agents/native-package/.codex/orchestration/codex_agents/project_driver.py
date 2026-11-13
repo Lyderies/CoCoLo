@@ -65,6 +65,8 @@ ACCOUNT_RETRY_INTERVAL = 0.5
 RATE_LIMIT_TIMEOUT_SECONDS = 10  # One event; the child's stream waits for it.
 MAX_PENDING_RATE_LIMITS = 64  # The account keeps at most this many per run.
 MAX_RUN_RATE_LIMIT_EVENTS = 1_000
+# Recorded workers whose originals a verifier open may still bind, per host (newest kept).
+MAX_RETAINED_WORKERS = 64
 _RETRYING = object()
 REASON_CODES = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable', 'run_abandoned',
@@ -72,7 +74,7 @@ REASON_CODES = frozenset({
 _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 'assignment', 'task', 'route',
                     'parent_grant'}
 _PREPARE_FIELDS = {'purpose', 'expected_export_commit'}
-_ACTIVE = frozenset({'preparing', 'observing', 'leasing', 'arming', 'recording_open', 'claiming', 'binding',
+_ACTIVE = frozenset({'reading', 'preparing', 'observing', 'leasing', 'arming', 'recording_open', 'claiming', 'binding',
                      'registering', 'provenance', 'consuming'})
 _AFTER = frozenset({'ready', 'reporting', 'terminal', 'acknowledging', 'cleanup', 'releasing', 'retiring', 'released'})
 
@@ -110,6 +112,7 @@ class _Run:
     dispatch_tokens: dict = field(default_factory=dict)
     submit_token: tuple | None = None
     result_admitted: bool = False
+    commit: str | None = None
     released_at: float | None = None
     recorder: object = None
 
@@ -188,10 +191,14 @@ class _RateLimitRecorder:
 
 
 class RunDriver:
-    def __init__(self, state, project_root, bundle_root, scope, runtime, *, clock=time.monotonic):
+    def __init__(self, state, project_root, bundle_root, scope, runtime, *, clock=time.monotonic, history_endpoint=None):
         self._state, self._root, self._bundle = state, Path(project_root), Path(bundle_root)
+        # This host's own project API, read from the helper thread for a verifier's worker result.
+        self._history_endpoint = None if history_endpoint is None else Path(history_endpoint)
         self._scope, self._runtime, self._clock = scope, runtime, clock
         self._runs, self._closed, self._intake = {}, False, []
+        # host outcome digest -> (host class, HostResultContext).
+        self._workers = {}
         self._call = _Call()
         self._account = account_endpoint_path(state)
         self._preparation = runtime.bind_preparation(
@@ -207,7 +214,14 @@ class RunDriver:
     # Enrollment for this host's own account calls, one helper thread at a time.
     def _preamble(self, socket_path, message):
         call = self._call
-        if Path(socket_path) != self._account or call.role is None:
+        if call.role is None:
+            return None
+        if call.role == 'host' and self._history_endpoint is not None and Path(socket_path) == self._history_endpoint:
+            # The helper thread reading this host's own project API as the run's host class.
+            key, proofs = read_capability(self._state, self._root, 'host'), proof_directory(socket_path)
+            line = enrollment_preamble(key, 'host', call.host_client, self._scope.supervisor_generation, message, proofs)
+            return line, lambda: withdraw_proof(proofs, line)
+        if Path(socket_path) != self._account:
             return None
         key, proofs = read_capability(self._state, None, 'account'), proof_directory(socket_path)
         line = enrollment_preamble(key, call.role, call.host_client, 1, message, proofs,
@@ -315,7 +329,7 @@ class RunDriver:
             elif request['operation'] == 'run.prepare':
                 self._prepare(key, request['inputs_digest'], context, enrolled.host_client)
             else:
-                self._recorded(key, request['inputs_digest'], enrolled.host_client)
+                self._recorded(key, request['inputs_digest'], context, enrolled.host_client)
         except HistoryError as error:
             self._reply(connection, {'state': 'refused', 'reason_code': error.reason_code})
             return
@@ -325,11 +339,14 @@ class RunDriver:
         else:
             run.waiters.append((connection, self._clock() + WAIT_SECONDS))
 
-    def _recorded(self, key, inputs_digest, host_client):
+    def _recorded(self, key, inputs_digest, value, host_client):
         """The opening primary reports its result admitted; custody may then retire.
 
         Only after its own successful admission does the CLI say so. A false
         report can only shorten custody of that host class's own released run.
+        With the outcome's digest, the run's originals are kept so a verifier of
+        that outcome can be opened later; project history still checks them
+        against the run's consumed grant, so a wrong digest binds nothing.
         """
         run = self._runs.get(key)
         if run is None:
@@ -338,7 +355,38 @@ class RunDriver:
             raise HistoryError('history_not_authorized')
         if run.inputs_digest != inputs_digest:
             raise HistoryError('history_conflict')
+        if value:
+            if (value.keys() != {'purpose', 'host_outcome_digest'} or value['purpose'] != 'recorded'
+                    or not matches(value['host_outcome_digest'], _DIGEST)):
+                raise HistoryError('history_invalid_input')
+            original = self.result_context(run.binding, host_client) if run.binding is not None else None
+            if original is not None:
+                self._workers.pop(value['host_outcome_digest'], None)
+                self._workers[value['host_outcome_digest']] = (host_client, original)
+                while len(self._workers) > MAX_RETAINED_WORKERS:
+                    self._workers.pop(next(iter(self._workers)))
         run.result_admitted = True
+
+    def worker_context(self, orchestration_handle, host_outcome_digest, host_client):
+        """A recorded worker's originals for its verifier, only for the host class that ran it.
+
+        Kept in memory: after a host restart a verifier of an earlier worker is
+        refused, never opened without its exact worker.
+        """
+        held = self._workers.get(host_outcome_digest)
+        if held is None or held[0] != host_client or (
+                orchestration_handle is not None and held[1].binding.orchestration_handle != orchestration_handle):
+            return None
+        return held[1]
+
+    def retained_context(self, binding, host_client):
+        """The kept originals of exactly this recorded run, for that host class's QA."""
+        return next((held[1] for held in self._workers.values()
+                     if held[0] == host_client and held[1].binding == binding), None)
+
+    def retains_worker(self, binding, host_client):
+        """Whether this exact binding is a recorded worker kept for that host class's verifier."""
+        return self.retained_context(binding, host_client) is not None
 
     def _register(self, key, inputs_digest, value, host_client):
         # The host class is the enrolled one; the context may only repeat it.
@@ -358,8 +406,14 @@ class RunDriver:
             return
         if len(self._runs) >= MAX_RUNS:
             raise HistoryError('history_service_unavailable')
+        worker = None
+        digest = value['task'].get('verification_for_outcome') if type(value['task']) is dict else None
+        if digest is not None:
+            worker = self.worker_context(value['orchestration_handle'], digest, host_client)
+            if worker is None:
+                raise HistoryError('history_orchestration_unavailable')
         prospective = OpenScopeContext(self._scope, value['orchestration_handle'], value['assignment'], value['task'],
-                                       value['route'], value['parent_grant'])
+                                       value['route'], value['parent_grant'], worker)
         prospective.snapshot()
         self._runs[key] = _Run(key, self._scope, host_client, prospective, value['run_id'], inputs_digest)
 
@@ -375,15 +429,49 @@ class RunDriver:
             return  # Already under way: report its state, never start it twice.
         if value.keys() != _PREPARE_FIELDS or value['purpose'] != 'prepare':
             raise HistoryError('history_invalid_input')
-        commit = value['expected_export_commit']
+        run.commit = value['expected_export_commit']
+        if run.prospective.worker is None:
+            self._start_preparation(run, None)
+            return
+        # A verifier's worker result is read first, off the owner thread.
+        worker, digest, host = run.prospective.worker, run.prospective.task['verification_for_outcome'], run.host_client
+
+        def read():
+            return self._read_worker_result(worker, digest, host)
+
+        run.call, run.retry_at, run.retry_until = read, None, self._clock()
+        run.future = self._executor.submit(read)
+        run.state = 'reading'
+
+    def _start_preparation(self, run, worker_result):
         run.preparation = PreparationContext(preparation_payload(run.prospective, self._root, self._bundle,
-            {'PATH': os.defpath}, expected_export_commit=commit))
+            {'PATH': os.defpath}, expected_export_commit=run.commit, worker_result=worker_result))
         try:
             run.prepared = self._preparation.submit(run.preparation)
         except PreparationError:
             self._fail(run, 'run_unavailable')
             return
         run.state = 'preparing'
+
+    def _read_worker_result(self, worker, digest, host_client):
+        """Helper thread: the worker's terminal and result from this host's own APIs, checked."""
+        from .history_api import HistoryClient
+        from .result_contracts import MAX_RESULT_BODY_BYTES, checked_result_body
+        from .result_read_api import ResultReadClient
+        self._call.role, self._call.host_client, self._call.context = 'host', host_client, None
+        try:
+            endpoint, scope = self._history_endpoint, self._scope
+            history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=10)
+            current = history.worker_input(digest)
+            if current['worker'] != worker.snapshot()[1]:
+                raise HistoryError('history_conflict')
+            reference = current['reference']
+            terminal = history.read_record(reference['terminal_record_id'])['record']
+            body = ResultReadClient(endpoint, timeout=10).read_result(worker.binding, reference['result_digest'])
+            checked_result_body(body, worker.assignment, terminal)
+            return parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
+        finally:
+            self._call.role = self._call.host_client = self._call.context = None
 
     @staticmethod
     def _view(run):
@@ -512,7 +600,11 @@ class RunDriver:
 
     def _advance(self, run):
         lane, prep = self._runtime.persistence, self._preparation
-        if run.state == 'preparing':
+        if run.state == 'reading':
+            worker_result = self._result(run)
+            if worker_result is not None:
+                self._start_preparation(run, worker_result)
+        elif run.state == 'preparing':
             state = prep.snapshot(run.prepared)['state']
             if state in {'failed', 'unknown', 'cleaned'}:
                 self._fail(run, 'run_unavailable')
@@ -551,7 +643,8 @@ class RunDriver:
                 return
             run.evidence = lane.storage_evidence(run.persistence)
             self._account_call(run, 'project', 'open_provenance',
-                OpenProvenanceInput(run.key[0], run.prospective.assignment['assignment_id']),
+                OpenProvenanceInput(run.key[0], run.prospective.assignment['assignment_id'],
+                                    run.prospective.task.get('verification_for_outcome')),
                 request_id='open-' + self._id(run), custody=self._custody(run, storage=run.evidence))
             run.state = 'recording_open'
         elif run.state == 'recording_open':

@@ -379,6 +379,73 @@ class RuntimeResultError(RuntimeError):
         super().__init__(self.reason_code)
 
 
+class HostOutcomeUnknown(RuntimeError):
+    """The outcome is not one this project's host recorded; the legacy ledger owns it."""
+
+
+def _host_pair(state_root, project_root, host_outcome_digest, verifier_host_outcome_digest, *, host_client):
+    """Both recorded runs' bindings from this project's host, or HostOutcomeUnknown."""
+    state = CollectorPaths(state_root)
+    try:
+        scope, endpoint, result_endpoint = read_runtime_hint(state, project_root)
+    except Exception:
+        raise HostOutcomeUnknown() from None
+    history = HistoryClient(result_endpoint, scope.project_id, scope.runtime_digest, timeout=10)
+    pair = []
+    for digest in (host_outcome_digest, verifier_host_outcome_digest):
+        enroll_clients(state, project_root, scope, (result_endpoint,), host_client=host_client)
+        try:
+            pair.append(history.worker_input(digest))
+        except HistoryError as error:
+            if error.reason_code == 'history_not_authorized' and not pair:
+                raise HostOutcomeUnknown() from None
+            raise
+    worker, verifier = (AttemptBinding(**value['worker']['binding']) for value in pair)
+    return state, scope, result_endpoint, history, pair, worker, verifier
+
+
+def operational_checks_client(state_root, project_root, host_outcome_digest, verifier_host_outcome_digest,
+                              run_checks, *, host_client):
+    """Run the fixed checks for a host-recorded worker and verifier and get a receipt from the project.
+
+    The report reaches the project writer as this request's protected context,
+    never as request JSON; the writer binds it to both kept originals.
+    """
+    state, scope, endpoint, history, _, worker, verifier = _host_pair(
+        state_root, project_root, host_outcome_digest, verifier_host_outcome_digest, host_client=host_client)
+    contexts = enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+    history.operational_qa_scope(worker, verifier, host_outcome_digest, verifier_host_outcome_digest)
+    diagnostics = []
+    report = run_checks(diagnostics)
+    contexts = enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+    contexts[endpoint] = canonical_json({'purpose': 'checks', 'report': report})
+    request_id = 'qa-checks-' + content_digest({'worker': host_outcome_digest, 'verifier': verifier_host_outcome_digest,
+                                                'report': report})[:48]
+    receipt = history.issue_operational_check_receipt(worker, verifier, host_outcome_digest,
+                                                      verifier_host_outcome_digest, request_id=request_id)
+    return {'ready': True, **receipt, 'check_report': report, 'diagnostics': diagnostics}
+
+
+def record_operational_qa_client(state_root, project_root, host_outcome_digest, verifier_host_outcome_digest,
+                                 check_receipt, evaluator_assignment, evaluator_result, verifier_assignment,
+                                 verifier_result, *, host_client):
+    """Commit QA for a host-recorded pair; the files must be the exact recorded originals and results."""
+    state, scope, endpoint, history, pair, worker, verifier = _host_pair(
+        state_root, project_root, host_outcome_digest, verifier_host_outcome_digest, host_client=host_client)
+    for value, binding, assignment, result in ((pair[0], worker, evaluator_assignment, evaluator_result),
+                                               (pair[1], verifier, verifier_assignment, verifier_result)):
+        if canonical_json(value['worker']['assignment']) != canonical_json(assignment):
+            raise HistoryError('history_conflict')
+        enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+        body = ResultReadClient(endpoint, timeout=10).read_result(binding, value['reference']['result_digest'])
+        if canonical_json(parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)) != canonical_json(result):
+            raise HistoryError('history_conflict')
+    enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+    committed = history.commit_operational_qa(worker, verifier, host_outcome_digest, verifier_host_outcome_digest,
+                                              check_receipt)
+    return {'ready': True, **committed}
+
+
 def record_codex_result_client(state_root, project_root, task, route, assignment, parent_grant, result, observation,
                                *, host_client):
     """Admit only the original published terminal; never transmit a replacement body."""
@@ -433,8 +500,9 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
             contexts = enroll_clients(state, project_root, scope, (endpoint, Path(endpoint).parent / 'run.sock'),
                                       host_client=host_client)
             if (Path(endpoint).parent / 'run.sock').exists():
-                _run_driver(contexts, endpoint, 'run.recorded', binding.run_handle, binding.attempt, inputs, {},
-                            timeout=5)
+                _run_driver(contexts, endpoint, 'run.recorded', binding.run_handle, binding.attempt, inputs,
+                            {'purpose': 'recorded',
+                             'host_outcome_digest': admitted['admission']['host_outcome_digest']}, timeout=5)
         except Exception:
             pass  # The host keeps custody for its grace period instead.
         return {'ready': True, **admitted, **records,
@@ -601,14 +669,21 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
         # The trusted CLI hands each owner the originals for exactly this request.
         contexts[endpoints[1]] = canonical_json({'purpose': 'open', 'orchestration_handle': orchestration_handle,
                                                  **originals})
-        project_scope = HistoryClient(endpoints[1], scope.project_id, scope.runtime_digest, timeout=10).original_open_scope(
-            prospective, orchestration_handle, digest)
+        history = HistoryClient(endpoints[1], scope.project_id, scope.runtime_digest, timeout=10)
+        project_scope = history.original_open_scope(prospective, orchestration_handle, digest)
         if project_scope['facts']['client_version'] != host_client:
             raise HostClientMismatch('host_client_mismatch')
+        # A verifier carries the exact worker this host recorded, as the project bound it.
+        worker = None
+        if task.get('verification_for_outcome') is not None:
+            contexts[endpoints[1]] = None
+            worker = history.worker_input(task['verification_for_outcome'])['worker']
+            if worker['binding']['orchestration_handle'] != orchestration_handle:
+                raise RuntimeOpenError('open_not_authorized')
         opening = AccountOpenInput(prospective, orchestration_handle, digest)
         contexts[endpoints[2]] = canonical_json({'purpose': 'open', 'project_scope': project_scope,
             'prospective': {'scope': prospective.as_data(), 'orchestration_handle': orchestration_handle,
-                            **originals, 'worker': None}})
+                            **originals, 'worker': worker}})
         identity = 'cli-open-' + content_digest(opening.payload())
         reply = AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=10).open_host_run(
             opening, request_id=identity)

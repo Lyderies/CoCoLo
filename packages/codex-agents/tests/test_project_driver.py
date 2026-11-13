@@ -419,6 +419,139 @@ class ProjectDriverTests(DriverHarness):
         self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
 
 
+class HostVerificationTests(DriverHarness):
+    """A verifier of a host-driven worker is opened, prepared and run through the same host."""
+
+    def worker(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write('worker-result.json', dispatched['result']),
+                            '--observation', observation)
+        return orchestration, dispatched['result'], recorded['host_outcome_digest']
+
+    def verifier(self, orchestration, digest, **changes):
+        task = {**self.task(), 'id': 'verify-1', 'objective': 'Independently verify the research result',
+                'family': 'verification', 'verification_for_family': 'research',
+                'verification_for_provider': 'codex', 'verification_for_outcome': digest,
+                'owned_paths': ['source.txt'], **changes}
+        task_path = self.write('verifier-task.json', task)
+        route = self.cli('learning-route', '--task', task_path)
+        assigned = self.assignment_for(route, assignment_id='verify-assignment-1', task_id='verify-1',
+                                       objective=task['objective'], context=[digest], owned_paths=['source.txt'],
+                                       verification_required=route['verification_required'])
+        context = ('--task', task_path, '--assignment', self.write('verifier-assignment.json', assigned),
+                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        return route, assigned, context, self.write('verifier-route.json', route)
+
+    def verified(self):
+        orchestration, worker_result, digest = self.worker()
+        route, assigned, context, route_path = self.verifier(orchestration, digest)
+        self.assertEqual(('codex', 'bridge'), (route['provider'], route['dispatch']))
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration)
+        self.assertEqual(('admitted', True), (opened['admission'], opened['project_host_registered']))
+        (self.tools / 'codex-last-message.json').write_text(
+            json.dumps(null_filled({**result(), 'assignment_id': assigned['assignment_id']})))
+        with mock.patch.object(self, 'assertEqual', side_effect=lambda *a: unittest.TestCase.assertEqual(
+                self, *a[:2], (a[2] if len(a) > 2 else '') + ' driver stopped at %r' % (self.stopped_runs,))):
+            dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        invocation = [i for i in self.invocations('codex') if 'exec' in i['argv']][-1]
+        self.assertEqual(['.orchestration-input/worker-result.json', 'source.txt'], invocation['files'])
+        placed = invocation['reserved_inputs']['worker-result.json']
+        self.assertEqual(worker_result, json.loads(placed['content']))
+        observation = self.write('verifier-observation.json', {'run_handle': opened['run_handle'], 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write('verifier-result.json', dispatched['result']),
+                            '--observation', observation)
+        self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
+        return digest, recorded['host_outcome_digest'], assigned, dispatched['result']
+
+    def test_a_verifier_gets_the_recorded_worker_result_through_the_host(self):
+        self.verified()
+
+    def test_operational_qa_of_a_host_worker_and_verifier_goes_through_the_project(self):
+        worker, verifier, verifier_assignment, verifier_result = self.verified()
+        from tests.test_bridge import passing_check_report
+        with mock.patch.object(cli, 'run_operational_check_suite',
+                               side_effect=lambda _root, **_scratch: passing_check_report()):
+            checks = self.cli('learning-run-operational-checks', '--host-outcome-digest', worker,
+                              '--verifier-host-outcome-digest', verifier)
+        self.assertTrue(checks['checks_passed'])
+        files = {'--evaluator-assignment': self.write('eval-assignment.json', json.loads(
+                     Path(self.temporary.name, 'project-assignment.json').read_text())),
+                 '--evaluator-result': str(Path(self.temporary.name, 'worker-result.json')),
+                 '--verifier-assignment': self.write('ver-assignment.json', verifier_assignment),
+                 '--verifier-result': self.write('ver-result.json', verifier_result)}
+        qa = self.cli('learning-record-operational-qa', '--host-outcome-digest', worker,
+                      '--verifier-host-outcome-digest', verifier, '--check-receipt', checks['check_receipt'],
+                      *[item for pair in files.items() for item in pair])
+        self.assertTrue(qa['ready'])
+        self.assertIn('accepted', json.dumps(qa))
+        with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('legacy ledger')):
+            again = self.cli('learning-record-operational-qa', '--host-outcome-digest', worker,
+                             '--verifier-host-outcome-digest', verifier, '--check-receipt', checks['check_receipt'],
+                             *[item for pair in files.items() for item in pair])
+        # A repeat is the same committed QA, now reported as known; no legacy ledger is opened.
+        self.assertEqual((False, True), (qa['known'], again['known']))
+        self.assertEqual({k: v for k, v in qa.items() if k != 'known'}, {k: v for k, v in again.items() if k != 'known'})
+
+    def test_a_verifier_of_an_unknown_or_unrecorded_outcome_is_refused(self):
+        orchestration, _, digest = self.worker()
+        route, assigned, context, route_path = self.verifier(orchestration, 'f' * 64)
+        refused = self.cli('learning-open-host-run', *context, '--route', route_path,
+                           '--orchestration-handle', orchestration, expected=2)
+        self.assertNotEqual('admitted', refused.get('admission'))
+
+
+class HostClaudeVerificationTests(HostVerificationTests):
+    """The verifier of a Codex worker is a bridged Claude child, for a Claude primary."""
+    primary = 'claude'
+
+    def admit(self, provider):
+        fingerprint = super().admit(provider)
+        if provider == 'codex':
+            super().admit('claude')
+            from tests.test_bridge import FIXTURES_ROOT
+            name = 'claude_agents_verification_worker'  # The routed Claude verifier's installed agent.
+            (self.bundle / f'.claude/agents/{name}.md').write_text(
+                (FIXTURES_ROOT / f'claude/{name}.md').read_text().replace('\n---\n', '\nmaxTurns: 8\n---\n', 1))
+        return fingerprint
+
+    def verified(self):
+        orchestration, worker_result, digest = self.worker()  # Routed to Codex: Claude is not enabled yet.
+        config = self.project / '.codex/orchestration/provider-routing.json'
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(json.dumps({'version': 1, 'providers': {'codex': {'enabled': True},
+                                      'claude': {'enabled': True}}, 'codex_primary_may_bridge_to_claude': True}))
+        git(self.project, 'add', '.')
+        git(self.project, 'commit', '-qm', 'Both providers')
+        route, assigned, context, route_path = self.verifier(orchestration, digest)
+        self.assertEqual(('claude', 'bridge'), (route['provider'], route['dispatch']))
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration)
+        self.assertEqual(('admitted', True), (opened['admission'], opened['project_host_registered']))
+        self.frames('claude', [init_frame(), RATE_LIMIT, result_frame(json.dumps(
+            {**result(), 'assignment_id': assigned['assignment_id']}))])
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        invocation = [i for i in self.invocations('claude') if '-p' in i['argv']][-1]
+        self.assertIn('.orchestration-input/worker-result.json', invocation['files'])
+        self.assertEqual(worker_result, json.loads(invocation['reserved_inputs']['worker-result.json']['content']))
+        observation = self.write('verifier-observation.json', {'run_handle': opened['run_handle'], 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write('verifier-result.json', dispatched['result']),
+                            '--observation', observation)
+        return digest, recorded['host_outcome_digest'], assigned, dispatched['result']
+
+
 class ClaudePrimaryDriverTests(ProjectDriverTests):
     """Path B: a Claude primary bridges the same Codex child through the same host."""
     primary = 'claude'

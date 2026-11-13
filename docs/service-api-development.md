@@ -254,8 +254,8 @@ recorded and releases its capacity.
 Not done: no cancellation-before-dispatch path for a claimed run through the
 driver, no driver state across a host restart (a run opened before a restart is
 refused at dispatch and keeps its account capacity until reconciled), the
-`learning-bind-host-agent` (native routes from older policies only), verification and
-QA still use the legacy ledger.
+`learning-bind-host-agent` (native routes from older policies only) and the learning
+cycle report still use the legacy ledger.
 
 
 #### Claude children (path C)
@@ -316,15 +316,33 @@ from outside its session, so it could not meet the silence cutoff, deadline or
 cleanup guarantees. Tests: `ClaudePrimaryClaudeChildTests` (the Claude-child tests
 with a Claude primary).
 
-Open gap (verification on the host path): a verifier of a host-driven worker cannot be
-opened through the host yet, for either provider. `open_codex_client` and the driver's
-registration send no worker context (`prospective.worker` is None), while the account
-open (`account_original_open`) and preparation (`codex_preparation._worker_input`)
-require the exact retained worker for a task with `verification_for_outcome`, so such
-an open is refused rather than run unbound. Routing Claude verifiers through the bridge
-moves them onto this gap. The fix is to carry the worker's retained reference
-(`history.verification_worker_reference`) through the CLI open, driver registration and
-preparation, without weakening those checks.
+Verification and operational QA on the host path. When the CLI reports a recorded
+result (`run.recorded`) it names the result's `host_outcome_digest`; the driver then
+keeps that run's originals (`HostResultContext`: binding, assignment, task, route,
+client capability) in memory, keyed by the digest, for the host class that ran it
+(at most 64, newest kept; lost on a host restart, after which a verifier or QA of an
+earlier run is refused). A task with `verification_for_outcome`:
+
+- routes even though the legacy ledger does not know the outcome (the open binds it);
+- opens with the kept worker: the project host's `history.open_scope` authorizer adds
+  it to the open-scope context, project history checks it against the worker's
+  consumed grant (`current_input_reference`), and the CLI fetches the same snapshot
+  through `history.worker_input` (host role, kept runs only, 80 KiB reply) for the
+  account open, whose worker digest must match the project's proof;
+- registers with the kept worker, and the driver reads the worker's terminal and result
+  through its own project API on its helper thread (as the run's host class), checks
+  the body against the terminal and hands it to preparation, which places it at
+  `.orchestration-input/worker-result.json`; open provenance names the worker digest.
+
+`learning-run-operational-checks` and `learning-record-operational-qa` use the project
+API when the host recorded both runs: `history.qa_scope`, `history.issue_qa_checks`
+(the fixed check report travels as the request's protected context) and
+`history.commit_qa`, authorized from the two kept originals. The record command checks
+the evaluator and verifier assignment and result files against the kept originals and
+the stored results. Outcomes the host did not record keep the legacy ledger path.
+Tests: `HostVerificationTests` (Codex verifier) and `HostClaudeVerificationTests`
+(Claude verifier for a Claude primary): worker, verifier with its exact worker result,
+QA, and a repeated QA record that opens no legacy ledger.
 
 Tests: `tests/test_project_driver.py` `ClaudeChildDriverTests` (open to released
 capacity with a rate-limit event recorded; a paid-usage event stops the child and the

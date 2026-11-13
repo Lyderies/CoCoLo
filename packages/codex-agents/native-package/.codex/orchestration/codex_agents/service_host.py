@@ -24,7 +24,7 @@ import time
 
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
 from .collector_paths import CollectorPaths, StateError, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
-from .history_contracts import HistoryError, valid_integer
+from .history_contracts import AttemptBinding, HistoryError, valid_integer
 from .learning_contracts import canonical_json, keyed_digest
 from .orchestration_api import ORCHESTRATION_OPERATIONS, OrchestrationScope, orchestration_request_digest
 from .orchestration_service import OrchestrationAuthorization
@@ -33,7 +33,7 @@ from .control_service import ControlAuthorization
 from .service_protocol import service_request_digest
 from .history_api import history_request_digest
 from .history_service import HistoryAuthorization
-from .host_result_contracts import decode_host_result_reference
+from .host_result_contracts import OperationalCheckContext, OperationalQAContext, decode_host_result_reference
 from .result_read_api import result_read_request_digest
 from .result_read_service import ResultReadAuthorization
 from .learning_contracts import parse_bounded_json
@@ -347,7 +347,8 @@ class ProjectServiceHost:
                 limits, self._attach, proofs, clock_ns=clock_ns)
             if bundle_root is not None:
                 from .project_driver import RunDriver
-                self._driver = RunDriver(state, self._project_root, bundle_root, self._scope, self._runtime)
+                self._driver = RunDriver(state, self._project_root, bundle_root, self._scope, self._runtime,
+                                         history_endpoint=self._endpoints['project'])
                 self._driver._enrolled = self._enrolled_control
             for kind in _KINDS:
                 self._frontend.listen(self._endpoints[kind], kind)
@@ -423,7 +424,8 @@ class ProjectServiceHost:
         """A run's own result, read by the host class that dispatched it."""
         entry = self._frontend.context(token) if self._frontend is not None else None
         if (entry is None or entry.kind != 'project' or entry.enrolled.role != 'host' or self._driver is None
-                or not self._driver.owns_binding(request.binding, entry.enrolled.host_client)):
+                or not (self._driver.owns_binding(request.binding, entry.enrolled.host_client)
+                        or self._driver.retains_worker(request.binding, entry.enrolled.host_client))):
             return None
         return ResultReadAuthorization(request.binding, request.result_digest, result_read_request_digest(request))
 
@@ -446,6 +448,37 @@ class ProjectServiceHost:
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
                                         frozenset({'history.admit_host_result', 'history.read_record'}),
                                         host_result_context=original)
+        if request.operation == 'history.worker_input':
+            worker = None if self._driver is None else self._driver.worker_context(
+                None, request.payload.get('host_outcome_digest'), entry.enrolled.host_client)
+            if worker is None:
+                return None
+            return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
+                                        frozenset({'history.worker_input'}), host_result_context=worker)
+        if request.operation in {'history.qa_scope', 'history.issue_qa_checks', 'history.commit_qa', 'history.qa_details'}:
+            # QA of a worker and its verifier, both recorded by this host class: the
+            # originals are the ones this host kept, never request JSON.
+            try:
+                pair = [self._driver.retained_context(AttemptBinding(**request.payload[name + '_binding']),
+                                                      entry.enrolled.host_client) for name in ('worker', 'verifier')]
+            except Exception:
+                return None
+            if self._driver is None or None in pair:
+                return None
+            qa = OperationalQAContext(*pair)
+            check = None
+            if request.operation == 'history.issue_qa_checks':
+                try:
+                    supplied = parse_bounded_json(entry.enrolled.context or b'', max_bytes=MAX_CONTEXT_BYTES)
+                    if supplied.keys() != {'purpose', 'report'} or supplied['purpose'] != 'checks':
+                        return None
+                    check = OperationalCheckContext(qa, supplied['report'])
+                    check.snapshot()
+                except Exception:
+                    return None
+            return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
+                                        frozenset({request.operation}), operational_qa_context=qa,
+                                        operational_check_context=check)
         if request.operation != 'history.open_scope' or entry.enrolled.context is None:
             return None
         try:
@@ -454,8 +487,16 @@ class ProjectServiceHost:
                     or original['purpose'] != 'open'
                     or original['orchestration_handle'] != request.payload.get('orchestration_handle')):
                 return None
+            # A verifier binds the worker this host recorded for that outcome; none, no open.
+            digest = original['task'].get('verification_for_outcome') if type(original['task']) is dict else None
+            worker = None
+            if digest is not None:
+                worker = None if self._driver is None else self._driver.worker_context(
+                    original['orchestration_handle'], digest, entry.enrolled.host_client)
+                if worker is None:
+                    return None
             prospective = OpenScopeContext(self._scope, original['orchestration_handle'], original['assignment'],
-                                           original['task'], original['route'], original['parent_grant'])
+                                           original['task'], original['route'], original['parent_grant'], worker)
             prospective.snapshot()
         except Exception:
             return None

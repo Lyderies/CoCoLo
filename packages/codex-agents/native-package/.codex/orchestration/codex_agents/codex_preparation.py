@@ -99,13 +99,19 @@ class _Slot:
         self.thread = None
 
 
-def preparation_payload(prospective, project_root, bundle_root, environ, *, expected_export_commit=None, history_endpoint=None):
-    """Frontend encoding, before controller intake; no I/O or authority is granted."""
-    if type(prospective) is not OpenScopeContext:
+def preparation_payload(prospective, project_root, bundle_root, environ, *, expected_export_commit=None, history_endpoint=None,
+                        worker_result=None):
+    """Frontend encoding, before controller intake; no I/O or authority is granted.
+
+    A verifier's worker result is either read here through `history_endpoint` or,
+    in the project host, supplied as `worker_result` by the owner that already
+    read and checked it against the worker's terminal.
+    """
+    if type(prospective) is not OpenScopeContext or (worker_result is not None and history_endpoint is not None):
         raise PreparationError('preparation_invalid_input')
     raw = canonical_json({'prospective': prospective.snapshot()[1], 'project_root': str(project_root),
         'bundle_root': str(bundle_root), 'environ': environ, 'expected_export_commit': expected_export_commit,
-        'history_endpoint': None if history_endpoint is None else str(history_endpoint)})
+        'history_endpoint': None if history_endpoint is None else str(history_endpoint), 'worker_result': worker_result})
     if not 0 < len(raw) <= MAX_INPUT_BYTES:
         raise PreparationError('preparation_invalid_input')
     return raw
@@ -122,18 +128,23 @@ def _remove(workspace):
     return False
 
 
-def _worker_input(prospective, endpoint):
+def _worker_input(prospective, endpoint, supplied=None):
     """Read the original verifier input through fixed project APIs, never SQLite."""
     worker = prospective.worker
     digest = prospective.task.get('verification_for_outcome')
     if worker is None:
-        if digest is not None or prospective.task['family'] == 'verification':
+        if digest is not None or prospective.task['family'] == 'verification' or supplied is not None:
             raise PreparationError('preparation_invalid_input')
         return None
     if (digest is None or prospective.task['family'] != 'verification'
             or not prospective.scope.matches_attempt(worker.binding)
-            or worker.binding.orchestration_handle != prospective.orchestration_handle
-            or type(endpoint) is not str or not Path(endpoint).is_absolute()):
+            or worker.binding.orchestration_handle != prospective.orchestration_handle):
+        raise PreparationError('preparation_invalid_input')
+    if supplied is not None:
+        if type(supplied) is not dict:
+            raise PreparationError('preparation_invalid_input')
+        return supplied
+    if type(endpoint) is not str or not Path(endpoint).is_absolute():
         raise PreparationError('preparation_invalid_input')
     history = HistoryClient(Path(endpoint), prospective.scope.project_id, prospective.scope.runtime_digest, timeout=10)
     reference = history.verification_worker_reference(worker.binding, digest)
@@ -153,7 +164,7 @@ def _build(payload, scope):
     try:
         value = parse_bounded_json(payload, max_bytes=MAX_INPUT_BYTES)
         if (type(value) is not dict or value.keys() != {'prospective', 'project_root', 'bundle_root',
-                'environ', 'expected_export_commit', 'history_endpoint'}):
+                'environ', 'expected_export_commit', 'history_endpoint', 'worker_result'}):
             raise PreparationError('preparation_invalid_input')
         prospective = OpenScopeContext.from_snapshot(value['prospective'])
         if prospective.scope != scope:
@@ -183,7 +194,7 @@ def _build(payload, scope):
             from .learning_engine import _read_managed_bytes
             schema = _read_managed_bytes(bundle, '.codex/orchestration/schemas/result.schema.json', max_bytes=MAX_RESULT_BODY_BYTES)
             bridge.codex_schemas(schema)
-        worker_result = _worker_input(prospective, value['history_endpoint'])
+        worker_result = _worker_input(prospective, value['history_endpoint'], value['worker_result'])
         paths = bridge.assignment_read_paths(assignment, worker_outcome_digest=prospective.task.get('verification_for_outcome'))
         identity = resolve_client(provider, untrusted=[root])
         if identity[0] is None:
