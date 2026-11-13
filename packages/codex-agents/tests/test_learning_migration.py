@@ -9,7 +9,7 @@ from unittest import mock
 
 from tests import test_learning_cli as cli_fixture
 from tests import test_learning_source_image_legacy as legacy
-from tests.learning_support import verification_outcome
+from tests.learning_support import routing_fields, verification_outcome
 from tests.test_project_learning_live import fixture_record, full_report, run_cycle, stored
 
 from codex_agents import learning_migration as migration
@@ -93,6 +93,14 @@ class LearningMigrationTests(unittest.TestCase):
             self.fixture._admit_outcome(self.project, outcome, now_ms=now_ms())
         with self.assertRaisesRegex(LedgerError, LEARNING_MOVED_ERROR):
             self.source.run_learning_cycle(self.project, as_of_ms=now_ms())
+        # Nor does its frozen copy vouch for routing evidence any more.
+        cited = {"id": "task-1", "objective": "Use earlier reconnaissance", "family": "research",
+                 "complexity": "extreme", "risk": "low", "meaningful": True,
+                 **routing_fields(operation="end_to_end"), "deterministic_validation": True,
+                 "independent_parts": 1, "parallel_safe": False, "failed_attempts": 0, "failure_events": [],
+                 "routing_evidence_refs": ["outcome:" + "a" * 64]}
+        with self.assertRaisesRegex(LedgerError, LEARNING_MOVED_ERROR):
+            self.source.trusted_routing_evidence_refs(self.project, cited)
         with self.source._lock, self.source._connection:
             for kind in sorted(learning_store.LEARNING_MOVED_TYPES):
                 with self.subTest(kind=kind), self.assertRaisesRegex(LedgerError, LEARNING_MOVED_ERROR):

@@ -443,6 +443,35 @@ class ProjectServiceOtherVersion(Exception):
     """A live service of another version holds the project and could not be replaced."""
 
 
+def _replace_other_version_host(args, directory):
+    """Withdraw a project service that another version started; whether it stopped.
+
+    Done with the collector stopped (it stops only when no run is active or
+    unsettled, and no run can be claimed while it is down) and the ledger
+    checked drained, so the service holds no run and cannot be given one,
+    whatever version its clients are. The collector is started again either way.
+    """
+    try:
+        state = LearningState(args.state_root, create=False)
+        maintenance = CollectorMaintenance.acquire(state, ORCHESTRATION_ROOT / "cli.py", args.project_root)
+    except (CollectorError, StateError, OSError):
+        return False
+    try:
+        ledger = LearningLedger(state)
+        try:
+            drained = ledger.drained()
+        finally:
+            ledger.close()
+        return drained and withdraw_project_host(args.state_root, args.project_root, directory)
+    except (LedgerError, StateError, OSError):
+        return False
+    finally:
+        try:
+            maintenance.resume()
+        except CollectorError:
+            pass
+
+
 def _start_project_host(args):
     """Start this project's service unless one serves; first settle where its learning lives.
 
@@ -457,15 +486,8 @@ def _start_project_host(args):
     leaves the project as it was: its service starts either way.
     """
     outdated = other_version_host(args.state_root, args.project_root)
-    if outdated is not None:
-        _start_collector_quietly(args)
-        try:
-            client = _compatible_collector(CollectorPaths(args.state_root))
-            drained = client is not None and client.learning_migration(args.project_root)["drained"]
-        except (CollectorError, StateError, OSError):
-            drained = False
-        if not drained or not withdraw_project_host(args.state_root, args.project_root, outdated):
-            raise ProjectServiceOtherVersion()
+    if outdated is not None and not _replace_other_version_host(args, outdated):
+        raise ProjectServiceOtherVersion()
     try:
         if not project_host_serving(args.state_root, args.project_root):
             _start_collector_quietly(args)

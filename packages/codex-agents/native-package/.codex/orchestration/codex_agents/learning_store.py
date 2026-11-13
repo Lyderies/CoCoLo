@@ -147,6 +147,9 @@ DEFAULT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 # A project whose learning history moved to its own project store. The ledger
 # keeps that project's account rows and account-owned evidence; it accepts no
 # further learning records for it.
+# The first release whose collector hosts the account service that claims and
+# counts runs; an older collector's stop cannot take a run's account away.
+FIRST_RUN_DRIVING_VERSION = (0, 8, 13)
 LEARNING_MOVED_KEY = "project_learning_moved_v1:"
 # Set with the moved marker by a migration that still has to switch the copied
 # history on in the project store, and cleared when that is done.
@@ -10078,6 +10081,10 @@ class LearningLedger:
         references = checked["routing_evidence_refs"]
         if not references:
             return frozenset()
+        if self.learning_moved(project_id):
+            # The owner may have rejected a run in the project store since the move;
+            # this frozen copy cannot vouch for any.
+            raise LedgerError(LEARNING_MOVED_ERROR)
         expected_task_id = keyed_digest(self.state.digest_key(), checked["id"])
         accepted: set[str] = set()
         with self._lock:
@@ -11460,13 +11467,11 @@ class CollectorMaintenance:
         transferred = False
         try:
             client = CollectorClient(state.socket)
-            older = False
             try:
                 client.health()
             except CollectorUpgradeRequired:
                 if not owner_registration:
                     raise
-                older = True
             except CollectorVersionError:
                 raise
             except CollectorError:
@@ -11482,10 +11487,20 @@ class CollectorMaintenance:
                         "a child run is active; nothing was changed, try again when none is running",
                         code="collector_busy",
                     ) from None
-                # Only a collector of an older release may lack the drained stop:
-                # those drive no runs (their CLIs run children themselves and pause
-                # the collector for every command). Anything else fails closed.
-                if error.code != "operation_invalid" or not older:
+                # Only a collector of a release from before project services may
+                # lack the drained stop: those drive no runs (their CLIs run
+                # children themselves and pause the collector for every command).
+                # Anything else, this version with an older schema included,
+                # fails closed.
+                if error.code != "operation_invalid" or not owner_registration:
+                    raise
+                try:
+                    reported = _version_tuple(client._request(
+                        {"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "health"}
+                    ).get("runtime_version"))
+                except CollectorError:
+                    reported = None
+                if reported is None or reported >= FIRST_RUN_DRIVING_VERSION:
                     raise
                 client.shutdown()
             if _wait_for_collector_shutdown(client, state, deadline):

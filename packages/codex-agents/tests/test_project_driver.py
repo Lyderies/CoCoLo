@@ -6,6 +6,8 @@ they resolve. Everything else is the product path: the in-process CLI, the
 hosts' enrollment, the run driver and the original owners.
 """
 import base64
+import io
+import contextlib
 import sqlite3
 import json
 import os
@@ -326,15 +328,24 @@ class ProjectDriverTests(DriverHarness):
         replacement.write_text(json.dumps(value, sort_keys=True, separators=(',', ':')))
         replacement.chmod(0o600)
         os.replace(replacement, hint)
-        busy = mock.Mock()
-        busy.learning_migration.return_value = {'moved': False, 'has_learning': False, 'drained': False,
-                                                'activation_pending': False}
-        with mock.patch.object(cli, '_compatible_collector', return_value=busy):
+        from codex_agents.collector_client import CollectorClient
+        from codex_agents.collector_contracts import CollectorError
+
+        with mock.patch.object(cli.CollectorMaintenance, 'acquire',
+                               side_effect=CollectorError('a child run is active', code='collector_busy')):
             refused = self.cli_for(self.project, 'learning-open-orchestration', expected=2)
         self.assertEqual('project_service_other_version', refused['reason_code'])
         self.assertIn('try again when none is running', refused['error'])
         self.assertTrue(hint.exists())  # Nothing was stopped.
-        # With no run active anywhere it is asked to stop, and this version's service takes over.
+        # With no run active anywhere the collector is stopped for the moment (so no run can
+        # be claimed), the old service is asked to stop, and this version's services take over.
+        def stop_started_collector():
+            try:
+                CollectorClient(self.state.socket, timeout=2).shutdown()
+            except Exception:
+                pass  # The harness may already have stopped everything.
+
+        self.addCleanup(stop_started_collector)
         opened = self.cli('learning-open-orchestration')
         self.assertRegex(opened['orchestration_handle'], '^orc_[0-9a-f]{48}$')
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, json.loads(hint.read_text())['scope']['runtime_digest'])
@@ -383,6 +394,119 @@ class ProjectDriverTests(DriverHarness):
         self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
 
 
+class LifecycleBoundaryTests(DriverHarness):
+    """End-to-end checks of boundaries that are otherwise only tested below the project service."""
+
+    def attempt(self, command, *arguments):
+        """Run one command for the project; returns (exit code, report) without asserting either."""
+        stdout = io.StringIO()
+        argv = ['cli.py', command, '--state-root', str(self.state.root), '--project-root', str(self.project), *arguments]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(cli, 'BUNDLE_ROOT', self.bundle), \
+                contextlib.redirect_stdout(stdout):
+            code = cli.main()
+        return code, json.loads(stdout.getvalue())
+
+    def executions(self):
+        return [i for i in self.invocations('codex') if 'exec' in i['argv']]
+
+    def test_repeated_cancels_keep_one_decision_and_a_finished_run_is_never_launched_again(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'quiet-child'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(self.executions, seconds=30)
+        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
+        # A handle nobody was given, in this orchestration or a made-up one, shows and stops nothing.
+        for forged in (('--orchestration-handle', orchestration, '--run-handle', 'hrn_' + 'f' * 48),
+                       ('--orchestration-handle', 'orc_' + 'f' * 48, '--run-handle', run_handle)):
+            for command in ('learning-run-status', 'learning-cancel-run'):
+                with self.subTest(command=command, forged=forged[1][:8] + forged[3][:8]):
+                    code, refused = self.attempt(command, *forged)
+                    self.assertEqual((2, False), (code, refused['ready']))
+                    self.assertNotIn('health', refused)
+        self.assertEqual('running', self.cli('learning-run-status', *target)['cancellation_state'])
+        first = self.cli('learning-cancel-run', *target)
+        again = self.cli('learning-cancel-run', *target)
+        self.assertEqual(('cancel_requested', True), (first['stop_reason'], first['stop_requested']))
+        self.assertEqual(first['stop_reason'], again['stop_reason'])
+        # A request is not a confirmed stop: the state says which it is.
+        self.assertIn(first['cancellation_state'], {'stop_requested', 'cleanup_confirmed'})
+        output, errors = process.communicate(timeout=30)
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        fenced = json.loads(output)
+        self.assertEqual('cancelled', fenced['bridge_report']['terminal_state'])
+        self.assertEqual('cancel_requested', self.cli('learning-cancel-run', *target)['stop_reason'])
+        # Dispatching the same handle again never starts another child.
+        code, repeated = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual(1, len(self.executions()))
+        if code == 0:
+            self.assertEqual(fenced['bridge_report']['terminal_state'], repeated['bridge_report']['terminal_state'])
+            self.assertEqual(fenced['result'], repeated['result'])
+        else:
+            self.assertFalse(repeated['ready'])
+
+    def test_an_invalid_result_is_fenced_with_its_reason_and_recorded_exactly_once(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        invalid = {**null_filled(result()), 'evidence': [], 'summary': 'CANARY-rejected-answer'}
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(invalid))
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        report = dispatched['bridge_report']
+        # Fenced as a failure with a typed reason; the rejected answer itself is not passed on.
+        self.assertNotEqual('result', report['outcome'])
+        self.assertNotIn('CANARY', json.dumps(dispatched))
+        self.assertIn('effective_bounds', report)
+        self.assertEqual(('invalid_result', 'failed', 'missing_evidence'), (
+            report['outcome'], report['terminal_state'], report['result_validation_reason_code']))
+        self.assertEqual('failed', dispatched['result']['execution_state'])
+        observation = self.write('invalid-observation.json', {
+            'run_handle': run_handle, 'result_attempts': [{'status': 'accepted', 'reason_code': None, 'receipt_id': None}],
+            **({'terminal_state': report['terminal_state']} if report.get('terminal_state') else {})})
+        record = ('learning-record-host-result', *context, '--route', route_path,
+                  '--result', self.write('fenced-result.json', dispatched['result']), '--observation', observation)
+        # The caller cannot turn the fenced failure into a pass.
+        softened = {**dispatched['result'], 'semantic_verdict': 'pass', 'status': 'completed', 'execution_state': 'completed'}
+        code, refused = self.attempt('learning-record-host-result', *context, '--route', route_path,
+                                     '--result', self.write('softened.json', softened), '--observation', observation)
+        self.assertEqual((2, 'history_conflict'), (code, refused['reason_code']))
+        recorded = self.cli(*record)
+        self.assertFalse(recorded['outcome']['accepted'])
+        self.assertEqual('missing_evidence', recorded['dispatch_diagnostics']['result_validation_reason_code'])
+        self.assertNotIn('CANARY', json.dumps(recorded))
+        # Once recorded the host lets the run go; recording it again adds nothing.
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
+        code, again = self.attempt(*record)
+        self.assertEqual((2, False), (code, again['ready']))
+        store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3')))
+                                + '?mode=ro', uri=True)
+        self.addCleanup(store.close)
+        self.assertEqual(1, store.execute("SELECT COUNT(*) FROM records WHERE record_type='outcome'").fetchone()[0])
+        self.assertEqual([], [row for row in store.execute('SELECT content FROM records')
+                              if b'CANARY' in bytes(row[0])])
+
+    def test_the_preview_names_exactly_what_the_child_is_then_given(self):
+        task = self.write('task.json', self.task())
+        route = self.cli('learning-route', '--task', task)
+        context = ('--task', task, '--assignment', self.write('assignment.json', self.assignment_for(route)),
+                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
+            preview = self.cli('dispatch-preflight', *context)
+        self.assertTrue(preview['preflight_only'])
+        self.assertFalse(preview['admission_created'])
+        route_path = self.write('route.json', route)
+        orchestration = self.cli('learning-open-orchestration')
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration['orchestration_handle'])
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        self.assertEqual(sorted(item['path'] for item in preview['files']), sorted(self.executions()[0]['files']))
+        self.assertEqual(preview['capabilities']['model'], route['model'])
+        self.assertEqual(preview['capabilities']['sandbox'], 'read-only')
+
+
 class HostRestartTests(DriverHarness):
     """The project host stops mid-run and starts again: nothing is claimed that is not known."""
 
@@ -402,6 +526,11 @@ class HostRestartTests(DriverHarness):
         after = self.cli('learning-run-status', *target, expected=2)
         self.assertFalse(after['ready'])
         self.assertNotIn('health', after)
+        # Its slot stays claimed and counted: nothing confirmed that the child ended.
+        unsettled = [tuple(row) for row in self.ledger._connection.execute(
+            'SELECT released_at_ms,release_digest FROM active_run_capacity')]
+        self.assertEqual([(None, None)], unsettled)
+        self.assertFalse(self.ledger.drained())
         # The primary carries on: a new run in the same orchestration routes, opens and runs.
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         task = self.write('next-task.json', {**self.task(), 'id': 'task-next'})
@@ -414,6 +543,12 @@ class HostRestartTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled({**result(), 'assignment_id': 'next'})))
         dispatched = self.cli('dispatch', *nxt, '--route', nxt_route, '--run-handle', opened['run_handle'])
         self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        # The earlier run's claim is still unreleased, and neither child was started twice.
+        claims = [row[0] for row in self.ledger._connection.execute(
+            'SELECT released_at_ms FROM active_run_capacity ORDER BY claimed_at_ms')]
+        self.assertEqual(2, len(claims))
+        self.assertIsNone(claims[0])
+        self.assertEqual(2, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
 
     def restart_host(self):
         """Stop the running project host and start a fresh one for the same project."""
@@ -951,6 +1086,53 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
         self.assertEqual('cancelled', json.loads(output)['bridge_report']['terminal_state'])
         self.assertEqual('cancel_requested', self.cli('learning-run-status', *target)['stop_reason'])
 
+    def test_a_prohibited_tool_stops_the_claude_child_at_once(self):
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        # The child asks for a tool outside its read-only set and would then keep going.
+        self.frames('claude', [init_frame(), {'type': 'assistant', 'message': {
+            'id': 'msg_1', 'model': 'claude-opus-5-5', 'content': [
+                {'type': 'tool_use', 'id': 'toolu_1', 'name': 'Bash', 'input': {'command': 'CANARY-COMMAND'}}]}},
+            {'sleep': 30}, result_frame()])
+        started = time.monotonic()
+        dispatched = self.dispatch_claude(context, route_path, run_handle)
+        self.assertLess(time.monotonic() - started, 20)
+        report = dispatched['bridge_report']
+        self.assertNotEqual('result', report['outcome'])
+        self.assertIn('claude_tool_not_allowed', json.dumps(report))
+        self.assertNotIn('CANARY', json.dumps(dispatched))
+
+    def test_reasoning_and_tool_content_never_reach_status_or_the_project_store(self):
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        self.frames('claude', [init_frame(), {'type': 'assistant', 'message': {
+            'id': 'msg_1', 'model': 'claude-opus-5-5', 'content': [
+                {'type': 'thinking', 'thinking': 'CANARY-PRIVATE-REASONING'},
+                {'type': 'text', 'text': 'CANARY-PRIVATE-TEXT'},
+                {'type': 'tool_use', 'id': 'toolu_1', 'name': 'Read', 'input': {'file_path': 'CANARY-PRIVATE-PATH'}}]}},
+            {'type': 'user', 'message': {'role': 'user', 'content': [
+                {'type': 'tool_result', 'tool_use_id': 'toolu_1', 'content': 'CANARY-PRIVATE-OUTPUT'}]}},
+            {'sleep': 3}, result_frame()])
+        process = self.separate_dispatch(context, route_path, run_handle)
+        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('claude') if '-p' in i['argv']], seconds=30)
+        self.wait_for(lambda: self.cli('learning-run-status', *target)['health'] in {'active', 'quiet'}, seconds=20)
+        status = self.cli('learning-run-status', *target)
+        # Status is counts and states: bounded, and none of what the child thought, said or read.
+        self.assertNotIn('CANARY', json.dumps(status))
+        self.assertLess(len(json.dumps(status)), 4096)
+        output, errors = process.communicate(timeout=60)
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        dispatched = json.loads(output)
+        self.assertNotIn('CANARY', json.dumps(dispatched['bridge_report']))
+        observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write('result.json', dispatched['result']), '--observation', observation)
+        self.assertNotIn('CANARY', json.dumps(recorded))
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
+        # Nothing the services keep on disk holds it either: the stores, their journals, the hints.
+        kept = [path for path in self.state.root.rglob('*') if path.is_file() and b'CANARY' in path.read_bytes()]
+        self.assertEqual([], kept)
+
     def test_a_paid_usage_event_stops_the_claude_child_at_once(self):
         context, route_path, orchestration, run_handle = self.open_claude_run()
         paid = {**RATE_LIMIT, 'rate_limit_info': {**RATE_LIMIT['rate_limit_info'], 'isUsingOverage': True,
@@ -1212,6 +1394,49 @@ class TwoProjectTests(DriverHarness):
         self.cli_for(self.second, 'learning-cancel-run', *targets[1])
         output, errors = processes[1].communicate(timeout=30)
         self.assertEqual(0, processes[1].returncode, (output + errors).decode(errors='replace'))
+
+    def test_one_projects_service_stopping_leaves_the_others_child_answering_and_finishing(self):
+        stop_second = threading.Event()
+        self.start_project_host(self.second, stop_second)
+        second_host = self.threads[-1]
+        first = self.open_run(self.project)
+        second = self.open_run(self.second)
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'stalled-child'}, {'sleep': 8},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        processes = [self.separate_dispatch(first[0], first[1], first[3], self.project),
+                     self.separate_dispatch(second[0], second[1], second[3], self.second)]
+        self.wait_for(lambda: len([i for i in self.invocations('codex') if 'exec' in i['argv']]) == 2, seconds=40)
+        targets = [('--orchestration-handle', run[2], '--run-handle', run[3]) for run in (first, second)]
+
+        def timed_status(project, target, expected=0):
+            started = time.monotonic()
+            report = self.cli_for(project, 'learning-run-status', *target, expected=expected)
+            # Control requests answer promptly while both children stall.
+            self.assertLess(time.monotonic() - started, 2.0)
+            return report
+
+        for project, target in zip((self.project, self.second), targets):
+            self.assertEqual('running', timed_status(project, target)['cancellation_state'])
+        # The second project's service stops while its child runs.
+        stop_second.set()
+        second_host.join(30)
+        self.assertFalse(second_host.is_alive())
+        processes[1].communicate(timeout=30)
+        self.assertFalse(timed_status(self.second, targets[1], expected=2)['ready'])
+        # The first project's child is untouched: it still answers, and finishes with its result.
+        self.assertEqual(('running', None), tuple(timed_status(self.project, targets[0])[name]
+                                                  for name in ('cancellation_state', 'stop_reason')))
+        output, errors = processes[0].communicate(timeout=60)
+        self.assertEqual(0, processes[0].returncode, (output + errors).decode(errors='replace'))
+        dispatched = json.loads(output)
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        observation = self.write('first-observation.json', {'run_handle': first[3], 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *first[0], '--route', first[1],
+                            '--result', self.write('first-result.json', dispatched['result']),
+                            '--observation', observation)
+        self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
 
 
 if __name__ == '__main__':

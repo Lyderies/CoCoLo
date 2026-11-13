@@ -3860,12 +3860,23 @@ class LearningStoreTests(unittest.TestCase):
         with self.assertRaises(CollectorError) as unknown:
             acquire(CollectorError("collector rejected request: operation_invalid", code="operation_invalid"))
         self.assertEqual("operation_invalid", unknown.exception.code)
-        # Only a collector of an older release, which drives no runs, is stopped as before.
-        older = iter([CollectorError("collector rejected request: operation_invalid", code="operation_invalid"), None])
-        with mock.patch("codex_agents.learning_store.CollectorClient.health",
-                        side_effect=CollectorUpgradeRequired("older runtime")):
-            self.assertEqual(([{"only_if_drained": True}, {}], 1),
-                             acquire(lambda **_: _raise_or_return(next(older)), health=False))
+        # Only a collector of a release from before project services, which drives no
+        # runs, is stopped as before; this version with an older schema is not.
+        for reported, stopped in (("0.8.12", True), ("0.8.13", False), ("not-a-version", False)):
+            answers = iter([CollectorError("collector rejected request: operation_invalid",
+                                           code="operation_invalid"), None])
+            with self.subTest(reported=reported), \
+                    mock.patch("codex_agents.learning_store.CollectorClient.health",
+                               side_effect=CollectorUpgradeRequired("older runtime")), \
+                    mock.patch("codex_agents.learning_store.CollectorClient._request",
+                               return_value={"ok": True, "runtime_version": reported}):
+                if stopped:
+                    self.assertEqual(([{"only_if_drained": True}, {}], 1),
+                                     acquire(lambda **_: _raise_or_return(next(answers)), health=False))
+                else:
+                    with self.assertRaises(CollectorError) as refused:
+                        acquire(lambda **_: _raise_or_return(next(answers)), health=False)
+                    self.assertEqual("operation_invalid", refused.exception.code)
         # Any other refusal is not treated as permission.
         with self.assertRaises(CollectorError) as other:
             acquire(CollectorError("collector rejected request: operation_rejected", code="operation_rejected"))

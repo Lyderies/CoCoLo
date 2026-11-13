@@ -99,6 +99,14 @@ class ClaudeActivityTests(unittest.TestCase):
             now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
             self.assertIsNone(activity.observe(self.delta("input_json_delta", "partial_json", '{"a"')))
         self.assertEqual("activity", activity.observe(self.delta("input_json_delta", "partial_json", ': 1}')))
+        # Nor are earlier fragments replayed in turn, or a replayed block start followed by them.
+        for value in ('{"a"', ': 1}', '{"a"', ': 1}'):
+            now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+            self.assertIsNone(activity.observe(self.delta("input_json_delta", "partial_json", value)))
+        now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
+        self.assertIsNone(activity.observe(self.stream("content_block_start", index=0, content_block={"type": "text"})))
+        self.assertIsNone(activity.observe(self.delta("input_json_delta", "partial_json", '{"a"')))
+        self.assertIsNone(activity.observe(self.delta()))
         # A fragment for a block that never started, or that has stopped, is not work.
         now[0] += claude_activity.PARTIAL_ACTIVITY_SECONDS
         self.assertIsNone(activity.observe(self.stream(

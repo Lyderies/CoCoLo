@@ -281,11 +281,14 @@ immediately before launch; a mismatch never launches.
   Partial messages are on (`--include-partial-messages`): a streamed text, thinking or
   tool-input fragment counts only inside a message whose `message_start` named the
   requested model, only inside a content block that was started in that message, only
-  when non-blank and different from the block's previous fragment, and at most once
+  when non-blank and not already seen in that block, and at most once
   per second, so a long message keeps a working child alive without flooding the
-  monitor. A message whose stream already started is not counted again, so replaying
-  partial frames (one fragment, or a whole message's stream) never refreshes the
-  silence timer. A streamed
+  monitor. A block starts once in its message, a fragment a block already carried in
+  that message is not counted again (up to 65,536 remembered per message; beyond that
+  nothing more counts), and a message whose stream already started is not counted
+  again. Replaying partial frames, in any order and with or without their block starts,
+  therefore does not refresh the silence timer; a stream that keeps producing new text
+  is indistinguishable from work and is bounded by the hard deadline. A streamed
   `message_start` from another model marks the run rerouted, and a prohibited tool
   stops the child as soon as its `content_block_start` arrives; a paid or rejected
   rate-limit event stops it mid-message as before. A tool call outside
@@ -495,7 +498,9 @@ registration (the account run then stays open until reconciled). Neither is
 reachable by a session that can only read the state root.
 
 A project host stops on a signal, after
-fifteen idle minutes with no run held, or when its hint or lock file is removed;
+fifteen idle minutes with no run held (twelve hours while it keeps recorded runs for
+their verifiers), or when its hint or lock file is removed, in which case it first
+finishes any run it holds;
 there is no drain command or status command for it yet, and a host that fails
 leaves no diagnostic because its output is discarded.
 
@@ -507,6 +512,24 @@ restart after SIGTERM with the earlier orchestration intact, replacement after
 SIGKILL, and no host for an unregistered root. Neither runs inside a real Codex
 sandbox, so the claim that a sandboxed session cannot create a proof rests on the
 documented sandbox behaviour, not on a test here.
+
+End-to-end boundary tests through the service (`tests/test_project_driver.py`):
+`LifecycleBoundaryTests` (a made-up run or orchestration handle shows and stops
+nothing; repeated cancellation keeps one decision and a request is never reported as a
+confirmed stop; a second dispatch of a finished handle starts no child; an invalid
+result is fenced with its typed reason, cannot be softened by the caller, is recorded
+once and leaves no trace of the rejected answer; the dispatch preview names exactly the
+files the child is then given), `ClaudeChildDriverTests` (a prohibited tool stops the
+child at once; nothing the child thought, said, asked a tool for or read reaches
+status, reports or any file under the state root), and
+`TwoProjectTests.test_one_projects_service_stopping_leaves_the_others_child_answering_and_finishing`
+(status answers within two seconds while both children stall; one project's service
+stopping leaves the other's child running to its result).
+
+Known limit: once a result is recorded the service retires the run, and recording the
+same result again is refused (`dispatch_not_authorized`). A primary that lost the reply
+of a successful record cannot ask for the `host_outcome_digest` again; the outcome is
+in the project store but cannot then be named for verification.
 
 Known gap, pinned by a test: a stored orchestration scope includes the supervisor
 generation and runtime digest, so a host started under a different generation, or a
@@ -531,24 +554,25 @@ What an update or an owner command may stop, and what it says when it may not:
   fallbacks, registration over an older runtime, migration) asks the collector to stop
   with `shutdown_if_drained`. With any run active or unsettled the collector answers
   `collector_busy`, keeps running, and the command reports "a child run is active;
-  nothing was changed, try again when none is running". Only a collector of an older
-  release (its health says so, and the caller is the owner's registration) may answer
+  nothing was changed, try again when none is running". Only a collector that reports
+  a release before 0.8.13 (`FIRST_RUN_DRIVING_VERSION`, the first whose collector hosts
+  the account service), and only for the owner's registration, may answer
   `operation_invalid` and be stopped as before: those releases drive no runs, their CLIs
   run children themselves and pause the collector for every command. The same answer
-  from a collector of this version stops nothing.
+  from this version, including one with an older schema, stops nothing.
   (`LearningStoreTests.test_maintenance_never_stops_a_collector_from_under_a_run`,
   `ProjectDriverTests.test_an_owner_ledger_command_is_refused_while_a_child_runs`.)
 - A project's service that another version started (the project was updated while it
   idled) cannot answer this version's commands, and holds the project's store.
-  `cli._start_project_host` replaces it by withdrawing its hint, but only when the
-  collector reports no run active anywhere; otherwise the command reports
-  `project_service_other_version` and nothing is stopped
+  `cli._replace_other_version_host` replaces it: the collector is stopped first (it
+  agrees only when no run is active or unsettled, and while it is down no run can be
+  claimed by a client of any version), the ledger is checked drained, the old
+  service's hint is withdrawn, and the collector is started again. If the collector
+  refuses, the command reports `project_service_other_version` and nothing is stopped
   (`ProjectDriverTests.test_a_service_left_by_another_version_is_replaced_only_when_no_run_is_active`).
-  The check and the withdrawal are two steps. A service of this version is safe in
-  between: one whose hint is withdrawn finishes any run it holds before it stops
-  (`ProjectDriverTests.test_a_service_asked_to_stop_finishes_the_run_it_holds`). A
-  service of an earlier build stops at once; the only clients that could give it a new
-  run in between are that earlier build's, which the update has replaced.
+  Independently, a service of this version whose hint is withdrawn finishes any run it
+  holds before it stops
+  (`ProjectDriverTests.test_a_service_asked_to_stop_finishes_the_run_it_holds`).
   Commands that do not start a service (status of a run, dispatch, record) still report
   the service as unavailable in that situation.
 - Clients and collectors of different versions: a client refuses a collector with an
@@ -685,8 +709,8 @@ What stops a migration, always with nothing changed: a run that is active or
 unsettled anywhere (`migration_not_drained`: the collector is asked to stop with
 `shutdown_if_drained` and refuses with `collector_busy`, and the copy itself checks
 again; a claim more than an hour past its hard deadline belongs to a crashed host
-and does not block); the project's own service holding its store
-(`migration_project_service_running`; it stops after fifteen idle minutes); a
+and does not block); the project's own service still holding its store after the
+command withdrew it (`migration_project_service_running`); a
 ledger that changed during the copy (`migration_source_changed`); a history larger
 than the staging bounds (`migration_too_large`). The collector is started again
 whatever happens. `learning-status` reports `learning_migration`: `complete`,
