@@ -5318,6 +5318,47 @@ class LearningLedger:
             raise ContractError("host run recorded too many rate-limit events")
         return kept
 
+    def _record_project_rate_limit_event(self, project_id, *, runtime_digest, event, storage_binding, storage_evidence):
+        """A rate-limit event of a registered, unfinished Claude run of one project.
+
+        The run's lease and sealed storage evidence name the run; the event is
+        accepted only while its execution is registered and has no terminal.
+        A failure to keep it is recorded as a lost `during` reading before the
+        refusal, so the account never silently drops a restriction.
+        """
+        from .claim_storage import capture_storage_evidence, verify_bound_storage_evidence
+        from .rate_limit_contracts import RateLimitEventInput
+
+        if type(event) is not RateLimitEventInput:
+            raise ClaimError("claim_execution_invalid")
+        event = RateLimitEventInput(**event.payload())
+        expected, evidence = capture_storage_evidence(storage_binding, storage_evidence)
+        lease = verify_bound_storage_evidence(self.state.digest_key(), expected, evidence)
+        if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                or expected.run_handle != event.run_handle or lease.claim_id is None):
+            raise ClaimError("claim_execution_invalid")
+        handle_digest = keyed_digest(self.state.digest_key(), event.run_handle)
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT e.run_id FROM capacity_executions e JOIN active_run_capacity a "
+                "ON a.project_id=e.project_id AND a.handle_digest=e.handle_digest AND a.run_id=e.run_id "
+                "AND a.bridge_run_id=e.bridge_run_id "
+                "LEFT JOIN capacity_completions c ON c.project_id=e.project_id AND c.handle_digest=e.handle_digest "
+                "WHERE e.project_id=? AND e.handle_digest=? AND e.bridge_run_id=? AND e.run_id=? "
+                "AND a.provider='claude' AND a.released_at_ms IS NULL AND c.handle_digest IS NULL",
+                (project_id, handle_digest, lease.claim_id, expected.run_id),
+            ).fetchone()
+        if row is None:
+            raise ClaimError("claim_execution_unavailable")
+        try:
+            return self.record_claude_rate_limit_event(project_id, run_handle=event.run_handle,
+                                                       rate_limit_info=event.rate_limit_info)
+        except (ContractError, LedgerError):
+            with contextlib.suppress(ContractError, LedgerError):
+                self.record_observation_unavailable(project_id, run_handle=event.run_handle, provider="claude",
+                                                    phase="during", reason_code="observation_failed")
+            raise
+
     def _owner_generation_locked(self) -> tuple[int, bytes, str, int] | None:
         row = self._connection.execute(
             "SELECT sequence,signer_line,reason,recorded_at_ms FROM owner_key_history "
@@ -6078,7 +6119,7 @@ class LearningLedger:
             ).fetchone()
             orchestration_digest = self._claim_original_orchestration_digest(expected, 'claim_execution_unavailable')
             if (row is None or row["kind"] != "claimed" or row["runtime_digest"] != runtime_digest
-                    or row["provider"] != "codex" or row["run_id"] != expected.run_id
+                    or row["provider"] not in {"codex", "claude"} or row["run_id"] != expected.run_id
                     or row["assignment_digest"] != lease.assignment_digest
                     or orchestration_digest != keyed_digest(key, expected.orchestration_handle)
                     or row["deadline_at_ms"] != lease.hard_deadline_at_ms):
@@ -6187,7 +6228,7 @@ class LearningLedger:
                 (project_id, context.handle, registration.bridge_run_id),
             ).fetchone()
             orchestration_digest = self._claim_original_orchestration_digest(expected, 'claim_terminal_unavailable')
-            if (row is None or row['kind'] != 'claimed' or row['provider'] != 'codex'
+            if (row is None or row['kind'] != 'claimed' or row['provider'] not in {'codex', 'claude'}
                     or terminal_record['client_diagnostics'] is not None
                     or row['runtime_digest'] != runtime_digest or row['run_id'] != grant.binding.run_id
                     or row['client_version'] != 'bridge-v1' or row['owner_digest'] != grant.registration_digest

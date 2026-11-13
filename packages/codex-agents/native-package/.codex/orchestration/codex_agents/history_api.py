@@ -297,7 +297,7 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
                                      verification=name == 'verifier')
     elif operation == 'history.worker_reference':
         _validate_host_reference(result, request.payload['binding'], request.payload['host_outcome_digest'], verification=False)
-        if result['provider'] != 'codex':
+        if result['provider'] not in {'codex', 'claude'}:
             raise HistoryError('history_invalid_response')
     elif operation == 'history.record_host_open':
         if not _closed(result, {'record', 'metadata'}):

@@ -33,6 +33,9 @@ from .provider_observation_contracts import (
 from .observation_failure_contracts import (
     ObservationFailureInput, checked_observation_failure_reply, decode_observation_failure,
 )
+from .rate_limit_contracts import (
+    RateLimitError, RateLimitEventInput, checked_rate_limit_reply, decode_rate_limit_event,
+)
 from .billing_probe_contracts import (
     BILLING_PROBE_REASONS, BillingProbeError, checked_billing_probe_reply, decode_billing_probe_input,
 )
@@ -46,7 +49,7 @@ ACCOUNT_READ_OPERATIONS = frozenset({
 ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt",
     "account.run_provenance", "account.open_provenance", 'account.open_host_run', 'account.observe_provider',
-    'account.record_observation_unavailable',
+    'account.record_observation_unavailable', 'account.record_rate_limit_event',
     'account.billing_probe',
 }
 ACCOUNT_REASON_CODES = frozenset({
@@ -119,6 +122,11 @@ def _checked_request(data: object) -> None:
             (decode_observation_input if data['operation'] == 'account.observe_provider' else
              decode_observation_failure)(data['payload'])
         except ObservationError:
+            raise AccountError('account_invalid_request') from None
+    elif data['operation'] == 'account.record_rate_limit_event':
+        try:
+            decode_rate_limit_event(data['payload'])
+        except RateLimitError:
             raise AccountError('account_invalid_request') from None
     elif data['operation'] == 'account.open_host_run':
         try:
@@ -205,6 +213,11 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
         try:
             return checked_observation_failure_reply(result, decode_observation_failure(request.payload))
         except ObservationError:
+            raise AccountError('account_invalid_response') from None
+    elif request.operation == 'account.record_rate_limit_event':
+        try:
+            return checked_rate_limit_reply(result)
+        except RateLimitError:
             raise AccountError('account_invalid_response') from None
     elif request.operation == 'account.observe_provider':
         try:
@@ -409,6 +422,20 @@ class AccountClient:
         except ObservationError:
             raise AccountError('account_invalid_request') from None
         request = AccountRequest(1, 'account.record_observation_unavailable', request_id, self._project, self._runtime, payload)
+        raw = encode_account_request(request)
+        try:
+            reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError:
+            raise AccountError('account_unavailable') from None
+        return decode_account_response(reply, request)
+
+    def record_rate_limit_event(self, run_handle, rate_limit_info, *, request_id):
+        """One event of a registered run; a lost reply is never resent as success."""
+        try:
+            payload = RateLimitEventInput(run_handle, rate_limit_info).payload()
+        except RateLimitError:
+            raise AccountError('account_invalid_request') from None
+        request = AccountRequest(1, 'account.record_rate_limit_event', request_id, self._project, self._runtime, payload)
         raw = encode_account_request(request)
         try:
             reply = exchange_frame(self._path, raw, timeout=self._timeout, response_limit=MAX_ACCOUNT_FRAME_BYTES)

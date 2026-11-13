@@ -22,11 +22,14 @@ LEASE_SCOPE_FIELDS = ("project_id", "primary_session_id", "runtime_digest", "sup
                       "supervisor_generation", "orchestration_handle", "run_handle", "run_id", "attempt")
 
 CODEX_USAGE_FIELDS = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")
+# A Claude child's counts in the same fields (cache reads as cached input, no
+# reasoning count) plus the cache writes Claude reports separately.
+CLAUDE_USAGE_FIELDS = (*CODEX_USAGE_FIELDS, "cache_creation_input_tokens")
 
 
 @dataclass(frozen=True)
 class CodexUsageObservation:
-    """Actual fixed-worker client counts, never model-reported result usage.
+    """Actual fixed-worker client counts of a bridged Codex or Claude child, never model-reported result usage.
 
     The writer must separately prove custody of the selected packet. None means
     unavailable, not zero. These values establish no billing/admission authority.
@@ -39,13 +42,14 @@ class CodexUsageObservation:
 
     def as_data(self):
         if (type(self.requested_model) is not str or self.requested_model not in SUPPORTED_MODELS
-                or not self.requested_model.startswith("gpt-")):
+                or not self.requested_model.startswith(("gpt-", "claude-"))):
             raise HistoryError("history_invalid_input")
-        if self.usage is not None and (type(self.usage) is not dict or self.usage.keys() != set(CODEX_USAGE_FIELDS)
+        fields = CLAUDE_USAGE_FIELDS if self.requested_model.startswith("claude-") else CODEX_USAGE_FIELDS
+        if self.usage is not None and (type(self.usage) is not dict or self.usage.keys() != set(fields)
                                       or any(v is not None and not valid_integer(v) for v in self.usage.values())):
             raise HistoryError("history_invalid_input")
         return {"requested_model": self.requested_model,
-                "usage": None if self.usage is None else {name: self.usage[name] for name in CODEX_USAGE_FIELDS}}
+                "usage": None if self.usage is None else {name: self.usage[name] for name in fields}}
 
 
 @dataclass(frozen=True)

@@ -40,6 +40,7 @@ from .learning_contracts import canonical_json, content_digest, parse_bounded_js
 from .open_scope_contracts import OpenScopeContext, open_inputs_digest
 from .orchestration_api import OrchestrationScope
 from .prepared_dispatch import DispatchAuthorization, PreparedDispatchContext
+from .rate_limit_contracts import RateLimitError
 from .result_contracts import LEASE_SCOPE_FIELDS, ResultLeaseBinding
 from .run_provenance import RunProvenanceInput
 from .service_enrollment import (
@@ -60,6 +61,7 @@ WAIT_SECONDS = 5.0
 ACCOUNT_TIMEOUT_SECONDS = 60
 ACCOUNT_RETRY_SECONDS = 600  # How long an unreachable account is waited for, per call.
 ACCOUNT_RETRY_INTERVAL = 0.5
+RATE_LIMIT_TIMEOUT_SECONDS = 10  # One event; the child's stream waits for it.
 _RETRYING = object()
 REASON_CODES = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable', 'run_abandoned',
@@ -110,6 +112,48 @@ class _Run:
 
 class _Call(local):
     role = host_client = context = None
+
+
+class _RateLimitRecorder:
+    """A Claude child's rate-limit events, sent from its worker thread to the account owner.
+
+    `run_claude` calls this in place of the legacy ledger. Each event is one
+    request with its own ID; any failure reaches the child as a contract error,
+    which stops it. The account records a lost `during` reading itself when it
+    refuses an event; an unreachable account leaves the run stopped with
+    `rate_limit_event_invalid` and no reading.
+    """
+
+    def __init__(self, driver, run):
+        self._driver, self._project, self._host = driver, run.scope.project_id, run.host_client
+        self._custody = driver._custody(run, storage=run.evidence)
+        self._prefix, self._count = 'rate-' + driver._id(run) + '-', 0
+
+    def record_claude_rate_limit_event(self, project_id, *, run_handle, rate_limit_info):
+        if project_id != self._project or self._count >= 1_000:
+            raise RateLimitError('rate limit event was not recorded')
+        self._count += 1
+        call = self._driver._call
+        call.role, call.host_client, call.context = 'project', self._host, self._custody
+        try:
+            client = AccountClient(self._driver._account, self._project, COLLECTOR_RUNTIME_DIGEST,
+                                   timeout=RATE_LIMIT_TIMEOUT_SECONDS)
+            reply = client.record_rate_limit_event(run_handle, rate_limit_info,
+                                                   request_id=self._prefix + str(self._count))
+        except AccountError:
+            raise RateLimitError('rate limit event was not recorded') from None
+        finally:
+            call.role = call.host_client = call.context = None
+        # The shape run_claude reads: one record per kept event, the first one
+        # carrying the stop the account derived.
+        stop = {'paid_usage_observed': {'record_type': 'provider_billing', 'paid_usage_usable': True,
+                                        'is_using_overage': None},
+                'provider_rejected': {'record_type': 'provider_headroom', 'status': 'rejected'}}.get(reply['stop'])
+        kept = [{'record_type': 'provider_headroom', 'status': 'allowed'} for _ in range(reply['kept'])]
+        return [stop, *kept[1:]] if stop is not None else kept
+
+    def record_observation_unavailable(self, project_id, **_):
+        return None  # The account already recorded it when it refused the event.
 
 
 class RunDriver:
@@ -444,7 +488,8 @@ class RunDriver:
             elif state == 'ready':
                 run.prepared_inputs = prep.prepared(run.prepared)
                 run.state = 'observing'
-                self._account_call(run, 'account', 'observe_provider', 'codex', request_id='before-' + self._id(run),
+                self._account_call(run, 'account', 'observe_provider', run.prospective.route['provider'],
+                                   request_id='before-' + self._id(run),
                                    run_handle=run.key[0], phase='before')
         elif run.state == 'observing':
             reply = self._result(run)
@@ -537,6 +582,8 @@ class RunDriver:
             if lane.snapshot(run.persistence)['state'] == 'consuming_execution':
                 return
             inputs = run.prepared_inputs
+            if run.prospective.route['provider'] == 'claude':
+                self._runtime.pool.attach_recorder(inputs.worker, _RateLimitRecorder(self, run))
             run.context = PreparedDispatchContext(run.binding, run.persistence, inputs.worker,
                                                   lane.prepared_inputs_digest(run.persistence), inputs.export_info)
             run.state = 'ready'

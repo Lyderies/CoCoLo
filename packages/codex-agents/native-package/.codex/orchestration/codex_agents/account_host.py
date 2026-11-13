@@ -49,6 +49,7 @@ PROJECT_OPERATIONS = frozenset({
     'account.health', 'account.observe_provider', 'account.record_observation_unavailable',
     'account.open_provenance', 'account.register_execution', 'account.run_provenance',
     'account.submit_terminal', 'account.release_capacity', 'account.close_denied_attempt',
+    'account.record_rate_limit_event',
 })
 GENERATION = 1
 

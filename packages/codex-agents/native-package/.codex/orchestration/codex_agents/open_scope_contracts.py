@@ -109,7 +109,7 @@ def checked_open_scope(value, scope, handle, inputs_digest):
                 or not valid_integer(f['sequence'], minimum=1, maximum=65_536)
                 or not valid_integer(f['attempt'], minimum=1)
                 or type(f['client_version']) is not str or f['client_version'] not in HOST_CLIENT_VERSIONS
-                or f['provider'] != 'codex' or type(f['task_family']) is not str or f['task_family'] not in TASK_FAMILIES
+                or f['provider'] not in {'codex', 'claude'} or type(f['task_family']) is not str or f['task_family'] not in TASK_FAMILIES
                 or any(not matches(f[n], _DIGEST) for n in ('checkpoint_digest', 'assignment_digest', 'task_digest',
                     'route_digest', 'parent_grant_digest', 'configuration_digest'))):
             raise ValueError()
@@ -124,7 +124,7 @@ def checked_open_scope(value, scope, handle, inputs_digest):
                 raise ValueError()
             binding = AttemptBinding(**w['binding'])
             if (not scope.matches_attempt(binding) or binding.orchestration_handle != handle
-                    or w['provider'] != 'codex' or type(w['task_family']) is not str
+                    or w['provider'] not in {'codex', 'claude'} or type(w['task_family']) is not str
                     or w['task_family'] not in TASK_FAMILIES - {'verification'}
                     or any(not matches(w[n], _DIGEST) for n in ('host_outcome_digest', 'host_open_content_digest', 'result_digest'))
                     or any(not matches(w[n], _ID) for n in ('host_open_record_id', 'terminal_record_id'))

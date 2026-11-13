@@ -138,7 +138,7 @@ pipeline. The report keeps the legacy `admission`, `status` and
 `observation_started_at_ms` fields, and a denial prints the legacy admission error.
 A wrong-host lifecycle command again reports `host_client_mismatch`.
 
-### Production run driver (bridged Codex runs)
+### Production run driver (bridged Codex and Claude runs)
 
 `project_driver.RunDriver` runs inside the project host and gives a bridged Codex run
 its whole custody sequence. After an admitted open, the CLI registers the run with
@@ -254,8 +254,44 @@ recorded and releases its capacity.
 Not done: no cancellation-before-dispatch path for a claimed run through the
 driver, no driver state across a host restart (a run opened before a restart is
 refused at dispatch and keeps its account capacity until reconciled), the
-Claude bridge and native Claude paths are not driven, and `learning-bind-host-agent`, verification and QA still use
-the legacy ledger.
+native Claude path (path D) is not driven (the bridged Claude path is, below), and
+`learning-bind-host-agent`, verification and QA still use the legacy ledger.
+
+
+#### Claude children (path C)
+
+The same driver runs a bridged Claude child (`claude -p`, stream-json) when the
+admitted route's provider is Claude. The provider comes only from the admitted route
+and model: the account open, admission capture, claim, registration, run provenance,
+terminal, the project open scope and the usage record each accept exactly `codex` or
+`claude`, with the model's provider equal to the route's, and never switch providers.
+Preparation resolves the Claude client, uses a Claude-safe private workspace, refuses
+managed settings and a metered backend (`claude_host.check_backend`) and needs no
+result schema. The worker launches `bridge.run_claude` with the route's effective
+`--max-turns`.
+
+- Liveness: `claude_activity.ClaudeActivity` counts a clean init as startup and new
+  non-empty work from the requested model (text, thinking, an allowed tool call and
+  its result) as activity. Billing, result, status and other-model frames never
+  refresh the silence timer. Partial messages stay off. A tool call outside
+  Read/Glob/Grep after init stops the child (`claude_tool_not_allowed`).
+- Rate limits: each `rate_limit_event` goes from the worker thread to the account
+  owner as `account.record_rate_limit_event` (role `project`, with the run's lease and
+  sealed storage evidence). The account accepts it only for a registered, unfinished
+  Claude run of that project, keeps the restrictive records account-wide (so later
+  admissions on the account see them), and replies with the count kept and any stop
+  (`paid_usage_observed`, `provider_rejected`). A refused event is recorded as a lost
+  `during` reading; any failure stops the child with `rate_limit_event_invalid`.
+  Without that recorder a Claude job is never launched.
+- Gaps: a run with no rate-limit event leaves no `no_rate_limit_event` record (the
+  legacy bridge wrote one); real stream-json frame shapes and cadence still need a
+  version-pinned real-client check; a native Claude child (path D) does not use this
+  driver.
+
+Tests: `tests/test_project_driver.py` `ClaudeChildDriverTests` (open to released
+capacity with a rate-limit event recorded; a paid-usage event stops the child and the
+next Claude open on the account is refused) and `ClaudeSilenceCutoffTests`;
+`tests/test_claude_activity.py` for the classifier on an owned execution.
 
 ### What is and is not covered
 
@@ -830,7 +866,7 @@ supply an assignment, result body, parent permission, admission or active flag.
 
 The owner verifies its actual sealed active journal, the existing assignment
 validator, original parent permissions, routed bounds and retry history. Only
-read-only Codex bridge routes are supported at this stage; write-capable children
+read-only Codex and Claude bridge routes are supported at this stage; write-capable children
 remain assigned to 0.4.0. A prospective verifier additionally needs the exact
 retained worker result, original full inputs/client capability, consumed claim,
 admission, host-open, terminal and outbox companions. Family/provider/role,
@@ -2951,7 +2987,7 @@ route, parent grant and project-owned `history.open_scope` proof. Prospective
 verifiers also bind the complete original worker context and retained project
 result. JSON cannot supply admission, an accepted flag, timestamps or permissions.
 The existing assignment validator and subscription admission evaluator remain
-authoritative; this initial producer admits read-only Codex bridge routes only.
+authoritative; this producer admits read-only Codex and Claude bridge routes only.
 
 The configured account owner records a sealed pending request before signature
 work. Its original start and observation deadline survive cancellation, a lost

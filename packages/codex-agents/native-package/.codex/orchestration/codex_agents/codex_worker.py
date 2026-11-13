@@ -1,4 +1,9 @@
-"""Prestarted fixed Codex workers and bounded, actual-returned result custody.
+"""Prestarted fixed bridge workers and bounded, actual-returned result custody.
+
+The pool runs one read-only bridged child per job: `codex exec` for a Codex
+route, `claude -p` for a Claude route. A Claude job also needs the run's
+rate-limit recorder, attached by the host after registration, so each event
+reaches the account owner while the child runs.
 
 Trusted supervisor code supplies already authorized/exported inputs and an actual
 execution ticket. Neither this adapter, input bytes nor returned packets establish
@@ -26,6 +31,7 @@ MAX_INPUT_BYTES = 32 * 1_048_576
 MAX_REPORT_BYTES = 16_384
 MAX_PACKET_BYTES = MAX_RESULT_BODY_BYTES + MAX_REPORT_BYTES + 4096
 _RUN_CODEX = bridge.run_codex
+_RUN_CLAUDE = bridge.run_claude
 _PREPARE_RESULT = bridge.prepare_dispatch_result
 _OUTCOMES = frozenset({
     "result", "launch_failed", "process_tracking_unavailable", "watchdog_unavailable",
@@ -34,6 +40,14 @@ _OUTCOMES = frozenset({
     "missing_result", "unparseable_result", "invalid_result", "result_too_large",
     *("codex_tool_not_allowed:" + label for label in (*bridge.CODEX_DENIED_ITEM_LABELS, "unknown")),
 })
+CLAUDE_OUTCOMES = frozenset({
+    "claude_activity_invalid", "claude_tool_not_allowed", "missing_init_frame", "paid_usage_observed",
+    "provider_rejected", "rate_limit_event_invalid",
+    *("init_" + name for name in ("api_key_source", "model_mismatch", "plugin_loaded", "mcp_server_loaded",
+                                  "tool_not_allowed")),
+})
+_CLAUDE_USAGE = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+_CODEX_USAGE = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")
 
 
 class CodexWorkerError(RuntimeError):
@@ -81,6 +95,7 @@ class _Job:
     supervisor: object = None
     state: str = "prepared"
     packet: CodexWorkerPacket | None = None
+    recorder: object = None
 
 
 class _Slot:
@@ -102,10 +117,13 @@ def _decode_input(payload):
                                      parent_grant=data["parent_grant"])
     route, environment = data["route"], data["environ"]
     permissions = assignment["permissions"]
-    if (route.get("provider") != "codex" or route.get("dispatch") != "bridge"
+    provider = route.get("provider")
+    if (provider not in {"codex", "claude"} or route.get("dispatch") != "bridge"
             or route.get("sandbox_mode") != "read-only" or permissions.get("network") is not False
-            or any(not item.endswith(":read") for item in permissions.get("filesystem", []))
-            or route.get("model") not in SUPPORTED_MODELS or not route["model"].startswith("gpt-")
+            or permissions.get("mcps") or any(not item.endswith(":read") for item in permissions.get("filesystem", []))
+            or route.get("model") not in SUPPORTED_MODELS
+            or not route["model"].startswith("gpt-" if provider == "codex" else "claude-")
+            or (data["schema"] is None) != (provider == "claude")
             or type(environment) is not dict or len(environment) > 256
             or any(type(k) is not str or type(v) is not str or len(k) > 256 or len(v) > 16_384
                    for k, v in environment.items()) or bridge.api_keys_present(environment)):
@@ -114,29 +132,32 @@ def _decode_input(payload):
     for name in ("export", "control", "executable"):
         if type(data[name]) is not str or not 0 < len(data[name]) <= 8192 or not Path(data[name]).is_absolute():
             raise CodexWorkerError()
-    if (type(data["schema"]) is not str or len(data["schema"].encode("utf-8")) > MAX_RESULT_BODY_BYTES
+    if ((provider == "codex" and (type(data["schema"]) is not str
+                                   or len(data["schema"].encode("utf-8")) > MAX_RESULT_BODY_BYTES))
             or type(data["role_prompt"]) is not str or len(data["role_prompt"].encode("utf-8")) > MAX_INPUT_BYTES
             or (data["worker_result_path"] is not None and type(data["worker_result_path"]) is not str)):
         raise CodexWorkerError()
     return data, assignment
 
 
-def _safe_report(report):
-    if report.get("outcome") not in _OUTCOMES:
+def _safe_report(report, provider):
+    claude = provider == "claude"
+    if report.get("outcome") not in (_OUTCOMES | CLAUDE_OUTCOMES if claude else _OUTCOMES):
         raise CodexWorkerError()
     result = {key: report[key] for key in (
         "provider", "requested_model", "effort", "wall_seconds", "read_containment", "rerouted", "outcome",
     )}
-    if (result["provider"] != "codex" or result["requested_model"] not in SUPPORTED_MODELS
+    if (result["provider"] != provider or result["requested_model"] not in SUPPORTED_MODELS
             or result["effort"] not in SUPPORTED_EFFORTS
-            or type(result["rerouted"]) is not bool or result["read_containment"] != "advisory"
+            or type(result["rerouted"]) is not bool
+            or result["read_containment"] != ("enforced" if claude else "advisory")
             or type(result["wall_seconds"]) not in {int, float}
             or not math.isfinite(result["wall_seconds"]) or not 0 <= result["wall_seconds"] <= 1_000_000):
         raise CodexWorkerError()
     model = report.get("observed_model")
     result["observed_model"] = model if type(model) is str and model in SUPPORTED_MODELS else None
     usage = report.get("usage")
-    names = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")
+    names = _CLAUDE_USAGE if claude else _CODEX_USAGE
     result["usage"] = ({name: usage.get(name) for name in names} if type(usage) is dict and all(
         usage.get(name) is None or (type(usage.get(name)) is int and 0 <= usage[name] <= (1 << 63) - 1)
         for name in names) else None)
@@ -145,30 +166,42 @@ def _safe_report(report):
         if type(code) is not str or code not in RESULT_VALIDATION_REASON_CODES:
             raise CodexWorkerError()
         result["result_validation_reason_code"] = code
+    if claude:
+        counts = [report.get(name) for name in ("rate_limit_events", "rate_limit_records_kept")]
+        if (any(type(n) is not int or not 0 <= n <= 1_000_000 for n in counts)
+                or type(report.get("rate_limit_record_failed")) is not bool):
+            raise CodexWorkerError()
+        result.update(rate_limit_events=counts[0], rate_limit_records_kept=counts[1],
+                      rate_limit_record_failed=report["rate_limit_record_failed"])
     body = canonical_json(result)
     if len(body) > MAX_REPORT_BYTES:
         raise CodexWorkerError()
     return body
 
 
-def _execute(payload, ticket, project_id):
+def _execute(payload, ticket, project_id, run_handle=None, recorder=None):
     try:
         data, assignment = _decode_input(payload)
-        result, report = _RUN_CODEX(
-            ledger=object(), project_id=project_id, route=data["route"], assignment=assignment,
-            export=Path(data["export"]), control=Path(data["control"]),
-            schema=data["schema"].encode("utf-8"), environ=data["environ"],
-            role_prompt=data["role_prompt"], executable=data["executable"],
-            worker_result_path=data["worker_result_path"],
-            deadline_seconds=max(0, (ticket.deadline_ns() - time.monotonic_ns()) / 1_000_000_000),
-            _execution=ticket,
-        )
+        provider = data["route"]["provider"]
+        deadline = max(0, (ticket.deadline_ns() - time.monotonic_ns()) / 1_000_000_000)
+        common = dict(project_id=project_id, route=data["route"], assignment=assignment,
+                      export=Path(data["export"]), control=Path(data["control"]), environ=data["environ"],
+                      role_prompt=data["role_prompt"], executable=data["executable"],
+                      worker_result_path=data["worker_result_path"], deadline_seconds=deadline, _execution=ticket)
+        if provider == "claude":
+            # Without its recorder a Claude child could not report a restriction: never launch it.
+            if recorder is None or type(run_handle) is not str:
+                raise CodexWorkerError()
+            _, max_turns = bridge.effective_dispatch_limits(data["route"], assignment)
+            result, report = _RUN_CLAUDE(ledger=recorder, run_handle=run_handle, max_turns=max_turns, **common)
+        else:
+            result, report = _RUN_CODEX(ledger=object(), schema=data["schema"].encode("utf-8"), **common)
         result, report, fenced, reviewed, terminal, reason = _PREPARE_RESULT(assignment, result, report)
         body = canonical_json(result)
         if len(body) > MAX_RESULT_BODY_BYTES:
             raise CodexWorkerError()
         identity = (assignment["assignment_id"], assignment["attempt"], assignment.get("retry_of_assignment_id"))
-        return CodexWorkerPacket(identity, body, _safe_report(report), fenced, reviewed, terminal, reason, None)
+        return CodexWorkerPacket(identity, body, _safe_report(report, provider), fenced, reviewed, terminal, reason, None)
     except (ContractError, CodexWorkerError):
         code = "worker_input_invalid"
     except Exception:
@@ -282,6 +315,14 @@ class CodexWorkerPool:
         with self._registry._lock:
             return self._job(handle).supervisor
 
+    def attach_recorder(self, handle, recorder):
+        """Before submission: the run's rate-limit recorder, used only by a Claude job."""
+        with self._registry._lock:
+            job = self._job(handle)
+            if job.state not in {"prepared", "reserved"} or job.recorder is not None or recorder is None:
+                raise CodexWorkerError()
+            job.recorder = recorder
+
     def submit(self, handle):
         self._owner()
         with self._registry._lock:
@@ -366,8 +407,9 @@ class CodexWorkerPool:
                     job.state = "active"
                     payload, job.payload = job.payload, None
                     ticket, project_id = job.ticket, entry.key.project_id
-                packet = _execute(payload, ticket, project_id)
-                payload = ticket = None
+                    run_handle, recorder = entry.run_handle, job.recorder
+                packet = _execute(payload, ticket, project_id, run_handle, recorder)
+                payload = ticket = recorder = None
                 with self._registry._lock:
                     job.packet, job.state = packet, "finishing"
                     self._registry._complete_worker(self, handle)

@@ -111,7 +111,7 @@ def _snapshot(ledger, context, request, lease, expected):
         orchestration_digest = original_orchestration_digest(ledger, expected) if managed is None else managed['orchestration_digest']
     except OpenError as error:
         raise ClaimError('claim_execution_invalid' if error.reason_code == 'open_conflict' else 'claim_execution_unavailable') from None
-    if (row['kind'] != 'claimed' or row['runtime_digest'] != context.runtime_digest or row['provider'] != 'codex'
+    if (row['kind'] != 'claimed' or row['runtime_digest'] != context.runtime_digest or row['provider'] not in {'codex', 'claude'}
             or row['run_id'] != expected.run_id or row['client_version'] != 'bridge-v1'
             or row['assignment_digest'] != lease.assignment_digest or row['deadline_at_ms'] != lease.hard_deadline_at_ms
             or orchestration_digest != keyed_digest(key, expected.orchestration_handle)

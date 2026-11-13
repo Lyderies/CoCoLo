@@ -233,7 +233,8 @@ class AccountClaimJobs:
             if known is not None:
                 job.result, job.state = known, 'ready'
             else:
-                job.signature_handle = self._intake.capture_admission(project_id, 'codex', self._work_limits)
+                from .account_original_open import _provider
+                job.signature_handle = self._intake.capture_admission(project_id, _provider(captured), self._work_limits)
                 self._signatures[job.signature_handle] = ticket
                 job.state = 'pending'
             return ticket

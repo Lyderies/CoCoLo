@@ -1653,13 +1653,15 @@ class ProjectHistory:
         data = observation.as_data()
         if data["requested_model"] != assignment["model"] or terminal["bridge_run_id"] != binding.claim_id:
             raise HistoryError("history_conflict")
-        record = {"schema_version": 1, "record_id": self._client_usage_id(binding), "provider": "codex",
+        provider = "claude" if data["requested_model"].startswith("claude-") else "codex"
+        record = {"schema_version": 1, "record_id": self._client_usage_id(binding), "provider": provider,
                   "run_id": binding.run_id, "phase": "after", "observed_at_ms": terminal["observed_at_ms"]}
         if data["usage"] is None:
             record.update(record_type="observation_unavailable", reason_code="usage_unavailable")
         else:
-            record.update(record_type="provider_usage", requested_model=data["requested_model"], models=[], helper_models=[],
-                          cache_creation_input_tokens=None, **data["usage"])
+            # Claude reports cache writes; a Codex child leaves them unknown.
+            record.update({"record_type": "provider_usage", "requested_model": data["requested_model"], "models": [],
+                           "helper_models": [], "cache_creation_input_tokens": None, **data["usage"]})
         return self._checked_record(canonical_json(record), "provider", terminal["observed_at_ms"])
 
     def _client_usage_entry(self, binding, terminal, model):
@@ -1670,7 +1672,8 @@ class ProjectHistory:
         entry = self._entry(row)
         record = parse_bounded_json(entry.content)
         if (entry.source != "provider" or record["record_type"] not in {"provider_usage", "observation_unavailable"}
-                or record["run_id"] != binding.run_id or record["provider"] != "codex" or record["phase"] != "after"
+                or record["run_id"] != binding.run_id or record["phase"] != "after"
+                or record["provider"] != ("claude" if model.startswith("claude-") else "codex")
                 or record["observed_at_ms"] != terminal["observed_at_ms"]
                 or (record["record_type"] == "provider_usage" and record["requested_model"] != model)
                 or (record["record_type"] == "observation_unavailable" and record["reason_code"] != "usage_unavailable")):
@@ -1958,7 +1961,7 @@ class ProjectHistory:
             usage = parse_bounded_json(usage_entry.content)
             if (usage_entry.source != "provider" or usage_entry.content_digest != receipt["usage_content_digest"]
                     or usage["record_type"] not in {"provider_usage", "observation_unavailable"}
-                    or usage["run_id"] != receipt["run_id"] or usage["provider"] != "codex"
+                    or usage["run_id"] != receipt["run_id"] or usage["provider"] not in {"codex", "claude"}
                     or usage["observed_at_ms"] != receipt["observed_at_ms"]):
                 raise HistoryError("history_conflict")
         commits = {}

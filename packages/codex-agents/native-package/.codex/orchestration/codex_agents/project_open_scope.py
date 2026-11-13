@@ -33,8 +33,9 @@ def current_open_scope(history, context):
         assignment = validate_assignment(captured['assignment'], task=task, route=route, parent_grant=captured['parent_grant'])
         configuration = validate_execution_configuration(route['execution_configuration'])
         if (assignment['task_id'] != task['id'] or route['task_id'] != task['id']
-                or route.get('provider', 'codex') != 'codex' or route.get('dispatch') != 'bridge'
-                or provider_for_model(assignment['model']) != 'codex' or route.get('sandbox_mode') != 'read-only'
+                or route.get('provider', 'codex') not in {'codex', 'claude'} or route.get('dispatch') != 'bridge'
+                or provider_for_model(assignment['model']) != route.get('provider', 'codex')
+                or route.get('sandbox_mode') != 'read-only'
                 or any(not p.endswith(':read') for p in assignment['permissions']['filesystem'])
                 or assignment['permissions']['mcps']
                 or any(assignment[n] != configuration[n] or assignment[n] != route[n] for n in ('model', 'effort', 'role'))
@@ -55,7 +56,7 @@ def current_open_scope(history, context):
             if (facts['worker_outcome_digest'] is not None or facts['task_family'] == 'verification'
                     or facts['task_family'] != task['verification_for_family']
                     or facts['provider'] != task['verification_for_provider']
-                    or assignment['role'] != 'codex_agents_verification_worker'
+                    or assignment['role'] != route.get('provider', 'codex') + '_agents_verification_worker'
                     or assignment['assignment_id'] == original['assignment_id']
                     or assignment['context'] != [worker_digest]
                     or assignment['required_evidence'] != original['required_evidence']
@@ -74,7 +75,7 @@ def current_open_scope(history, context):
         'assignment_id': assignment['assignment_id'], 'attempt': assignment['attempt'],
         **{n + '_digest': keyed_digest(key, canonical_json(v)) for n, v in
            (('assignment', assignment), ('task', task), ('route', route), ('parent_grant', captured['parent_grant']))},
-        'configuration_digest': content_digest(configuration), 'provider': 'codex', 'task_family': task['family'],
+        'configuration_digest': content_digest(configuration), 'provider': route.get('provider', 'codex'), 'task_family': task['family'],
         'worker': worker, 'worker_context_digest': None if context.worker is None else keyed_digest(key,
             b'project-open-worker-input-v1\0'+canonical_json(captured['worker']))})
 

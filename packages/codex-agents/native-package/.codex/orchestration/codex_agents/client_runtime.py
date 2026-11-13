@@ -41,6 +41,7 @@ from .service_transport import exchange_frame, install_enrollment
 
 
 ACCOUNT_GENERATION = 1  # account_host.GENERATION; that module is a persistence owner.
+BRIDGE_PROVIDERS = frozenset({"codex", "claude"})  # Read-only children the project host runs.
 
 
 def runtime_hint_path(state, project_root):
@@ -382,7 +383,7 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
                                *, host_client):
     """Admit only the original published terminal; never transmit a replacement body."""
     try:
-        if (type(route) is not dict or route.get('provider') != 'codex' or route.get('dispatch') != 'bridge'
+        if (type(route) is not dict or route.get('provider') not in BRIDGE_PROVIDERS or route.get('dispatch') != 'bridge'
                 or type(observation) is not dict
                 or observation.keys() - {'run_handle', 'result_attempts', 'terminal_state'}
                 or observation.get('result_attempts') != [{'status': 'accepted', 'reason_code': None, 'receipt_id': None}]):
@@ -583,7 +584,7 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
     resources independently. Neither this client nor the returned metadata can
     create a launch ticket or replace that protected preparation.
     """
-    if (host_client not in HOST_CLIENTS or route.get('provider') != 'codex' or route.get('dispatch') != 'bridge'
+    if (host_client not in HOST_CLIENTS or route.get('provider') not in BRIDGE_PROVIDERS or route.get('dispatch') != 'bridge'
             or route.get('sandbox_mode') != 'read-only' or assignment.get('permissions', {}).get('network') is not False
             or any(not p.endswith(':read') for p in assignment.get('permissions', {}).get('filesystem', []))
             or api_keys_present(os.environ)):
@@ -631,13 +632,15 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
     # The legacy open report's fields, projected from the account receipt.
     return {'ready': opened, **reply, 'admission': 'admitted' if opened else 'denied',
             'status': 'started' if opened else 'denied',
-            'observation_started_at_ms': reply['recorded_at_ms'] if opened else None, 'read_containment': 'advisory',
+            'observation_started_at_ms': reply['recorded_at_ms'] if opened else None,
+            # Only a bridged Claude child's reads are contained (its client enforces the tool set).
+            'read_containment': 'enforced' if route['provider'] == 'claude' else 'advisory',
             'project_host_registered': registered}
 
 
 def dispatch_codex_client(state_root, project_root, run_handle, task, route, assignment, parent_grant, *, expected_export_commit=None):
     """Actual CLI path: submit once, poll metadata, read original result chunks."""
-    if (route.get('provider') != 'codex' or route.get('dispatch') != 'bridge'
+    if (route.get('provider') not in BRIDGE_PROVIDERS or route.get('dispatch') != 'bridge'
             or route.get('sandbox_mode') != 'read-only' or assignment.get('permissions', {}).get('network') is not False
             or any(not p.endswith(':read') for p in assignment.get('permissions', {}).get('filesystem', []))
             or api_keys_present(os.environ)):

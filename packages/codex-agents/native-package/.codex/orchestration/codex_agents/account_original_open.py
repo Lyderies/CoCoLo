@@ -29,6 +29,8 @@ _HOST_FIELDS = ('project_id', 'handle_digest', 'run_id', 'assignment_digest', 't
                 'route_digest', 'configuration_digest', 'client_version', 'created_at_ms', 'expires_at_ms',
                 'orchestration_id', 'observation_started_at_ms', 'observation_deadline_at_ms', 'agent_type', 'history_owner')
 
+BRIDGE_PROVIDERS = frozenset({'codex', 'claude'})
+
 
 @dataclass(frozen=True, repr=False)
 class OpenExecution:
@@ -109,9 +111,11 @@ def _capture(ledger, project_id, runtime_digest, caller_scope, request_id, reque
         configuration = validate_execution_configuration(route['execution_configuration'])
         seconds = route.get('observation_deadline_seconds', assignment['bounds']['timeout_seconds'])
         facts = proof['facts']
-        if (route.get('provider', 'codex') != 'codex' or route.get('dispatch') != 'bridge'
+        # A bridged child is a read-only Codex or Claude child of the provider its model names.
+        provider = route.get('provider', 'codex')
+        if (provider not in BRIDGE_PROVIDERS or route.get('dispatch') != 'bridge'
                 or route.get('stage') not in {'execution', 'reconnaissance'}
-                or route.get('sandbox_mode') != 'read-only' or provider_for_model(assignment['model']) != 'codex'
+                or route.get('sandbox_mode') != 'read-only' or provider_for_model(assignment['model']) != provider
                 or any(not entry.endswith(':read') for entry in assignment['permissions']['filesystem'])
                 or assignment['permissions']['mcps'] or facts['assignment_id'] != assignment['assignment_id']
                 or facts['attempt'] != assignment['attempt'] or facts['task_family'] != task['family']
@@ -130,7 +134,7 @@ def _capture(ledger, project_id, runtime_digest, caller_scope, request_id, reque
                 or (worker is not None and (worker['host_outcome_digest'] != task['verification_for_outcome']
                     or worker['task_family'] != task['verification_for_family']
                     or worker['provider'] != task['verification_for_provider']
-                    or assignment['role'] != 'codex_agents_verification_worker'
+                    or assignment['role'] != provider + '_agents_verification_worker'
                     or assignment['context'] != [worker['host_outcome_digest']]))):
             raise ValueError()
     except Exception:
@@ -153,6 +157,11 @@ def _capture(ledger, project_id, runtime_digest, caller_scope, request_id, reque
         min(route['bounds']['timeout_seconds'], assignment['bounds']['timeout_seconds']))
     return OriginalOpenRequest(ledger._attestation_origin, project_id, runtime_digest, caller_scope, request_id,
         request, raw, scope, request_key, original_key, parameters, handle, keyed_digest(key, handle), external_id(key, 'run', handle), seconds, execution)
+
+
+def _provider(request):
+    """The admitted child's provider, from the model the original open validated."""
+    return provider_for_model(request.execution.model)
 
 
 def start_metadata(ledger, request, opened):
@@ -245,7 +254,7 @@ def _receipt(ledger, request, journal):
             "WHERE project_id=? AND run_id=? AND producer='host'", (request.project_id, request.run_id)).fetchone()
         session = ledger._connection.execute("SELECT created_at_ms FROM sessions WHERE project_id=? AND session_digest=? AND producer='host'",
             (request.project_id, request.handle_digest)).fetchone()
-        if (inputs is None or tuple(inputs) != (request.run_id, request.runtime_digest, 'codex',
+        if (inputs is None or tuple(inputs) != (request.run_id, request.runtime_digest, _provider(request),
                 request.execution.model, request.execution.effort, request.execution.hard_timeout_seconds)
                 or canonical_json(dict(inputs)) != canonical_json(data['launch'])
                 or provenance is None or tuple(provenance) != ('bridge-v1', request.handle_digest, journal['opened_at_ms'])
@@ -256,7 +265,7 @@ def _receipt(ledger, request, journal):
     elif data['start_event'] is not None or data['verification_binding'] is not None:
         raise OpenError('open_conflict')
     admission = validate_learning_record(data['admission'])
-    if (admission['record_type'] != 'admission_decision' or admission['provider'] != 'codex'
+    if (admission['record_type'] != 'admission_decision' or admission['provider'] != _provider(request)
             or admission['record_id'] != view['admission_record_id'] or content_digest(admission) != view['admission_content_digest']
             or admission['reason_code'] != view['reason_code'] or admission['run_id'] != view['run_id']
             or (admission['decision'] == 'pass') != (view['state'] == 'opened')):
@@ -371,7 +380,7 @@ def _returned_admission(ledger, request, pool, handle):
     snapshot, work_limits = intake.returned_admission(handle)
     if (inputs.origin is not ledger._attestation_origin or inputs.project_id != request.project_id
             or snapshot.origin is not intake._views._admission_capture_origin or snapshot.project_id != request.project_id
-            or snapshot.provider != 'codex' or inputs.provider != 'codex'):
+            or snapshot.provider != _provider(request) or inputs.provider != _provider(request)):
         raise OpenError('open_unavailable')
     return intake, result, inputs, snapshot, work_limits
 
@@ -380,10 +389,10 @@ def _fresh_admission(ledger, request, intake, snapshot, work_limits, *, appended
     from .admission_inputs import AdmissionCaptureLimits
     from .claim_admission import same_admission_inputs
     signer = ledger._current_signer_bytes()
-    policy = intake._views._claim_policy('codex')
+    policy = intake._views._claim_policy(_provider(request))
     limits = intake._limits
     current = ledger._connection.transaction_read_call(work_limits, lambda: intake._views._capture_admission_rows_locked(
-        request.project_id, 'codex', policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer))
+        request.project_id, _provider(request), policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer))
     expected = snapshot
     if appended is not None:
         originals = [row for row in snapshot.rows if row[1] == request.project_id and row[2] == appended['record_id']]
@@ -481,7 +490,7 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
                      e.route_digest, e.configuration_digest, 'bridge-v1', request.opened_at_ms, expires, e.orchestration_id,
                      e.agent_type, request.opened_at_ms, request.observation_deadline_at_ms, request.opened_at_ms))
                 ledger._connection.execute('INSERT INTO launch_inputs VALUES(?,?,?,?,?,?,?,?)',
-                    (request.project_id, request.handle_digest, request.run_id, request.runtime_digest, 'codex', e.model, e.effort, e.hard_timeout_seconds))
+                    (request.project_id, request.handle_digest, request.run_id, request.runtime_digest, _provider(request), e.model, e.effort, e.hard_timeout_seconds))
                 ledger._connection.execute('INSERT OR IGNORE INTO sessions VALUES(?,?,?,?)',
                     (request.project_id, request.handle_digest, 'host', request.opened_at_ms))
                 ledger._connection.execute('INSERT INTO run_provenance VALUES(?,?,?,?,?,?)',
@@ -613,10 +622,11 @@ def _managed_open_metadata(ledger, expected):
         (expected.project_id, handle)).fetchone()
     if (inputs is None or canonical_json(dict(inputs)) != canonical_json(data['launch'])
             or inputs['run_id'] != expected.run_id or inputs['runtime_digest'] != expected.runtime_digest
-            or inputs['provider'] != 'codex' or provenance is None
+            or inputs['provider'] not in BRIDGE_PROVIDERS or provider_for_model(inputs['model']) != inputs['provider']
+            or provenance is None
             or tuple(provenance) != ('bridge-v1', handle, journal['opened_at_ms'])
             or session is None or session[0] != journal['opened_at_ms']
-            or admission['record_type'] != 'admission_decision' or admission['decision'] != 'pass' or admission['provider'] != 'codex'
+            or admission['record_type'] != 'admission_decision' or admission['decision'] != 'pass' or admission['provider'] != inputs['provider']
             or admission['run_id'] != expected.run_id or admission['record_id'] != view['admission_record_id']
             or content_digest(admission) != view['admission_content_digest']
             or event['record_type'] != 'event' or event['run_id'] != expected.run_id

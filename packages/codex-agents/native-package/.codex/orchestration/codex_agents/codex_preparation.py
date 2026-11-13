@@ -161,39 +161,49 @@ def _build(payload, scope):
         assignment = validate_assignment(prospective.assignment, task=prospective.task,
             route=prospective.route, parent_grant=prospective.parent_grant)
         route, environment = prospective.route, value['environ']
-        if (route.get('provider') != 'codex' or route.get('dispatch') != 'bridge'
+        provider = route.get('provider')
+        claude = provider == 'claude'
+        if (provider not in {'codex', 'claude'} or route.get('dispatch') != 'bridge'
                 or route.get('sandbox_mode') != 'read-only' or assignment['permissions']['network'] is not False
                 or assignment['permissions']['mcps'] or any(not p.endswith(':read') for p in assignment['permissions']['filesystem'])
                 or type(environment) is not dict or len(environment) > 256
                 or any(type(k) is not str or type(v) is not str or len(k) > 256 or len(v) > 16_384 for k,v in environment.items())
-                or bridge.api_keys_present(environment) or bridge.codex_managed_configuration_present()):
+                or bridge.api_keys_present(environment)
+                or (bridge.managed_configuration_present() if claude else bridge.codex_managed_configuration_present())):
             raise PreparationError('preparation_invalid_input')
         for name in ('project_root', 'bundle_root'):
             if (type(value[name]) is not str or not 0 < len(value[name]) <= 4096
                     or not Path(value[name]).is_absolute() or '..' in Path(value[name]).parts):
                 raise PreparationError('preparation_invalid_input')
         root, bundle = Path(value['project_root']), Path(value['bundle_root'])
-        role_prompt = bridge._codex_role_prompt(bundle, route)
-        from .learning_engine import _read_managed_bytes
-        schema = _read_managed_bytes(bundle, '.codex/orchestration/schemas/result.schema.json', max_bytes=MAX_RESULT_BODY_BYTES)
-        bridge.codex_schemas(schema)
+        if claude:
+            role_prompt, schema = bridge._claude_role_prompt(bundle, route), None
+        else:
+            role_prompt = bridge._codex_role_prompt(bundle, route)
+            from .learning_engine import _read_managed_bytes
+            schema = _read_managed_bytes(bundle, '.codex/orchestration/schemas/result.schema.json', max_bytes=MAX_RESULT_BODY_BYTES)
+            bridge.codex_schemas(schema)
         worker_result = _worker_input(prospective, value['history_endpoint'])
         paths = bridge.assignment_read_paths(assignment, worker_outcome_digest=prospective.task.get('verification_for_outcome'))
-        identity = resolve_client('codex', untrusted=[root])
+        identity = resolve_client(provider, untrusted=[root])
         if identity[0] is None:
             raise PreparationError('preparation_unavailable')
         started = True
-        workspace = bridge.private_workspace('prepare-', claude=False, project_root=root)
+        workspace = bridge.private_workspace('prepare-', claude=claude, project_root=root)
         metadata = bridge.export_committed_snapshot(root, paths, workspace/'export',
             expected_commit=value['expected_export_commit'])
         worker_path = None if worker_result is None else bridge.place_worker_result(workspace/'export', worker_result)
-        if not set(bridge.CODEX_REQUIRED_EXEC_OPTIONS) <= bridge.codex_exec_options(
+        if claude:
+            # The same metered-backend refusal an open applies, against the export.
+            from .claude_host import check_backend
+            check_backend(environment, workspace/'export')
+        elif not set(bridge.CODEX_REQUIRED_EXEC_OPTIONS) <= bridge.codex_exec_options(
                 identity[0], environ=environment, tmpdir=workspace/'tmp'):
             raise PreparationError('preparation_unavailable')
-        if resolve_client('codex', untrusted=[root]) != identity:
+        if resolve_client(provider, untrusted=[root]) != identity:
             raise PreparationError('preparation_unavailable')
         body = canonical_json({'task': prospective.task, 'route': route, 'assignment': assignment,
-            'parent_grant': prospective.parent_grant, 'schema': schema.decode('utf-8'),
+            'parent_grant': prospective.parent_grant, 'schema': None if schema is None else schema.decode('utf-8'),
             'export': str(workspace/'export'), 'control': str(workspace/'control'), 'executable': identity[0],
             'environ': environment, 'role_prompt': role_prompt, 'worker_result_path': worker_path})
         if len(body) > MAX_INPUT_BYTES:

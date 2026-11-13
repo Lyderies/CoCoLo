@@ -206,6 +206,13 @@ class AccountOwnerViews:
                                                      submission=submission, storage_binding=storage_binding,
                                                      storage_evidence=storage_evidence, terminal_evidence=terminal_evidence)
 
+    def record_rate_limit_event(self, project_id, *, runtime_digest, event, storage_binding, storage_evidence):
+        self._guard()
+        from .rate_limit_contracts import rate_limit_reply
+        return rate_limit_reply(self._ledger._record_project_rate_limit_event(
+            project_id, runtime_digest=runtime_digest, event=event,
+            storage_binding=storage_binding, storage_evidence=storage_evidence))
+
     def close_denied_attempt(self, project_id, *, runtime_digest, caller_scope, closure, storage_binding, storage_evidence):
         self._guard()
         return self._ledger._close_denied_attempt(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
@@ -854,6 +861,8 @@ class AccountService:
             observation = decode_observation_input(request.payload) if operation == 'account.observe_provider' else None
             if operation == 'account.record_observation_unavailable':
                 observation = decode_observation_failure(request.payload)
+            from .rate_limit_contracts import decode_rate_limit_event
+            rate_event = decode_rate_limit_event(request.payload) if operation == 'account.record_rate_limit_event' else None
             labels = {"request_id": request.request_id, "project_id": request.project_id,
                       "runtime_digest": request.runtime_digest, "request_digest": digest}
             if self._pid != os.getpid():
@@ -879,8 +888,10 @@ class AccountService:
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
                 or (authorization.source == "project" and operation not in {
-                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable"})
-                or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance"} and
+                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable",
+                    "account.record_rate_limit_event"})
+                or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.run_provenance", "account.open_provenance",
+                                  "account.record_rate_limit_event"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
                 or (operation in {"account.claim_launch", "account.capacity_status", 'account.open_host_run'} and
                     (authorization.source != "host" or authorization.caller_scope is None))
@@ -1086,6 +1097,11 @@ class AccountService:
                                                      caller_scope=authorization.caller_scope, submission=submission,
                                                      storage_binding=storage_binding, storage_evidence=storage_evidence,
                                                      terminal_evidence=capture_terminal_evidence(authorization.terminal_evidence))
+            elif operation == 'account.record_rate_limit_event':
+                from .claim_storage import capture_storage_evidence
+                storage_binding, storage_evidence = capture_storage_evidence(authorization.storage_binding, authorization.storage_evidence)
+                result = self._views.record_rate_limit_event(project, runtime_digest=runtime, event=rate_event,
+                                                             storage_binding=storage_binding, storage_evidence=storage_evidence)
             elif operation == 'account.close_denied_attempt':
                 from .claim_storage import capture_storage_evidence
                 storage_binding, storage_evidence = capture_storage_evidence(authorization.storage_binding, authorization.storage_evidence)

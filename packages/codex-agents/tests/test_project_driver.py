@@ -20,7 +20,9 @@ from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT
 from tests.learning_support import attest_provider
-from tests.test_bridge import CLEAN, PARENT_GRANT, CliTestCase, cli, git, null_filled, result
+from tests.test_bridge import (
+    CLEAN, PARENT_GRANT, RATE_LIMIT, CliTestCase, cli, git, init_frame, null_filled, result, result_frame,
+)
 
 from codex_agents import client_runtime, collector_runtime, learning_store, project_driver
 from codex_agents.account_host import AccountServiceHost
@@ -419,6 +421,95 @@ class ProjectDriverTests(DriverHarness):
 class ClaudePrimaryDriverTests(ProjectDriverTests):
     """Path B: a Claude primary bridges the same Codex child through the same host."""
     primary = 'claude'
+
+
+class ClaudeChildHarness(DriverHarness):
+    """Path C: a Codex primary bridges a Claude child (`claude -p`) through the same host."""
+
+    def admit(self, provider):
+        # Before the services start: the account is also attested for Claude and
+        # the project routes its children to Claude.
+        fingerprint = super().admit(provider)
+        if provider == 'codex':
+            super().admit('claude')
+            config = self.project / '.codex/orchestration/provider-routing.json'
+            config.parent.mkdir(parents=True, exist_ok=True)
+            config.write_text(json.dumps({'version': 1, 'providers': {'codex': {'enabled': False},
+                                          'claude': {'enabled': True}}, 'codex_primary_may_bridge_to_claude': True}))
+            git(self.project, 'add', '.')
+            git(self.project, 'commit', '-qm', 'Bridge Claude children')
+        return fingerprint
+
+    def open_claude_run(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        route = json.loads(Path(route_path).read_text())
+        self.assertEqual(('claude', 'bridge'), (route['provider'], route['dispatch']))
+        return context, route_path, orchestration, run_handle
+
+    def dispatch_claude(self, context, route_path, run_handle):
+        with mock.patch.object(self, 'assertEqual', side_effect=lambda *a: unittest.TestCase.assertEqual(
+                self, *a[:2], (a[2] if len(a) > 2 else '') + ' driver stopped at %r' % (self.stopped_runs,))):
+            return self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+
+
+
+class ClaudeChildDriverTests(ClaudeChildHarness):
+    def test_the_host_runs_a_claude_child_and_its_rate_limit_reaches_the_account(self):
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        self.frames('claude', [init_frame(), {'type': 'assistant', 'message': {
+            'id': 'msg_1', 'model': 'claude-opus-5-5', 'content': [{'type': 'text', 'text': 'Reading.'}]}},
+            RATE_LIMIT, result_frame()])
+        dispatched = self.dispatch_claude(context, route_path, run_handle)
+        report = dispatched['bridge_report']
+        self.assertEqual(('result', 'claude', 'enforced'), (report['outcome'], report['provider'], report['read_containment']))
+        self.assertEqual((1, False), (report['rate_limit_events'], report['rate_limit_record_failed']))
+        self.assertGreaterEqual(report['rate_limit_records_kept'], 1)
+        argv = [i for i in self.invocations('claude') if '-p' in i['argv']]
+        self.assertEqual(1, len(argv))
+        self.assertEqual('Read,Glob,Grep', argv[0]['argv'][argv[0]['argv'].index('--tools') + 1])
+        observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write('result.json', dispatched['result']), '--observation', observation)
+        self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
+
+    def test_a_paid_usage_event_stops_the_claude_child_at_once(self):
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        paid = {**RATE_LIMIT, 'rate_limit_info': {**RATE_LIMIT['rate_limit_info'], 'isUsingOverage': True,
+                                                  'overageStatus': 'allowed'}}
+        self.frames('claude', [init_frame(), paid, {'sleep': 30}, result_frame()])
+        started = time.monotonic()
+        dispatched = self.dispatch_claude(context, route_path, run_handle)
+        self.assertLess(time.monotonic() - started, 20)
+        self.assertEqual(('paid_usage_observed', 'failed'),
+                         (dispatched['bridge_report']['outcome'], dispatched['bridge_report']['terminal_state']))
+        self.assertGreater(dispatched['bridge_report']['rate_limit_records_kept'], 0)
+        # The account kept the restriction, so the next Claude child on this account is refused.
+        task = self.write('next-task.json', {**self.task(), 'id': 'task-2'})
+        route = self.cli('learning-route', '--task', task)
+        assigned = {**self.assignment_for(route), 'assignment_id': 'next-assignment', 'task_id': 'task-2'}
+        refused = self.cli('learning-open-host-run', '--task', task, '--assignment', self.write('next.json', assigned),
+                           '--parent-grant', context[5], '--route', self.write('next-route.json', route),
+                           '--orchestration-handle', orchestration, expected=2)
+        self.assertIn('paid', refused['reason_code'])
+
+
+class ClaudeSilenceCutoffTests(ClaudeChildHarness):
+    liveness = LivenessLimits(5 * SECOND, SECOND, 2 * SECOND, 3 * SECOND)
+
+    def test_the_host_stops_a_claude_child_that_goes_silent_after_init(self):
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        self.frames('claude', [init_frame(), {'type': 'assistant', 'message': {
+            'id': 'msg_1', 'model': 'claude-opus-5-5', 'content': [{'type': 'text', 'text': 'Starting.'}]}},
+            {'sleep': 30}, result_frame()])
+        started = time.monotonic()
+        dispatched = self.dispatch_claude(context, route_path, run_handle)
+        self.assertLess(time.monotonic() - started, 20)  # Cut off by silence, not by the child's own end.
+        self.assertEqual(('work_silence', 'timed_out'),
+                         (dispatched['bridge_report']['outcome'], dispatched['bridge_report']['terminal_state']))
+        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
+        self.assertEqual('work_silence', status['stop_reason'])
 
 
 class SilenceCutoffTests(DriverHarness):

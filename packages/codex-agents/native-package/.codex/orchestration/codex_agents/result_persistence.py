@@ -872,10 +872,16 @@ class ResultPersistenceLane:
                                         selected.validation_reason)
         assignment = parse_bounded_json(pending.assignment, max_bytes=MAX_ASSIGNMENT_CANONICAL_BYTES)
         report = (None if selected.report is None else parse_bounded_json(selected.report, max_bytes=MAX_REPORT_BYTES))
-        if report is not None and (type(report) is not dict or report.get("provider") != "codex"
+        provider = "claude" if assignment["model"].startswith("claude-") else "codex"
+        if report is not None and (type(report) is not dict or report.get("provider") != provider
                                    or report.get("requested_model") != assignment["model"]):
             raise HistoryError("history_invalid_input")
-        usage = CodexUsageObservation(assignment["model"], None if report is None else report.get("usage"))
+        counts = None if report is None else report.get("usage")
+        if provider == "claude" and type(counts) is dict:
+            counts = {"input_tokens": counts.get("input_tokens"), "cached_input_tokens": counts.get("cache_read_input_tokens"),
+                      "output_tokens": counts.get("output_tokens"), "reasoning_output_tokens": None,
+                      "cache_creation_input_tokens": counts.get("cache_creation_input_tokens")}
+        usage = CodexUsageObservation(assignment["model"], counts)
         delivery = self._history().publish_result(pending.binding, assignment, selected.body, observation, client_usage=usage)
         if type(delivery) is not TerminalDelivery or delivery.binding != pending.binding:
             raise HistoryError("history_service_unavailable")

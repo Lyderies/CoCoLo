@@ -407,6 +407,12 @@ def _start_collector_quietly(args: argparse.Namespace) -> None:
         pass
 
 
+def _host_driven(route):
+    """A Codex route, or a bridged Claude child: the project host runs both."""
+    return isinstance(route, dict) and (route.get('provider') == 'codex' or (
+        route.get('provider') == 'claude' and route.get('dispatch') == 'bridge'))
+
+
 def _refuse_bridged_run(args: argparse.Namespace, run_handle: str, refusal: str) -> None:
     """A run the project host drives is not changed through the legacy ledger."""
     owner = bridged_run_owner(args.state_root, args.project_root, run_handle, host_client=_host_client())
@@ -1840,7 +1846,7 @@ def main() -> int:
             # route remains untrusted until the ledger resolves and compares it.
             validate_assignment(assignment, task=task, route=supplied_route,
                                 parent_grant=parent_grant)
-            if supplied_route.get('provider') == 'codex':
+            if _host_driven(supplied_route):
                 ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)
                 host = _host_client()  # Consistency only; native identity is independently checked.
                 if host == CLAUDE_HOST_CLIENT:
@@ -1932,7 +1938,7 @@ def main() -> int:
             assignment = _json_input(args.assignment)
             parent_grant = _json_input(args.parent_grant)
             validate_assignment(assignment, task=task, route=route, parent_grant=parent_grant)
-            if route.get("provider") == "codex":
+            if _host_driven(route):
                 _host_client()  # Existing consistency check; markers confer no authority.
                 report = {"ready": True, **dispatch_codex_client(
                     args.state_root, args.project_root, args.run_handle, task, route, assignment, parent_grant,
@@ -2175,13 +2181,14 @@ def main() -> int:
                     "evaluation assignment digest and trial id must appear together"
                 )
             assignment = _json_input(args.assignment)
-            if trusted_host and provider_for_model(assignment.get('model')) == 'codex':
+            supplied_route = None if args.route is None else _json_input(args.route)
+            if trusted_host and (provider_for_model(assignment.get('model')) == 'codex' or _host_driven(supplied_route)):
                 if args.route is None:
                     _refuse_bridged_run(args, observation['run_handle'], "a bridged run must be dispatched before its result")
                     raise RuntimeResultError('history_invalid_input')
                 if args.evaluation_assignment_digest is not None or args.fallback_receipt is not None:
                     raise RuntimeResultError('history_invalid_input')
-                route = _json_input(args.route)
+                route = supplied_route
                 parent_grant = _json_input(args.parent_grant)
                 assignment = validate_assignment(assignment, task=task, route=route, parent_grant=parent_grant)
                 report = record_codex_result_client(args.state_root, args.project_root, task, route, assignment,

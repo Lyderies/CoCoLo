@@ -30,6 +30,12 @@ _OUTCOMES = frozenset({'result', 'launch_failed', 'process_tracking_unavailable'
     'unparseable_result', 'invalid_result', 'result_too_large',
     'codex_tool_not_allowed:mcp_tool_call', 'codex_tool_not_allowed:web_search',
     'codex_tool_not_allowed:collab_tool_call', 'codex_tool_not_allowed:unknown'})
+_CLAUDE_OUTCOMES = frozenset({'claude_activity_invalid', 'claude_tool_not_allowed', 'missing_init_frame',
+    'paid_usage_observed', 'provider_rejected', 'rate_limit_event_invalid', 'init_api_key_source',
+    'init_model_mismatch', 'init_plugin_loaded', 'init_mcp_server_loaded', 'init_tool_not_allowed'})
+_USAGE = {'codex': {'input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens'},
+          'claude': {'input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'}}
+_RATE_LIMIT_FIELDS = {'rate_limit_events', 'rate_limit_records_kept', 'rate_limit_record_failed'}
 
 
 class DispatchError(RuntimeError):
@@ -140,9 +146,15 @@ def decode_dispatch_response(raw, request):
                 if type(delivery) is not dict or type(report) is not dict:
                     raise ValueError()
                 actual = TerminalDelivery(**{**delivery, 'binding': AttemptBinding(**delivery['binding'])})
-                if actual.binding != binding or report.get('provider') != 'codex' or report.get('bridge_run_id') != binding.claim_id:
+                provider = report.get('provider')
+                claude = provider == 'claude'
+                if (actual.binding != binding or provider not in _USAGE or report.get('bridge_run_id') != binding.claim_id
+                        or (claude and (not _RATE_LIMIT_FIELDS <= set(report)
+                                        or type(report['rate_limit_record_failed']) is not bool
+                                        or not valid_integer(report['rate_limit_events'])
+                                        or not valid_integer(report['rate_limit_records_kept'])))):
                     raise ValueError()
-                if (set(report) - {'provider', 'requested_model', 'observed_model', 'effort', 'wall_seconds',
+                if (set(report) - (_RATE_LIMIT_FIELDS if claude else set()) - {'provider', 'requested_model', 'observed_model', 'effort', 'wall_seconds',
                         'read_containment', 'rerouted', 'outcome', 'usage', 'result_validation_reason_code',
                         'bridge_run_id', 'reviewed', 'terminal_state', 'capacity_state', 'export_file_count',
                         'export_commit', 'export_manifest_digest'}
@@ -152,8 +164,10 @@ def decode_dispatch_response(raw, request):
                     raise ValueError()
                 if (report.get('requested_model') not in SUPPORTED_MODELS
                         or report.get('observed_model') not in {None, *SUPPORTED_MODELS}
-                        or report.get('effort') not in SUPPORTED_EFFORTS or report.get('outcome') not in _OUTCOMES
-                        or report.get('read_containment') != 'advisory' or type(report.get('rerouted')) is not bool
+                        or report.get('effort') not in SUPPORTED_EFFORTS
+                        or report.get('outcome') not in (_OUTCOMES | _CLAUDE_OUTCOMES if claude else _OUTCOMES)
+                        or report.get('read_containment') != ('enforced' if claude else 'advisory')
+                        or type(report.get('rerouted')) is not bool
                         or type(report.get('wall_seconds')) not in {int, float}
                         or not math.isfinite(report['wall_seconds']) or not 0 <= report['wall_seconds'] <= 1_000_000
                         or not valid_integer(report.get('export_file_count'), maximum=2000)
@@ -161,8 +175,7 @@ def decode_dispatch_response(raw, request):
                         or not matches(report.get('export_manifest_digest'), _DIGEST)):
                     raise ValueError()
                 usage = report.get('usage')
-                if usage is not None and (type(usage) is not dict or usage.keys() != {'input_tokens', 'cached_input_tokens',
-                        'output_tokens', 'reasoning_output_tokens'} or any(v is not None and not valid_integer(v) for v in usage.values())):
+                if usage is not None and (type(usage) is not dict or usage.keys() != _USAGE[provider] or any(v is not None and not valid_integer(v) for v in usage.values())):
                     raise ValueError()
             elif result['delivery'] is not None or result['report'] is not None:
                 raise ValueError()

@@ -102,7 +102,7 @@ def checked_open_provenance(value, request, project_id, runtime_digest):
                 or facts['worker_outcome_digest'] != request.worker_outcome_digest
                 or any(not matches(facts[name], _DIGEST) for name in _DIGEST_FIELDS)
                 or any(not matches(facts[name], _ID) for name in ('admission_record_id', 'start_record_id'))
-                or facts['provider'] != 'codex' or facts['client_version'] != 'bridge-v1'
+                or facts['provider'] not in {'codex', 'claude'} or facts['client_version'] != 'bridge-v1'
                 or type(facts['task_family']) is not str or facts['task_family'] not in TASK_FAMILIES
                 or not valid_integer(facts['opened_at_ms']) or not valid_integer(facts['admission_observed_at_ms'])
                 or not valid_integer(facts['observation_deadline_at_ms'], minimum=facts['opened_at_ms'] + 1)
