@@ -608,6 +608,28 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
         self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
         self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
 
+    def test_a_running_claude_child_reports_live_status_and_stops_on_cancellation(self):
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        # The child starts and does some work, then goes quiet well inside every bound.
+        self.frames('claude', [init_frame(), {'type': 'assistant', 'message': {
+            'id': 'msg_1', 'model': 'claude-opus-5-5', 'content': [{'type': 'text', 'text': 'Reading.'}]}},
+            {'sleep': 30}, result_frame()])
+        process = self.separate_dispatch(context, route_path, run_handle)
+        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('claude') if '-p' in i['argv']], seconds=30)
+        self.wait_for(lambda: self.cli('learning-run-status', *target)['health'] in {'active', 'quiet'}, seconds=20)
+        status = self.cli('learning-run-status', *target)
+        self.assertEqual(('attempt', 'running'), (status['kind'], status['cancellation_state']))
+        self.assertIsNone(status['stop_reason'])
+        started = time.monotonic()
+        cancelled = self.cli('learning-cancel-run', *target)
+        self.assertEqual(('cancel_requested', True), (cancelled['stop_reason'], cancelled['stop_requested']))
+        output, errors = process.communicate(timeout=30)
+        self.assertLess(time.monotonic() - started, 20)  # The child never emits another event.
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        self.assertEqual('cancelled', json.loads(output)['bridge_report']['terminal_state'])
+        self.assertEqual('cancel_requested', self.cli('learning-run-status', *target)['stop_reason'])
+
     def test_a_paid_usage_event_stops_the_claude_child_at_once(self):
         context, route_path, orchestration, run_handle = self.open_claude_run()
         paid = {**RATE_LIMIT, 'rate_limit_info': {**RATE_LIMIT['rate_limit_info'], 'isUsingOverage': True,
