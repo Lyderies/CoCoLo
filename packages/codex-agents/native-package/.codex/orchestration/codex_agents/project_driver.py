@@ -89,6 +89,8 @@ MAX_PENDING_RATE_LIMITS = 64  # The account keeps at most this many per run.
 MAX_RUN_RATE_LIMIT_EVENTS = 1_000
 # Recorded workers whose originals a verifier open may still bind, per host (newest kept).
 MAX_RETAINED_WORKERS = 64
+# Retired runs whose status this host still answers as not found (newest kept).
+MAX_RETIRED_RUNS = 256
 _RETRYING = object()
 # How often the journal is checked for runs of stopped earlier services, and how long
 # one settlement request may take.
@@ -237,6 +239,9 @@ class RunDriver:
         self._giving_back = []
         # host outcome digest -> (host class, HostResultContext).
         self._workers = {}
+        # Released and retired runs: key -> (host class, orchestration handle); and the
+        # bindings whose monitor slots are still to be freed.
+        self._retired, self._forgetting = {}, []
         self._call = _Call()
         self._account = account_endpoint_path(state)
         self._preparation = runtime.bind_preparation(
@@ -689,10 +694,16 @@ class RunDriver:
         return run is not None and run.binding == binding and run.host_client == host_client
 
     def owns(self, target, host_client):
-        """Whether this run exists here for that host class; status and cancel stay with it."""
-        run = self._runs.get((target.run_handle, target.attempt))
-        return (run is not None and run.host_client == host_client
-                and run.prospective.orchestration_handle == target.orchestration_handle)
+        """Whether this run exists here for that host class; status and cancel stay with it.
+
+        A run this host released and retired still belongs to its host class, so
+        its status answers that the attempt is no longer tracked.
+        """
+        key = (target.run_handle, target.attempt)
+        run = self._runs.get(key)
+        if run is None:
+            return self._retired.get(key) == (host_client, target.orchestration_handle)
+        return run.host_client == host_client and run.prospective.orchestration_handle == target.orchestration_handle
 
     # Owner-thread state machine.
     def step(self):
@@ -700,6 +711,7 @@ class RunDriver:
             return
         self._read_intake()
         self._retire_given_back()
+        self._forget_retired()
         self._sweep_lost()
         for run in list(self._runs.values()):
             try:
@@ -1007,7 +1019,27 @@ class RunDriver:
                     self._dispatch.retire_released(run.context)
                 except Exception:
                     pass
+                # Nothing holds its monitor entry any more: the lane, the pool and the
+                # dispatch job are retired. Its slot is freed (see `_forget_retired`).
+                self._retired.pop(run.key, None)
+                self._retired[run.key] = (run.host_client, run.prospective.orchestration_handle)
+                while len(self._retired) > MAX_RETIRED_RUNS:
+                    self._retired.pop(next(iter(self._retired)))
+                self._forgetting.append(run.binding)
                 run.state = 'released'
+
+    def _forget_retired(self):
+        """Free the monitor slots of retired runs; one not yet seen cleaned is tried again next step."""
+        from .project_monitor import ProjectMonitorError
+        for binding in list(self._forgetting):
+            try:
+                self._runtime.owner.forget(binding)
+            except ProjectMonitorError as error:
+                if error.reason_code != 'monitor_attempt_not_found':
+                    continue
+            except Exception:
+                continue
+            self._forgetting.remove(binding)
 
     # Runs of earlier service instances of this project.
     def _sweep_lost(self):

@@ -167,6 +167,24 @@ class BridgeLivenessOwner:
         pool.retire(handle)
         self._results.pop(handle, None)
 
+    def forget(self, binding):
+        """After the original execution was released and retired: free its monitor slot.
+
+        The monitor refuses unless the attempt's terminal and cleanup were both
+        observed; the execution handle is then no longer synchronized either.
+        """
+        self._owner()
+        self._loop._owner()
+        binding = _capture_binding(binding)
+        key = (binding.run_handle, binding.attempt)
+        previous = self._attempts.get(key)
+        if previous is not None and previous[0] != binding:
+            raise ControlError("control_invalid_input")
+        if previous is not None and not previous[1].snapshot()["cleanup_confirmed"]:
+            raise ControlError("control_unavailable")
+        self._monitor.forget(binding)
+        self._attempts.pop(key, None)
+
     def run_once(self):
         """Drive bounded control I/O and apply latched stops on every exit path."""
         self._owner()

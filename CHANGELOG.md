@@ -146,6 +146,10 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   work.
 - Verification and operational QA of a result go through the project's service. It keeps what a
   verifier needs only while it runs (twelve idle hours when it holds recorded results).
+- A project's service can run any number of children over its lifetime: a finished,
+  released and recorded child no longer keeps one of its four tracking slots (third real
+  trial: the fifth run was refused with `run_failed`). Status of such a run answers
+  `control_attempt_not_found`.
 - If a project's service stops or crashes while a child is claimed, the project's next service
   settles that run by itself as soon as the operating system shows that the child, everything
   left in its process group and session, and its deadline watchdog are gone, and the watchdog

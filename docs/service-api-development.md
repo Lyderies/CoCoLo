@@ -2296,6 +2296,23 @@ conflicts. Explicit capacity includes retained terminal entries, with no evictio
 automatic retry, account release or reuse of a run/attempt. Bindings and policy
 values are captured rather than retaining caller-owned objects.
 
+An entry is freed only by an explicit `forget`, which the monitor refuses
+(`monitor_attempt_live`) unless the attempt's terminal and tracked-tree cleanup were
+both observed. The project host's run driver calls it (through
+`BridgeLivenessOwner.forget`, which also stops synchronizing that execution and
+requires its supervisor to report cleanup) only once a run is released and retired:
+its persistence entry and worker slot retired, its dispatch job reduced to the
+tombstone that refuses a repeated submit. Nothing reads a monitor entry after that:
+the dispatch tombstone and status of the retired job need only the job, and a
+verifier or QA of the run reads the kept originals and project history. A forget that
+is refused is retried on the next step. A retired run's status (and cancellation)
+for its own host class answers `control_attempt_not_found`; the driver remembers the
+last 256 retired runs for that. So a long-lived service is no longer limited to four
+children in its lifetime: four is the number of attempts it tracks at once (found in
+the third real trial; `test_a_project_keeps_more_than_four_recorded_results`,
+`ManyRunsTests`). A run that failed after its claim was admitted, or one released
+but not yet recorded (up to the hour's record grace), still holds its slot.
+
 Trusted startup/activity/status/cancel calls use the complete immutable binding.
 Wrong scope/process/thread refuses before clock sampling. Tick and pending-stop
 reads perform no persistence, RPC, authorization or publication callback. A shared

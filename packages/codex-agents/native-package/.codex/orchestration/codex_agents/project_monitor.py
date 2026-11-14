@@ -23,7 +23,7 @@ MAX_TRACKED_ATTEMPTS = 4096
 MONITOR_REASON_CODES = frozenset({
     "monitor_invalid_input", "monitor_wrong_scope", "monitor_attempt_not_found",
     "monitor_binding_conflict", "monitor_capacity_exceeded", "monitor_wrong_owner",
-    "monitor_unavailable",
+    "monitor_unavailable", "monitor_attempt_live",
 })
 _BINDING_FIELDS = tuple(AttemptBinding.__dataclass_fields__)
 _SCOPE_FIELDS = ("project_id", "primary_session_id", "runtime_digest",
@@ -128,8 +128,9 @@ class ProjectMonitor:
     """One process/thread's bounded attempt registry; no shared/global lock.
 
     Register after upstream authorization and before native launch so the startup
-    clock covers launch. Registration is not launch permission. Entries remain
-    for this registry's lifetime: no eviction, automatic
+    clock covers launch. Registration is not launch permission. An entry stays
+    until its owner explicitly forgets it, which is refused unless its terminal
+    and its tracked-tree cleanup were both observed: no eviction, automatic
     relaunch, forgotten cancellation or reuse of a run/attempt with new bounds.
     All methods are trusted owner calls, not operations exposed to native clients.
     """
@@ -429,6 +430,17 @@ class ProjectMonitor:
         first = not entry.cleanup_confirmed
         entry.cleanup_confirmed = True
         return self._observe(entry, "poll", final_cleanup_poll=first)
+
+    def forget(self, binding: AttemptBinding) -> None:
+        """Drop a finished attempt whose terminal and cleanup were both observed.
+
+        Its slot is free again; a later status of it answers not found. A live,
+        stopping or uncleaned attempt is never dropped (`monitor_attempt_live`).
+        """
+        entry = self._entry(binding)
+        if not (entry.terminal_observed and entry.cleanup_confirmed):
+            raise ProjectMonitorError("monitor_attempt_live")
+        del self._attempts[(binding.run_handle, binding.attempt)]
 
     def _poll_entries(self, entries: tuple[_Attempt, ...]) -> tuple[AttemptStatus, ...]:
         failed_before = self._clock_failed
