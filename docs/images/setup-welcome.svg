@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="430" viewBox="0 0 760 430" role="img" aria-labelledby="title desc">
+  <title id="title">The COCOLO setup wizard's first screen</title>
+  <desc id="desc">A terminal window showing the COCOLO setup wizard at step 1 of 9: a welcome, the tagline, and a list of machine checks that all say OK.</desc>
+  <style>
+    .t { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; fill: #d4d4d8; }
+    .dim { fill: #71717a; }
+    .title { fill: #e879f9; font-weight: 700; }
+    .now { fill: #22d3ee; font-weight: 700; }
+    .ok { fill: #4ade80; font-weight: 700; }
+    .bold { font-weight: 700; fill: #fafafa; }
+  </style>
+  <rect x="0" y="0" width="760" height="430" rx="12" fill="#18181b"/>
+  <rect x="0" y="0" width="760" height="34" rx="12" fill="#27272a"/>
+  <rect x="0" y="22" width="760" height="12" fill="#27272a"/>
+  <circle cx="20" cy="17" r="6" fill="#f87171"/>
+  <circle cx="40" cy="17" r="6" fill="#fbbf24"/>
+  <circle cx="60" cy="17" r="6" fill="#4ade80"/>
+  <text x="380" y="22" text-anchor="middle" class="t dim">./setup.sh</text>
+  <text x="20" y="62" class="t"><tspan class="title">COCOLO setup</tspan><tspan class="dim">  Step 1 of 9</tspan></text>
+  <text x="20" y="82" class="t"><tspan class="now">[Checks]</tspan><tspan class="dim"> Project Providers Install Collector Billing Profile Commands Done</tspan></text>
+  <text x="20" y="102" class="t ok">####<tspan class="dim">------------------------------------</tspan></text>
+  <text x="20" y="136" class="t bold">Welcome to COCOLO</text>
+  <text x="20" y="156" class="t">Claude Orchestrator, Codex Orchestrator, Local Orchestrator</text>
+  <text x="20" y="186" class="t">This wizard sets up delegation between Codex and Claude children in one</text>
+  <text x="20" y="204" class="t">of your Git projects. It uses only your existing subscription logins and</text>
+  <text x="20" y="222" class="t">never any metered API billing. First, a quick look at this machine.</text>
+  <text x="20" y="256" class="t"><tspan class="ok">OK  </tspan> Operating system: Darwin</text>
+  <text x="20" y="274" class="t"><tspan class="ok">OK  </tspan> python3: 3.14</text>
+  <text x="20" y="292" class="t"><tspan class="ok">OK  </tspan> git: 2.54</text>
+  <text x="20" y="310" class="t"><tspan class="ok">OK  </tspan> codex: installed, signed in</text>
+  <text x="20" y="328" class="t"><tspan class="ok">OK  </tspan> claude: signed in</text>
+  <text x="20" y="346" class="t"><tspan class="ok">OK  </tspan> No ANTHROPIC_API_KEY or OPENAI_API_KEY</text>
+  <text x="20" y="376" class="t now">  &gt; Continue</text>
+  <text x="20" y="410" class="t dim">  Up/Down move   Enter select   ? what ran   q quit</text>
+</svg>
