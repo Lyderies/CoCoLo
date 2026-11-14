@@ -129,15 +129,22 @@ child is never retried automatically.
   installed limits are deliberately conservative for this release; no request can raise them. A child
   that cannot get a place is refused with `claim_busy`.
 - **Per project:** a project's service prepares up to four children. A refused run frees its share.
+  A child's place is given back only once every process it started has stopped, including one that
+  detached from its tree: each child carries a run marker in its environment, and the place is held
+  while any process still carries it or is still in the child's session.
 - **Per usage window:** admission also keeps a run cap per provider usage window, whatever headroom
   says.
 - **After a crash:** when a project's service stops or crashes while its run holds a place, the
   project's next service settles that run by itself, usually within seconds of its child ending: the
   run ends abandoned with an unknown outcome and its place is freed. It does so only on positive
   evidence from the operating system that the child, everything left in its process group and
-  session, and its deadline watchdog are gone, and that the watchdog confirmed before exiting that
-  every process it tracked had stopped (or that the run never started a child), and never while any
-  of it may still run. A watchdog that was killed before it could confirm leaves the run to the
+  session, and its deadline watchdog are gone, that the watchdog confirmed before exiting that
+  every process it tracked had stopped (or that the run never started a child), and that no process
+  still carries the child's run marker (see the [security model](security-model.md#what-it-does-not-protect-against)),
+  and never while any of it may still run. The account takes that settlement on the project
+  service's own evidence (its result lease and storage evidence); it cannot check the kernel itself.
+  That is within your own same-user trust boundary, and a stronger, generic reconcile is planned for
+  0.4.0. A watchdog that was killed before it could confirm leaves the run to the
   timed rule below. A service that is stopped normally does the same for its own runs
   before it exits. When that evidence is missing or cannot be read, or the service crashed in the
   instant between starting the child and its watchdog taking over, the place is freed one hour after
@@ -151,7 +158,10 @@ billing, for example), the account fences it, its result space and preparation a
 gives the denial's reason. A run that failed before its claim was sent frees them the same way. A claim
 refused without a receipt, or whose reply was lost, is settled by the account's claim fence: if the
 account admitted the claim the run keeps everything; otherwise the fence makes sure it can never be
-admitted, and the run closes the same way. The orchestration can then close and the next child launches.
+admitted, and the run closes the same way. If the account refuses the fence itself, the service asks
+again, waiting longer each time (from one second up to five minutes, ten tries in all), and keeps the
+run's result space and preparation meanwhile. If no try is answered, the run gives its preparation back
+so the project can still prepare others, and its place at the account is freed by the timed rule. The orchestration can then close and the next child launches.
 Called anyway, `learning-classify-host-run-abandoned` answers `already_closed`.
 
 ## The records and replay

@@ -11,8 +11,9 @@ asks the account to release the capacity and retires local custody.
 
 Every step runs on the host's owner thread, except account calls, which run on
 one helper thread and are collected on the next step. A failed step stops that
-run where it is: nothing is retried or relaunched, and an uncertain account
-reply leaves the capacity charged. A run that provably can never launch closes
+run where it is: nothing is relaunched, and an uncertain account reply leaves
+the capacity charged. Only a refused claim fence is asked again, for a bounded
+number of tries (`_fence_later`). A run that provably can never launch closes
 by itself: a claim the account denied is closed through the account's denial
 closure; any other armed run without an admitted claim is fenced by the account
 (`account.fence_claim`), which either returns the admitted claim (and closes
@@ -92,6 +93,20 @@ MAX_RETAINED_WORKERS = 64
 # Retired runs whose status this host still answers as not found (newest kept).
 MAX_RETIRED_RUNS = 256
 _RETRYING = object()
+# A fence the account refused (anything but unreachable), or one that could not be
+# built, is asked again after this long, doubling up to the cap, at most this many
+# times. Then the run gives its preparation back and keeps its lease; the account's
+# own timed rule covers its capacity.
+FENCE_RETRY_SECONDS = 1.0
+FENCE_RETRY_MAX_SECONDS = 300.0
+MAX_FENCE_ATTEMPTS = 10
+# A given-back preparation whose cleanup did not finish, and a retired run whose
+# monitor slot was refused, are tried again after this long, doubling up to the cap.
+# A refused forget is tried at most MAX_FORGET_ATTEMPTS times: a live attempt is
+# never forgotten, so its slot then stays taken for this host's lifetime.
+CLEANUP_RETRY_SECONDS = 1.0
+CLEANUP_RETRY_MAX_SECONDS = 60.0
+MAX_FORGET_ATTEMPTS = 12
 # How often the journal is checked for runs of stopped earlier services, and how long
 # one settlement request may take.
 SWEEP_SECONDS = 1.0
@@ -153,6 +168,8 @@ class _Run:
     withdrawing: bool = False  # The lease's release is queued on the writer.
     denied: bool = False  # The account holds a denied receipt for the run's claim: it can never be admitted.
     closed: bool = False  # Failed and holding nothing: no lease, no preparation, nothing to reconcile.
+    fence_attempts: int = 0  # Fences the account refused or that could not be sent.
+    fence_at: float | None = None  # When a refused fence is asked again.
 
 
 class _Call(local):
@@ -235,13 +252,14 @@ class RunDriver:
         self._history_endpoint = None if history_endpoint is None else Path(history_endpoint)
         self._scope, self._runtime, self._clock = scope, runtime, clock
         self._runs, self._closed, self._intake = {}, False, []
-        # Preparations of runs that failed or were abandoned before launch, until their slot is free.
-        self._giving_back = []
+        # Preparations of runs that failed or were abandoned before launch, until their slot is free;
+        # and, for one whose cleanup did not finish, (attempts, when it is tried again).
+        self._giving_back, self._cleanup_retry = [], {}
         # host outcome digest -> (host class, HostResultContext).
         self._workers = {}
         # Released and retired runs: key -> (host class, orchestration handle); and the
-        # bindings whose monitor slots are still to be freed.
-        self._retired, self._forgetting = {}, []
+        # bindings whose monitor slots are still to be freed: binding -> (refusals, next try).
+        self._retired, self._forgetting = {}, {}
         self._call = _Call()
         self._account = account_endpoint_path(state)
         self._preparation = runtime.bind_preparation(
@@ -568,6 +586,8 @@ class RunDriver:
             run.state = 'failed'
             if not run.claim_sent or run.denied:
                 self._give_back(run)
+            else:
+                self._fence_later(run)  # Its claim may still be admitted: only the account can say.
             return
         run.state, run.reason = 'failed', reason
         if run.persistence is None:
@@ -586,12 +606,34 @@ class RunDriver:
             fence = FenceClaimInput(run.key[0], run.identity_digest, run.claim_request_id,
                                     self._runtime.persistence.lease(run.persistence).lease_digest)
         except Exception:
-            run.state = 'failed'  # Nothing to fence it with: it keeps what it holds.
+            run.state = 'failed'
+            if run.claim_sent and not run.denied:
+                self._fence_later(run)  # Nothing to fence it with yet: it keeps what it holds.
+            else:
+                self._give_back(run)  # No claim of it was ever sent, so none can be admitted.
             return
         self._account_call(run, 'project', 'fence_claim', fence, request_id='fence-' + self._id(run),
                            custody=self._custody(run, storage=run.evidence))
         run.retry_until = math.inf  # Nothing is freed without the account's answer.
         run.state = 'fencing'
+
+    def _fence_later(self, run):
+        """A claimed run whose fence was refused asks again later, less and less often.
+
+        Nothing is freed without the account's answer, so it keeps its lease and
+        preparation meanwhile, and its status reads failed. After
+        MAX_FENCE_ATTEMPTS it stops asking and gives its preparation back, so it
+        no longer holds one of this host's preparation slots: a failed run is
+        never bound or launched here, so the preparation can never be used. Its
+        lease stays, and the account's own timed rule settles its capacity.
+        """
+        run.fence_attempts += 1
+        if run.fence_attempts >= MAX_FENCE_ATTEMPTS:
+            run.fence_at = None
+            self._give_back(run)
+            return
+        delay = min(FENCE_RETRY_MAX_SECONDS, FENCE_RETRY_SECONDS * 2 ** (run.fence_attempts - 1))
+        run.fence_at = self._clock() + delay
 
     def _close(self, run):
         """The lease is expired in the history: drop its input, then give the preparation back."""
@@ -639,10 +681,21 @@ class RunDriver:
                 if state in {'cleaned', 'failed'}:
                     self._preparation.retire(handle)
                     self._giving_back.remove(handle)
+                    self._cleanup_retry.pop(handle, None)
                 elif state == 'unknown':
-                    self._giving_back.remove(handle)  # Its slot is lost to this host; never retried.
+                    # Its workspace may still be there: kept, and its removal asked for again later.
+                    self._retry_cleanup(handle)
             except Exception:
                 pass  # Still cleaning up; asked again on the next step.
+
+    def _retry_cleanup(self, handle):
+        attempts, when = self._cleanup_retry.get(handle, (0, self._clock()))
+        if self._clock() < when:
+            return
+        attempts += 1
+        self._cleanup_retry[handle] = (attempts, self._clock() + min(
+            CLEANUP_RETRY_MAX_SECONDS, CLEANUP_RETRY_SECONDS * 2 ** (attempts - 1)))
+        self._preparation.retry_cleanup(handle)
 
     # The dispatch service names only runs this driver has made ready.
     def _authorize_dispatch(self, request, token):
@@ -761,7 +814,11 @@ class RunDriver:
 
     def _advance(self, run):
         lane, prep = self._runtime.persistence, self._preparation
-        if run.state == 'reading':
+        if run.state == 'failed':
+            if run.fence_at is not None and self._clock() >= run.fence_at:
+                run.fence_at = None
+                self._fence(run)  # A refused fence, asked again (see `_fence_later`).
+        elif run.state == 'reading':
             worker_result = self._result(run)
             if worker_result is not None:
                 self._start_preparation(run, worker_result)
@@ -1025,21 +1082,33 @@ class RunDriver:
                 self._retired[run.key] = (run.host_client, run.prospective.orchestration_handle)
                 while len(self._retired) > MAX_RETIRED_RUNS:
                     self._retired.pop(next(iter(self._retired)))
-                self._forgetting.append(run.binding)
+                self._forgetting[run.binding] = (0, self._clock())
                 run.state = 'released'
 
     def _forget_retired(self):
-        """Free the monitor slots of retired runs; one not yet seen cleaned is tried again next step."""
+        """Free the monitor slots of retired runs.
+
+        One the monitor refuses (not yet seen cleaned, say) is tried again later,
+        less and less often, at most MAX_FORGET_ATTEMPTS times; a live attempt is
+        never forgotten, so its slot then stays taken.
+        """
         from .project_monitor import ProjectMonitorError
-        for binding in list(self._forgetting):
+        now = self._clock()
+        for binding, (refusals, when) in list(self._forgetting.items()):
+            if now < when:
+                continue
             try:
                 self._runtime.owner.forget(binding)
-            except ProjectMonitorError as error:
-                if error.reason_code != 'monitor_attempt_not_found':
+            except Exception as error:
+                if not (isinstance(error, ProjectMonitorError) and error.reason_code == 'monitor_attempt_not_found'):
+                    refusals += 1
+                    if refusals >= MAX_FORGET_ATTEMPTS:
+                        del self._forgetting[binding]
+                    else:
+                        self._forgetting[binding] = (refusals, now + min(
+                            CLEANUP_RETRY_MAX_SECONDS, CLEANUP_RETRY_SECONDS * 2 ** (refusals - 1)))
                     continue
-            except Exception:
-                continue
-            self._forgetting.remove(binding)
+            del self._forgetting[binding]
 
     # Runs of earlier service instances of this project.
     def _sweep_lost(self):

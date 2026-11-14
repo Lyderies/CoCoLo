@@ -4,6 +4,18 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## Unreleased: COCOLO 0.3.0 (in progress)
 
+- From the final security review: a child's process that detached from its tree while its parent
+  exited between two checks could keep running after its place was given back. Every child now
+  carries a fresh, private run marker in its environment, which everything it starts inherits, and its
+  place is held while any of your processes still carries it or is still in the child's session. A
+  process that clears its environment, or on macOS runs one of Apple's own tools such as `sleep` (macOS
+  hides their environment), and also starts a session of its own is still not found; it stays inside
+  the child's read-only sandbox. Also: a run whose
+  claim fence the account refused now asks again, waiting longer each time, instead of holding one of
+  the project's four preparations until the service restarted; a preparation whose cleanup failed is
+  cleaned up again later instead of being lost; and a finished run's monitor place that could not be
+  freed is asked for less and less often instead of on every step. The documentation now says that the
+  account settles a lost run on the project service's own evidence, within your own user's trust.
 - From the real install's containment check on Codex 0.169: a Codex child was stopped with
   `codex_tool_not_allowed:mcp_tool_call`. It had called Codex's own built-in `list_mcp_resources`
   tool (reported as an MCP call from server "codex"). Codex 0.164 offers the same tool, and both

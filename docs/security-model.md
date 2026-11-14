@@ -189,9 +189,20 @@ These are accepted limits of this release. A report that shows one is worse than
   rule, and a Claude primary can spawn its own Claude Code subagents. Those are outside admission and
   spend the primary's own allowance.
 - **Other spellings and detached processes.** The installer's Claude Code deny rules are a policy layer,
-  so a command spelled another way (such as `bash -c`) is not matched. A process that double-forks
-  between snapshots can outlive cleanup; it stays inside the child's read-only, network-disabled
-  sandbox.
+  so a command spelled another way (such as `bash -c`) is not matched. The process tracker polls, so a
+  descendant that detaches (starts its own session) while its parent exits between two snapshots is
+  never seen as part of the child's tree. Every child therefore carries a fresh, unguessable marker in
+  its environment (`COCOLO_RUN_TAG`), which its descendants inherit, and a child's place is not given
+  back while any of your processes started since the child still carries it, or is still in the
+  child's own session. What is still not found: a process that clears or rewrites its own
+  environment, or, on macOS, runs one of Apple's own system tools (such as `sh` or `sleep`, whose
+  environment macOS hides from other processes), and that also starts a new session and detaches
+  between snapshots. Such a process can outlive cleanup; it stays inside the child's read-only,
+  network-disabled sandbox.
+- **Settling a lost service's run.** The account accepts a project service's settlement of a lost run
+  (`account.settle_lost_run`) on that project's own evidence, its result lease and storage evidence;
+  the account cannot check the kernel itself. Each project service runs as you, so this is within the
+  same-user trust boundary. A stronger, generic reconcile is planned for 0.4.0.
 - **Prompt content and a modified package.** Repository text, and your own `AGENTS.md` and Codex skills,
   reach a child's prompt as instructions (never as authority). The protected copy is checked against
   this package, not against a signature: an owner who installs a modified package gets that package

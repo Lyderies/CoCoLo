@@ -380,6 +380,27 @@ class CodexPreparationLane:
                 job.state, job.reason = 'unknown', 'preparation_unavailable'
                 raise PreparationError() from None
 
+    def retry_cleanup(self, handle):
+        """Ask the slot's worker again to remove a discarded preparation whose cleanup did not finish.
+
+        Only for a job already given back ('unknown' after `discard`) whose
+        worker no longer holds it in the pool and whose slot thread still runs.
+        """
+        job = self._job(handle)
+        if job.prepared is not None and self._pool._jobs.get(job.prepared_snapshot[0]) is not None:
+            raise PreparationError('preparation_busy')
+        with self._lock:
+            # Without a known workspace there is nothing to name for removal, so it stays unknown.
+            if (job.state != 'unknown' or not job.cancelled or self._closing or job.workspace is None
+                    or job.slot.thread is None or not job.slot.thread.is_alive() or job.slot.current != handle):
+                raise PreparationError('preparation_busy')
+            job.state = 'cleanup'
+            try:
+                job.slot.incoming.put_nowait(handle)
+            except queue.Full:
+                job.state = 'unknown'
+                raise PreparationError() from None
+
     def retire(self, handle):
         job = self._job(handle)
         with self._lock:
