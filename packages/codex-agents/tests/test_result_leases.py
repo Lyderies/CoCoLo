@@ -118,6 +118,42 @@ class ResultLeaseTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, "history_result_capacity"):
             self.reserve(5)
 
+    def test_a_lease_whose_claim_was_never_sent_is_released_once_and_never_revived(self):
+        self.fixture.capacity = replace(self.fixture.capacity, max_entries=3)
+        self.reopen()
+        self.reserve()
+        released = self.store.release_unsent_result_lease(lease_binding())
+        self.assertEqual("expired", released.state)
+        self.assertEqual(released, self.store.release_unsent_result_lease(lease_binding()))  # Nothing freed twice.
+        with self.assertRaisesRegex(HistoryError, "history_result_expired"):
+            self.store.arm_result_lease(lease_binding())
+        self.assertEqual("expired", self.reserve().state)
+        # Armed, but its host open was never recorded, so its claim was never sent.
+        self.reserve(2)
+        self.store.arm_result_lease(lease_binding(2))
+        self.assertEqual("expired", self.store.release_unsent_result_lease(lease_binding(2)).state)
+        self.reserve(3)  # The released body space is free again.
+
+    def test_a_lease_is_never_released_once_its_claim_may_have_been_sent(self):
+        self.reserve()
+        self.store.arm_result_lease(lease_binding())
+        # The run driver sends a claim only after its host open is recorded here.
+        connection = self.store._connection
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute("INSERT INTO project_host_opens VALUES(?,?,?,?,?,?,?,?,?,?)",
+                           (lease_binding().project_id, lease_binding().run_handle, lease_binding().attempt, b"{}",
+                            "host_open_provenance:" + "0" * 64, "0" * 64, 1, 1000, 0, "0" * 64))
+        connection.execute("PRAGMA foreign_keys=ON")
+        with self.assertRaisesRegex(HistoryError, "history_conflict"):
+            self.store.release_unsent_result_lease(lease_binding())
+        self.assertEqual("claim_pending", self.store.result_lease(lease_binding()).state)
+        self.reserve(2)
+        self.store.arm_result_lease(lease_binding(2))
+        self.store.bind_result_lease(lease_binding(2), binding(2), assignment(), hard_deadline_at_ms=2000)
+        with self.assertRaisesRegex(HistoryError, "history_conflict"):
+            self.store.release_unsent_result_lease(lease_binding(2))
+        self.assertEqual("bound", self.store.result_lease(lease_binding(2)).state)
+
     def test_body_and_entry_caps_include_both_lease_and_known_claim_paths_without_double_counting(self):
         self.fixture.capacity = replace(self.fixture.capacity, max_entries=2)
         self.reopen()

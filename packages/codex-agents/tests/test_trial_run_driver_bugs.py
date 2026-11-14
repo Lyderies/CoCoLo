@@ -249,19 +249,150 @@ class TrialRunDriverTests(DriverHarness):
             self.skipTest('the second run launched; bug 2 is fixed, so there is no refusal to report')
         self.assertEqual('run_unavailable', report.get('reason_code'), report)
 
-    # 4. A run refused at claim must be closable by the primary.
-    @unittest.expectedFailure  # Open: closing it needs the account to confirm the refused claim (see CHANGELOG).
-    def test_a_run_refused_at_claim_can_be_abandoned_and_then_blocks_nothing(self):
-        code, report, (context, route_path, orchestration, run_handle) = self.forced_refusal_at_claim()
+    # 4. A run that can never launch closes by itself; the primary runs no command for it.
+    def watched_runs(self):
+        """The driver's own runs by run handle, and how often each gave its preparation back."""
+        from codex_agents import project_driver
+        seen, given_back = {}, {}
+        advance, give_back = project_driver.RunDriver._advance, project_driver.RunDriver._give_back
+
+        def watch(driver, run):
+            seen[run.key[0]] = (driver, run)
+            return advance(driver, run)
+
+        def count(driver, run):
+            held = run.prepared is not None
+            give_back(driver, run)
+            if held and run.prepared is None:
+                given_back[run.key[0]] = given_back.get(run.key[0], 0) + 1
+        for name, replacement in (('_advance', watch), ('_give_back', count)):
+            patcher = mock.patch.object(project_driver.RunDriver, name, replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return seen, given_back
+
+    def lease_state(self, run_handle):
+        import sqlite3
+        store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3'))) + '?mode=ro',
+                                uri=True)
+        try:
+            return [row[0] for row in store.execute('SELECT state FROM result_leases WHERE run_handle=?', (run_handle,))]
+        finally:
+            store.close()
+
+    def denied_at_claim(self, name='denied'):
+        """A run the account itself refuses at claim, with a denied receipt (stale billing, here)."""
+        from codex_agents import providers
+        context, route_path, orchestration, run_handle, _, _ = self.opened(name)
+        self.child_answers()
+        with mock.patch.object(providers, 'evaluate_launch', return_value='billing_unverified'):
+            code, report = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        return code, report, (context, route_path, orchestration, run_handle)
+
+    def assert_closed(self, runs, given_back, run_handle, reason):
+        driver, run = runs[run_handle]
+        self.assertEqual(('failed', reason, True), (run.state, run.reason, run.closed))
+        self.assertIsNone(run.prepared)
+        self.assertEqual(1, given_back.get(run_handle), 'the preparation is given back exactly once')
+        self.assertIsNone(run.receipt)
+        self.assertEqual(['expired'], self.lease_state(run_handle))
+        self.assertFalse(driver.busy())
+
+    def next_run_launches(self, before):
+        context, route_path, _, run_handle, _, _ = self.opened(
+            'next', task_changes={'id': 'task-next'}, assignment_changes={'assignment_id': 'next', 'task_id': 'task-next'})
+        self.child_answers('next')
+        code, report = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual(0, code, 'next run refused: %r; driver stopped at %r' % (report, self.stopped_runs))
+        self.assertEqual('result', report['bridge_report']['outcome'])
+        self.assertEqual(before + 1, len(self.executions()))
+
+    def test_a_run_denied_at_claim_closes_by_itself_and_frees_what_it_held(self):
+        runs, given_back = self.watched_runs()
+        code, report, (_, _, orchestration, run_handle) = self.denied_at_claim()
+        self.assertEqual((2, 'billing_unverified'), (code, report.get('reason_code')), report)
+        self.assertEqual([], self.executions())
+        self.assertIn(('driver', 'claiming', 'closing'), self.stopped_runs)
+        self.assert_closed(runs, given_back, run_handle, 'billing_unverified')
+        # The account fenced it: nothing pending, and the orchestration closes without any command for the run.
+        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
+        self.assertEqual((0, 1), (lifecycle['host_runs_pending'], lifecycle['host_runs_abandoned']), lifecycle)
+        closed = self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'failed')
+        self.assertEqual('failed', closed['current']['snapshot']['status'])
+        self.next_run_launches(0)
+
+    def test_a_run_failing_before_its_claim_was_sent_closes_by_itself(self):
+        from codex_agents.account_api import AccountClient, AccountError
+        runs, given_back = self.watched_runs()
+        context, route_path, orchestration, run_handle, _, _ = self.opened('unsent')
+        self.child_answers()
+        claims, claim = [], AccountClient.claim_launch
+
+        def refused(*_args, **_kwargs):
+            raise AccountError('account_not_authorized')
+
+        def counted(client, *args, **options):
+            claims.append(args)
+            return claim(client, *args, **options)
+        with mock.patch.object(AccountClient, 'open_provenance', refused), \
+                mock.patch.object(AccountClient, 'claim_launch', counted):
+            code, report = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual((2, 'account_not_authorized'), (code, report.get('reason_code')), report)
+        self.assertEqual([], claims)
+        self.assertEqual([], self.executions())
+        self.assertIn(('recording_open', 'account_not_authorized'), self.stopped_runs)
+        self.assert_closed(runs, given_back, run_handle, 'account_not_authorized')
+        closed = self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'failed')
+        self.assertEqual('failed', closed['current']['snapshot']['status'])
+        code, abandoned = self.attempt('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                                       '--reason', 'host_confirmed_gone')
+        self.assertEqual((0, 'already_closed'), (code, abandoned.get('classification')), abandoned)
+        self.next_run_launches(0)
+
+    def assert_not_freed(self, runs, run_handle, orchestration):
+        _, run = runs[run_handle]
+        self.assertEqual(('failed', False), (run.state, run.closed))
+        self.assertEqual(['claim_pending'], self.lease_state(run_handle))
+        code, refused = self.attempt('learning-close-orchestration', '--orchestration-handle', orchestration,
+                                     '--status', 'failed')
+        self.assertEqual((2, 'history_orchestration_pending'), (code, refused.get('reason_code')), refused)
+        code, abandoned = self.attempt('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                                       '--reason', 'host_confirmed_gone')
+        self.assertEqual((2, 'history_conflict'), (code, abandoned.get('reason_code')), abandoned)
+
+    def test_a_claim_refused_without_a_receipt_is_never_freed(self):
+        # The account sends no proof with a refusal such as this, so the project cannot show its
+        # history that nothing was committed: the run keeps its lease, as before.
+        runs, _ = self.watched_runs()
+        code, report, (_, _, orchestration, run_handle) = self.forced_refusal_at_claim()
+        self.assertEqual((2, 'claim_storage_expired'), (code, report.get('reason_code')), report)
+        self.assert_not_freed(runs, run_handle, orchestration)
+
+    def test_a_claim_whose_reply_was_lost_is_never_freed(self):
+        from codex_agents.account_api import AccountClient, AccountError
+        runs, _ = self.watched_runs()
+        context, route_path, orchestration, run_handle, _, _ = self.opened('lost')
+        self.child_answers()
+        claim = AccountClient.claim_launch
+
+        def lost(client, *args, **options):
+            claim(client, *args, **options)  # The account admits it; the reply never arrives intact.
+            raise AccountError('account_invalid_response')
+        with mock.patch.object(AccountClient, 'claim_launch', lost):
+            code, report = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual((2, 'account_invalid_response'), (code, report.get('reason_code')), report)
+        self.assertEqual([], self.executions())
+        self.assert_not_freed(runs, run_handle, orchestration)
+
+    def test_a_run_refused_at_claim_closes_without_the_primary_and_then_blocks_nothing(self):
+        code, report, (context, route_path, orchestration, run_handle) = self.denied_at_claim()
         self.assertNotEqual(0, code, 'precondition: the run must be refused at claim')
-        target = ('--orchestration-handle', orchestration)
-        self.cli('learning-pause-orchestration', *target)
+        # No pause and no command for the run: it is already closed, and the command says so if called.
         code, abandoned = self.attempt('learning-classify-host-run-abandoned', '--run-handle', run_handle,
                                        '--reason', 'host_confirmed_gone')
         self.assertEqual(0, code, abandoned)
-        self.assertEqual('abandoned', abandoned['classification'])
-        # Nothing waits on it any more: the orchestration closes and the ledger has no pending run.
-        self.cli('learning-resume-orchestration', *target)
+        self.assertEqual('already_closed', abandoned['classification'])
+        target = ('--orchestration-handle', orchestration)
         closed = self.cli('learning-close-orchestration', *target, '--status', 'failed')
         self.assertEqual('failed', closed['current']['snapshot']['status'] if 'current' in closed else closed['status'])
         lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
