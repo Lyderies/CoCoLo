@@ -22,8 +22,11 @@ child starts one, so a descendant that never called setsid stays in it). The
 known limits: a process that clears or rewrites its own environment, or (on
 macOS, which withholds the environment of its own signed tools such as /bin/sh
 and /bin/sleep from other processes) runs one of those tools, and that also
-starts a new session and detaches between two snapshots, is not found. It is
-still confined to the child's read-only sandbox.
+starts a new session and detaches between two snapshots, is not found. A
+process whose environment cannot be read at all is judged by the nearest
+readable parent its environment came from; detached under launchd/init with
+no such parent, it keeps cleanup unconfirmed. Either way it is still confined
+to the child's read-only sandbox.
 
 Standard library only: the deadline watchdog runs this file as a script.
 """
@@ -83,6 +86,8 @@ RUN_TAG = re.compile(r"[0-9a-f]{32}")
 # one environment larger than this, makes the answer unknown, never "none".
 MAX_TAG_SCAN_PROCESSES = 8192
 MAX_ENVIRONMENT_BYTES = 4 * 1024 * 1024
+# How far up its listed parents an unreadable process is judged (`_judged_by_parents`).
+MAX_PARENT_DEPTH = 16
 # A process that is being killed still shows its environment for a moment.
 TAG_SCAN_ATTEMPTS = 3
 
@@ -376,10 +381,53 @@ def _in_session(pid: int, session: int | None) -> bool:
         return False  # Gone since it was listed, or not readable: its record decides.
 
 
-def _carries_tag(pid: int, entry: bytes, born: str, session: int | None = None) -> bool | None:
+def _subreaper(pid: int) -> bool:
+    """Linux: a per-user service manager adopts orphans in place of init."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        with open(f"/proc/{pid}/comm", "rb") as handle:
+            return handle.read(64).strip() == b"systemd"
+    except OSError:
+        return True  # Cannot tell: treated as the adopter, so never as proof.
+
+
+def _judged_by_parents(record: Record, entry: bytes, born: str, session: int | None,
+                       table: Table) -> bool | None:
+    """An unreadable process born since the child, judged by the parent its environment came from.
+
+    Its listed parents are walked up (at most MAX_PARENT_DEPTH): the first one
+    born before the child, or readable, decides, as does one in the child's
+    session. Each parent must still be the listed process, born no later than
+    its child, so a reused pid cannot vouch for it. Reaching launchd/init (or a
+    Linux subreaper), an unlisted parent, or the bound while every step was
+    unreadable is not proof: that is how a detached escapee looks.
+    """
+    child = record
+    for _ in range(MAX_PARENT_DEPTH):
+        parent = child[0]
+        if parent <= 1 or parent not in table or _excluded_pid(parent) or _subreaper(parent):
+            return None
+        found = process_record(parent)
+        if found is None or found[3] or _born_before(child[2], found[2]):
+            return None
+        if _born_before(found[2], born):
+            return False  # Born before the child: it never had the marker to pass on.
+        if _in_session(parent, session):
+            return True
+        arguments = process_arguments(parent)
+        if arguments is not None:
+            return entry in arguments[1]
+        child = found
+    return None
+
+
+def _carries_tag(pid: int, entry: bytes, born: str, session: int | None = None,
+                 table: Table | None = None) -> bool | None:
     """Whether this pid is a live process born since `born` with `entry` in its environment.
 
-    With `session`, a live process still in that session counts too.
+    With `session`, a live process still in that session counts too. One whose
+    environment cannot be read (a setuid `login`, say) is judged by its parents.
 
     macOS withholds the environment of its own signed tools (an empty list
     here), which therefore never match: the documented limit.
@@ -400,7 +448,7 @@ def _carries_tag(pid: int, entry: bytes, born: str, session: int | None = None) 
         return False
     if after is not None and (after[2] != record[2] or after[3]):
         return False  # It exited, or its pid passed to another process, while being read.
-    return None
+    return None if table is None else _judged_by_parents(record, entry, born, session, table)
 
 
 def _tag_scan(tag: str, born: str, session: int | None) -> bool | None:
@@ -412,7 +460,7 @@ def _tag_scan(tag: str, born: str, session: int | None) -> bool | None:
     for pid in sorted(table):
         if _excluded_pid(pid):
             continue
-        carries = _carries_tag(pid, entry, born, session)
+        carries = _carries_tag(pid, entry, born, session, table)
         if carries:
             return True
         unknown = unknown or carries is None

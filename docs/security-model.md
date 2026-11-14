@@ -194,7 +194,9 @@ These are accepted limits of this release. A report that shows one is worse than
   never seen as part of the child's tree. Every child therefore carries a fresh, unguessable marker in
   its environment (`COCOLO_RUN_TAG`), which its descendants inherit, and a child's place is not given
   back while any of your processes started since the child still carries it, or is still in the
-  child's own session. What is still not found: a process that clears or rewrites its own
+  child's own session. A process whose environment cannot be read at all (a setuid `login`, say) is
+  judged by the nearest readable parent it inherited its environment from; one detached under
+  launchd/init with no such parent holds the place. What is still not found: a process that clears or rewrites its own
   environment, or, on macOS, runs one of Apple's own system tools (such as `sh` or `sleep`, whose
   environment macOS hides from other processes), and that also starts a new session and detaches
   between snapshots. Such a process can outlive cleanup; it stays inside the child's read-only,
