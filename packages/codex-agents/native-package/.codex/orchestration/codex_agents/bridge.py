@@ -65,9 +65,11 @@ from .learning_contracts import (
 from .process_tree import (
     TRACK_INTERVAL_SECONDS,
     WATCHDOG_READY_SECONDS,
+    RUN_TAG_VARIABLE,
     ProcessTree,
     Table,
     await_ready,
+    new_run_tag,
     process_table,
     tracking_available,
 )
@@ -583,7 +585,7 @@ class _WatchdogOwner:
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
 
-    def start(self, root: int, birth: str, deadline_monotonic: float, marker: tuple[str, str] | None = None) -> None:
+    def start(self, root: int, birth: str, deadline_monotonic: float, marker: tuple[str, str, str] | None = None) -> None:
         # The child remains unreaped through the acknowledgement, so its pid
         # cannot pass to another process. Output processing waits for verification.
         try:
@@ -707,6 +709,8 @@ def run_child(
     killed on timeout, overflow, an unparseable line or an aborting frame, and
     always once the child has exited. The child is reaped only after that, and
     it is never launched when its tree or its watchdog cannot be tracked.
+    Its environment carries a fresh per-run marker (`RUN_TAG_VARIABLE`) that its
+    cleanup confirmation looks for in every process of this user.
     """
 
     outcome: dict[str, Any] = {"returncode": None, "abort": None}
@@ -728,6 +732,8 @@ def run_child(
     received = 0
     execution_bound = False
     cleanup_entered = False
+    run_tag = new_run_tag()
+    environment = {**environment, RUN_TAG_VARIABLE: run_tag}
 
     def requested_abort():
         if _execution is None:
@@ -764,8 +770,11 @@ def run_child(
             outcome["abort"] = (requested_abort() if cancelled else None) or (
                 "timed_out" if expired else "cancelled" if cancelled else "launch_failed")
             return outcome
-        tree = ProcessTree(process.pid) if _execution is None else _execution.tree(process)
+        tree = ProcessTree(process.pid, run_tag) if _execution is None else _execution.tree(process)
         _ACTIVE_CHILDREN[process.pid] = (process, tree, _execution)
+        if _execution is not None and tree.run_tag != run_tag:
+            # The registry keeps the marker it saw in the child's environment.
+            raise _Abort("process_tracking_unavailable")
         check_stop()
         identified = tree.identify(process_table())
         check_stop()
@@ -787,7 +796,7 @@ def run_child(
         watchdog.start(
             process.pid, tree.root_birth,
             deadline + WATCHDOG_GRACE_SECONDS,
-            *(() if marker is None else (marker,)),
+            *(() if marker is None else ((*marker, run_tag),)),
         )
         if _execution is not None:
             # The project service records the acknowledged watchdog durably, so a

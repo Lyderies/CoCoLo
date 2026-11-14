@@ -12,7 +12,18 @@ tracked leader, which includes the child itself while it is unreaped.
 
 Tracking is by polling, so it is conservative rather than complete: a
 descendant whose parent exits before any snapshot has seen it is lost, and it
-is left running rather than risk signalling an unrelated process.
+is left running rather than risk signalling an unrelated process. So that such
+a process cannot let cleanup be confirmed, every child is started with a
+per-run marker in its environment (`RUN_TAG_VARIABLE`, an unguessable value
+kept with the tree), which its descendants inherit. Cleanup is confirmed only
+while no process of this user, born since the child, still carries it
+(`tagged_process_running`), and none is still in the child's own session (the
+child starts one, so a descendant that never called setsid stays in it). The
+known limits: a process that clears or rewrites its own environment, or (on
+macOS, which withholds the environment of its own signed tools such as /bin/sh
+and /bin/sleep from other processes) runs one of those tools, and that also
+starts a new session and detaches between two snapshots, is not found. It is
+still confined to the child's read-only sandbox.
 
 Standard library only: the deadline watchdog runs this file as a script.
 """
@@ -22,6 +33,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
+import secrets
 import selectors
 import signal
 import struct
@@ -59,6 +72,19 @@ DARWIN_PID_OFFSET = 40
 DARWIN_PPID_OFFSET = 560
 DARWIN_PGID_OFFSET = 564
 DARWIN_ZOMBIE = 5
+
+# macOS: sysctl(CTL_KERN, KERN_PROCARGS2, pid) gives argc, the executable path,
+# then the argument and environment strings, each NUL-terminated.
+DARWIN_KERN_PROCARGS2 = 49
+# Each child's environment carries this marker with a fresh 128-bit value.
+RUN_TAG_VARIABLE = "COCOLO_RUN_TAG"
+RUN_TAG = re.compile(r"[0-9a-f]{32}")
+# Bounds on one scan of the process table for the marker: more processes, or
+# one environment larger than this, makes the answer unknown, never "none".
+MAX_TAG_SCAN_PROCESSES = 8192
+MAX_ENVIRONMENT_BYTES = 4 * 1024 * 1024
+# A process that is being killed still shows its environment for a moment.
+TAG_SCAN_ATTEMPTS = 3
 
 # pid -> parent pid, as `ps` listed it: a hint for which records to read, never trusted.
 Table = dict[int, int]
@@ -230,6 +256,189 @@ def process_gone(pid: int) -> bool:
     return False
 
 
+def new_run_tag() -> str:
+    """A fresh, unguessable per-run marker value for a child's environment."""
+    return secrets.token_hex(16)
+
+
+def run_tag_entry(tag: str) -> bytes:
+    """The exact environment entry a tagged child and its descendants carry."""
+    return (RUN_TAG_VARIABLE + "=" + tag).encode("ascii")
+
+
+def parse_procargs2(raw: bytes) -> tuple[bytes, list[bytes]] | None:
+    """The executable path and environment strings of a macOS KERN_PROCARGS2 buffer.
+
+    None when it does not parse. macOS withholds the environment of an
+    Apple-signed (platform) executable from other processes, so for one of
+    those the list is empty.
+    """
+
+    if len(raw) < 4:
+        return None
+    argc = struct.unpack_from("=i", raw, 0)[0]
+    if argc < 0:
+        return None
+    # The executable path, then NUL padding, then argv and the environment.
+    end = raw.find(b"\0", 4)
+    if end < 0:
+        return None
+    path, position = raw[4:end], end
+    while position < len(raw) and raw[position] == 0:
+        position += 1
+    strings = raw[position:].split(b"\0")
+    if len(strings) < argc:
+        return None
+    environment = []
+    for string in strings[argc:]:
+        if not string:
+            break  # The environment ends at its first empty string.
+        environment.append(string)
+    return path, environment
+
+
+def parse_environ(raw: bytes) -> list[bytes]:
+    """The environment strings of a Linux /proc/<pid>/environ buffer."""
+    return [string for string in raw.split(b"\0") if string]
+
+
+_ARGMAX: list[int] = []
+
+
+def _darwin_arguments(pid: int) -> tuple[bytes, list[bytes]] | None:
+    import ctypes
+
+    if not _SYSCTL:
+        _darwin_raw(os.getpid())  # Binds sysctl once, as the record read does.
+    if not _ARGMAX:
+        value = ctypes.c_int(0)
+        size = ctypes.c_size_t(ctypes.sizeof(value))
+        if _SYSCTL[0]((ctypes.c_int * 2)(1, 8), 2, ctypes.byref(value), ctypes.byref(size), None, 0) != 0:
+            return None
+        _ARGMAX.append(min(max(value.value, 0), MAX_ENVIRONMENT_BYTES))
+    buffer = ctypes.create_string_buffer(_ARGMAX[0])
+    size = ctypes.c_size_t(_ARGMAX[0])
+    name = (ctypes.c_int * 3)(1, DARWIN_KERN_PROCARGS2, pid)
+    if _SYSCTL[0](name, 3, buffer, ctypes.byref(size), None, 0) != 0:
+        return None
+    return parse_procargs2(buffer.raw[:size.value])
+
+
+def _linux_environment(pid: int) -> list[bytes] | None:
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as handle:
+            raw = handle.read(MAX_ENVIRONMENT_BYTES + 1)
+    except OSError:
+        return None
+    return None if len(raw) > MAX_ENVIRONMENT_BYTES else parse_environ(raw)
+
+
+def process_arguments(pid: int) -> tuple[bytes | None, list[bytes]] | None:
+    """One process's executable path (macOS only) and environment strings; None when unreadable."""
+
+    if pid <= 0:
+        return None
+    try:
+        if sys.platform == "darwin":
+            return _darwin_arguments(pid)
+        if sys.platform.startswith("linux"):
+            environment = _linux_environment(pid)
+            return None if environment is None else (None, environment)
+    except (OSError, ValueError, AttributeError, IndexError, struct.error):
+        return None
+    return None
+
+
+def process_environment(pid: int) -> list[bytes] | None:
+    """One process's environment strings from the kernel; None when unreadable."""
+    arguments = process_arguments(pid)
+    return None if arguments is None else arguments[1]
+
+
+def _birth_order(birth: str) -> tuple[int, ...] | None:
+    """A birth time as comparable numbers: seconds and microseconds on macOS, ticks on Linux."""
+    parts = birth.split(".")
+    return tuple(int(part) for part in parts) if all(part.isdigit() for part in parts) else None
+
+
+def _born_before(birth: str, reference: str) -> bool:
+    first, second = _birth_order(birth), _birth_order(reference)
+    return first is not None and second is not None and len(first) == len(second) and first < second
+
+
+def _in_session(pid: int, session: int | None) -> bool:
+    """Whether this process is still in the child's session (whose id is the child's pid)."""
+    if session is None or session <= 1:
+        return False
+    try:
+        return os.getsid(pid) == session
+    except OSError:
+        return False  # Gone since it was listed, or not readable: its record decides.
+
+
+def _carries_tag(pid: int, entry: bytes, born: str, session: int | None = None) -> bool | None:
+    """Whether this pid is a live process born since `born` with `entry` in its environment.
+
+    With `session`, a live process still in that session counts too.
+
+    macOS withholds the environment of its own signed tools (an empty list
+    here), which therefore never match: the documented limit.
+    """
+    record = process_record(pid)
+    if record is None:
+        return False if process_gone(pid) else None
+    if record[3] or _born_before(record[2], born):
+        # An exited process runs nothing; one born before the child cannot have inherited the tag.
+        return False
+    if _in_session(pid, session):
+        return True
+    arguments = process_arguments(pid)
+    if arguments is not None:
+        return entry in arguments[1]
+    after = process_record(pid)
+    if after is None and process_gone(pid):
+        return False
+    if after is not None and (after[2] != record[2] or after[3]):
+        return False  # It exited, or its pid passed to another process, while being read.
+    return None
+
+
+def _tag_scan(tag: str, born: str, session: int | None) -> bool | None:
+    table = process_table()
+    if table is None or len(table) > MAX_TAG_SCAN_PROCESSES:
+        return None
+    entry = run_tag_entry(tag)
+    unknown = False
+    for pid in sorted(table):
+        if _excluded_pid(pid):
+            continue
+        carries = _carries_tag(pid, entry, born, session)
+        if carries:
+            return True
+        unknown = unknown or carries is None
+    return None if unknown else False
+
+
+def tagged_process_running(tag: str, born: str, session: int | None = None) -> bool | None:
+    """Whether a process other than this one still carries the run's marker.
+
+    Only this user's processes born at or after `born` (the child's birth) are
+    read; with `session`, one still in that session (the child's) counts too. True when one is found, False only when every one could be read and
+    none carries it, None (not proof) otherwise. A process seen with it is looked
+    at again a moment later, since one being killed still shows its environment.
+    """
+
+    if type(tag) is not str or RUN_TAG.fullmatch(tag) is None or type(born) is not str:
+        return None
+    for attempt in range(TAG_SCAN_ATTEMPTS):
+        if attempt:
+            time.sleep(KILL_ROUND_PAUSE_SECONDS)
+        found = _tag_scan(tag, born, session)
+        if found is False:
+            return False
+    return found
+
+
 def tracking_available() -> bool:
     """Whether both the process table and kernel records can be read here."""
 
@@ -247,8 +456,11 @@ def _excluded_group(group: int) -> bool:
 class ProcessTree:
     """One child and every descendant seen so far, each known by pid and birth time."""
 
-    def __init__(self, root: int) -> None:
+    def __init__(self, root: int, run_tag: str | None = None) -> None:
         self.root = root
+        # The marker in the child's environment; with it, cleanup is confirmed
+        # only once no process still carries it.
+        self.run_tag = run_tag
         self.root_birth: str | None = None
         self.tracked: dict[int, str] = {}
         # Until the root's birth time is known nothing is tracked or signalled.
@@ -292,7 +504,18 @@ class ProcessTree:
                 self._remember_cleanup(pid, birth, process_record(pid))
         return not self._cleanup_incomplete and all(
             stopped or identity == root for identity, stopped in self._cleanup_seen.items()
-        )
+        ) and self._no_tagged_process()
+
+    def _no_tagged_process(self) -> bool:
+        """No process outside the tracked tree still carries this run's marker.
+
+        Catches a descendant whose parent exited between two snapshots, so it
+        was never adopted: by the marker it inherited, or because it is still
+        in the child's session. The child started its session, so its id is
+        the child's pid.
+        """
+        return (self.run_tag is None
+                or tagged_process_running(self.run_tag, self.root_birth, self.root) is False)
 
     def cleanup_confirmed(self) -> bool:
         """Positive evidence that every process this tree ever tracked has stopped.
@@ -306,7 +529,8 @@ class ProcessTree:
         for (pid, birth), stopped in tuple(self._cleanup_seen.items()):
             if not stopped:
                 self._remember_cleanup(pid, birth, process_record(pid))
-        return not self._cleanup_incomplete and all(self._cleanup_seen.values())
+        return (not self._cleanup_incomplete and all(self._cleanup_seen.values())
+                and self._no_tagged_process())
 
     def identify(self, table: Table | None, birth: str | None = None) -> bool:
         """Record the root, which must be unreaped, and adopt what is already visible.
@@ -465,7 +689,7 @@ def write_cleanup_marker(path: str, bridge_run_id: str, pid: int, birth: str) ->
 
 
 def watch(root: int, birth: str, deadline: float, announce, marker: str | None = None,
-          bridge_run_id: str | None = None) -> None:
+          bridge_run_id: str | None = None, run_tag: str | None = None) -> None:
     """The detached deadline watchdog for one bridged child.
 
     It verifies the child's identity from the bridge, which keeps the child
@@ -474,11 +698,12 @@ def watch(root: int, birth: str, deadline: float, announce, marker: str | None =
     the tree is killed at the absolute monotonic deadline supplied by the bridge,
     or once the child itself has exited. Wall-clock corrections cannot shorten or
     extend that budget. Supported Python versions share this clock across processes.
-    With `marker`, once the tree it tracked is confirmed empty it records that
-    there before exiting (`write_cleanup_marker`).
+    With `marker`, once the tree it tracked is confirmed empty (and, with
+    `run_tag`, no process still carries the run's marker) it records that there
+    before exiting (`write_cleanup_marker`).
     """
 
-    tree = ProcessTree(root)
+    tree = ProcessTree(root, run_tag)
     give_up = time.monotonic() + WATCHDOG_IDENTIFY_SECONDS
     while not tree.identify(process_table(), birth):
         if time.monotonic() >= give_up:
@@ -508,5 +733,6 @@ def _announce() -> None:
 
 
 if __name__ == "__main__":
+    # root birth deadline [marker bridge_run_id [run_tag]]
     watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
-          *(sys.argv[4:6] if len(sys.argv) == 6 else ()))
+          *(sys.argv[4:7] if len(sys.argv) in (6, 7) else ()))

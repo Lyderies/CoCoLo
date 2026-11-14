@@ -8,7 +8,8 @@ project's own state folder, and moves it forward as the run goes:
   started a child.
 - ``spawning``: written (and flushed to disk) immediately before the child is
   created. A launch whose ``spawning`` write fails never happens.
-- ``launched``: the child's pid and kernel birth time, once it is identified.
+- ``launched``: the child's pid and kernel birth time, once it is identified,
+  and the per-run marker in its environment (`process_tree.RUN_TAG_VARIABLE`).
 - ``watched``: the detached watchdog's pid and birth time, once it has
   acknowledged that it tracks the child's tree.
 
@@ -38,7 +39,7 @@ import stat
 import subprocess
 import time
 
-from .process_tree import process_gone, process_record
+from .process_tree import RUN_TAG, process_gone, process_record, tagged_process_running
 
 STATES = frozenset({'claimed', 'spawning', 'launched', 'watched', 'settled'})
 MAX_ENTRY_BYTES = 65_536
@@ -57,7 +58,7 @@ _HANDLE = re.compile(r'hrn_[0-9a-f]{48}')
 _DIGEST = re.compile(r'[0-9a-f]{64}')
 _FIELDS = {'version', 'state', 'instance', 'bridge_run_id', 'run_handle', 'attempt', 'host_client', 'lease',
            'identity_digest', 'claim_request_id', 'storage_evidence', 'workspace', 'child', 'watchdog',
-           'outcome', 'settled_at_ms'}
+           'run_tag', 'outcome', 'settled_at_ms'}
 
 
 class JournalError(RuntimeError):
@@ -85,7 +86,8 @@ def checked_entry(value):
                                                                and type(value['workspace']) is not str)):
         return None
     state = value['state']
-    if state in {'launched', 'watched'} and not _identity(value['child']):
+    if state in {'launched', 'watched'} and (not _identity(value['child'])
+                                             or not _matches(value['run_tag'], RUN_TAG)):
         return None
     if state == 'watched' and not _identity(value['watchdog']):
         return None
@@ -218,7 +220,7 @@ class LaunchJournal:
                  'run_handle': run_handle, 'attempt': attempt, 'host_client': host_client, 'lease': lease,
                  'identity_digest': identity_digest, 'claim_request_id': claim_request_id,
                  'storage_evidence': storage_evidence.hex(), 'workspace': None if workspace is None else str(workspace),
-                 'child': None, 'watchdog': None, 'outcome': None, 'settled_at_ms': None}
+                 'child': None, 'watchdog': None, 'run_tag': None, 'outcome': None, 'settled_at_ms': None}
         self._writable()
         known = self.entry(bridge_run_id)
         if known is not None:
@@ -234,8 +236,9 @@ class LaunchJournal:
         """Immediately before the child is created; a failure here means it is never created."""
         self._advance(bridge_run_id, 'claimed', state='spawning')
 
-    def launched(self, bridge_run_id, pid, birth):
-        self._advance(bridge_run_id, 'spawning', state='launched', child={'pid': pid, 'birth': birth})
+    def launched(self, bridge_run_id, pid, birth, run_tag):
+        self._advance(bridge_run_id, 'spawning', state='launched', child={'pid': pid, 'birth': birth},
+                      run_tag=run_tag)
 
     def watched(self, bridge_run_id, pid, birth):
         self._advance(bridge_run_id, 'launched', state='watched', watchdog={'pid': pid, 'birth': birth})
@@ -422,13 +425,20 @@ def _confirmed(value, path):
                       'birth': value['child']['birth'], 'confirmed': True}
 
 
-def _kernel_empty(identities):
-    """True when no process is in either group or session; None when that cannot be read."""
+def _kernel_empty(identities, run_tag, born):
+    """True when no process is in either group or session, and none carries the run's marker.
+
+    None when that cannot be read. The marker finds a descendant that detached
+    after its parent exited between two of the watchdog's snapshots.
+    """
     for identity in identities:
         if not _group_empty(identity['pid']):
             return False
     members = _session_members({identity['pid'] for identity in identities})
-    return None if members is None else not members
+    if members is None or members:
+        return None if members is None else False
+    tagged = tagged_process_running(run_tag, born)
+    return None if tagged is None else not tagged
 
 
 def tree_state(entry):
@@ -438,7 +448,8 @@ def tree_state(entry):
     and now the child and the watchdog are each reaped (or their pids belong
     to processes born later), the watchdog confirmed before it exited that
     the whole tree it tracked is empty, and, twice, a short interval apart,
-    no process is in either one's process group or session. The child and
+    no process is in either one's process group or session and no process of
+    this user still carries the run's environment marker. The child and
     the watchdog each started a new session, so their group and session ids
     are their pids. Nothing is signalled.
     """
@@ -458,7 +469,8 @@ def tree_state(entry):
                 return 'alive'
             if not _identity_gone(identity):
                 return 'unknown'
-        first = _kernel_empty(identities)
+        evidence = (identities, value['run_tag'], value['child']['birth'])
+        first = _kernel_empty(*evidence)
         if first is not True:
             return 'unknown' if first is None else 'alive'
         if not _confirmed(value, entry.get('marker_path')):
@@ -466,7 +478,7 @@ def tree_state(entry):
             # have escaped into a session of its own. Not evidence.
             return 'unknown'
         time.sleep(RECHECK_SECONDS)
-        second = _kernel_empty(identities)
+        second = _kernel_empty(*evidence)
         if second is not True:
             return 'unknown' if second is None else 'alive'
         return 'gone'

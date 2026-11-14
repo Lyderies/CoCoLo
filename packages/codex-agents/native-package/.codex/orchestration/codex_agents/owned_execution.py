@@ -19,7 +19,7 @@ import weakref
 from .account_claim_contracts import _BRIDGE, _DIGEST, _HANDLE, _PROJECT, _RUN, matches
 from .execution_activity import ActivityBuffer, ActivityUnavailable
 from .liveness_clock import LIVENESS_STOP_REASONS
-from .process_tree import ProcessTree, process_record
+from .process_tree import RUN_TAG, RUN_TAG_VARIABLE, ProcessTree, process_record
 
 _POPEN = subprocess.Popen
 MAX_OWNED_EXECUTIONS = 64
@@ -538,7 +538,8 @@ class OwnedExecutionRegistry:
                     or type(process) is not _POPEN or type(tree) is not ProcessTree
                     or process is not entry.process
                     or tree is not entry.tree
-                    or not tree.identified or process.pid != tree.root or tree.root_birth is None):
+                    or not tree.identified or process.pid != tree.root or tree.root_birth is None
+                    or type(tree.run_tag) is not str or RUN_TAG.fullmatch(tree.run_tag) is None):
                 raise ExecutionCustodyError()
             entry.process, entry.tree, entry.birth = process, tree, tree.root_birth
             entry.state = "active"
@@ -546,7 +547,7 @@ class OwnedExecutionRegistry:
         if journal is not None:
             # Outside the lock. A failure stops the child before any output is read.
             try:
-                journal.launched(entry.key.bridge_run_id, process.pid, entry.birth)
+                journal.launched(entry.key.bridge_run_id, process.pid, entry.birth, tree.run_tag)
             except Exception:
                 raise ExecutionCustodyError() from None
 
@@ -603,7 +604,10 @@ class OwnedExecutionRegistry:
                 entry.process = process
                 if entry.stop_requested:
                     self._signal_owned_group(entry)
-                entry.tree = ProcessTree(process.pid)
+                # The marker the fixed runner put in the child's environment, kept with its tree.
+                environment = options.get("env")
+                entry.tree = ProcessTree(process.pid, environment.get(RUN_TAG_VARIABLE)
+                                         if type(environment) is dict else None)
                 if (self._entry(ticket) is not entry or self._pending.get(ticket) is not entry
                         or entry.state != "launching"):
                     raise ExecutionCustodyError()
