@@ -1,5 +1,5 @@
 #!/bin/bash
-# Interactive setup wizard for the Codex-Claude agent orchestration.
+# Interactive setup wizard for COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 #
 #   ./setup.sh [PROJECT_PATH]
 #
@@ -771,7 +771,7 @@ usage() {
   cat <<'EOF'
 Usage: ./setup.sh [PROJECT_PATH]
 
-Interactive wizard that installs the Codex-Claude agent orchestration into a Git project.
+Interactive wizard that installs COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator) into a Git project.
 Run it from a terminal in the root of this repository. Keys: Up/Down move, Enter selects,
 Space toggles, q quits. Set NO_COLOR=1 for plain output.
 EOF
@@ -1368,7 +1368,7 @@ save_summary() {
   fi
   if [ -e "$dest" ] || [ -L "$dest" ]; then
     list_add fail "$dest already exists; nothing written"
-  elif ( umask 077; set -C; printf 'Agent orchestration setup: what failed\n%s' "$FAIL_SUMMARY" >"$dest" ) 2>/dev/null; then
+  elif ( umask 077; set -C; printf 'COCOLO setup: what failed\n%s' "$FAIL_SUMMARY" >"$dest" ) 2>/dev/null; then
     list_add ok "Saved a summary of what failed (step names, labels, exit codes and fixed hints only)"
   else
     list_add fail "Could not write the summary"
@@ -1900,7 +1900,7 @@ step_providers() {
 # ---------------------------------------------------------------------------
 # Step 4: install
 # ---------------------------------------------------------------------------
-COMMIT_MSG_1="Install agent orchestration packages"
+COMMIT_MSG_1="Install COCOLO"
 COMMIT_MSG_2="Adds the managed Codex and Claude agent packages and the provider routing configuration."
 PLAN_TEXT=""
 COMMIT_PATHS=()
