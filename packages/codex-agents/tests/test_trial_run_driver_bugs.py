@@ -412,21 +412,26 @@ class TrialRunDriverTests(DriverHarness):
             raise AccountError('account_invalid_response')
         with mock.patch.object(AccountClient, 'claim_launch', lost):
             code, report = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        if committed:
+            return orchestration, run_handle, context, route_path, code, report
         self.assertEqual((2, 'account_invalid_response'), (code, report.get('reason_code')), report)
         self.assertEqual([], self.executions())
         return orchestration, run_handle
 
-    def test_a_claim_whose_reply_was_lost_after_it_was_admitted_is_never_fenced_or_freed(self):
+    def test_a_claim_whose_reply_was_lost_after_it_was_admitted_launches_exactly_once(self):
+        # The fence finds the admitted claim and changes nothing at the account; the run, which
+        # never launched, goes on as if the lost reply had arrived, and its waiting dispatch gets it.
         runs, given_back = self.watched_runs()
-        orchestration, run_handle = self.lost_claim_reply('lost', committed=True)
-        # The fence found the admitted claim and changed nothing: the run keeps everything it holds.
-        _, run = runs[run_handle]
-        self.assertEqual('claimed', run.receipt['state'])
-        self.assertIsNotNone(run.prepared)
-        self.assertEqual({}, given_back)
-        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
-        self.assertEqual((1, 0), (lifecycle['host_runs_pending'], lifecycle['host_runs_abandoned']), lifecycle)
-        self.assert_not_freed(runs, run_handle, orchestration)
+        orchestration, run_handle, context, route_path, code, report = self.lost_claim_reply('lost', committed=True)
+        self.assertEqual(0, code, report)
+        self.assertEqual('result', report['bridge_report']['outcome'])
+        self.assertEqual(1, len(self.executions()))
+        self.assertEqual({}, given_back)  # Released through its normal path, never given back early.
+        self.record('lost', context, route_path, run_handle, report)
+        # Never launched again: a second dispatch of the handle is refused.
+        again, _ = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertNotEqual(0, again)
+        self.assertEqual(1, len(self.executions()))
 
     def test_a_claim_whose_reply_was_lost_before_it_was_admitted_is_fenced_and_closes(self):
         runs, given_back = self.watched_runs()

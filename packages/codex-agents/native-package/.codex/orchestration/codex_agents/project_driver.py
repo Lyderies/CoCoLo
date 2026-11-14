@@ -559,6 +559,14 @@ class RunDriver:
         self._give_back(run)
         run.closed = run.prepared is None
 
+    def _bind_claim(self, run, receipt):
+        """The account admitted the run's claim: bind it and go on towards launch."""
+        run.receipt = receipt
+        run.binding = AttemptBinding(**{n: getattr(run.lease, n) for n in LEASE_SCOPE_FIELDS},
+                                     claim_id=receipt['bridge_run_id'], claim_digest=receipt['receipt_digest'])
+        self._runtime.persistence.bind_claim(run.persistence, run.binding, hard_deadline_at_ms=receipt['deadline_at_ms'])
+        run.state = 'binding'
+
     def _give_back(self, run):
         """A run that stopped before the account admitted its claim gives its preparation
         back. Once a claim is admitted (or the run bound to an execution) the preparation
@@ -775,11 +783,7 @@ class RunDriver:
                     request_id='close-' + self._id(run), custody=self._custody(run, storage=run.evidence))
                 run.state = 'closing'
                 return
-            run.receipt = receipt
-            run.binding = AttemptBinding(**{n: getattr(run.lease, n) for n in LEASE_SCOPE_FIELDS},
-                                         claim_id=receipt['bridge_run_id'], claim_digest=receipt['receipt_digest'])
-            lane.bind_claim(run.persistence, run.binding, hard_deadline_at_ms=receipt['deadline_at_ms'])
-            run.state = 'binding'
+            self._bind_claim(run, receipt)
         elif run.state == 'closing':
             closure = self._result(run)
             if closure is not None:
@@ -798,9 +802,10 @@ class RunDriver:
             if reply is None:
                 return
             if reply['receipt']['state'] == 'claimed':
-                # Admitted after all (its reply was lost): it keeps its lease and preparation,
-                # and its capacity stays charged until reconciled, as for any admitted run.
-                run.receipt, run.state = reply['receipt'], 'failed'
+                # Admitted after all (its reply was lost): it never launched and still holds its
+                # lease and preparation, so it goes on exactly as if that reply had arrived. Its
+                # dispatch is still waiting, and its capacity is then released the normal way.
+                self._bind_claim(run, reply['receipt'])
                 return
             run.denied = True
             lane.settle_denial(run.persistence, canonical_json(reply['closure']))
