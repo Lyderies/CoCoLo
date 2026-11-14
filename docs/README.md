@@ -19,6 +19,8 @@ grouped by what you need from them.
 ## Look up
 
 - [Configuration](configuration.md): project files, machine files and environment variables.
+- [Run states and versions](run-states.md): the exact words COCOLO uses for a run's health, stopping,
+  outcome and answer, and how it treats an unknown version. The first page of the COCOLO standard.
 - [Routing table](routing-table.md): which provider and model each task goes to, and how the table
   changes.
 
