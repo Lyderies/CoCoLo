@@ -8536,6 +8536,11 @@ class LearningLedger:
             raise LedgerError("authenticated owner record type is unsupported")
         from .learning_engine import OwnerGrantAuthority
 
+        with self._lock:
+            # A key added while this ledger was already open (a new machine: register, then
+            # attest) is recorded before its first signature counts, as opening would have.
+            if not self._connection.in_transaction and self._owner_generation_locked() is None:
+                self._record_first_owner_key()
         authority = OwnerGrantAuthority.for_state(self.state)
         if not authority.verify_owner_record(project_id, checked, signature):
             raise LedgerError("owner record signature is invalid")

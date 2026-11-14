@@ -3,6 +3,7 @@
 The collector and project host are the product processes, started by the CLI
 itself; the test supplies only a registered disposable state and owner key.
 """
+import base64
 import json
 import os
 from pathlib import Path
@@ -15,7 +16,7 @@ import time
 import unittest
 
 from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
-from tests.learning_support import generate_test_owner_key
+from tests.learning_support import generate_test_owner_key, sign_owner_payload
 
 from codex_agents.account_api import AccountError, AccountRequest, decode_account_response, encode_account_request
 from codex_agents.client_runtime import runtime_hint_path
@@ -159,6 +160,45 @@ class AccountHostTests(unittest.TestCase):
         other_root, other_id = self.projects[1]
         self.assertEqual('account_not_authorized',
                          self.refusal(*self.raw(endpoint, other_id, root, label=OWNER_CLIENT)))
+
+    def test_a_key_added_after_the_collector_opened_the_ledger_is_recorded(self):
+        # A new machine: setup registers first; the attestation adds the owner key afterwards,
+        # while the collector already holds the ledger. Status must not call that a mismatch.
+        fresh = LearningState(self.base / 'fresh')
+        authorize_collector_runtime(fresh, ORCHESTRATION_ROOT / 'cli.py')
+        root = self.base / 'newcomer'
+        (root / '.git').mkdir(parents=True)
+        ledger = LearningLedger(fresh)
+        try:
+            ledger.register_project(root)
+        finally:
+            ledger.close()
+        self.state, self.paths = fresh, CollectorPaths(fresh.root)
+        self.cli('learning-open-orchestration', '--request-id', 'newcomer-open', project=root)
+        before = self.cli('learning-status', project=root, terminal=True)
+        self.assertEqual('not_configured', before['owner_key']['state'])
+        (self.base / 'second-key').mkdir()
+        _, public_text = generate_test_owner_key(self.base / 'second-key')
+        public = self.base / 'owner.pub'
+        public.write_text(public_text)
+        # What attest.py runs: this command names no project.
+        configured = subprocess.run([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'),
+            'learning-configure-owner-key', '--state-root', str(fresh.root), '--public-key', str(public)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40, check=False)
+        self.assertEqual(0, configured.returncode, configured.stdout + configured.stderr)
+        # Then the attestation signs its first statement with that key, as setup does next.
+        grant = self.base / 'grant.json'
+        grant.write_text(json.dumps({'version': 1, 'provider': 'codex', 'account_fingerprint': 'a' * 64,
+                                     'no_paid_overage': True, 'no_usage_credits': True,
+                                     'issued_at': int(time.time() * 1000)}))
+        base = ('learning-record-billing-attestation', '--provider', 'codex', '--grant', str(grant))
+        prepared = self.cli(*base, project=root, terminal=True)
+        private = self.base / 'second-key' / 'test-owner-key'
+        signature = sign_owner_payload(private, base64.b64decode(prepared['signing_payload_b64']), 'statement')
+        self.cli(*base, '--signature', str(signature), project=root, terminal=True)
+        after = self.cli('learning-status', project=root, terminal=True)
+        self.assertEqual('ok', after['owner_key']['state'], after)
+        self.assertIsNotNone(after['owner_key']['fingerprint'])
 
     def test_a_key_reader_without_write_access_and_a_stopped_collector_get_nothing(self):
         root, project_id = self.projects[0]
