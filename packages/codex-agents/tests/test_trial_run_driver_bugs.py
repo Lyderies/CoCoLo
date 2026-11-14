@@ -342,6 +342,10 @@ class TrialRunDriverTests(DriverHarness):
         self.assertEqual([], self.executions())
         self.assertIn(('recording_open', 'account_not_authorized'), self.stopped_runs)
         self.assert_closed(runs, given_back, run_handle, 'account_not_authorized')
+        # Open: the account still counts its never-claimed binding as pending; no account operation
+        # lets the project close one yet (an account change, not the driver's). Nothing here waits on it.
+        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
+        self.assertEqual((1, 0), (lifecycle['host_runs_pending'], lifecycle['host_runs_abandoned']), lifecycle)
         closed = self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'failed')
         self.assertEqual('failed', closed['current']['snapshot']['status'])
         code, abandoned = self.attempt('learning-classify-host-run-abandoned', '--run-handle', run_handle,

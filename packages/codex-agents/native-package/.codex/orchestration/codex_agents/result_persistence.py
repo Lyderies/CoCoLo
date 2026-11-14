@@ -380,10 +380,38 @@ class ResultPersistenceLane:
             pending.denial_receipt, pending.state, pending.reason = raw, 'denial_settling', None
             self._incoming.put_nowait(('settle_denial', handle))
 
-    def retire_denied(self, handle):
+    def withdraw_unsent(self, handle):
+        """Queue the release of a lease whose claim the trusted driver never sent.
+
+        Only the history decides: it refuses once the run's host open is
+        recorded, after which the claim may have been sent. Nothing here is
+        retried; a refusal leaves the lease charged.
+        """
         pending = self._job(handle)
         with self._lock:
-            if pending.state != 'denied' or pending.lease.state != 'expired' or pending.execution_issued:
+            if self._closed or self._fault:
+                raise HistoryError('history_service_unavailable')
+            if pending.state in {'withdrawing', 'withdrawn'}:
+                return
+            if (pending.state not in {'reserved', 'claim_pending', 'lease_claim_pending', 'failed'}
+                    or pending.lease_binding is None or pending.lease is None or pending.claim_binding is not None
+                    or pending.denial_receipt is not None or pending.open_record is not None
+                    or pending.grant_raw is not None or pending.grant is not None or pending.supervisor is not None):
+                raise HistoryError('history_result_not_ready')
+        with self._pool._registry._lock:
+            original = self._pool._job(pending.worker_handle)
+            if original is not pending.original_job or original.state != 'prepared' or original.payload is not pending.payload:
+                raise HistoryError('history_not_authorized')
+        with self._lock:
+            pending.state, pending.reason = 'withdrawing', None
+            self._incoming.put_nowait(('withdraw_unsent', handle))
+
+    def retire_denied(self, handle):
+        """Drop a closed lease's input: denied by the account, or withdrawn before its claim."""
+        pending = self._job(handle)
+        with self._lock:
+            if (pending.state not in {'denied', 'withdrawn'} or pending.lease.state != 'expired'
+                    or pending.execution_issued):
                 raise HistoryError('history_result_not_ready')
         with self._pool._registry._lock:
             original = self._pool._job(pending.worker_handle)
@@ -927,12 +955,19 @@ class ResultPersistenceLane:
             pending.lease, pending.state, pending.reason = value, 'denied', None
             pending.storage_evidence = None
 
+    def _withdraw_unsent(self, pending):
+        value = self._history().release_unsent_result_lease(pending.lease_binding)
+        with self._lock:
+            pending.lease, pending.state, pending.reason = value, 'withdrawn', None
+            pending.storage_evidence = None
+
     def _run(self):
         operations = {"prepare": self._prepare, "publish": self._publish,
                       "arm": self._arm, "bind_claim": self._bind_claim,
                       "record_host_open": self._record_host_open,
                       "consume_execution": self._consume_execution,
                       "settle_denial": self._settle_denial,
+                      "withdraw_unsent": self._withdraw_unsent,
                       "acknowledge_terminal": self._acknowledge_terminal,
                       "prepare_cleanup": self._prepare_cleanup,
                       "acknowledge_release": self._acknowledge_release}

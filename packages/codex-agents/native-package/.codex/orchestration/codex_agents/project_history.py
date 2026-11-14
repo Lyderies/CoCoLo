@@ -1027,6 +1027,35 @@ class ProjectHistory:
         return value
 
     @_operation
+    def release_unsent_result_lease(self, binding: ResultLeaseBinding) -> ResultLease:
+        """Retire a lease whose launch claim was never sent; its run can never launch.
+
+        The run driver sends a run's claim, with the lease's fixed request ID,
+        only after this history recorded the run's host open, and never after
+        the run failed. So a reserved lease, or an armed one with no host open
+        here, has had no claim sent. Once the host open is recorded the claim may
+        have been sent, and the lease stays charged until the account settles it;
+        a bound lease follows its normal release. Expired is the existing
+        permanent tombstone: nothing is freed twice, and the lease never revives.
+        """
+        binding = self._lease_binding(binding)
+        with self._transaction():
+            value = self._lease_row(binding)
+            if value.state == 'expired':
+                return value
+            if value.state not in {'reserved', 'claim_pending'}:
+                raise HistoryError('history_conflict')
+            if (self._connection.execute('SELECT 1 FROM project_host_opens WHERE project_id=? AND run_handle=? AND attempt=?',
+                                         (self.project_id, binding.run_handle, binding.attempt)).fetchone() is not None
+                    or self._connection.execute('SELECT 1 FROM result_reservations WHERE project_id=? AND run_handle=? '
+                                                'AND attempt=? LIMIT 1',
+                                                (self.project_id, binding.run_handle, binding.attempt)).fetchone() is not None):
+                raise HistoryError('history_conflict')
+            value = replace(value, state='expired')
+            self._set_lease(value)
+        return value
+
+    @_operation
     def consume_execution_grant(self, binding: AttemptBinding, raw: bytes, *, task: dict, route: dict, provenance=None):
         """Persist one original registration BEFORE local process custody.
 

@@ -14,6 +14,7 @@ import time
 
 from .collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient, empty_ingestion_snapshot
 from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError, integer as account_integer, _ID as _ACCOUNT_ID
+from .account_claim_contracts import CLAIM_DENIAL_CODES
 from .account_open_contracts import AccountOpenInput, OpenError
 from .collector_paths import CollectorPaths, StateError, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
 from .contracts import ContractError
@@ -43,12 +44,12 @@ from .service_transport import exchange_frame, install_enrollment
 
 ACCOUNT_GENERATION = 1  # account_host.GENERATION; that module is a persistence owner.
 BRIDGE_PROVIDERS = frozenset({"codex", "claude"})  # Read-only children the project host runs.
-# Why the project host could not start a run: its run driver's codes (project_driver.REASON_CODES)
-# and the account's (a refused claim, say). All fixed identifiers, safe to report.
+# Why the project host could not start a run: its run driver's codes (project_driver.REASON_CODES),
+# the account's (a refused claim, say) and a denied claim receipt's. All fixed identifiers, safe to report.
 START_REASONS = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable',
-    'run_abandoned',
-}) | ACCOUNT_REASON_CODES
+    'run_abandoned', 'run_closed',
+}) | ACCOUNT_REASON_CODES | CLAIM_DENIAL_CODES
 
 
 def runtime_hint_path(state, project_root):
@@ -756,7 +757,12 @@ def bridged_run_owner(state_root, project_root, run_handle, *, host_client):
 
 
 def abandon_bridged_run(state_root, project_root, run_handle, reason, *, host_client):
-    """Drop a host-driven run that never took a lease; anything later is refused."""
+    """Drop a host-driven run that never took a lease, or one that already closed by itself.
+
+    A run the account refused, or one that failed before its claim was sent,
+    closes without this command; called anyway, it says the run is closed.
+    Anything that still holds a lease is refused.
+    """
     state = CollectorPaths(state_root)
     scope, control, _ = read_runtime_hint(state, project_root)
     contexts = enroll_clients(state, project_root, scope, (control, Path(control).parent / 'run.sock'),
@@ -764,6 +770,9 @@ def abandon_bridged_run(state_root, project_root, run_handle, reason, *, host_cl
     reply = _run_driver(contexts, control, 'run.abandon', run_handle, 1, '0' * 64, {}, timeout=5)
     if reply['state'] == 'refused' and reply['reason_code'] == 'history_not_authorized':
         raise HostClientMismatch('host_client_mismatch')
+    if reply['reason_code'] == 'run_closed':
+        return {'ready': True, 'run_handle': run_handle, 'classification': 'already_closed', 'reason': reason,
+                'settled_by': 'project_host', 'capacity_state': 'never_claimed'}
     if reply['reason_code'] != 'run_abandoned':
         return {'ready': False, 'error': 'only a run that never took a lease can be abandoned here',
                 'reason_code': reply['reason_code'] or 'history_conflict'}

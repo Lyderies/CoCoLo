@@ -243,6 +243,22 @@ project custody; its report says `capacity_state: never_claimed`. A leased or
 claimed run is refused: settling it needs a reconciliation path that does not exist
 yet. No abandonment outcome record is written to project history.
 
+A run that can never launch closes by itself, with no command (the orchestrator's
+job, not the primary's). A claim the account denied with a receipt is closed through
+`account.close_denied_attempt` (a permanent no-launch fence; the binding becomes
+`abandoned`), the history expires the lease with the returned closure, the lane
+drops the run's input and the preparation is given back. A run that failed before
+its claim was sent releases its lease through the history's
+`release_unsent_result_lease`, which refuses once the run's host open is recorded
+(the driver sends the claim only after that, with the lease's fixed request ID, and
+never after the run failed). `dispatch` reports the run's reason; the project's
+orchestration can then close. Called on such a run, the abandonment command answers
+`classification: already_closed`. Not closed: a claim refused without a receipt
+(a `ClaimError` reply such as `claim_storage_expired`) or whose reply was lost: the
+account sends no proof that it committed nothing, so the lease stays charged. Still
+open: the account keeps a never-claimed run's binding `pending` (counted in
+`host_runs_pending`); no account operation lets the project close one yet.
+
 Account calls from the driver are retried, for up to ten minutes per call, only
 when the account services are unreachable, with the same request ID; the owner
 then answers it for the first time or returns the reply it already committed. A

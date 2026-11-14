@@ -11,8 +11,11 @@ asks the account to release the capacity and retires local custody.
 
 Every step runs on the host's owner thread, except account calls, which run on
 one helper thread and are collected on the next step. A failed step stops that
-run where it is: nothing is retried, relaunched or released on its behalf, and
-an uncertain account reply leaves the capacity charged.
+run where it is: nothing is retried or relaunched, and an uncertain account
+reply leaves the capacity charged. A run that provably can never launch closes
+by itself: a claim the account denied is fenced through the account's denial
+closure, and a lease whose claim was never sent is released by the history;
+either way its input and preparation are then given back.
 """
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -25,7 +28,8 @@ from threading import Lock, local
 import time
 
 from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountClient, AccountError, AccountRequest, account_request_digest
-from .account_claim_contracts import LaunchClaimInput
+from .account_claim_contracts import CLAIM_DENIAL_CODES, LaunchClaimInput
+from .claim_denial import CloseDeniedInput
 from .codex_preparation import (
     MAX_PREPARATION_BYTES, MAX_PREPARATION_EXPORT_BYTES, PreparationContext, PreparationError, PreparationLimits,
     preparation_payload,
@@ -73,12 +77,15 @@ MAX_RETAINED_WORKERS = 64
 _RETRYING = object()
 REASON_CODES = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable', 'run_abandoned',
+    'run_closed',
 })
 _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 'assignment', 'task', 'route',
                     'parent_grant'}
 _PREPARE_FIELDS = {'purpose', 'expected_export_commit'}
 _ACTIVE = frozenset({'reading', 'preparing', 'observing', 'leasing', 'arming', 'recording_open', 'claiming', 'binding',
-                     'registering', 'provenance', 'consuming'})
+                     'registering', 'provenance', 'consuming', 'closing', 'settling', 'withdrawing'})
+# A run that can never launch closes itself through these, then ends 'failed' and closed.
+_CLOSING = frozenset({'closing', 'settling', 'withdrawing'})
 _AFTER = frozenset({'ready', 'reporting', 'terminal', 'acknowledging', 'cleanup', 'releasing', 'retiring', 'released'})
 
 
@@ -118,6 +125,9 @@ class _Run:
     commit: str | None = None
     released_at: float | None = None
     recorder: object = None
+    claim_sent: bool = False  # Set before the claim is first handed to the account; never cleared.
+    withdrawing: bool = False  # The lease's release is queued on the writer.
+    closed: bool = False  # Failed and holding nothing: no lease, no preparation, nothing to reconcile.
 
 
 class _Call(local):
@@ -316,6 +326,10 @@ class RunDriver:
                 self._reply(connection, {'state': 'refused', 'reason_code': 'history_not_authorized'})
             elif request['operation'] == 'run.describe':
                 self._reply(connection, self._view(held[0]))
+            elif held[0].closed:
+                # It already closed by itself; dropping it changes nothing anywhere.
+                del self._runs[held[0].key]
+                self._reply(connection, {'state': 'failed', 'reason_code': 'run_closed'})
             elif held[0].lease is not None or held[0].state not in {'registered', 'failed'} or held[0].future is not None:
                 # A leased or claimed run holds custody and maybe capacity; that needs reconciliation.
                 self._reply(connection, {'state': 'refused', 'reason_code': 'history_conflict'})
@@ -492,8 +506,36 @@ class RunDriver:
             connection.close()
 
     def _fail(self, run, reason):
+        """Stop a run; one that can provably never launch then closes by itself.
+
+        A run that took no lease held only its preparation, given back here. A
+        run with a lease whose claim was never sent releases that lease through
+        the history first (`withdrawing`). A run whose claim was sent closes only
+        through the account's denial closure, never on a refusal or lost reply.
+        If closing itself fails, the run keeps its first reason and whatever was
+        not proven free, exactly as a failed run did before.
+        """
+        if run.state in _CLOSING:
+            run.state = 'failed'
+            self._give_back(run)
+            return
         run.state, run.reason = 'failed', reason
+        if run.persistence is None:
+            self._give_back(run)
+            run.closed = run.prepared is None and run.lease is None
+        elif not run.claim_sent and run.receipt is None and run.binding is None:
+            run.state = 'withdrawing'
+        else:
+            self._give_back(run)
+
+    def _close(self, run):
+        """The lease is expired in the history: drop its input, then give the preparation back."""
+        if run.receipt is not None or run.binding is not None:
+            raise HistoryError('history_conflict')  # An admitted claim keeps everything until its release.
+        self._runtime.persistence.retire_denied(run.persistence)
+        run.persistence, run.state = None, 'failed'
         self._give_back(run)
+        run.closed = run.prepared is None
 
     def _give_back(self, run):
         """A run that stopped before the account admitted its claim gives its preparation
@@ -689,6 +731,7 @@ class RunDriver:
             if state != 'claim_pending':
                 self._fail(run, 'run_failed')
                 return
+            run.claim_sent = True
             self._account_call(run, 'account', 'claim_launch', run.key[0], run.identity_digest,
                                request_id=run.claim_request_id, custody=self._custody(run, storage=run.evidence))
             run.state = 'claiming'
@@ -697,13 +740,48 @@ class RunDriver:
             if receipt is None:
                 return
             if receipt.get('state') != 'claimed':
-                self._fail(run, receipt.get('reason_code') or 'run_failed')
+                reason = receipt.get('reason_code')
+                if receipt.get('state') != 'denied' or reason not in CLAIM_DENIAL_CODES:
+                    self._fail(run, 'run_failed')
+                    return
+                # The account refused it for good: it fences the run against any later
+                # claim and returns the closure that lets the history expire the lease.
+                run.reason = reason
+                self._account_call(run, 'project', 'close_denied_attempt',
+                    CloseDeniedInput(run.key[0], run.identity_digest, run.claim_request_id, receipt['receipt_digest'],
+                                     lane.lease(run.persistence).lease_digest),
+                    request_id='close-' + self._id(run), custody=self._custody(run, storage=run.evidence))
+                run.state = 'closing'
                 return
             run.receipt = receipt
             run.binding = AttemptBinding(**{n: getattr(run.lease, n) for n in LEASE_SCOPE_FIELDS},
                                          claim_id=receipt['bridge_run_id'], claim_digest=receipt['receipt_digest'])
             lane.bind_claim(run.persistence, run.binding, hard_deadline_at_ms=receipt['deadline_at_ms'])
             run.state = 'binding'
+        elif run.state == 'closing':
+            closure = self._result(run)
+            if closure is not None:
+                lane.settle_denial(run.persistence, canonical_json(closure))
+                run.state = 'settling'
+        elif run.state == 'settling':
+            state = lane.snapshot(run.persistence)['state']
+            if state == 'denial_settling':
+                return
+            if state != 'denied':
+                self._fail(run, run.reason)
+                return
+            self._close(run)
+        elif run.state == 'withdrawing':
+            state = lane.snapshot(run.persistence)['state']
+            if not run.withdrawing:
+                if state in {'preparing', 'arming', 'recording_host_open'}:
+                    return  # The writer finishes what it started first.
+                lane.withdraw_unsent(run.persistence)
+                run.withdrawing = True
+            elif state == 'withdrawn':
+                self._close(run)
+            elif state != 'withdrawing':
+                self._fail(run, run.reason)
         elif run.state == 'binding':
             if lane.snapshot(run.persistence)['state'] == 'binding_claim':
                 return
