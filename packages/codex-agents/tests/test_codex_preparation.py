@@ -192,6 +192,34 @@ class CodexPreparationTests(unittest.TestCase):
             self.lane.submit(self.context)
         codex_preparation.remove_private_directory(prepared.workspace)  # Fixture-owned orphan cleanup only.
 
+    def test_a_failed_cleanup_is_asked_again_and_then_frees_its_slot(self):
+        handle, prepared = self.prepare()
+        with self.assertRaisesRegex(PreparationError, 'preparation_busy'):
+            self.lane.retry_cleanup(handle)  # Never for a preparation that was not given back.
+        with mock.patch.object(codex_preparation, 'remove_private_directory', new=lambda path: None):
+            self.lane.discard(handle)
+            self.until(lambda: self.lane.snapshot(handle)['state'] == 'unknown')
+            self.lane.retry_cleanup(handle)  # Removal still fails: unknown again, nothing freed.
+            self.until(lambda: self.lane.snapshot(handle)['state'] == 'unknown')
+        self.assertTrue(prepared.workspace.exists())
+        self.lane.retry_cleanup(handle)
+        self.until(lambda: self.lane.snapshot(handle)['state'] in {'cleaned', 'unknown'})
+        self.assertEqual('cleaned', self.lane.snapshot(handle)['state'])
+        self.assertFalse(prepared.workspace.exists())
+        self.lane.retire(handle)
+        self.discard(self.prepare()[0])  # Its slot is free again.
+
+    def test_a_dead_cleanup_worker_is_never_asked_again(self):
+        handle, prepared = self.prepare()
+        self.addCleanup(codex_preparation.remove_private_directory, prepared.workspace)
+        self.lane._slots[0].incoming.put_nowait(None)
+        self.until(lambda: not self.lane._slots[0].thread.is_alive())
+        with self.assertRaisesRegex(PreparationError, 'preparation_unavailable'):
+            self.lane.discard(handle)
+        with self.assertRaisesRegex(PreparationError, 'preparation_busy'):
+            self.lane.retry_cleanup(handle)
+        self.assertEqual('unknown', self.lane.snapshot(handle)['state'])
+
     def test_changed_context_and_forged_prepared_metadata_refuse_without_withdrawing_foreign_worker(self):
         handle, prepared = self.prepare()
         object.__setattr__(prepared, 'inputs_digest', 'f'*64)
