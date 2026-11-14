@@ -106,6 +106,9 @@ MAX_FENCE_ATTEMPTS = 10
 # never forgotten, so its slot then stays taken for this host's lifetime.
 CLEANUP_RETRY_SECONDS = 1.0
 CLEANUP_RETRY_MAX_SECONDS = 60.0
+# After this many refused removals a given-back preparation is no longer asked: it
+# stays listed (its workspace may still be there), so its place is never counted free.
+MAX_CLEANUP_ATTEMPTS = 12
 MAX_FORGET_ATTEMPTS = 12
 # How often the journal is checked for runs of stopped earlier services, and how long
 # one settlement request may take.
@@ -690,7 +693,7 @@ class RunDriver:
 
     def _retry_cleanup(self, handle):
         attempts, when = self._cleanup_retry.get(handle, (0, self._clock()))
-        if self._clock() < when:
+        if self._clock() < when or attempts >= MAX_CLEANUP_ATTEMPTS:
             return
         attempts += 1
         self._cleanup_retry[handle] = (attempts, self._clock() + min(

@@ -387,9 +387,10 @@ class CodexPreparationLane:
         worker no longer holds it in the pool and whose slot thread still runs.
         """
         job = self._job(handle)
-        if job.prepared is not None and self._pool._jobs.get(job.prepared_snapshot[0]) is not None:
-            raise PreparationError('preparation_busy')
         with self._lock:
+            if job.prepared is not None and (job.prepared_snapshot is None
+                                             or self._pool._jobs.get(job.prepared_snapshot[0]) is not None):
+                raise PreparationError('preparation_busy')
             # Without a known workspace there is nothing to name for removal, so it stays unknown.
             if (job.state != 'unknown' or not job.cancelled or self._closing or job.workspace is None
                     or job.slot.thread is None or not job.slot.thread.is_alive() or job.slot.current != handle):
