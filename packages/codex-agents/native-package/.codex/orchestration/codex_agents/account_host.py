@@ -26,6 +26,7 @@ from .billing_probe_worker import PROBE_SLOT_BYTES, BillingProbeWorkers, ProbeWo
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
 from .collector_paths import CollectorPaths, _assert_no_symlink_components, _check_owner_mode
 from .history_contracts import HistoryError
+from .hosts import OWNER_CLIENT
 from .learning_contracts import keyed_digest, parse_bounded_json
 from .owned_execution import OwnedExecutionRegistry
 from .service_enrollment import (
@@ -50,6 +51,12 @@ PROJECT_OPERATIONS = frozenset({
     'account.open_provenance', 'account.register_execution', 'account.run_provenance',
     'account.submit_terminal', 'account.release_capacity', 'account.close_denied_attempt',
     'account.record_rate_limit_event',
+})
+# The owner's terminal (setup, status, attestation): reads that spend nothing, and
+# never an open, a claim or a probe.
+OWNER_OPERATIONS = frozenset({
+    'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
+    'account.observe_provider',
 })
 GENERATION = 1
 
@@ -122,6 +129,8 @@ class AccountServiceHost:
         entry = self._frontend.context(token) if self._frontend is not None else None
         role = None if entry is None else entry.enrolled.role
         allowed = {'account': HOST_OPERATIONS, 'project': PROJECT_OPERATIONS}.get(role)
+        if role == 'account' and entry.enrolled.host_client == OWNER_CLIENT:
+            allowed = OWNER_OPERATIONS
         if (entry is None or entry.kind != 'account' or allowed is None or request.operation not in allowed
                 or account_request_digest(request) != entry.enrolled.request_digest):
             return None

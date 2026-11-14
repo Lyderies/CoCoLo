@@ -21,8 +21,10 @@ from codex_agents.account_api import AccountError, AccountRequest, decode_accoun
 from codex_agents.client_runtime import runtime_hint_path
 from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient
 from codex_agents.collector_paths import CollectorPaths
+from codex_agents import account_host
+from codex_agents.hosts import OWNER_CLIENT
 from codex_agents.learning_store import LearningLedger, LearningState, authorize_collector_runtime
-from codex_agents.service_enrollment import enrollment_preamble, proof_directory, read_capability
+from codex_agents.service_enrollment import EnrollmentError, enrollment_preamble, proof_directory, read_capability
 
 
 @unittest.skipUnless(sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file(),
@@ -63,11 +65,12 @@ class AccountHostTests(unittest.TestCase):
             self.assertLess(time.monotonic(), end, 'service processes did not stop on SIGTERM')
             time.sleep(.05)
 
-    def cli(self, command, *args, project=None, expected=0):
+    def cli(self, command, *args, project=None, expected=0, terminal=False):
         env = {k: v for k, v in os.environ.items() if not any(s in k.upper() for s in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
-        for name in ('CODEX_SESSION_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
+        for name in ('CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID'):
             env.pop(name, None)
-        env['CODEX_THREAD_ID'] = 'account-primary'
+        if not terminal:  # The owner's own terminal carries no client's markers.
+            env['CODEX_THREAD_ID'] = 'account-primary'
         done = subprocess.run([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'), command,
             '--state-root', str(self.state.root), '--project-root', str(project or self.projects[0][0]), *args],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=40, check=False)
@@ -79,10 +82,10 @@ class AccountHostTests(unittest.TestCase):
         self.assertEqual(2, hint['schema_version'])
         return hint['account_endpoint']
 
-    def raw(self, endpoint, project_id, subject, *, operation='account.owner_key'):
+    def raw(self, endpoint, project_id, subject, *, operation='account.owner_key', label='codex-host-v1'):
         request = AccountRequest(1, operation, 'raw-' + os.urandom(8).hex(), project_id, COLLECTOR_RUNTIME_DIGEST, {})
         frame = encode_account_request(request)
-        line = enrollment_preamble(read_capability(self.paths, None, 'account'), 'account', 'codex-host-v1', 1, frame,
+        line = enrollment_preamble(read_capability(self.paths, None, 'account'), 'account', label, 1, frame,
                                    proof_directory(endpoint), subject=str(subject))
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(10)
@@ -123,6 +126,32 @@ class AccountHostTests(unittest.TestCase):
         # Owner-only operations are never offered to an enrolled primary.
         self.assertEqual('account_not_authorized',
                          self.refusal(*self.raw(endpoint, project_id, root, operation='account.owner_public_key')))
+
+    def test_the_owners_terminal_reads_status_and_nothing_that_spends(self):
+        # Setup, status and attestation run in the owner's own terminal, with no client's markers.
+        root, project_id = self.projects[0]
+        self.cli('learning-open-orchestration', '--request-id', 'terminal-open')
+        status = self.cli('learning-status', terminal=True, expected=0)
+        self.assertTrue(status['ready'], status)
+        self.assertEqual('ok', status['owner_key']['state'])
+        endpoint = self.account_endpoint(root)
+        request, reply = self.raw(endpoint, project_id, root, label=OWNER_CLIENT)
+        self.assertEqual('ok', decode_account_response(reply, request)['state'])
+        # The terminal label cannot open, claim or probe: those stay with an enrolled primary.
+        self.assertEqual({'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
+                          'account.observe_provider'}, set(account_host.OWNER_OPERATIONS))
+        for operation in ('account.billing_probe', 'account.owner_public_key'):
+            with self.subTest(operation=operation):
+                self.assertEqual('account_not_authorized', self.refusal(
+                    *self.raw(endpoint, project_id, root, operation=operation, label=OWNER_CLIENT)))
+        # A run's project role never takes the terminal label.
+        with self.assertRaises(EnrollmentError):
+            enrollment_preamble(read_capability(self.paths, None, 'account'), 'project', OWNER_CLIENT, 1, b'{}',
+                                proof_directory(endpoint), subject=str(root))
+        # Nor does the label reach another project.
+        other_root, other_id = self.projects[1]
+        self.assertEqual('account_not_authorized',
+                         self.refusal(*self.raw(endpoint, other_id, root, label=OWNER_CLIENT)))
 
     def test_a_key_reader_without_write_access_and_a_stopped_collector_get_nothing(self):
         root, project_id = self.projects[0]

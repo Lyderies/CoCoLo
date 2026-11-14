@@ -123,8 +123,10 @@ def enroll_clients(state, project_root, scope, endpoints=(), *, account=None, ho
     Each key is read once from the owner-only state root, and each request leaves
     a single-use proof file beside its endpoint. The account preamble also names
     this project's root, which the account owner matches to the registered
-    project. A process with no host class, or a missing key, stays unenrolled
-    for that endpoint and its host refuses; there is no database fallback.
+    project. A process with no host class enrolls only for the account owner,
+    under the owner's terminal label, which the account owner limits to reads
+    that spend nothing; for every other endpoint it, or a process missing a
+    key, stays unenrolled and its host refuses. There is no database fallback.
 
     Returns a mapping from endpoint to the protected context for its next
     request; each entry is used once.
@@ -142,24 +144,24 @@ def enroll_clients(state, project_root, scope, endpoints=(), *, account=None, ho
             host_key = None
         if host_key is not None:
             for endpoint in endpoints:
-                preambles[Path(endpoint)] = ('host', host_key, scope.supervisor_generation, None)
-        if account is not None:
-            try:
-                account_key = read_capability(state, None, 'account')
-                root = str(_canonical_project_root(Path(project_root)))
-            except (EnrollmentError, StateError, OSError):
-                account_key = None
-            if account_key is not None:
-                preambles[Path(account)] = ('account', account_key, ACCOUNT_GENERATION, root)
+                preambles[Path(endpoint)] = ('host', host_client, host_key, scope.supervisor_generation, None)
+    if account is not None:
+        try:
+            account_key = read_capability(state, None, 'account')
+            root = str(_canonical_project_root(Path(project_root)))
+        except (EnrollmentError, StateError, OSError):
+            account_key = None
+        if account_key is not None:
+            preambles[Path(account)] = ('account', host_client or OWNER_CLIENT, account_key, ACCOUNT_GENERATION, root)
 
     def preamble(socket_path, message):
         entry = preambles.get(Path(socket_path))
         if entry is None:
             return None
-        role, key, generation, subject = entry
+        role, label, key, generation, subject = entry
         proofs = proof_directory(socket_path)
         try:
-            line = enrollment_preamble(key, role, host_client, generation, message, proofs,
+            line = enrollment_preamble(key, role, label, generation, message, proofs,
                                        subject=subject, context=contexts.pop(Path(socket_path), None))
         except EnrollmentError:
             raise OSError() from None

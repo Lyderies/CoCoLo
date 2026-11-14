@@ -31,6 +31,8 @@ ENROLLMENT_VERSION = 1
 # serves two roles: a primary's own calls ('account') and a project host's run
 # custody calls ('project').
 ROLES = frozenset({'host', 'account', 'project'})
+# The owner's terminal label: a project's service and the account owner, never a run's project role.
+OWNER_ROLES = frozenset({'host', 'account'})
 MAX_SUBJECT_BYTES = 4_096
 # Protected originals a trusted client hands the owner for exactly one request.
 MAX_CONTEXT_BYTES = 262_144
@@ -293,7 +295,7 @@ def enrollment_preamble(key, role, host_client, generation, message, proofs, *, 
               'nonce': secrets.token_hex(16) if nonce is None else nonce, 'request_digest': request_digest(message),
               'subject': subject, 'context_digest': None if context is None else hashlib.sha256(context).hexdigest()}
     if (type(key) is not bytes or len(key) != KEY_BYTES or role not in ROLES
-            or not (host_client in HOST_CLIENTS or (host_client == OWNER_CLIENT and role == 'host'))
+            or not (host_client in HOST_CLIENTS or (host_client == OWNER_CLIENT and role in OWNER_ROLES))
             or not _integer(generation, minimum=1) or not _integer(fields['issued_at_ms']) or not _hex(fields['nonce'], 32)
             or not _subject(subject) or (subject is None) != (role == 'host')):
         raise EnrollmentError('enrollment_invalid')
@@ -343,7 +345,7 @@ class EnrollmentVerifier:
                 or type(value['enrollment_version']) is not int
                 or type(value['role']) is not str or type(value['host_client']) is not str
                 or not (value['host_client'] in HOST_CLIENTS
-                        or (value['host_client'] == OWNER_CLIENT and value['role'] == 'host'))
+                        or (value['host_client'] == OWNER_CLIENT and value['role'] in OWNER_ROLES))
                 or not _integer(value['generation'], minimum=1)
                 or not _subject(value['subject'])
                 or (value['context_digest'] is not None and not _hex(value['context_digest'], 64))
