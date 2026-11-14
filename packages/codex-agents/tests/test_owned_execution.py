@@ -34,20 +34,38 @@ def _kill_quietly(pid):
         pass
 
 
+def _procargs2(path, argv, environment, apple):
+    """A KERN_PROCARGS2 buffer as macOS lays it out: argc, the executable path padded
+    with NULs so argv starts 8-byte aligned after argc, then argv, environment and
+    the kernel's own strings, each list ended by an empty string."""
+    start = 4 + -(-(len(path) + 1) // 8) * 8
+    head = struct.pack("=i", len(argv)) + path
+    head += b"\0" * (start - len(head))
+    return head + b"".join(item + b"\0" for item in argv + environment) + b"\0" + b"".join(item + b"\0" for item in apple)
+
+
 class RunMarkerParsingTests(unittest.TestCase):
     """The per-run marker is read from each process's environment, never its arguments."""
 
     def test_procargs2_yields_the_environment_after_argv(self):
-        raw = (struct.pack("=i", 2) + b"/bin/sh\0\0\0\0" + b"sh\0COCOLO_RUN_TAG=" + b"a" * 32
-               + b"\0A=1\0COCOLO_RUN_TAG=" + b"b" * 32 + b"\0\0ptr_munge=1\0")
+        raw = _procargs2(b"/bin/sh", [b"sh", b"COCOLO_RUN_TAG=" + b"a" * 32],
+                         [b"A=1", b"COCOLO_RUN_TAG=" + b"b" * 32], [b"ptr_munge=1"])
         self.assertEqual((b"/bin/sh", [b"A=1", b"COCOLO_RUN_TAG=" + b"b" * 32]), process_tree.parse_procargs2(raw))
         # What macOS returns for one of its own signed tools: the arguments, no environment.
         self.assertEqual((b"/bin/sleep", []),
-                         process_tree.parse_procargs2(struct.pack("=i", 2) + b"/bin/sleep\0\0\0/bin/sleep\x005\0\0\0"))
+                         process_tree.parse_procargs2(_procargs2(b"/bin/sleep", [b"/bin/sleep", b"5"], [], [])))
         for broken in (b"", b"\1\0", struct.pack("=i", 5) + b"/bin/sh\0a\0b\0", struct.pack("=i", -1) + b"x\0",
-                       struct.pack("=i", 1) + b"/bin/sh-without-end"):
+                       struct.pack("=i", 1) + b"/bin/sh-without-end",
+                       struct.pack("=i", 1) + b"/bin/sh\0x\0"):  # Padding cut short by a string.
             with self.subTest(raw=broken):
                 self.assertIsNone(process_tree.parse_procargs2(broken))
+
+    def test_procargs2_keeps_the_environment_boundary_after_an_empty_argv0(self):
+        tag = b"COCOLO_RUN_TAG=" + b"c" * 32
+        for path in (b"/bin/sh", b"/usr/bin/x", b"/opt/homebrew/bin/python3.14"):
+            with self.subTest(path=path):
+                raw = _procargs2(path, [b"", b"-c"], [tag, b"A=1"], [])
+                self.assertEqual((path, [tag, b"A=1"]), process_tree.parse_procargs2(raw))
 
     def test_linux_environ_splits_on_nul(self):
         self.assertEqual([b"A=1", b"B="], process_tree.parse_environ(b"A=1\0B=\0"))
