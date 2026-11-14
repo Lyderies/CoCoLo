@@ -39,7 +39,8 @@ import stat
 import subprocess
 import time
 
-from .process_tree import RUN_TAG, process_gone, process_record, tagged_process_running
+from .process_tree import (RUN_TAG, _born_before, process_gone, process_record, scan_until_stable,
+                           session_reused_at, tagged_process_running)
 
 STATES = frozenset({'claimed', 'spawning', 'launched', 'watched', 'settled'})
 MAX_ENTRY_BYTES = 65_536
@@ -372,31 +373,64 @@ def _group_empty(group):
     return False
 
 
-def _session_members(sessions):
-    """Whether any process is in one of these sessions; None when that cannot be read."""
+# Every user's processes are listed, so the cap is wider than the marker scan's.
+MAX_SESSION_SCAN_PROCESSES = 32768
+
+
+def _listed_pids():
+    """Every process's pid from a fixed-path `ps`, without that `ps` itself; None when unavailable."""
     path = next((candidate for candidate in PS_PATHS if os.path.isfile(candidate)), None)
     if path is None:
         return None
     try:
-        completed = subprocess.run([path, '-A', '-o', 'pid='], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, env={'PATH': os.defpath, 'LC_ALL': 'C'},
-                                   timeout=PS_TIMEOUT_SECONDS, check=False)
+        with subprocess.Popen([path, '-A', '-o', 'pid='], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, env={'PATH': os.defpath, 'LC_ALL': 'C'}) as lister:
+            try:
+                output, _ = lister.communicate(timeout=PS_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                lister.kill()
+                lister.communicate()
+                return None
     except (OSError, subprocess.SubprocessError):
         return None
-    if completed.returncode != 0:
+    if lister.returncode != 0:
         return None
-    pids = completed.stdout.decode('ascii', 'replace').split()
+    pids = output.decode('ascii', 'replace').split()
     if not pids or not all(pid.isdigit() for pid in pids):
         return None
-    for pid in map(int, pids):
+    # `ps` lists itself: a new pid in every listing, which would never look settled.
+    return [pid for pid in map(int, pids) if pid != lister.pid]
+
+
+def _session_members(sessions, births=None):
+    """Whether any process is in one of these sessions; None when that cannot be read.
+
+    The listing is repeated until it adds no new process, so a member that forks
+    and exits between a listing and its read cannot hide its descendant. With
+    `births` (session id -> the birth of the process that started it): when that
+    pid now belongs to a later process, which may lead a new session with the same
+    id, only a member born before that process counts.
+    """
+    reused = {session: session_reused_at(session, (births or {}).get(session, '')) if births else None
+              for session in sessions}
+
+    def check(pid, listed):
         try:
-            if os.getsid(pid) in sessions:
-                return True
+            session = os.getsid(pid)
         except ProcessLookupError:
-            continue  # Exited since the listing.
+            return False  # Exited since the listing; anything it forked shows in the next one.
         except OSError:
             return None
-    return False
+        if session not in reused:
+            return False
+        if reused[session] is None:
+            return True
+        record = process_record(pid)
+        if record is None:
+            return False if process_gone(pid) else None
+        return _born_before(record[2], reused[session])
+
+    return scan_until_stable(_listed_pids, check, limit=MAX_SESSION_SCAN_PROCESSES)
 
 
 def _confirmed(value, path):
@@ -434,7 +468,8 @@ def _kernel_empty(identities, run_tag, born):
     for identity in identities:
         if not _group_empty(identity['pid']):
             return False
-    members = _session_members({identity['pid'] for identity in identities})
+    members = _session_members({identity['pid'] for identity in identities},
+                               {identity['pid']: identity['birth'] for identity in identities})
     if members is None or members:
         return None if members is None else False
     tagged = tagged_process_running(run_tag, born)

@@ -335,7 +335,7 @@ class CleanupEvidenceTests(unittest.TestCase):
         patches.enter_context(mock.patch.object(process_tree.time, "sleep"))
         self.sessions = {}
         patches.enter_context(mock.patch.object(process_tree, "_in_session",
-                                                side_effect=lambda pid, session: self.sessions.get(pid) == session))
+                                                side_effect=lambda pid, session, *rest: self.sessions.get(pid) == session))
         return tree, records, SimpleNamespace(pid=root, returncode=0), patches, tag
 
     def test_a_detached_process_that_carries_the_run_marker_refuses_confirmation(self):

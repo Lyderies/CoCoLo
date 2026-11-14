@@ -43,6 +43,7 @@ import signal
 import struct
 import subprocess
 import sys
+from threading import local as thread_local
 import time
 
 # Fixed paths, never a search path: macOS has /bin/ps, Linux distributions one or both.
@@ -90,6 +91,10 @@ MAX_ENVIRONMENT_BYTES = 4 * 1024 * 1024
 MAX_PARENT_DEPTH = 16
 # A process that is being killed still shows its environment for a moment.
 TAG_SCAN_ATTEMPTS = 3
+# A scan lists again until a listing adds no process it has not read, so one that
+# forks and exits between the listing and its read cannot hide its descendant.
+# One still growing after this many listings is not proof.
+MAX_SCAN_ROUNDS = 8
 
 # pid -> parent pid, as `ps` listed it: a hint for which records to read, never trusted.
 Table = dict[int, int]
@@ -105,21 +110,25 @@ def process_table() -> Table | None:
         return None
     arguments = [path, "-U", str(os.getuid()), "-o", PS_COLUMNS]
     try:
-        completed = subprocess.run(
+        with subprocess.Popen(
             arguments,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=PS_ENVIRONMENT,
-            timeout=SNAPSHOT_TIMEOUT_SECONDS,
-            check=False,
-        )
+        ) as lister:
+            try:
+                output, _ = lister.communicate(timeout=SNAPSHOT_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                lister.kill()
+                lister.communicate()
+                return None
     except (OSError, subprocess.SubprocessError):
         return None
-    if completed.returncode != 0:
+    if lister.returncode != 0:
         return None
     table: Table = {}
-    for line in completed.stdout.decode("ascii", "replace").splitlines():
+    for line in output.decode("ascii", "replace").splitlines():
         fields = line.split()
         if not fields:
             continue
@@ -127,6 +136,8 @@ def process_table() -> Table | None:
         if len(fields) != 2 or not all(field.isdigit() for field in fields):
             return None
         table[int(fields[0])] = int(fields[1])
+    # `ps` lists itself: a new pid in every listing, which would never look settled.
+    table.pop(lister.pid, None)
     return table or None
 
 
@@ -313,6 +324,9 @@ def parse_environ(raw: bytes) -> list[bytes]:
 _ARGMAX: list[int] = []
 
 
+_ARGUMENT_BUFFERS = thread_local()
+
+
 def _darwin_arguments(pid: int) -> tuple[bytes, list[bytes]] | None:
     import ctypes
 
@@ -324,12 +338,15 @@ def _darwin_arguments(pid: int) -> tuple[bytes, list[bytes]] | None:
         if _SYSCTL[0]((ctypes.c_int * 2)(1, 8), 2, ctypes.byref(value), ctypes.byref(size), None, 0) != 0:
             return None
         _ARGMAX.append(min(max(value.value, 0), MAX_ENVIRONMENT_BYTES))
-    buffer = ctypes.create_string_buffer(_ARGMAX[0])
+    # One buffer per thread, reused: a scan reads every process, and kern.argmax can be megabytes.
+    buffer = getattr(_ARGUMENT_BUFFERS, "buffer", None)
+    if buffer is None:
+        buffer = _ARGUMENT_BUFFERS.buffer = ctypes.create_string_buffer(_ARGMAX[0])
     size = ctypes.c_size_t(_ARGMAX[0])
     name = (ctypes.c_int * 3)(1, DARWIN_KERN_PROCARGS2, pid)
     if _SYSCTL[0](name, 3, buffer, ctypes.byref(size), None, 0) != 0:
         return None
-    return parse_procargs2(buffer.raw[:size.value])
+    return parse_procargs2(ctypes.string_at(buffer, min(size.value, _ARGMAX[0])))
 
 
 def _linux_environment(pid: int) -> list[bytes] | None:
@@ -374,9 +391,28 @@ def _born_before(birth: str, reference: str) -> bool:
     return first is not None and second is not None and len(first) == len(second) and first < second
 
 
-def _in_session(pid: int, session: int | None) -> bool:
-    """Whether this process is still in the child's session (whose id is the child's pid)."""
+def session_reused_at(session: int | None, born: str) -> str | None:
+    """The birth of a later process that now holds the child's pid, the child's session id.
+
+    That process may lead a new, unrelated session with the same id; a member
+    born after it may belong to that one instead.
+    """
     if session is None or session <= 1:
+        return None
+    record = process_record(session)
+    return record[2] if record is not None and record[2] != born else None
+
+
+def _in_session(pid: int, session: int | None, birth: str | None = None,
+                reused_at: str | None = None) -> bool:
+    """Whether this process is still in the child's session (whose id is the child's pid).
+
+    When that pid now belongs to a later process (`reused_at` is its birth), only
+    a member born before it can be in the child's session.
+    """
+    if session is None or session <= 1:
+        return False
+    if reused_at is not None and (birth is None or not _born_before(birth, reused_at)):
         return False
     try:
         return os.getsid(pid) == session
@@ -396,7 +432,7 @@ def _subreaper(pid: int) -> bool:
 
 
 def _judged_by_parents(record: Record, entry: bytes, born: str, session: int | None,
-                       table: Table) -> bool | None:
+                       table: Table, reused_at: str | None = None) -> bool | None:
     """An unreadable process born since the child, judged by the parent its environment came from.
 
     Its listed parents are walked up (at most MAX_PARENT_DEPTH): the first one
@@ -416,7 +452,7 @@ def _judged_by_parents(record: Record, entry: bytes, born: str, session: int | N
             return None
         if _born_before(found[2], born):
             return False  # Born before the child: it never had the marker to pass on.
-        if _in_session(parent, session):
+        if _in_session(parent, session, found[2], reused_at):
             return True
         arguments = process_arguments(parent)
         if arguments is not None:
@@ -426,7 +462,7 @@ def _judged_by_parents(record: Record, entry: bytes, born: str, session: int | N
 
 
 def _carries_tag(pid: int, entry: bytes, born: str, session: int | None = None,
-                 table: Table | None = None) -> bool | None:
+                 table: Table | None = None, reused_at: str | None = None) -> bool | None:
     """Whether this pid is a live process born since `born` with `entry` in its environment.
 
     With `session`, a live process still in that session counts too. One whose
@@ -441,7 +477,7 @@ def _carries_tag(pid: int, entry: bytes, born: str, session: int | None = None,
     if record[3] or _born_before(record[2], born):
         # An exited process runs nothing; one born before the child cannot have inherited the tag.
         return False
-    if _in_session(pid, session):
+    if _in_session(pid, session, record[2], reused_at):
         return True
     arguments = process_arguments(pid)
     if arguments is not None:
@@ -451,23 +487,48 @@ def _carries_tag(pid: int, entry: bytes, born: str, session: int | None = None,
         return False
     if after is not None and (after[2] != record[2] or after[3]):
         return False  # It exited, or its pid passed to another process, while being read.
-    return None if table is None else _judged_by_parents(record, entry, born, session, table)
+    return None if table is None else _judged_by_parents(record, entry, born, session, table, reused_at)
+
+
+def scan_until_stable(listing, check, limit: int | None = None) -> bool | None:
+    """Check every listed pid, then list again and check the new ones, until none are new.
+
+    `listing()` returns the pids (None when unavailable); `check(pid, listed)`
+    returns True (found), False, or None (cannot tell). True as soon as one is
+    found; False once a listing adds nothing and every check was False; None
+    otherwise, including a listing still growing after MAX_SCAN_ROUNDS.
+    """
+    limit = MAX_TAG_SCAN_PROCESSES if limit is None else limit
+    seen: set[int] = set()
+    unknown = False
+    for _ in range(MAX_SCAN_ROUNDS):
+        listed = listing()
+        if listed is None:
+            return None
+        new = sorted(pid for pid in listed if pid not in seen)
+        if seen and not new:
+            return None if unknown else False
+        if len(seen) + len(new) > limit:
+            return None
+        for pid in new:
+            seen.add(pid)
+            found = check(pid, listed)
+            if found:
+                return True
+            unknown = unknown or found is None
+    return None
 
 
 def _tag_scan(tag: str, born: str, session: int | None) -> bool | None:
-    table = process_table()
-    if table is None or len(table) > MAX_TAG_SCAN_PROCESSES:
-        return None
     entry = run_tag_entry(tag)
-    unknown = False
-    for pid in sorted(table):
+    reused_at = session_reused_at(session, born)
+
+    def check(pid, table):
         if _excluded_pid(pid):
-            continue
-        carries = _carries_tag(pid, entry, born, session, table)
-        if carries:
-            return True
-        unknown = unknown or carries is None
-    return None if unknown else False
+            return False
+        return _carries_tag(pid, entry, born, session, table, reused_at)
+
+    return scan_until_stable(process_table, check)
 
 
 def tagged_process_running(tag: str, born: str, session: int | None = None) -> bool | None:

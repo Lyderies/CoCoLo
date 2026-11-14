@@ -200,7 +200,12 @@ These are accepted limits of this release. A report that shows one is worse than
   environment, or, on macOS, runs one of Apple's own system tools (such as `sh` or `sleep`, whose
   environment macOS hides from other processes), and that also starts a new session and detaches
   between snapshots. Such a process can outlive cleanup; it stays inside the child's read-only,
-  network-disabled sandbox.
+  network-disabled sandbox. Each check lists your processes again until a listing shows nothing new,
+  so one that forks and exits mid-check cannot hide what it started. On Linux two more cases apply,
+  because a process can make its own environment unreadable (`PR_SET_DUMPABLE`): such a process
+  started during a run and detached (an `ssh-agent`, say) holds that run's place until it exits, and
+  a marked process that does this and is adopted by a parent other than systemd (a container's init,
+  say) is not found. macOS is not affected by these two.
 - **Settling a lost service's run.** The account accepts a project service's settlement of a lost run
   (`account.settle_lost_run`) on that project's own evidence, its result lease and storage evidence;
   the account cannot check the kernel itself. Each project service runs as you, so this is within the

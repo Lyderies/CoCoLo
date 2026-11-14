@@ -10,7 +10,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   place is held while any of your processes still carries it or is still in the child's session. A
   process that clears its environment, or on macOS runs one of Apple's own tools such as `sleep` (macOS
   hides their environment), and also starts a session of its own is still not found; it stays inside
-  the child's read-only sandbox. Also: a run whose
+  the child's read-only sandbox. Each check lists your processes again until nothing new appears, so a
+  process that forks and exits mid-check cannot hide what it started; a new Terminal tab (whose `login`
+  cannot be read) never holds a place. Also: a run whose
   claim fence the account refused now asks again, waiting longer each time, instead of holding one of
   the project's four preparations until the service restarted; a preparation whose cleanup failed is
   cleaned up again later instead of being lost; and a finished run's monitor place that could not be

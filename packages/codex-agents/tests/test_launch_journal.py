@@ -327,7 +327,7 @@ class LaunchJournalTests(unittest.TestCase):
         self.assertEqual('gone', tree_state(entry))
         # Something joins one of the sessions between the first scan and the second.
         answers = iter([False, True])
-        with mock.patch.object(launch_journal, '_session_members', lambda sessions: next(answers)):
+        with mock.patch.object(launch_journal, '_session_members', lambda sessions, *rest: next(answers)):
             self.assertEqual('alive', tree_state(entry))
 
     def test_sessions_of_other_users_processes_can_be_read(self):
