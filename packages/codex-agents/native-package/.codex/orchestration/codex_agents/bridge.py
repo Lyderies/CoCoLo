@@ -124,6 +124,17 @@ CODEX_DISABLED_FEATURES = (
     "image_generation", "goals", "browser_use", "browser_use_external",
     "computer_use", "in_app_browser", "hooks", "skill_mcp_dependency_install",
 )
+# Every model in the Codex catalog turns on its sub-agent tools (spawn_agent and five
+# more, offered as a separate `collaboration` tool namespace) by itself, whatever
+# `--disable multi_agent_v2` says: the catalog names the model's multi-agent version.
+# This table setting removes that namespace. Checked on codex-cli 0.164.0 and 0.169.0
+# with `codex debug prompt-input`, which makes no model call: without it the child is
+# offered `functions`, `clock` and `collaboration`; with it only `functions` and
+# `clock`, in either order with the `--disable` above. The built-in MCP resource
+# tools (`list_mcp_resources`, `list_mcp_resource_templates`, `read_mcp_resource`,
+# reported as `mcp_tool_call` from server "codex") have no such setting on either
+# build; a call to one is fenced below, and the child is told so.
+CODEX_SUBAGENT_TOOLS_SETTING = "features.multi_agent_v2={enabled=false,disable_native_tools=true}"
 CODEX_WEB_SEARCH_SETTING = 'web_search="disabled"'
 # `codex exec` already defaults to never asking; pinning it means no escalation request
 # can ever be granted, whatever a later client or configuration layer defaults to.
@@ -138,8 +149,7 @@ CODEX_REQUIRED_EXEC_OPTIONS = ("--ignore-user-config", "--ignore-rules")
 # configuration key, which codex-cli 0.164.0 and 0.169.0 render as a developer message
 # (checked with `codex debug prompt-input`, which makes no model call).
 CODEX_DEVELOPER_INSTRUCTIONS_KEY = "developer_instructions"
-# Collaboration tools cannot be switched off by configuration. This allowlist only
-# detects emitted, typed events: anything outside it stops the child, but it does not
+# This allowlist backs up the switches above. It only detects emitted, typed events: anything outside it stops the child, but it does not
 # prevent a call and cannot see one that emits no event.
 CODEX_ALLOWED_EVENTS = frozenset({
     "thread.started", "turn.started", "turn.completed", "turn.failed", "error",
@@ -1083,7 +1093,10 @@ def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None =
         "details strings, with no extra evidence keys. Keep this assignment_id "
         "and retry block when reviewing another worker. Leave usage null unless "
         "you have measured values in the required shape; never invent usage.\n\n"
-        "Work only with the files in the current directory. When you finish, reply "
+        "Work only with the files in the current directory. Do not start sub-agents "
+        "and do not call the MCP resource tools (list_mcp_resources, "
+        "list_mcp_resource_templates, read_mcp_resource): no MCP server is available, "
+        "and any such call stops this run with no result. When you finish, reply "
         "with exactly one JSON object and no other text, filling in this template:\n"
         f"{json.dumps(template, indent=2)}\n"
         f"In the evidence list, {ONE_EVIDENCE_ENTRY_RULE}.\n"
@@ -1459,6 +1472,7 @@ def run_codex(
             for feature in CODEX_DISABLED_FEATURES
             for part in ("--disable", feature)
         ),
+        "-c", CODEX_SUBAGENT_TOOLS_SETTING,
         "-c", CODEX_WEB_SEARCH_SETTING,
         "-c", CODEX_APPROVAL_SETTING,
         # The verified instructions of the routed role, as a native child would get.

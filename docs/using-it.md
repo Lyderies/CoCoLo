@@ -211,6 +211,10 @@ Codex protocol denials retain only the fixed known denied item names `mcp_tool_c
 `web_search` and `collab_tool_call`. Every other unrecognized event or item label becomes
 `unknown` before constructing the returned or stored fence; arbitrary child-authored labels
 are discarded. This does not change the failed denial or permit the event.
+A Codex child is launched without sub-agent tools (the model catalog would otherwise offer them
+whatever the feature switches say). Codex still gives every child its built-in MCP resource tools
+(`list_mcp_resources` and two more), which no setting removes on the admitted builds; the child is
+told not to call them, and a call is stopped as `codex_tool_not_allowed:mcp_tool_call`, with no result.
 Raw child results must leave admission `unverified` and cannot attest their own timeout.
 Those claims are fenced with `inconsistent_axes` before result binding; actual bridge-observed
 timeouts keep their authoritative timed-out outcome.

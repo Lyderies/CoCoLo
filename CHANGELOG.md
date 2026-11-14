@@ -4,6 +4,13 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## Unreleased: COCOLO 0.3.0 (in progress)
 
+- From the real install's containment check on Codex 0.169: a Codex child was stopped with
+  `codex_tool_not_allowed:mcp_tool_call`. It had called Codex's own built-in `list_mcp_resources`
+  tool (reported as an MCP call from server "codex"). Codex 0.164 offers the same tool, and both
+  builds also offered every child the sub-agent tools (`spawn_agent` and five more), because the
+  model catalog turns them on whatever the feature switches say. Children are now launched with a
+  setting that removes the sub-agent tools (checked on 0.164.0 and 0.169.0 without a model call), and
+  are told not to call the MCP resource tools, which no setting removes; a call to one is still stopped.
 - The product is now called COCOLO: Claude Orchestrator, Codex Orchestrator, Local Orchestrator. The
   README, the user documentation and the setup wizard's header and welcome screen use the name. Folder,
   package, skill, command, file and field names are unchanged, so nothing you type or see in command

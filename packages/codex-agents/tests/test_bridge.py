@@ -1971,6 +1971,13 @@ class CodexBridgeTests(BridgeTestCase):
         self.assertNotIn("code_mode_host", disabled)
         self.assertNotIn("code_mode_host", " ".join(argv))
         self.assertIn('web_search="disabled"', argv)
+        # The model catalog turns sub-agent tools on whatever the --disable says.
+        setting = "features.multi_agent_v2={enabled=false,disable_native_tools=true}"
+        self.assertEqual("-c", argv[argv.index(setting) - 1])
+        self.assertLess(argv.index(setting), argv.index("--"))
+        prompt = argv[-1]
+        self.assertIn("Do not start sub-agents", prompt)
+        self.assertIn("list_mcp_resources", prompt)
         # No escalation request can be granted, whatever the client's default.
         self.assertEqual('approval_policy="never"', argv[argv.index('approval_policy="never"')])
         self.assertEqual("-c", argv[argv.index('approval_policy="never"') - 1])
