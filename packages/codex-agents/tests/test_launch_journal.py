@@ -19,7 +19,7 @@ from tests.support import TEMP_ROOT
 
 from unittest import mock
 
-from codex_agents import launch_journal
+from codex_agents import launch_journal, process_tree
 from codex_agents.bridge import PYTHON_ISOLATION_FLAGS, WATCHDOG_SCRIPT
 from codex_agents.launch_journal import LaunchJournal, JournalError, tree_state
 from codex_agents.process_tree import WATCHDOG_READY_SECONDS, await_ready, process_record, write_cleanup_marker
@@ -335,6 +335,32 @@ class LaunchJournalTests(unittest.TestCase):
         # every session scan would be unknown and no run could ever be settled.
         os.getsid(1)
         self.assertIs(False, launch_journal._session_members({0x7FFFFFF0}))
+
+    def test_a_session_member_forked_by_one_that_exited_before_it_was_read_is_found(self):
+        # 40000 was listed and gone before its read; it had forked 40001 into the session.
+        listings = iter([[1, 40000], [1, 40001], [1, 40001]])
+        sessions = {1: 1, 40001: 20000}
+        def getsid(pid):
+            if pid not in sessions:
+                raise ProcessLookupError(pid)
+            return sessions[pid]
+        with mock.patch.object(launch_journal, '_listed_pids', lambda: next(listings)), \
+                mock.patch.object(launch_journal.os, 'getsid', side_effect=getsid):
+            self.assertIs(True, launch_journal._session_members({20000}))
+
+    def test_a_new_session_on_a_reused_session_id_is_not_counted(self):
+        # The child (pid 20000, born at 10) is gone; a later shell born at 50 holds its pid.
+        records = {20000: (1, 20000, '50.000000', False), 40001: (20000, 20000, '51.000000', False),
+                   40002: (1, 20000, '20.000000', False)}
+        def run(members):
+            with mock.patch.object(launch_journal, '_listed_pids', lambda: [1, 20000, *members]), \
+                    mock.patch.object(launch_journal.os, 'getsid',
+                                      side_effect=lambda pid: 1 if pid == 1 else 20000), \
+                    mock.patch.object(launch_journal, 'process_record', side_effect=records.get), \
+                    mock.patch.object(process_tree, 'process_record', side_effect=records.get):
+                return launch_journal._session_members({20000}, {20000: '10.000000'})
+        self.assertIs(False, run([40001]))  # Born after the new leader: its session, not the child's.
+        self.assertIs(True, run([40002]))  # Born before it: left in the child's session.
 
     def test_a_lock_file_appears_only_once_its_instance_holds_it(self):
         other = LaunchJournal(self.directory)
