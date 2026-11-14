@@ -68,6 +68,28 @@ class ProjectMonitorTests(unittest.TestCase):
         return source, ProjectMonitor(scope(project=project), limits(),
                                       max_tracked_attempts=capacity, clock_ns=source)
 
+    def test_only_a_finished_and_cleaned_attempt_is_forgotten_and_frees_its_slot(self):
+        source, owner = self.make_monitor(capacity=1)
+        owner.register(binding(1), hard_deadline_ns=100 * SECOND)
+        with self.assertRaisesRegex(ProjectMonitorError, "monitor_capacity_exceeded"):
+            owner.register(binding(2), hard_deadline_ns=100 * SECOND)
+        # Live, terminal-only or cleanup-only: never dropped.
+        with self.assertRaisesRegex(ProjectMonitorError, "monitor_attempt_live"):
+            owner.forget(binding(1))
+        owner.observe_terminal(binding(1))
+        with self.assertRaisesRegex(ProjectMonitorError, "monitor_attempt_live"):
+            owner.forget(binding(1))
+        owner.observe_cleanup(binding(1))
+        with self.assertRaisesRegex(ProjectMonitorError, "monitor_binding_conflict"):
+            owner.forget(replace(binding(1), claim_id="claim-other"))
+        owner.forget(binding(1))
+        with self.assertRaisesRegex(ProjectMonitorError, "monitor_attempt_not_found"):
+            owner.status(binding(1))
+        with self.assertRaisesRegex(ProjectMonitorError, "monitor_attempt_not_found"):
+            owner.forget(binding(1))
+        owner.register(binding(2), hard_deadline_ns=100 * SECOND)
+        self.assertEqual(1, len(owner.tick()))
+
     def test_duplicate_registration_cannot_rearm_startup_or_work_or_deadline(self):
         for started in (False, True):
             with self.subTest(started=started):

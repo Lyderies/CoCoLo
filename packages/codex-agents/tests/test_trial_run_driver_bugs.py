@@ -153,7 +153,6 @@ class TrialRunDriverTests(DriverHarness):
         self.assertEqual(0, code, 'second run refused: %r; driver stopped at %r' % (report, self.stopped_runs[before:]))
         self.assertEqual('result', report['bridge_report']['outcome'])
 
-    @unittest.expectedFailure  # Open: the project monitor never forgets a finished attempt (fifth run refused).
     def test_a_project_keeps_more_than_four_recorded_results(self):
         # Third trial: each kept result reserved the largest possible body for hours, so a
         # project's fifth run could not reserve space (history_result_capacity at arm).

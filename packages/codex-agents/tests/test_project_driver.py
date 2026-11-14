@@ -616,6 +616,71 @@ class HostRestartTests(DriverHarness):
             super().setUp()
 
 
+class ManyRunsTests(DriverHarness):
+    """A long-lived service runs more children than it tracks at once (four), one after another."""
+
+    worker_once = None  # Set below to HostVerificationTests.worker.
+    verifier = None
+    verified = None
+
+    def recorded_run(self, name, orchestration):
+        task = self.write(name + '-task.json', {**self.task(), 'id': 'task-' + name})
+        route = self.cli('learning-route', '--task', task)
+        assigned = {**self.assignment_for(route), 'assignment_id': name, 'task_id': 'task-' + name}
+        context = ('--task', task, '--assignment', self.write(name + '-assignment.json', assigned),
+                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        route_path = self.write(name + '-route.json', route)
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration)
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled({**result(), 'assignment_id': name})))
+        with mock.patch.object(self, 'assertEqual', side_effect=lambda *a: unittest.TestCase.assertEqual(
+                self, *a[:2], (a[2] if len(a) > 2 else '') + ' driver stopped at %r' % (self.stopped_runs[-30:],))):
+            dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
+        self.assertEqual('result', dispatched['bridge_report']['outcome'], self.stopped_runs[-30:])
+        observation = self.write(name + '-observation.json', {'run_handle': opened['run_handle'], 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        self.cli('learning-record-host-result', *context, '--route', route_path,
+                 '--result', self.write(name + '-result.json', dispatched['result']), '--observation', observation)
+        return opened['run_handle']
+
+    def worker(self):
+        """The worker, then four more recorded runs: more than the service tracks at once."""
+        orchestration, worker_result, digest = self.worker_once()
+        for index in range(4):
+            self.recorded_run('later%d' % index, orchestration)
+        return orchestration, worker_result, digest
+
+    def test_a_verifier_and_qa_of_an_early_run_work_after_later_runs_pushed_it_past_four(self):
+        from tests.test_bridge import passing_check_report
+        worker, verifier, verifier_assignment, verifier_result = self.verified()
+        with mock.patch.object(cli, 'run_operational_check_suite',
+                               side_effect=lambda _root, **_scratch: passing_check_report()):
+            checks = self.cli('learning-run-operational-checks', '--host-outcome-digest', worker,
+                              '--verifier-host-outcome-digest', verifier)
+        self.assertTrue(checks['checks_passed'])
+        qa = self.cli('learning-record-operational-qa', '--host-outcome-digest', worker,
+                      '--verifier-host-outcome-digest', verifier, '--check-receipt', checks['check_receipt'],
+                      '--evaluator-assignment', self.write('eval-assignment.json', json.loads(
+                          Path(self.temporary.name, 'project-assignment.json').read_text())),
+                      '--evaluator-result', str(Path(self.temporary.name, 'worker-result.json')),
+                      '--verifier-assignment', self.write('ver-assignment.json', verifier_assignment),
+                      '--verifier-result', self.write('ver-result.json', verifier_result))
+        self.assertTrue(qa['ready'])
+        self.assertIn('accepted', json.dumps(qa))
+        self.assertEqual(6, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
+
+    def test_status_of_a_run_the_service_has_forgotten_answers_not_found(self):
+        orchestration = self.cli('learning-open-orchestration')['orchestration_handle']
+        run_handle = self.recorded_run('only', orchestration)
+        # Recorded, released and retired: the service no longer tracks it.
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
+        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle,
+                          expected=2)
+        self.assertEqual((False, 'control_attempt_not_found'), (status['ready'], status['reason_code']))
+        self.assertNotIn('health', status)
+
+
 class HostVerificationTests(DriverHarness):
     """A verifier of a host-driven worker is opened, prepared and run through the same host."""
 
@@ -1391,6 +1456,11 @@ class SilenceCutoffTests(DriverHarness):
         final = self.cli('learning-run-status', *target)
         self.assertEqual('work_silence', final['stop_reason'])
         self.assertTrue({'quiet', 'stale'} & seen, seen)
+
+
+ManyRunsTests.worker_once = HostVerificationTests.worker
+ManyRunsTests.verifier = HostVerificationTests.verifier
+ManyRunsTests.verified = HostVerificationTests.verified
 
 
 class TwoProjectTests(DriverHarness):
