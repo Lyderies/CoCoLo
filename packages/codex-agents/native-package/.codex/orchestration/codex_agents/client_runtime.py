@@ -48,8 +48,11 @@ BRIDGE_PROVIDERS = frozenset({"codex", "claude"})  # Read-only children the proj
 # the account's (a refused claim, say) and a denied claim receipt's. All fixed identifiers, safe to report.
 START_REASONS = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable',
-    'run_abandoned', 'run_closed',
+    'run_abandoned', 'run_closed', 'run_lost', 'run_lost_held',
 }) | ACCOUNT_REASON_CODES | CLAIM_DENIAL_CODES
+# A run whose project service stopped or crashed: ended abandoned with an unknown outcome.
+# Its capacity is released once the next service saw nothing of it still running.
+LOST_CAPACITY = {'run_lost': 'released', 'run_lost_held': 'held'}
 
 
 def runtime_hint_path(state, project_root):
@@ -729,10 +732,30 @@ def run_control_client(state_root, project_root, operation, orchestration_handle
     except DispatchError:
         return {'ready': False, 'reason_code': 'control_unavailable', 'error': 'run control is unavailable'}
     except Exception as error:
+        lost = _lost_run(state_root, project_root, run_handle, host_client)
+        if lost is not None:
+            return lost
         reason = getattr(error, 'reason_code', 'control_unavailable')
         return {'ready': False, 'reason_code': reason if type(reason) is str else 'control_unavailable',
                 'error': 'run control refused'}
     return {'ready': True, 'observed_at_ns': view.observed_at_ns, **view.result}
+
+
+def _lost_run(state_root, project_root, run_handle, host_client):
+    """The fixed report for a run of an earlier, stopped service of this project, or None."""
+    try:
+        state = CollectorPaths(state_root)
+        scope, control, _ = read_runtime_hint(state, project_root)
+        driver = Path(control).parent / 'run.sock'
+        contexts = enroll_clients(state, project_root, scope, (control, driver), host_client=host_client)
+        reply = _run_driver(contexts, control, 'run.describe', run_handle, 1, '0' * 64, {}, timeout=5)
+    except Exception:
+        return None
+    if reply['state'] != 'failed' or reply['reason_code'] not in LOST_CAPACITY:
+        return None
+    return {'ready': False, 'reason_code': 'run_lost', 'terminal_state': 'abandoned', 'outcome': 'unknown',
+            'capacity_state': LOST_CAPACITY[reply['reason_code']],
+            'error': 'the service that ran this run stopped; it ended with an unknown outcome'}
 
 
 def bridged_run_owner(state_root, project_root, run_handle, *, host_client):
@@ -773,6 +796,10 @@ def abandon_bridged_run(state_root, project_root, run_handle, reason, *, host_cl
     if reply['reason_code'] == 'run_closed':
         return {'ready': True, 'run_handle': run_handle, 'classification': 'already_closed', 'reason': reason,
                 'settled_by': 'project_host', 'capacity_state': 'never_claimed'}
+    if reply['reason_code'] in LOST_CAPACITY:
+        # Its stopped service's run is settled by the next service on its own, never by this command.
+        return {'ready': True, 'run_handle': run_handle, 'classification': 'already_closed', 'reason': reason,
+                'settled_by': 'project_host', 'capacity_state': LOST_CAPACITY[reply['reason_code']]}
     if reply['reason_code'] != 'run_abandoned':
         return {'ready': False, 'error': 'only a run that never took a lease can be abandoned here',
                 'reason_code': reply['reason_code'] or 'history_conflict'}

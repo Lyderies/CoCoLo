@@ -26,6 +26,7 @@ from .release_contracts import checked_release_receipt
 from .claim_denial import (
     CloseDeniedInput, FenceClaimInput, checked_denial_closure, checked_fence_reply, decode_close_denied, decode_fence_claim,
 )
+from .lost_run_contracts import SettleLostInput, checked_lost_reply, decode_settle_lost
 from .run_provenance import RunProvenanceInput, checked_run_provenance, decode_run_provenance_input
 from .host_open_contracts import OpenProvenanceInput, checked_open_provenance, decode_open_provenance_input
 from .account_open_contracts import AccountOpenInput, OpenError, OPEN_REASON_CODES, checked_account_open_reply, decode_account_open_input
@@ -50,7 +51,8 @@ ACCOUNT_READ_OPERATIONS = frozenset({
 })
 ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt",
-    "account.fence_claim", "account.run_provenance", "account.open_provenance", 'account.open_host_run', 'account.observe_provider',
+    "account.fence_claim", "account.settle_lost_run", "account.run_provenance", "account.open_provenance",
+    'account.open_host_run', 'account.observe_provider',
     'account.record_observation_unavailable', 'account.record_rate_limit_event',
     'account.billing_probe',
 }
@@ -175,6 +177,11 @@ def _checked_request(data: object) -> None:
             decode_fence_claim(data['payload'])
         except ClaimError:
             raise AccountError('account_invalid_request') from None
+    elif data['operation'] == 'account.settle_lost_run':
+        try:
+            decode_settle_lost(data['payload'])
+        except ClaimError:
+            raise AccountError('account_invalid_request') from None
     elif data["payload"]:
         raise AccountError("account_invalid_request")
 
@@ -287,6 +294,11 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
                     or checked['closure']['binding']['runtime_digest'] != request.runtime_digest):
                 raise ClaimError('claim_denial_invalid')
             return checked
+        except ClaimError:
+            raise AccountError('account_invalid_response') from None
+    elif request.operation == 'account.settle_lost_run':
+        try:
+            return checked_lost_reply(result, decode_settle_lost(request.payload))
         except ClaimError:
             raise AccountError('account_invalid_response') from None
     elif request.operation == 'account.close_denied_attempt':
@@ -609,6 +621,25 @@ class AccountClient:
         try:
             request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.fence_claim', request_id,
                                      self._project, self._runtime, fence.payload())
+        except ClaimError:
+            raise AccountError('account_invalid_request') from None
+        failed = False
+        try:
+            raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
+                                 response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError:
+            failed = True
+        if failed:
+            raise AccountError('account_unavailable')
+        return decode_account_response(raw, request)
+
+    def settle_lost_run(self, settle, *, request_id):
+        """Settle a claimed run whose service was lost; the project checked its kernel evidence first."""
+        if type(settle) is not SettleLostInput:
+            raise AccountError('account_invalid_request')
+        try:
+            request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.settle_lost_run', request_id,
+                                     self._project, self._runtime, settle.payload())
         except ClaimError:
             raise AccountError('account_invalid_request') from None
         failed = False

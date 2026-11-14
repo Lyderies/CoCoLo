@@ -625,3 +625,12 @@ class ProjectServiceHost:
     def threads_stopped(self):
         self._owner()
         return self._closed and (self._runtime is None or self._runtime.threads_stopped())
+
+    def settle_lost_runs(self):
+        """Once closed with every thread stopped: settle this host's own lost runs, then free its journal lock.
+
+        A host whose threads did not stop keeps the lock until its process
+        ends, so no later host settles a run one of them may still launch.
+        """
+        if self._driver is not None and self.threads_stopped():
+            self._driver.settle_on_exit()

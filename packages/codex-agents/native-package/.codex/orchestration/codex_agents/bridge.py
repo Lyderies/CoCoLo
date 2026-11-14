@@ -603,6 +603,9 @@ class _WatchdogOwner:
                 watchdog.kill()
             raise _Abort("watchdog_unavailable")
 
+    def pid(self) -> int | None:
+        return None if self._process is None else self._process.pid
+
     def reap(self) -> bool:
         """Wait once after child cleanup; leave a stuck backstop running."""
         if self._process is None:
@@ -768,6 +771,13 @@ def run_child(
             process.pid, tree.root_birth,
             deadline + WATCHDOG_GRACE_SECONDS,
         )
+        if _execution is not None:
+            # The project service records the acknowledged watchdog durably, so a
+            # later service can tell when this whole run is gone.
+            try:
+                _execution.watched(watchdog.pid())
+            except ExecutionCustodyError:
+                raise _Abort("watchdog_unavailable") from None
         next_track = time.monotonic() + TRACK_INTERVAL_SECONDS
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)

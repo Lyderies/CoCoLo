@@ -19,7 +19,7 @@ import weakref
 from .account_claim_contracts import _BRIDGE, _DIGEST, _HANDLE, _PROJECT, _RUN, matches
 from .execution_activity import ActivityBuffer, ActivityUnavailable
 from .liveness_clock import LIVENESS_STOP_REASONS
-from .process_tree import ProcessTree
+from .process_tree import ProcessTree, process_record
 
 _POPEN = subprocess.Popen
 MAX_OWNED_EXECUTIONS = 64
@@ -119,6 +119,10 @@ class ExecutionTicket:
     def fail_activity(self):
         self._registry.fail_activity(self)
 
+    def watched(self, pid):
+        """The detached watchdog acknowledged tracking this execution's tree."""
+        self._registry.watched(self, pid)
+
     def _signal_stop(self, process):
         self._registry._signal_stop(self, process)
 
@@ -205,6 +209,10 @@ class _Owned:
 
 class OwnedExecutionRegistry:
     def __init__(self):
+        # A project service's launch journal (`launch_journal.LaunchJournal`), or None.
+        # With one, a child is created only after its `spawning` entry is on disk,
+        # and its identity and its watchdog's are recorded as soon as they are known.
+        self.launch_journal = None
         self._pid = os.getpid()
         self._lock = threading.RLock()
         self._issued = weakref.WeakKeyDictionary()
@@ -530,6 +538,31 @@ class OwnedExecutionRegistry:
                 raise ExecutionCustodyError()
             entry.process, entry.tree, entry.birth = process, tree, tree.root_birth
             entry.state = "active"
+        journal = self.launch_journal
+        if journal is not None:
+            # Outside the lock. A failure stops the child before any output is read.
+            try:
+                journal.launched(entry.key.bridge_run_id, process.pid, entry.birth)
+            except Exception:
+                raise ExecutionCustodyError() from None
+
+    def watched(self, ticket, pid):
+        with self._lock:
+            entry = self._entry(ticket)
+            if (self._pending.get(ticket) is not entry or entry.state != "active" or type(pid) is not int
+                    or entry.process is None or pid == entry.process.pid):
+                raise ExecutionCustodyError()
+        journal = self.launch_journal
+        if journal is None:
+            return
+        # The watchdog is this process's unreaped child, so its pid is still its own.
+        record = process_record(pid)
+        if record is None:
+            raise ExecutionCustodyError()
+        try:
+            journal.watched(entry.key.bridge_run_id, pid, record[2])
+        except Exception:
+            raise ExecutionCustodyError() from None
 
     def spawn(self, ticket, arguments, **options):
         # The fixed runner supplies arguments/options. A caller cannot substitute
@@ -539,6 +572,14 @@ class OwnedExecutionRegistry:
         entry = self.enter(ticket)
         process = None
         try:
+            journal = self.launch_journal
+            if journal is not None:
+                # Durably on disk before the child exists: a run whose entry never
+                # reached `spawning` provably never started one.
+                try:
+                    journal.spawning(entry.key.bridge_run_id)
+                except Exception:
+                    raise ExecutionCustodyError() from None
             process = _POPEN(arguments, **options)
             with self._lock:
                 # Retain the actual process before any fallible metadata work.

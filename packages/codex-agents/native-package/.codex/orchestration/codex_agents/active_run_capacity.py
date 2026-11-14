@@ -3,9 +3,10 @@
 Only the account persistence owner uses this schema. Rows and policy digests are
 metadata, never caller authentication, launch permission or cleanup evidence.
 No timer, lost connection or model-reported terminal state releases a reservation.
-A claimed run still unsettled one hour after its hard deadline (its project host
-crashed; the detached watchdog has enforced that deadline) stops counting against
-the limits, but its row stays unreleased and a late terminal still settles it.
+A claimed run whose project service was lost stops counting against the limits
+once a later service of the project settles it on kernel evidence that nothing
+of it still runs, or, as the last resort, one hour after its hard deadline (the
+detached watchdog has enforced that deadline). Its row stays unreleased either way.
 """
 
 from __future__ import annotations
@@ -167,22 +168,32 @@ CAPACITY_OBJECTS = (
 # limits (and no longer holds back a drained migration) while its row stays
 # unreleased. "Well past" must hold on both clocks: the wall clock alone can
 # be set forward while the child, whose own deadline is monotonic, is alive.
+# This is the last resort: a later service of the project settles such a run
+# much sooner, once kernel evidence shows that nothing of it still runs
+# (`account_lost_run`), and from then on it does not count either.
 CRASHED_CLAIM_GRACE_MS = 3_600_000
+# A run settled that way has this fixed abandonment reason on its host binding.
+LOST_RUN_REASON = 'service_lost'
 
 
 def crashed_claim(alias, now_ms, monotonic_ns):
     """SQL for "this unreleased claim's run cannot still be alive", with its parameters.
 
-    True only when the wall clock is more than the grace past the claim's
-    deadline AND the monotonic clock is too (or has restarted below the
-    claim's reference: the machine rebooted since, and no child survives that).
-    A claim without a monotonic deadline (an earlier version's) never qualifies.
+    True when the run's project service settled it as lost (its binding is
+    abandoned with `service_lost`), or when the wall clock is more than the
+    grace past the claim's deadline AND the monotonic clock is too (or has
+    restarted below the claim's reference: the machine rebooted since, and no
+    child survives that). A claim without a monotonic deadline (an earlier
+    version's) never qualifies by time.
     """
     column = (alias + ".") if alias else ""
+    table = alias or "active_run_capacity"
     return (
-        f"({column}deadline_at_ms IS NOT NULL AND {column}deadline_at_ms<? "
+        f"(({column}deadline_at_ms IS NOT NULL AND {column}deadline_at_ms<? "
         f"AND {column}execution_deadline_ns IS NOT NULL "
-        f"AND ({column}execution_deadline_ns<=? OR {column}clock_reference_ns>?))",
+        f"AND ({column}execution_deadline_ns<=? OR {column}clock_reference_ns>?)) "
+        f"OR EXISTS(SELECT 1 FROM host_run_bindings lost WHERE lost.project_id={table}.project_id "
+        f"AND lost.handle_digest={table}.handle_digest AND lost.binding_state='abandoned' "
+        f"AND lost.abandoned_reason='{LOST_RUN_REASON}'))",
         (now_ms - CRASHED_CLAIM_GRACE_MS, monotonic_ns - CRASHED_CLAIM_GRACE_MS * 1_000_000, monotonic_ns),
     )
-

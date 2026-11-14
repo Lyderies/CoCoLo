@@ -157,4 +157,7 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         end = time.monotonic() + 10
         while not host.threads_stopped() and time.monotonic() < end:
             time.sleep(0.01)
+        # A run it still held (a running child it stopped, a finished one not yet
+        # released) is settled now on kernel evidence, or by the next host.
+        host.settle_lost_runs()
     return {'ready': True, 'stopped': True}

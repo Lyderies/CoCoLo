@@ -18,6 +18,16 @@ closure; any other armed run without an admitted claim is fenced by the account
 (`account.fence_claim`), which either returns the admitted claim (and closes
 nothing) or makes sure it never will be; and a lease never armed is released by
 the history. Its input and preparation are then given back.
+
+A run whose service stopped or crashed while it held an admitted claim is
+settled by the next service of the project, by itself: each admitted claim
+has a durable entry in the project's launch journal (`launch_journal`) that
+records whether the run ever spawned, the child's and its watchdog's pids and
+birth times. Once the earlier service instance has provably stopped and the
+kernel shows nothing of that run still running, this driver asks the account
+to settle it (`account.settle_lost_run`): it ends abandoned, with an unknown
+outcome, and no longer counts against the limits. A service that stops
+gracefully settles its own runs this way after its threads have stopped.
 """
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -43,7 +53,9 @@ from .execution_grant import ExecutionRegistrationInput, checked_execution_grant
 from .history_contracts import AttemptBinding, HistoryError, _DIGEST, _ID, matches
 from .host_open_contracts import OpenProvenanceInput
 from .hosts import HOST_CLIENTS
+from .launch_journal import JournalError, LaunchJournal, tree_state
 from .learning_contracts import canonical_json, content_digest, parse_bounded_json
+from .lost_run_contracts import SettleLostInput
 from .open_scope_contracts import OpenScopeContext, open_inputs_digest
 from .orchestration_api import OrchestrationScope
 from .prepared_dispatch import DispatchAuthorization, PreparedDispatchContext
@@ -77,9 +89,16 @@ MAX_RUN_RATE_LIMIT_EVENTS = 1_000
 # Recorded workers whose originals a verifier open may still bind, per host (newest kept).
 MAX_RETAINED_WORKERS = 64
 _RETRYING = object()
+# How often the journal is checked for runs of stopped earlier services, and how long
+# one settlement request may take.
+SWEEP_SECONDS = 1.0
+SETTLE_TIMEOUT_SECONDS = 10
 REASON_CODES = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable', 'run_abandoned',
     'run_closed',
+    # A run of an earlier, stopped service: settled (abandoned, outcome unknown, capacity no
+    # longer counted), or not yet, because something of it may still run.
+    'run_lost', 'run_lost_held',
 })
 _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 'assignment', 'task', 'route',
                     'parent_grant'}
@@ -226,6 +245,16 @@ class RunDriver:
         self._dispatch = runtime.bind_dispatch(max_requests=DISPATCH_SLOTS, steps_per_cycle=1,
                                                authorizer=self._authorize_dispatch)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='project-driver-account')
+        # Durable launch evidence for this project's admitted claims; every child this
+        # host's pool creates is recorded there first.
+        try:
+            self._journal = LaunchJournal(Path(state.root) / 'projects' / scope.project_id / 'launches')
+        except JournalError:
+            raise HistoryError('history_service_unavailable') from None
+        runtime.pool._registry.launch_journal = self._journal
+        # Runs of earlier service instances, by run handle: (host class, 'released' or 'held').
+        self._lost, self._sweep, self._next_sweep = {}, None, 0.0
+        self._sweeper = ThreadPoolExecutor(max_workers=1, thread_name_prefix='project-driver-sweep')
         self._owner_name = 'project-driver-%d-%d' % (os.getpid(), id(self))
         install_enrollment(self._preamble, owner=self._owner_name)
         self._enrolled = None  # Set by the host: token -> its enrolled facts, for dispatch requests.
@@ -323,7 +352,15 @@ class RunDriver:
             # Commands that know only a run handle: which host class holds it, or
             # dropping one that never took a lease.
             held = [run for run in self._runs.values() if run.key[0] == request['run_handle']]
-            if not held:
+            lost = self._lost.get(request['run_handle'])
+            if not held and lost is not None:
+                # A run of an earlier service of this project; it is never started again here.
+                if lost[0] != enrolled.host_client:
+                    self._reply(connection, {'state': 'refused', 'reason_code': 'history_not_authorized'})
+                else:
+                    self._reply(connection, {'state': 'failed',
+                                             'reason_code': 'run_lost' if lost[1] == 'released' else 'run_lost_held'})
+            elif not held:
                 self._reply(connection, {'state': 'refused', 'reason_code': 'history_orchestration_unavailable'})
             elif held[0].host_client != enrolled.host_client:
                 self._reply(connection, {'state': 'refused', 'reason_code': 'history_not_authorized'})
@@ -560,8 +597,17 @@ class RunDriver:
         run.closed = run.prepared is None
 
     def _bind_claim(self, run, receipt):
-        """The account admitted the run's claim: bind it and go on towards launch."""
+        """The account admitted the run's claim: record it in the journal, bind it, go on towards launch.
+
+        The journal entry is written before anything can launch the run; if it
+        cannot be written the run stops here, keeping what the account holds.
+        """
         run.receipt = receipt
+        self._journal.claimed(receipt['bridge_run_id'], run_handle=run.key[0], attempt=run.key[1],
+                              host_client=run.host_client,
+                              lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
+                              identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
+                              storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
         run.binding = AttemptBinding(**{n: getattr(run.lease, n) for n in LEASE_SCOPE_FIELDS},
                                      claim_id=receipt['bridge_run_id'], claim_digest=receipt['receipt_digest'])
         self._runtime.persistence.bind_claim(run.persistence, run.binding, hard_deadline_at_ms=receipt['deadline_at_ms'])
@@ -653,6 +699,7 @@ class RunDriver:
             return
         self._read_intake()
         self._retire_given_back()
+        self._sweep_lost()
         for run in list(self._runs.values()):
             try:
                 self._advance(run)
@@ -937,6 +984,11 @@ class RunDriver:
                 return
             if run.released_at is None:
                 run.released_at = self._clock()
+                try:
+                    # Its capacity is released: nothing is left for a later service to settle.
+                    self._journal.remove(run.receipt['bridge_run_id'])
+                except JournalError:
+                    pass  # A later settlement finds it released and keeps only a tombstone.
             if not run.result_admitted and self._clock() - run.released_at < RECORD_GRACE_SECONDS:
                 return  # The capacity is released; local custody waits for the primary's record.
             lane.finish_release(run.persistence)
@@ -955,6 +1007,107 @@ class RunDriver:
                 except Exception:
                     pass
                 run.state = 'released'
+
+    # Runs of earlier service instances of this project.
+    def _sweep_lost(self):
+        """Owner step: collect the last sweep, and start the next one on its own helper thread."""
+        if self._sweep is not None:
+            if not self._sweep.done():
+                return
+            try:
+                self._lost = self._sweep.result()
+            except Exception:
+                pass
+            self._sweep, self._next_sweep = None, self._clock() + SWEEP_SECONDS
+        if self._clock() >= self._next_sweep:
+            self._sweep = self._sweeper.submit(self._settle_lost, False)
+
+    def _settle_lost(self, own):
+        """Settle every run of a stopped instance whose whole tree is provably gone; return what is known.
+
+        Only an instance whose lock is free can have no thread left that might
+        launch or own its child; with `own`, this instance's threads have
+        stopped too. Nothing is ever signalled; an entry that cannot be read is
+        left as it is, and its capacity to the account's timed rule.
+        """
+        journal, lost, stopped = self._journal, {}, {}
+        for entry in journal.entries():
+            if entry['state'] is None:
+                continue
+            handle, host_client = entry['run_handle'], entry['host_client']
+            if entry['state'] == 'settled':
+                lost[handle] = (host_client, 'released')
+                continue
+            instance = entry['instance']
+            if instance == journal.instance:
+                if not own:
+                    continue
+            elif stopped.setdefault(instance, journal.instance_stopped(instance)) is not True:
+                continue
+            lost[handle] = (host_client, 'held')
+            if tree_state(entry) != 'gone':
+                continue
+            try:
+                reply = self._settle_entry(entry)
+            except Exception:
+                continue  # The account is unreachable or refused: asked again on the next sweep.
+            self._remove_workspace(entry['workspace'])
+            try:
+                journal.settled(entry['bridge_run_id'], reply['state'])
+            except JournalError:
+                continue
+            lost[handle] = (host_client, 'released')
+        journal.prune()
+        for instance in journal.instances():
+            if instance != journal.instance:
+                journal.forget_instance(instance)
+        return lost
+
+    def _settle_entry(self, entry):
+        """Helper thread: the account's settlement of this run, sent with the run's own custody."""
+        lease = ResultLeaseBinding(**entry['lease'])
+        if lease.project_id != self._scope.project_id or entry['host_client'] not in HOST_CLIENTS:
+            raise HistoryError('history_conflict')
+        evidence = bytes.fromhex(entry['storage_evidence'])
+        settle = SettleLostInput(entry['run_handle'], entry['identity_digest'], entry['claim_request_id'],
+                                 entry['bridge_run_id'], parse_bounded_json(evidence)['lease']['lease_digest'])
+        custody = canonical_json({'purpose': 'run', 'lease': entry['lease'], 'storage_evidence': entry['storage_evidence'],
+                                  'terminal_evidence': None, 'cleanup_evidence': None})
+        call = self._call
+        call.role, call.host_client, call.context = 'project', entry['host_client'], custody
+        try:
+            client = AccountClient(self._account, self._scope.project_id, COLLECTOR_RUNTIME_DIGEST,
+                                   timeout=SETTLE_TIMEOUT_SECONDS)
+            return client.settle_lost_run(
+                settle, request_id='lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32])
+        finally:
+            call.role = call.host_client = call.context = None
+
+    @staticmethod
+    def _remove_workspace(workspace):
+        """The settled run's private workspace, only if it is one of the host scratch folder's."""
+        if workspace is None:
+            return
+        from .bridge import SCRATCH_CONTAINER, scratch_base
+        from .host_paths import remove_private_directory
+        try:
+            container = Path(os.path.realpath(scratch_base())) / SCRATCH_CONTAINER
+            path = Path(workspace)
+            if path.parent == container and path.name.startswith('prepare-') and not path.is_symlink() and path.is_dir():
+                remove_private_directory(path)
+        except Exception:
+            pass
+
+    def settle_on_exit(self):
+        """After every thread of this host stopped: settle its own runs, then let later hosts settle the rest."""
+        install_enrollment(self._preamble, owner=self._owner_name)
+        try:
+            self._settle_lost(True)
+        except Exception:
+            pass
+        finally:
+            install_enrollment(None, owner=self._owner_name)
+        self._journal.release()
 
     @staticmethod
     def _id(run):
@@ -984,3 +1137,4 @@ class RunDriver:
                 connection.close()
             run.waiters = []
         self._executor.shutdown(wait=False, cancel_futures=True)
+        self._sweeper.shutdown(wait=False, cancel_futures=True)

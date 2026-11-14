@@ -223,6 +223,12 @@ class AccountOwnerViews:
         return self._ledger._fence_claim(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                                          fence=fence, storage_binding=storage_binding, storage_evidence=storage_evidence)
 
+    def settle_lost_run(self, project_id, *, runtime_digest, caller_scope, settle, storage_binding, storage_evidence):
+        self._guard()
+        from .account_lost_run import settle_lost_run
+        return settle_lost_run(self._ledger, project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                               settle=settle, storage_binding=storage_binding, storage_evidence=storage_evidence)
+
     def release_capacity(self, project_id, **options):
         self._guard()
         from .account_cleanup import release_capacity
@@ -861,6 +867,8 @@ class AccountService:
             from .claim_denial import decode_close_denied, decode_fence_claim
             closure = decode_close_denied(request.payload) if operation == 'account.close_denied_attempt' else None
             fence = decode_fence_claim(request.payload) if operation == 'account.fence_claim' else None
+            from .lost_run_contracts import decode_settle_lost
+            lost = decode_settle_lost(request.payload) if operation == 'account.settle_lost_run' else None
             provenance = decode_run_provenance_input(request.payload) if operation == 'account.run_provenance' else None
             open_provenance = decode_open_provenance_input(request.payload) if operation == 'account.open_provenance' else None
             opening = decode_account_open_input(request.payload, project, runtime) if operation == 'account.open_host_run' else None
@@ -894,9 +902,9 @@ class AccountService:
                 or (authorization.source in {"hook", "app_server"} and request.operation != "account.health")
                 or (request.operation == "account.owner_public_key" and authorization.source != "owner")
                 or (authorization.source == "project" and operation not in {
-                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable",
+                    "account.health", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.run_provenance", "account.open_provenance", "account.observe_provider", "account.record_observation_unavailable",
                     "account.record_rate_limit_event"})
-                or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.run_provenance", "account.open_provenance",
+                or (operation in {"account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt", "account.fence_claim", "account.settle_lost_run", "account.run_provenance", "account.open_provenance",
                                   "account.record_rate_limit_event"} and
                     (authorization.source != "project" or authorization.caller_scope is None))
                 or (operation in {"account.claim_launch", "account.capacity_status", 'account.open_host_run'} and
@@ -1119,6 +1127,12 @@ class AccountService:
                 storage_binding, storage_evidence = capture_storage_evidence(authorization.storage_binding, authorization.storage_evidence)
                 result = self._views.fence_claim(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
                                                  fence=fence, storage_binding=storage_binding, storage_evidence=storage_evidence)
+            elif operation == 'account.settle_lost_run':
+                from .claim_storage import capture_storage_evidence
+                storage_binding, storage_evidence = capture_storage_evidence(authorization.storage_binding, authorization.storage_evidence)
+                result = self._views.settle_lost_run(project, runtime_digest=runtime, caller_scope=authorization.caller_scope,
+                                                     settle=lost, storage_binding=storage_binding,
+                                                     storage_evidence=storage_evidence)
             elif request.operation == "account.health":
                 result = {"transport_alive": True, "database_checked": False}
             elif request.operation == "account.project":

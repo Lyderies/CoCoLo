@@ -240,8 +240,10 @@ gets the legacy bridged-run refusal instead of a legacy-ledger error.
 it (`run.abandon`). That succeeds only for a run that never took a lease (still
 registered, or failed before leasing), which holds no account capacity and no
 project custody; its report says `capacity_state: never_claimed`. A leased or
-claimed run is refused: settling it needs a reconciliation path that does not exist
-yet. No abandonment outcome record is written to project history.
+claimed run is refused while this host holds it. A claimed run of an earlier, stopped
+host of the project is settled by the host itself ("Host crash recovery" below); the command answers
+`classification: already_closed` with `capacity_state` `released` or, while something of
+the run may still run, `held`. No abandonment outcome record is written to project history.
 
 A run that can never launch closes by itself, with no command (the orchestrator's
 job, not the primary's). A claim the account denied with a receipt is closed through
@@ -280,7 +282,7 @@ recorded and releases its capacity.
 
 Not done: no cancellation-before-dispatch path for a claimed run through the
 driver, no driver state across a host restart (a run opened before a restart is
-refused at dispatch and keeps its account capacity until reconciled), the
+refused at dispatch; its capacity is settled as below), the
 `learning-bind-host-agent` (native routes from older policies only) and the learning
 cycle report still use the legacy ledger.
 
@@ -393,19 +395,79 @@ originals live in memory (at most 64), so after a service restart earlier
 reconnaissance can no longer be cited. Test:
 `HostVerificationTests.test_accepted_reconnaissance_of_the_same_task_is_trusted_routing_evidence`.
 
-Host crash recovery (owner decision 2026-11-13: automatic). If a project host stops
-while a run is claimed, the new host does not know the run: `learning-run-status`
-reports it unavailable, never a confirmed outcome, and new runs open and run normally.
-The account keeps the claimed row unreleased (unconfirmed), but once its hard deadline
-is more than `CRASHED_CLAIM_GRACE_MS` (one hour) past on both clocks, it no longer
-counts against the machine or account active-run limits
-(`active_run_capacity.crashed_claim`): the wall clock must be past the claim's deadline
-plus the grace, and so must the monotonic clock against the claim's stored monotonic
-deadline, which is the one the child and its detached watchdog run on. A wall clock set
-forward therefore frees nothing. A monotonic clock below the claim's reference means
-the machine rebooted since, which no child survives. A claim without a monotonic
-deadline never qualifies. A late terminal still settles the row normally. No owner
-step is needed. Tests:
+Host crash recovery (owner decision 2026-11-13: automatic; finding 18). If a project
+host stops or crashes while a run holds an admitted claim, the new host does not know
+the run (no driver state survives a restart, so nothing is relaunched or replayed), but
+it settles the run's capacity by itself as soon as it has trusted evidence that nothing
+of the run can still be running:
+
+- Launch journal (`launch_journal.LaunchJournal`, `<state>/projects/<id>/launches/`,
+  owner-only, one file per admitted claim, each write fsynced and renamed into place).
+  The driver writes `claimed` (lease, claim request, identity digest, the run's sealed
+  pending storage evidence, workspace) when the account admits the claim, before the
+  run can launch. The host's execution registry writes `spawning` immediately before
+  `Popen`, and refuses the launch if that write fails, so a run still `claimed` never
+  started a child; then `launched` (child pid and kernel birth time, at bind) and
+  `watched` (the detached watchdog's pid and birth, after its acknowledgement). A normal
+  release removes the file.
+- Instance lock. Each driver holds an exclusive `flock` on its own
+  `<instance>.lock` for as long as any of its threads may launch or own a child: the
+  kernel frees it when the process dies, and a graceful stop frees it only after every
+  runtime thread has stopped. Another instance's entry is considered only while that lock
+  can be taken; a missing lock file proves nothing.
+- Evidence (`launch_journal.tree_state`): `claimed` is gone (never spawned). `watched` is
+  gone only when the child and the watchdog are each reaped (`process_gone`) or their pids
+  now have another birth time, `killpg(pid, 0)` answers ESRCH for both of their process
+  groups (each started a new session, so group and session ids are their pids), and no
+  process listed by `ps -A` has either as its session (`getsid`). Every other state,
+  and any unreadable, damaged or ambiguous entry or kernel read, is not evidence. Nothing
+  is ever signalled.
+- Settlement. Every second the driver's sweep thread checks the entries of stopped
+  instances; for a gone one it sends `account.settle_lost_run` (role `project`, with the
+  run's lease and the sealed storage evidence from the journal as its custody, retried
+  on the next sweep while the account is unreachable). The account verifies the
+  evidence against the lease, that the run's own claim request holds a `claimed` receipt
+  for that bridge run, and its unreleased capacity row; then in one transaction marks the
+  host binding `abandoned` with reason `service_lost`. `active_run_capacity.crashed_claim`
+  treats such a row as settled, so it no longer counts against the machine or account
+  limits or holds back a drained migration. The capacity row keeps `released_at_ms`
+  null: no terminal, cleanup or release receipt is invented, and `capacity_status` still
+  reports it `held`. A row its own host already released is answered `released`. The
+  reply digest does not depend on time, so a repeated or lost request gets the same
+  receipt and nothing is settled twice. The driver then removes the run's private
+  workspace (only a `prepare-` folder in the host scratch container) and keeps a
+  tombstone for 24 hours, through which `run.describe`, `learning-run-status`
+  (`reason_code: run_lost`, `terminal_state: abandoned`, `outcome: unknown`,
+  `capacity_state` `released` or `held`) and the abandonment command report the run.
+- Graceful stop (SIGTERM, idle stop, update): `serve_project` closes the host, waits for
+  its threads, and if they all stopped settles its own runs the same way before freeing
+  its instance lock, so a run stopped in any state (claimed but not launched, running,
+  finished but not yet reported, terminal sent, releasing) no longer counts once the host
+  has exited, or, if its threads did not stop, once the next host finds them gone.
+
+The timed rule stays as the last resort for a run without usable evidence (its journal
+entry missing or damaged, or a crash between the child's creation and its watchdog's
+acknowledgement): once its hard deadline is more than `CRASHED_CLAIM_GRACE_MS` (one hour)
+past on both clocks, it no longer counts (`active_run_capacity.crashed_claim`): the
+wall clock must be past the claim's deadline plus the grace, and so must the monotonic
+clock against the claim's stored monotonic deadline, which is the one the child and its
+detached watchdog run on. A wall clock set forward therefore frees nothing. A monotonic
+clock below the claim's reference means the machine rebooted since, which no child
+survives. A claim without a monotonic deadline never qualifies. A late terminal still
+settles the row normally. No owner step is needed.
+
+Limits: the next host starts only with the project's next command, so a crashed
+project's run keeps counting (and can turn another project's claim away with
+`claim_busy`) until then or until the timed rule. A run that failed after its claim was
+admitted while its host keeps running is not settled until that host stops. Descendants
+that left both the child's process group and its session are seen only through the
+watchdog, which tracks the tree by polling (the same limit as the normal release). The
+run's bound result lease in project history keeps its local slot until it expires or its
+orchestration closes. Tests: `tests/test_launch_journal.py` (evidence, pid reuse,
+group/session leftovers, unreadable entries, instance locks),
+`tests/test_lost_run_settlement.py` (a really SIGKILLed host process with the child
+finishing or still running, damaged evidence and the timed fallback, a graceful stop in
+each run state, a lost reply and repeated restarts),
 `ActiveRunCapacityTests.test_an_unsettled_claim_long_past_its_hard_deadline_stops_counting_but_stays_unreleased`
 and `HostRestartTests`.
 
@@ -523,7 +585,7 @@ status, capacity status, provider observation and failure recording, billing pro
 `open_host_run` with originals and project proof, and `claim_launch` with the run's
 lease and sealed evidence. Role `project` (same key): health, run observations and
 failure recording, open and run provenance, registration, terminal submission,
-capacity release and denial closure, each with the run's lease and sealed evidence.
+capacity release, denial closure and lost-run settlement, each with the run's lease and sealed evidence.
 
 Host class is a consistency label, as in 0.2.x (`hosts.py`), not an authority
 boundary between writers: record reads are not limited by host class, and run
@@ -648,8 +710,8 @@ What an update or an owner command may stop, and what it says when it may not:
   owner's registration may replace an older runtime's collector (the existing
   `LearningStoreTests` for upgrade quiescence, schema and version ordering). A runtime that
   is not the one authorized for the state root refuses itself before any request.
-- Nothing is replayed: a restarted service reports an earlier run as unavailable
-  ("Host crash recovery"), and setup opens no run.
+- Nothing is replayed: a restarted service reports an earlier run as lost and settles its
+  capacity once nothing of it runs ("Host crash recovery"), and setup opens no run.
 
 Not covered by a test here: an old runtime's CLI driven against this collector as a
 separate installed tree (the refusal rests on the runtime authorization tests), and a

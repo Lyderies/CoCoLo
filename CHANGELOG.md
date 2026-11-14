@@ -146,10 +146,16 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   work.
 - Verification and operational QA of a result go through the project's service. It keeps what a
   verifier needs only while it runs (twelve idle hours when it holds recorded results).
-- If a project's service stops while a child is claimed, the earlier run is reported as
-  unavailable, never as an outcome, and new runs proceed. Its capacity slot is freed
-  automatically one hour after the run's hard deadline, measured on both the wall clock and the
-  run's own monotonic clock.
+- If a project's service stops or crashes while a child is claimed, the project's next service
+  settles that run by itself as soon as the operating system shows that the child, everything
+  left in its process group and session, and its deadline watchdog are gone (or that it never
+  started a child): the run is reported as `run_lost` (abandoned, outcome unknown, never an
+  outcome) and its capacity slot is freed within seconds, exactly once (new account operation
+  `account.settle_lost_run`, backed by a durable per-run launch journal in the project's state
+  folder). A service stopped normally settles its own runs this way before it exits. Nothing is
+  relaunched, and nothing is freed while any of the run may still be running. Only when that
+  evidence is missing or damaged is the slot freed one hour after the run's hard deadline,
+  measured on both the wall clock and the run's own monotonic clock (finding 18).
 - Learning (case mining, analysis, inert proposals) runs on each project's own history after a
   result or its QA is recorded, and the command reports it (compact by default,
   `--full-report` for everything). A project's earlier learning history moves from the shared

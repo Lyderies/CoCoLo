@@ -84,8 +84,11 @@ history. Projects do not wait for each other.
 
 For now, at most two children run at once on the machine, and at most two per provider account; each
 project prepares up to four. A child that cannot get a place is refused with `claim_busy`: wait for a
-running child to finish, then ask again. If a project's service stops while one of its children holds a
-place, that place is freed by itself one hour after the child's hard deadline.
+running child to finish, then ask again. If a project's service stops or crashes while one of its
+children holds a place, the project's next service (started by the project's next command) frees that
+place by itself as soon as nothing of that child is still running, and reports the run as `run_lost`
+(abandoned, outcome unknown). Only if it cannot tell is the place freed one hour after the child's hard
+deadline.
 
 A run that can never launch (for example because the account's billing statement went stale) closes by
 itself. Its place and storage are freed, `dispatch` gives the reason, and the next child can start. You

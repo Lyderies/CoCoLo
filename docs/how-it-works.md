@@ -131,8 +131,16 @@ child is never retried automatically.
 - **Per project:** a project's service prepares up to four children. A refused run frees its share.
 - **Per usage window:** admission also keeps a run cap per provider usage window, whatever headroom
   says.
-- **After a crash:** a place held by a run whose project service stopped is freed by itself one hour
-  after the run's hard deadline, measured on both the wall clock and the run's own monotonic clock.
+- **After a crash:** when a project's service stops or crashes while its run holds a place, the
+  project's next service settles that run by itself, usually within seconds of its child ending: the
+  run ends abandoned with an unknown outcome and its place is freed. It does so only on positive
+  evidence from the operating system that the child, everything left in its process group and
+  session, and its deadline watchdog are gone (or that the run never started a child), and never
+  while any of it may still run. A service that is stopped normally does the same for its own runs
+  before it exits. When that evidence is missing or cannot be read, or the service crashed in the
+  instant between starting the child and its watchdog taking over, the place is freed one hour after
+  the run's hard deadline, measured on both the wall clock and the run's own monotonic clock. The next
+  service starts with the project's next command.
 
 ## Runs that cannot launch
 

@@ -117,8 +117,8 @@ again. The default records folder is `~/.local/state/codex-agents`.
 
 ## "a child run is active; nothing was changed, try again when none is running"
 
-The command needs the shared ledger to itself, and a child is running (or ended without being settled
-less than an hour ago) in some project. Nothing was stopped. Wait for the child to finish, or ask the
+The command needs the shared ledger to itself, and a child is running (or its service stopped and has
+not yet settled it) in some project. Nothing was stopped. Wait for the child to finish, or ask the
 primary to cancel it, and run the command again.
 
 ## `ledger_upgrade_required`, or "these records were written by an earlier version"
@@ -169,8 +169,11 @@ keeps failing, run `./setup.sh` and choose "Update the install and walk through 
 
 Usually two children are already running on this machine, or on the same provider account, which is this
 release's limit. Wait for one to finish (or ask the primary to stop one), then ask
-again. A place held by a run whose project service stopped is freed by itself one hour after that run's
-deadline.
+again. A place held by a run whose project service stopped or crashed is freed by that project's next
+service, which starts with the project's next command, as soon as nothing of the run is still running;
+`learning-run-status` then reports that run as `run_lost` (abandoned, outcome unknown). Only when the
+service cannot tell (its records of the run are missing or damaged) is the place freed one hour after
+that run's deadline.
 
 ## `project_service_other_version`
 

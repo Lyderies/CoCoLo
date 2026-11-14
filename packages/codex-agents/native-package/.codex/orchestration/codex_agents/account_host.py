@@ -51,7 +51,7 @@ PROJECT_OPERATIONS = frozenset({
     'account.health', 'account.observe_provider', 'account.record_observation_unavailable',
     'account.open_provenance', 'account.register_execution', 'account.run_provenance',
     'account.submit_terminal', 'account.release_capacity', 'account.close_denied_attempt',
-    'account.fence_claim', 'account.record_rate_limit_event',
+    'account.fence_claim', 'account.settle_lost_run', 'account.record_rate_limit_event',
 })
 # The owner's terminal (setup, status, attestation): reads that spend nothing, and
 # never an open, a claim or a probe. Its provider observation is the standalone kind
