@@ -16,9 +16,10 @@
   `dispatch` gives the denial's reason; a run that failed before its claim was sent frees them the
   same way. The orchestration can then close, and the next child launches. Called anyway,
   `learning-classify-host-run-abandoned` answers `already_closed`. A claim refused without a
-  receipt (`claim_storage_expired`, say) or whose reply was lost still holds its space: nothing
-  proves the account committed nothing. Still open: the account counts a run that failed before
-  its claim was sent as pending (`host_runs_pending`).
+  receipt (`claim_storage_expired`, say), or whose reply was lost, is now settled by the account's
+  new claim fence: if the account admitted the claim the run keeps everything; otherwise the fence
+  makes sure it can never be admitted and the run closes the same way, and the account no longer
+  counts it as pending. A denied Claude child closes like a Codex one.
 - From the first real install: setup, `learning-status` and the billing attestation run in your own
   terminal, with no Codex or Claude Code markers, and the account service refused them, so setup said
   "Collector status: not ready" and attestation stopped with "provider observation unavailable". Your

@@ -253,11 +253,22 @@ its claim was sent releases its lease through the history's
 (the driver sends the claim only after that, with the lease's fixed request ID, and
 never after the run failed). `dispatch` reports the run's reason; the project's
 orchestration can then close. Called on such a run, the abandonment command answers
-`classification: already_closed`. Not closed: a claim refused without a receipt
-(a `ClaimError` reply such as `claim_storage_expired`) or whose reply was lost: the
-account sends no proof that it committed nothing, so the lease stays charged. Still
-open: the account keeps a never-claimed run's binding `pending` (counted in
-`host_runs_pending`); no account operation lets the project close one yet.
+`classification: already_closed`. Codex and Claude bridged runs close alike.
+
+Every other armed run without an admitted claim (one that failed before its claim
+was sent, a claim refused without a receipt, a claim whose reply was lost) is
+settled by `account.fence_claim`, sent by the project with the run's storage
+custody and retried while the account is unreachable. In one account transaction,
+for the run's fixed claim request: a receipt the account already holds is returned
+unchanged (a claimed one closes nothing, and the run keeps its lease and
+preparation); otherwise the account stores a denied `claim_not_open` receipt for
+the request (an existing code: a new one would change the account schema's receipt
+check), so any later claim with it gets that receipt back before admission or
+capacity work, marks the binding `abandoned` (`claim_denied`) and returns
+the same denial closure, which the history verifies to expire the lease. Only a
+lease that was never armed, which no claim can use, is released locally. Not
+closed: a run that failed before it took a lease keeps its account binding
+`pending` (no storage custody exists to fence it with).
 
 Account calls from the driver are retried, for up to ten minutes per call, only
 when the account services are unreachable, with the same request ID; the owner

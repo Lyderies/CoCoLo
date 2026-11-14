@@ -354,20 +354,27 @@ class TrialRunDriverTests(DriverHarness):
         """The run's own claim sent again after it closed, as a delayed duplicate would arrive."""
         from codex_agents.account_api import AccountClient
         from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
-        call = driver._call
-        call.role, call.host_client, call.context = 'account', run.host_client, driver._custody(run, storage=run.evidence)
-        try:
-            client = AccountClient(driver._account, run.scope.project_id, COLLECTOR_RUNTIME_DIGEST, timeout=30)
-            return client.claim_launch(run.key[0], run.identity_digest, request_id=run.claim_request_id)
-        finally:
-            call.role = call.host_client = call.context = None
+        custody = driver._custody(run, storage=run.evidence)
+
+        def claim():  # On the driver's own account thread, enrolled exactly as its claim was.
+            call = driver._call
+            call.role, call.host_client, call.context = 'account', run.host_client, custody
+            try:
+                client = AccountClient(driver._account, run.scope.project_id, COLLECTOR_RUNTIME_DIGEST, timeout=30)
+                return client.claim_launch(run.key[0], run.identity_digest, request_id=run.claim_request_id)
+            finally:
+                call.role = call.host_client = call.context = None
+        from codex_agents import service_transport
+        # Only the driver enrolls it: no earlier command's client enrollment may answer for it.
+        with mock.patch.dict(service_transport._ENROLLMENTS, {driver._owner_name: driver._preamble}, clear=True):
+            return driver._executor.submit(claim).result(timeout=60)
 
     def assert_fenced(self, driver, run):
         """The account fenced the run: nothing pending, and its own claim is refused from now on."""
         lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
         self.assertEqual((0, 1), (lifecycle['host_runs_pending'], lifecycle['host_runs_abandoned']), lifecycle)
         late = self.late_claim(driver, run)
-        self.assertEqual(('denied', 'claim_fenced'), (late['state'], late['reason_code']), late)
+        self.assertEqual(('denied', 'claim_not_open'), (late['state'], late['reason_code']), late)
         self.assertEqual([], self.executions())
 
     def assert_not_freed(self, runs, run_handle, orchestration):

@@ -37,6 +37,65 @@ class CloseDeniedInput:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class FenceClaimInput:
+    """The run's own fixed claim request, to be closed for good unless the account admitted it."""
+    run_handle: str
+    identity_digest: str
+    claim_request_id: str
+    lease_digest: str
+
+    def __post_init__(self):
+        LaunchClaimInput(self.run_handle, self.identity_digest)
+        if not matches(self.claim_request_id, _REQUEST_ID) or not matches(self.lease_digest, _DIGEST):
+            raise ClaimError('claim_denial_invalid')
+
+    def payload(self):
+        self.__post_init__()
+        return asdict(self)
+
+
+def decode_fence_claim(payload):
+    invalid = False
+    try:
+        if type(payload) is not dict:
+            raise ValueError()
+        value = FenceClaimInput(**payload)
+    except Exception:
+        invalid = True
+    if invalid:
+        raise ClaimError('claim_denial_invalid')
+    return value
+
+
+def checked_fence_reply(value, request):
+    """The receipt the account holds for the request and, unless it was admitted, the closure."""
+    invalid = False
+    try:
+        if type(value) is not dict or set(value) != {'receipt', 'closure'} or type(request) is not FenceClaimInput:
+            raise ValueError()
+        receipt = checked_claim_receipt(value['receipt'])
+        if receipt['known'] is not True:
+            raise ValueError()
+        if receipt['state'] == 'claimed':
+            if value['closure'] is not None:
+                raise ValueError()
+            closure = None
+        else:
+            closure = checked_denial_closure(value['closure'])
+            binding = closure['binding']
+            if (closure['denial'] != receipt or binding['run_handle'] != request.run_handle
+                    or binding['claim_request_id'] != request.claim_request_id
+                    or closure['lease_digest'] != request.lease_digest):
+                raise ValueError()
+        result = {'receipt': receipt, 'closure': closure}
+    except Exception:
+        invalid = True
+    if invalid:
+        raise ClaimError('claim_denial_invalid')
+    return result
+
+
 def decode_close_denied(payload):
     invalid = False
     try:

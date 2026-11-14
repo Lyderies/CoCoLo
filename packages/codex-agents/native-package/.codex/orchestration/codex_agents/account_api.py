@@ -23,7 +23,9 @@ from .capacity_status_contracts import CapacityStatusInput, checked_capacity_sta
 from .execution_grant import ExecutionRegistrationInput, checked_execution_reply, decode_execution_registration
 from .terminal_delivery import checked_terminal_receipt, decode_terminal_submission
 from .release_contracts import checked_release_receipt
-from .claim_denial import CloseDeniedInput, checked_denial_closure, decode_close_denied
+from .claim_denial import (
+    CloseDeniedInput, FenceClaimInput, checked_denial_closure, checked_fence_reply, decode_close_denied, decode_fence_claim,
+)
 from .run_provenance import RunProvenanceInput, checked_run_provenance, decode_run_provenance_input
 from .host_open_contracts import OpenProvenanceInput, checked_open_provenance, decode_open_provenance_input
 from .account_open_contracts import AccountOpenInput, OpenError, OPEN_REASON_CODES, checked_account_open_reply, decode_account_open_input
@@ -48,7 +50,7 @@ ACCOUNT_READ_OPERATIONS = frozenset({
 })
 ACCOUNT_OPERATIONS = ACCOUNT_READ_OPERATIONS | {
     "account.claim_launch", "account.register_execution", "account.submit_terminal", "account.release_capacity", "account.close_denied_attempt",
-    "account.run_provenance", "account.open_provenance", 'account.open_host_run', 'account.observe_provider',
+    "account.fence_claim", "account.run_provenance", "account.open_provenance", 'account.open_host_run', 'account.observe_provider',
     'account.record_observation_unavailable', 'account.record_rate_limit_event',
     'account.billing_probe',
 }
@@ -168,6 +170,11 @@ def _checked_request(data: object) -> None:
             decode_close_denied(data['payload'])
         except ClaimError:
             raise AccountError('account_invalid_request') from None
+    elif data['operation'] == 'account.fence_claim':
+        try:
+            decode_fence_claim(data['payload'])
+        except ClaimError:
+            raise AccountError('account_invalid_request') from None
     elif data["payload"]:
         raise AccountError("account_invalid_request")
 
@@ -269,6 +276,16 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
             checked = checked_release_receipt(result, decode_terminal_submission(request.payload))
             if checked['binding']['project_id'] != request.project_id or checked['binding']['runtime_digest'] != request.runtime_digest:
                 raise ClaimError('claim_cleanup_invalid')
+            return checked
+        except ClaimError:
+            raise AccountError('account_invalid_response') from None
+    elif request.operation == 'account.fence_claim':
+        try:
+            checked = checked_fence_reply(result, decode_fence_claim(request.payload))
+            if checked['closure'] is not None and (
+                    checked['closure']['binding']['project_id'] != request.project_id
+                    or checked['closure']['binding']['runtime_digest'] != request.runtime_digest):
+                raise ClaimError('claim_denial_invalid')
             return checked
         except ClaimError:
             raise AccountError('account_invalid_response') from None
@@ -573,6 +590,25 @@ class AccountClient:
         try:
             request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.close_denied_attempt', request_id,
                                      self._project, self._runtime, closure.payload())
+        except ClaimError:
+            raise AccountError('account_invalid_request') from None
+        failed = False
+        try:
+            raw = exchange_frame(self._path, encode_account_request(request), timeout=self._timeout,
+                                 response_limit=MAX_ACCOUNT_FRAME_BYTES)
+        except ServiceTransportError:
+            failed = True
+        if failed:
+            raise AccountError('account_unavailable')
+        return decode_account_response(raw, request)
+
+    def fence_claim(self, fence, *, request_id):
+        """Close the run's own claim request for good, unless the account already admitted it."""
+        if type(fence) is not FenceClaimInput:
+            raise AccountError('account_invalid_request')
+        try:
+            request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.fence_claim', request_id,
+                                     self._project, self._runtime, fence.payload())
         except ClaimError:
             raise AccountError('account_invalid_request') from None
         failed = False

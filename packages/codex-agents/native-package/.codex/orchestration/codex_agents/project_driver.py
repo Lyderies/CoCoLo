@@ -13,9 +13,11 @@ Every step runs on the host's owner thread, except account calls, which run on
 one helper thread and are collected on the next step. A failed step stops that
 run where it is: nothing is retried or relaunched, and an uncertain account
 reply leaves the capacity charged. A run that provably can never launch closes
-by itself: a claim the account denied is fenced through the account's denial
-closure, and a lease whose claim was never sent is released by the history;
-either way its input and preparation are then given back.
+by itself: a claim the account denied is closed through the account's denial
+closure; any other armed run without an admitted claim is fenced by the account
+(`account.fence_claim`), which either returns the admitted claim (and closes
+nothing) or makes sure it never will be; and a lease never armed is released by
+the history. Its input and preparation are then given back.
 """
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -29,7 +31,7 @@ import time
 
 from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountClient, AccountError, AccountRequest, account_request_digest
 from .account_claim_contracts import CLAIM_DENIAL_CODES, LaunchClaimInput
-from .claim_denial import CloseDeniedInput
+from .claim_denial import CloseDeniedInput, FenceClaimInput
 from .codex_preparation import (
     MAX_PREPARATION_BYTES, MAX_PREPARATION_EXPORT_BYTES, PreparationContext, PreparationError, PreparationLimits,
     preparation_payload,
@@ -83,9 +85,9 @@ _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 
                     'parent_grant'}
 _PREPARE_FIELDS = {'purpose', 'expected_export_commit'}
 _ACTIVE = frozenset({'reading', 'preparing', 'observing', 'leasing', 'arming', 'recording_open', 'claiming', 'binding',
-                     'registering', 'provenance', 'consuming', 'closing', 'settling', 'withdrawing'})
+                     'registering', 'provenance', 'consuming', 'closing', 'settling', 'withdrawing', 'fencing'})
 # A run that can never launch closes itself through these, then ends 'failed' and closed.
-_CLOSING = frozenset({'closing', 'settling', 'withdrawing'})
+_CLOSING = frozenset({'closing', 'settling', 'withdrawing', 'fencing'})
 _AFTER = frozenset({'ready', 'reporting', 'terminal', 'acknowledging', 'cleanup', 'releasing', 'retiring', 'released'})
 
 
@@ -127,6 +129,7 @@ class _Run:
     recorder: object = None
     claim_sent: bool = False  # Set before the claim is first handed to the account; never cleared.
     withdrawing: bool = False  # The lease's release is queued on the writer.
+    denied: bool = False  # The account holds a denied receipt for the run's claim: it can never be admitted.
     closed: bool = False  # Failed and holding nothing: no lease, no preparation, nothing to reconcile.
 
 
@@ -509,24 +512,43 @@ class RunDriver:
         """Stop a run; one that can provably never launch then closes by itself.
 
         A run that took no lease held only its preparation, given back here. A
-        run with a lease whose claim was never sent releases that lease through
-        the history first (`withdrawing`). A run whose claim was sent closes only
-        through the account's denial closure, never on a refusal or lost reply.
-        If closing itself fails, the run keeps its first reason and whatever was
-        not proven free, exactly as a failed run did before.
+        run with an armed lease and no admitted claim asks the account to fence
+        its claim request (`fencing`): whatever happened to the claim, the
+        account either returns the receipt it holds or makes sure it can never
+        be admitted, and only its closure frees the lease. A lease that was never
+        armed (no claim possible) is released through the history (`withdrawing`).
+        A run whose claim was admitted keeps everything. If closing itself fails,
+        the run keeps its first reason and everything not proven free; its
+        preparation is given back only when no claim of it can ever be admitted.
         """
         if run.state in _CLOSING:
             run.state = 'failed'
-            self._give_back(run)
+            if not run.claim_sent or run.denied:
+                self._give_back(run)
             return
         run.state, run.reason = 'failed', reason
         if run.persistence is None:
             self._give_back(run)
             run.closed = run.prepared is None and run.lease is None
-        elif not run.claim_sent and run.receipt is None and run.binding is None:
-            run.state = 'withdrawing'
+        elif run.receipt is not None or run.binding is not None:
+            return  # Admitted: local custody stays with what the account holds.
+        elif run.claim_sent:
+            self._fence(run)
         else:
-            self._give_back(run)
+            run.state = 'withdrawing'
+
+    def _fence(self, run):
+        """The account settles the claim request for good; retried while it is unreachable."""
+        try:
+            fence = FenceClaimInput(run.key[0], run.identity_digest, run.claim_request_id,
+                                    self._runtime.persistence.lease(run.persistence).lease_digest)
+        except Exception:
+            run.state = 'failed'  # Nothing to fence it with: it keeps what it holds.
+            return
+        self._account_call(run, 'project', 'fence_claim', fence, request_id='fence-' + self._id(run),
+                           custody=self._custody(run, storage=run.evidence))
+        run.retry_until = math.inf  # Nothing is freed without the account's answer.
+        run.state = 'fencing'
 
     def _close(self, run):
         """The lease is expired in the history: drop its input, then give the preparation back."""
@@ -746,7 +768,7 @@ class RunDriver:
                     return
                 # The account refused it for good: it fences the run against any later
                 # claim and returns the closure that lets the history expire the lease.
-                run.reason = reason
+                run.reason, run.denied = reason, True
                 self._account_call(run, 'project', 'close_denied_attempt',
                     CloseDeniedInput(run.key[0], run.identity_digest, run.claim_request_id, receipt['receipt_digest'],
                                      lane.lease(run.persistence).lease_digest),
@@ -771,11 +793,26 @@ class RunDriver:
                 self._fail(run, run.reason)
                 return
             self._close(run)
+        elif run.state == 'fencing':
+            reply = self._result(run)
+            if reply is None:
+                return
+            if reply['receipt']['state'] == 'claimed':
+                # Admitted after all (its reply was lost): it keeps its lease and preparation,
+                # and its capacity stays charged until reconciled, as for any admitted run.
+                run.receipt, run.state = reply['receipt'], 'failed'
+                return
+            run.denied = True
+            lane.settle_denial(run.persistence, canonical_json(reply['closure']))
+            run.state = 'settling'
         elif run.state == 'withdrawing':
             state = lane.snapshot(run.persistence)['state']
             if not run.withdrawing:
                 if state in {'preparing', 'arming', 'recording_host_open'}:
                     return  # The writer finishes what it started first.
+                if run.evidence is not None:
+                    self._fence(run)  # Armed: the account closes the request, and the run's binding with it.
+                    return
                 lane.withdraw_unsent(run.persistence)
                 run.withdrawing = True
             elif state == 'withdrawn':

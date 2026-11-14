@@ -6141,14 +6141,42 @@ class LearningLedger:
         Native peer/actor/epoch proof and old-capability drain remain activation
         gates. Claimed, ambiguous, native-bound or foreign attempts cannot close.
         """
-        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
-        from .claim_denial import DENIAL_LEGACY_READ_LIMITS, CloseDeniedInput, binding_digest, decode_close_denied, denial_closure, denial_record_id
-        from .claim_storage import capture_storage_evidence, verify_pending_storage_evidence
-        from .sql_read_budget import SQLReadError, SQLReadLimits
+        from .claim_denial import CloseDeniedInput, decode_close_denied
 
         if type(closure) is not CloseDeniedInput:
             raise ClaimError('claim_denial_invalid')
-        closure = decode_close_denied(closure.payload())
+        return self._settle_unlaunched(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                       closure=decode_close_denied(closure.payload()), storage_binding=storage_binding,
+                                       storage_evidence=storage_evidence, fence=False)
+
+    def _fence_claim(self, project_id, *, runtime_digest, caller_scope, fence, storage_binding, storage_evidence):
+        """Close the run's own claim request for good, unless this account already admitted it.
+
+        In one account transaction: a receipt already held for the request is
+        returned unchanged, and a claimed one closes nothing. Otherwise a denied
+        receipt (`claim_not_open`: the run is closed to claims) is stored for
+        the request, so every later claim
+        with it gets that receipt back before any admission or capacity work
+        (an admission still in flight finds it at its commit), and the run is
+        settled exactly as a denied claim. A launch or capacity row for the run
+        without a receipt for this request is contradictory and refused, and a
+        refusal anywhere commits nothing.
+        """
+        from .claim_denial import FenceClaimInput, decode_fence_claim
+
+        if type(fence) is not FenceClaimInput:
+            raise ClaimError('claim_denial_invalid')
+        return self._settle_unlaunched(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                       closure=decode_fence_claim(fence.payload()), storage_binding=storage_binding,
+                                       storage_evidence=storage_evidence, fence=True)
+
+    def _settle_unlaunched(self, project_id, *, runtime_digest, caller_scope, closure, storage_binding, storage_evidence,
+                           fence):
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+        from .claim_denial import DENIAL_LEGACY_READ_LIMITS, binding_digest, denial_closure, denial_record_id
+        from .claim_storage import capture_storage_evidence, verify_pending_storage_evidence
+        from .sql_read_budget import SQLReadError, SQLReadLimits
+
         expected, raw = capture_storage_evidence(storage_binding, storage_evidence)
         if expected is None:
             raise ClaimError('claim_storage_required')
@@ -6161,22 +6189,34 @@ class LearningLedger:
             raise ClaimError('claim_denial_invalid')
         context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
                                                     request_id=closure.claim_request_id, launch=launch, storage_binding=expected)
-        if (known is None or known['state'] != 'denied' or known['receipt_digest'] != closure.denial_receipt_digest
-                or known['run_id'] != expected.run_id):
+        if fence and known is not None and known['state'] == 'claimed':
+            return {'receipt': known, 'closure': None}  # Admitted: nothing here is closed.
+        if not fence and (known is None or known['state'] != 'denied'
+                          or known['receipt_digest'] != closure.denial_receipt_digest):
+            raise ClaimError('claim_denial_unavailable')
+        if known is not None and known['run_id'] != expected.run_id:
             raise ClaimError('claim_denial_unavailable')
         key = self.state.digest_key()
         identity = denial_record_id(key, project_id, closure.lease_digest)
-        facts = {'run_id': expected.run_id, 'handle_digest': context.handle, 'scope_digest': context.scope,
-                 'request_digest': context.request, 'parameters_digest': context.parameters,
-                 'binding_digest': binding_digest(key, expected), 'lease_digest': closure.lease_digest, 'denial': known}
         with self._lock:
             prior_hint = self._connection.execute('SELECT 1 FROM records WHERE project_id=? AND record_id=?',
                                                   (project_id, identity)).fetchone() is not None
         lease = None if prior_hint else verify_pending_storage_evidence(key, expected, raw)
         with self._account_transaction():
             current = self._known_claim_receipt_locked(project_id, context.scope, context.request, context.parameters)
-            if current != known:
+            if fence:
+                if current is not None and current['state'] == 'claimed':
+                    return {'receipt': current, 'closure': None}
+                if current is None:
+                    self._fence_claim_request_locked(project_id, context, expected)
+                    current = self._known_claim_receipt_locked(project_id, context.scope, context.request,
+                                                               context.parameters)
+                known = current
+            if current != known or known['state'] != 'denied' or known['run_id'] != expected.run_id:
                 raise ClaimError('claim_denial_unavailable')
+            facts = {'run_id': expected.run_id, 'handle_digest': context.handle, 'scope_digest': context.scope,
+                     'request_digest': context.request, 'parameters_digest': context.parameters,
+                     'binding_digest': binding_digest(key, expected), 'lease_digest': closure.lease_digest, 'denial': known}
             binding = self._connection.execute(
                 'SELECT h.*,l.provider FROM host_run_bindings h '
                 'LEFT JOIN launch_inputs l ON l.project_id=h.project_id AND l.handle_digest=h.handle_digest '
@@ -6225,12 +6265,13 @@ class LearningLedger:
                     invalid = True
                 if invalid:
                     raise ClaimError('claim_denial_conflict')
-                return denial_closure(key, expected, record, known=True)
+                result = denial_closure(key, expected, record, known=True)
+                return {'receipt': known, 'closure': result} if fence else result
             if lease is None:
                 raise ClaimError('claim_denial_unavailable')  # Never reconstruct a vanished known settlement.
             now = self._clock_ms()
             if (binding is None or binding['run_id'] != expected.run_id or binding['client_version'] != 'bridge-v1'
-                    or binding['provider'] != 'codex' or binding['binding_state'] != 'pending'
+                    or binding['provider'] not in {'codex', 'claude'} or binding['binding_state'] != 'pending'
                     or binding['consumed_at_ms'] is not None or binding['native_assignment_id'] is not None
                     or binding['usage_complete'] is not None
                     or binding['assignment_digest'] != lease.assignment_digest or lease.lease_digest != closure.lease_digest
@@ -6245,7 +6286,27 @@ class LearningLedger:
             self._connection.execute("UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='claim_denied' "
                                      "WHERE project_id=? AND handle_digest=? AND binding_state='pending'",
                                      (project_id, context.handle))
-        return denial_closure(key, expected, record, known=False)
+        result = denial_closure(key, expected, record, known=False)
+        return {'receipt': known, 'closure': result} if fence else result
+
+    def _fence_claim_request_locked(self, project_id, context, expected):
+        """Inside the fence's transaction: a denied receipt for a request this account never answered."""
+        binding = self._connection.execute('SELECT run_id FROM host_run_bindings WHERE project_id=? AND handle_digest=?',
+                                           (project_id, context.handle)).fetchone()
+        if (binding is None or binding['run_id'] != expected.run_id
+                or self._connection.execute('SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?) '
+                                            'LIMIT 1', (project_id, context.handle, expected.run_id)).fetchone() is not None
+                or self._connection.execute('SELECT 1 FROM active_run_capacity WHERE project_id=? AND (handle_digest=? '
+                                            'OR run_id=?) LIMIT 1',
+                                            (project_id, context.handle, expected.run_id)).fetchone() is not None):
+            raise ClaimError('claim_denial_unavailable')
+        now = self._clock_ms()
+        if type(now) is not int or not 0 <= now <= MAX_CLAIM_INTEGER:
+            raise ClaimError('claim_unavailable')
+        self._store_claim_receipt_locked(project_id, context.scope, context.request, context.parameters, context.handle, {
+            'state': 'denied', 'run_id': expected.run_id, 'reason_code': 'claim_not_open', 'bridge_run_id': None,
+            'deadline_at_ms': None, 'recorded_at_ms': now,
+        })
 
     def _attest_run_provenance(self, project_id, *, runtime_digest, caller_scope, request,
                               storage_binding, storage_evidence, work_limits):
