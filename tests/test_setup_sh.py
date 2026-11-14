@@ -2215,6 +2215,18 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\x1b[B\x1b[B\r")  # past the remembered project and this folder
         self.expect("Project path")
 
+    def test_started_from_the_orchestrator_it_suggests_no_project_and_refuses_itself(self) -> None:
+        # The first real install: Enter at the project question installed into this repository.
+        self.start(ROOT)
+        self.expect("Everything looks good")
+        self.send("\r")
+        self.expect("(type or paste the full path)")
+        self.send("\r")  # nothing typed: asked again, nothing previewed
+        self.expect("(type or paste the full path)")
+        self.send(f"{ROOT}\r")
+        self.expect("this orchestrator's own folder")
+        self.assertFalse(any("install.py" in line for line in self.py_full.read_text().splitlines()))
+
     def test_question_mark_shows_what_ran_in_the_step(self) -> None:
         project, _ = self.make_project("first")
         self.remembered(project)

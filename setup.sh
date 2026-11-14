@@ -1137,7 +1137,11 @@ ANSWER_RAW=""
 ask_text() { # ask_text PROMPT DEFAULT -> ANSWER (expanded), ANSWER_RAW (as typed)
   render
   show_cursor
-  printf '  %s%s%s [%s]\n  > ' "$C_BOLD" "$1" "$C_RESET" "$2"
+  if [ -n "$2" ]; then
+    printf '  %s%s%s [%s]\n  > ' "$C_BOLD" "$1" "$C_RESET" "$2"
+  else
+    printf '  %s%s%s (type or paste the full path)\n  > ' "$C_BOLD" "$1" "$C_RESET"
+  fi
   IFS= read -r -e ANSWER || { echo "Input closed; stopping." >&2; exit 1; }
   [ -z "$ANSWER" ] && ANSWER=$2
   case "$ANSWER" in
@@ -1554,6 +1558,10 @@ basic_problem() {
     echo "That is inside a Git project but not its top. Use the project root instead: $top"
     return 1
   fi
+  if [ "$dir" = "$(resolve_dir "$ROOT_DIR")" ]; then
+    echo "That is this orchestrator's own folder, where setup runs from, not a project to set up. Type the folder of the project you want to use it in."
+    return 1
+  fi
   if inside_dir "$PY" "$dir"; then
     PY_PROBLEM=project
     echo "$(python_problem_text) Put a system Python, such as Homebrew's or python.org's, first on PATH."
@@ -1673,7 +1681,7 @@ pick_project() {
 
 step_project() {
   local default dir reason out rc guess
-  default=${1:-$PWD}
+  default=${1-$PWD}
   while :; do
     begin_step 2
     body "Choose the project to set up. It must be the top folder of a Git working tree. Nothing is changed in this step; it only previews."
@@ -1681,6 +1689,7 @@ step_project() {
       screen_reset; begin_step 2
       body "Choose the project to set up. It must be the top folder of a Git working tree. Nothing is changed in this step; it only previews."
       ask_text "Project path" "$default"
+      [ -n "$ANSWER" ] || continue  # Nothing typed and nothing to suggest: ask again.
     fi
     dir=$(resolve_dir "$ANSWER")
     screen_reset; begin_step 2
@@ -2982,6 +2991,8 @@ reset_attempt() {
 
 main() {
   local start=${1:-$PWD} n
+  # Started from this repository itself (the usual way): there is no project to suggest yet.
+  [ "$(resolve_dir "$start")" = "$(resolve_dir "$ROOT_DIR")" ] && start=""
   setup_colors
   term_size
   step_checks
