@@ -2,6 +2,13 @@
 
 ## Unreleased: 0.3.0 (in progress)
 
+- From the second real install: a finished Codex child never gave its slot back (Claude children did),
+  so after two Codex runs no child could start anywhere on the machine (`claim_busy`). Real Codex runs
+  short shell commands that it reaps itself; the process tracker could not tell such a vanished
+  process from one that escaped, so it never confirmed the child's tree clean. A process whose id the
+  kernel positively no longer knows now counts as stopped; an unreadable one, or one still running
+  outside the tree, still does not. Checked on the real install: the slot is released two seconds
+  after the child ends.
 - From the first real install's checks (the tests had used short time limits and one child per
   project): a child with the route's standard time limit (6 hours) was refused at claim
   (`claim_storage_expired`), because its result space was reserved for 30 minutes; the reservation

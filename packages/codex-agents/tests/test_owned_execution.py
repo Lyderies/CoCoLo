@@ -37,7 +37,8 @@ class CleanupEvidenceTests(unittest.TestCase):
     def test_unreadable_descendant_is_not_forgotten_as_cleanup_proof(self):
         tree, records, root = self.identified()
         records.pop(20001)
-        with mock.patch.object(process_tree, "process_record", side_effect=records.get):
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "process_gone", return_value=False):  # Unreadable, not gone.
             tree.update({20000: 1})
             self.assertNotIn(20001, tree.tracked)
             self.assertFalse(tree.cleanup_after_owned_wait(root))
@@ -48,10 +49,65 @@ class CleanupEvidenceTests(unittest.TestCase):
             with self.subTest(candidate=candidate):
                 records = {20000: (1, 20000, "root", False), 20001: candidate}
                 tree = process_tree.ProcessTree(20000)
-                with mock.patch.object(process_tree, "process_record", side_effect=records.get):
+                with mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                        mock.patch.object(process_tree, "process_gone", return_value=False):
                     self.assertTrue(tree.identify({20000: 1, 20001: 20000}))
                     self.assertNotIn(20001, tree.tracked)
                     self.assertFalse(tree.cleanup_after_owned_wait(SimpleNamespace(pid=20000, returncode=0)))
+
+    def test_a_descendant_that_exited_and_was_reaped_counts_as_stopped(self):
+        # A child's quick shell command: its parent reaps it, so its pid is simply gone.
+        tree, records, root = self.identified()
+        records.pop(20001)
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "process_gone", side_effect=lambda pid: pid == 20001):
+            tree.update({20000: 1})
+            self.assertTrue(tree.cleanup_after_owned_wait(root))
+        # A candidate already reaped between the snapshot and its read is no loss of tracking either.
+        records = {20000: (1, 20000, "root", False)}
+        tree = process_tree.ProcessTree(20000)
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "process_gone", side_effect=lambda pid: pid == 20001):
+            self.assertTrue(tree.identify({20000: 1, 20001: 20000}))
+            self.assertTrue(tree.cleanup_after_owned_wait(SimpleNamespace(pid=20000, returncode=0)))
+
+    @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"), "kernel process records")
+    def test_gone_needs_positive_evidence(self):
+        reaped = subprocess.Popen(["/bin/sh", "-c", "exit 0"])
+        reaped.wait()
+        self.assertTrue(process_tree.process_gone(reaped.pid))
+        self.assertFalse(process_tree.process_gone(os.getpid()))  # Running.
+        self.assertFalse(process_tree.process_gone(1))  # Never claimed for init/launchd.
+        with mock.patch.object(process_tree.sys, "platform", "plan9"):
+            self.assertFalse(process_tree.process_gone(reaped.pid))  # No kernel read: no evidence.
+
+    @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"), "kernel process records")
+    def test_a_real_child_with_many_quick_grandchildren_is_confirmed_clean(self):
+        # What a real Codex child does: run short shell commands, each reaped by the child itself.
+        script = "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do /bin/echo $i >/dev/null; done"
+        process = subprocess.Popen(["/bin/sh", "-c", script], start_new_session=True)
+        tree = process_tree.ProcessTree(process.pid)
+        self.assertTrue(tree.identify(process_tree.process_table()))
+        while process.poll() is None:
+            table = process_tree.process_table()
+            if table is not None:
+                tree.update(table)
+        self.assertTrue(tree.cleanup_after_owned_wait(process))
+
+    @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"), "kernel process records")
+    def test_a_grandchild_that_escapes_still_refuses_confirmation(self):
+        # A descendant that outlives its parent (reparented, still running) is never proof.
+        process = subprocess.Popen(["/bin/sh", "-c", "/bin/sleep 5 & sleep 0.3"], start_new_session=True)
+        tree = process_tree.ProcessTree(process.pid)
+        self.assertTrue(tree.identify(process_tree.process_table()))
+        while process.poll() is None:
+            table = process_tree.process_table()
+            if table is not None:
+                tree.update(table)
+        try:
+            self.assertFalse(tree.cleanup_after_owned_wait(process))
+        finally:
+            os.killpg(process.pid, signal.SIGKILL)
 
     def test_positive_exit_survives_later_disappearance(self):
         tree, records, root = self.identified(child_exited=True)

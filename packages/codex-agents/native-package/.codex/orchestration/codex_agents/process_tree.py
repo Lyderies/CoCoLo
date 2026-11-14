@@ -121,6 +121,18 @@ def _darwin_raw(pid: int) -> bytes | None:
     return buffer.raw if size.value == DARWIN_KINFO_PROC_SIZE else None
 
 
+def _darwin_gone(pid: int) -> bool:
+    """The kernel answered and has no process with this pid (an empty record), not an error."""
+    import ctypes
+
+    if not _SYSCTL:
+        _darwin_raw(os.getpid())  # Binds sysctl once, as the record read does.
+    name = (ctypes.c_int * 4)(1, 14, 1, pid)
+    buffer = ctypes.create_string_buffer(DARWIN_KINFO_PROC_SIZE)
+    size = ctypes.c_size_t(DARWIN_KINFO_PROC_SIZE)
+    return _SYSCTL[0](name, 4, buffer, ctypes.byref(size), None, 0) == 0 and size.value == 0
+
+
 def parse_kinfo_proc(raw: bytes, pid: int) -> Record | None:
     """A macOS kinfo_proc as a record; None unless it is the record for `pid`."""
 
@@ -193,6 +205,30 @@ def process_record(pid: int) -> Record | None:
     return None
 
 
+def process_gone(pid: int) -> bool:
+    """Positive evidence that no process has this pid now: it exited and was reaped.
+
+    A record that cannot be read (permissions, an unknown platform, any error) is not
+    evidence, and neither is a pid reused by another process (that one has a record).
+    A process that escaped its tree is still running, so it is never "gone".
+    """
+
+    if pid <= 1:
+        return False
+    try:
+        if sys.platform == "darwin":
+            return _darwin_gone(pid)
+        if sys.platform.startswith("linux"):
+            try:
+                os.stat(f"/proc/{pid}")
+            except (FileNotFoundError, ProcessLookupError):
+                return True
+            return False
+    except (OSError, ValueError, AttributeError):
+        return False
+    return False
+
+
 def tracking_available() -> bool:
     """Whether both the process table and kernel records can be read here."""
 
@@ -231,7 +267,12 @@ class ProcessTree:
         if record is not None and (record[2] != birth or record[3]):
             self._cleanup_seen[identity] = True
         elif record is None and not self._cleanup_seen[identity]:
-            self._cleanup_incomplete = True
+            # Gone means it exited and its parent reaped it (a child's quick shell command,
+            # say); anything else unreadable stays unproven.
+            if process_gone(pid):
+                self._cleanup_seen[identity] = True
+            else:
+                self._cleanup_incomplete = True
 
     def cleanup_after_owned_wait(self, process) -> bool:
         """Positive tracked-tree metadata, not a cleanup credential.
@@ -297,10 +338,12 @@ class ProcessTree:
                 if pid in live or listed_parent not in live or _excluded_pid(pid):
                     continue
                 record = process_record(pid)
+                if record is None and process_gone(pid):
+                    continue  # Started and already reaped between the snapshot and this read.
                 if record is None or record[0] not in live:
                     # The snapshot put this candidate under an owned parent.
-                    # It may have escaped/reparented before this read; absence
-                    # or an unreadable identity cannot prove it stopped.
+                    # It may have escaped/reparented before this read; an
+                    # unreadable identity cannot prove it stopped.
                     self._cleanup_incomplete = True
                     continue
                 if self._record(record[0]) is None:
