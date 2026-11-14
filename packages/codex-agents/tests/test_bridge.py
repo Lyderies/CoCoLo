@@ -137,7 +137,8 @@ class BridgeTestCase(unittest.TestCase):
         git(self.project, "add", ".")
         git(self.project, "commit", "-qm", "project")
         self.bundle = base / "bundle"
-        shutil.copytree(ORCHESTRATION_ROOT.parent.parent, self.bundle)
+        shutil.copytree(ORCHESTRATION_ROOT.parent.parent, self.bundle,
+                        ignore=shutil.ignore_patterns("__pycache__"))  # Written meanwhile by other tests.
         (self.bundle / ".claude/agents").mkdir(parents=True)
         for name in ("claude_agents_researcher", "claude_agents_implementation_worker"):
             (self.bundle / f".claude/agents/{name}.md").write_text(

@@ -206,6 +206,8 @@ class LostRunAfterCrashTests(LostRunHarness):
             os.killpg(child['pgid'], 0)
         except ProcessLookupError:
             return True
+        except PermissionError:
+            return True  # The group number now belongs to another user's processes: ours is gone.
         return False
 
 
