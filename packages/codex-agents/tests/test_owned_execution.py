@@ -88,6 +88,63 @@ class RunMarkerParsingTests(unittest.TestCase):
         self.assertFalse(process_tree.tagged_process_running(tag, own))
 
 
+class UnreadableParentageTests(unittest.TestCase):
+    """An unreadable process born since the child is judged by the parent its environment came from."""
+
+    TAG = "f" * 32
+    CHILD_BIRTH = "10.000000"
+
+    def scan(self, processes, *, sessions=None):
+        """`processes`: pid -> (parent, birth, environment or None when unreadable)."""
+        table = {pid: value[0] for pid, value in processes.items()}
+        records = {pid: (value[0], pid, value[1], False) for pid, value in processes.items()}
+        arguments = {pid: (b"/opt/tool", value[2]) for pid, value in processes.items() if value[2] is not None}
+        sessions = sessions or {}
+        with mock.patch.object(process_tree, "process_table", return_value=table), \
+                mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "process_gone", side_effect=lambda pid: pid not in records), \
+                mock.patch.object(process_tree, "process_arguments", side_effect=arguments.get), \
+                mock.patch.object(process_tree, "_in_session",
+                                  side_effect=lambda pid, session: sessions.get(pid) == session), \
+                mock.patch.object(process_tree.time, "sleep"):
+            return process_tree.tagged_process_running(self.TAG, self.CHILD_BIRTH, 20000)
+
+    def tagged(self):
+        return [b"COCOLO_RUN_TAG=" + self.TAG.encode()]
+
+    def test_an_unreadable_process_with_an_untagged_readable_parent_does_not_block(self):
+        # `login` (setuid) for a Terminal tab opened during the run: its parent is Terminal.
+        self.assertIs(False, self.scan({500: (1, "1.000000", []), 30000: (500, "11.000000", None)}))
+        # A parent born since the child, readable and untagged, decides the same way.
+        self.assertIs(False, self.scan({500: (1, "10.500000", [b"PATH=/bin"]), 30000: (500, "11.000000", None)}))
+
+    def test_an_unreadable_process_whose_readable_parent_is_tagged_blocks(self):
+        self.assertIs(True, self.scan({500: (1, "10.500000", self.tagged()), 30000: (500, "11.000000", None)}))
+        # Its parent still in the child's session decides too.
+        self.assertIs(True, self.scan({500: (1, "10.500000", None), 30000: (500, "11.000000", None)},
+                                      sessions={500: 20000}))
+
+    def test_an_unreadable_detached_process_born_since_the_child_is_not_proof(self):
+        self.assertIsNone(self.scan({30000: (1, "11.000000", None)}))
+        # Every step up is unreadable and born since the child, up to launchd.
+        self.assertIsNone(self.scan({500: (1, "10.500000", None), 30000: (500, "11.000000", None)}))
+
+    def test_a_parent_that_cannot_be_the_listed_one_is_not_proof(self):
+        # Born after its supposed child: the pid passed to another process.
+        self.assertIsNone(self.scan({500: (1, "12.000000", []), 30000: (500, "11.000000", None)}))
+        # A parent the listing does not have.
+        self.assertIsNone(self.scan({30000: (500, "11.000000", None)}))
+
+    def test_the_walk_up_is_bounded(self):
+        depth = process_tree.MAX_PARENT_DEPTH
+        for length, expected in ((depth - 1, False), (depth + 1, None)):
+            with self.subTest(length=length):
+                processes = {1000: (1, "1.000000", [])}  # An untagged ancestor born before the child.
+                for index in range(length):
+                    processes[1001 + index] = (1000 + index, "11.%06d" % index, None)
+                self.assertIs(expected, self.scan(processes))
+
+
 class CleanupEvidenceTests(unittest.TestCase):
     def identified(self, child_exited=False):
         root, child = 20000, 20001
