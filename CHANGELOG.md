@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## Unreleased: COCOLO 0.3.0 (in progress)
+## 0.3.0: COCOLO, watched and stoppable children (Codex package 0.8.13)
 
 - From the final security review: a child's process that detached from its tree while its parent
   exited between two checks could keep running after its place was given back. Every child now
