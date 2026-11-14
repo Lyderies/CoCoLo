@@ -82,8 +82,9 @@ class AccountHostTests(unittest.TestCase):
         self.assertEqual(2, hint['schema_version'])
         return hint['account_endpoint']
 
-    def raw(self, endpoint, project_id, subject, *, operation='account.owner_key', label='codex-host-v1'):
-        request = AccountRequest(1, operation, 'raw-' + os.urandom(8).hex(), project_id, COLLECTOR_RUNTIME_DIGEST, {})
+    def raw(self, endpoint, project_id, subject, *, operation='account.owner_key', label='codex-host-v1', payload=None):
+        request = AccountRequest(1, operation, 'raw-' + os.urandom(8).hex(), project_id, COLLECTOR_RUNTIME_DIGEST,
+                                 {} if payload is None else payload)
         frame = encode_account_request(request)
         line = enrollment_preamble(read_capability(self.paths, None, 'account'), 'account', label, 1, frame,
                                    proof_directory(endpoint), subject=str(subject))
@@ -144,6 +145,12 @@ class AccountHostTests(unittest.TestCase):
             with self.subTest(operation=operation):
                 self.assertEqual('account_not_authorized', self.refusal(
                     *self.raw(endpoint, project_id, root, operation=operation, label=OWNER_CLIENT)))
+        # Nor may it refresh a run's launch evidence. (No positive control here: a primary's
+        # request would reach the real provider client.)
+        run_observation = {'provider': 'codex', 'run_handle': 'hrn_' + '0' * 48, 'phase': 'before'}
+        self.assertEqual('account_not_authorized', self.refusal(*self.raw(
+            endpoint, project_id, root, operation='account.observe_provider', label=OWNER_CLIENT,
+            payload=run_observation)))
         # A run's project role never takes the terminal label.
         with self.assertRaises(EnrollmentError):
             enrollment_preamble(read_capability(self.paths, None, 'account'), 'project', OWNER_CLIENT, 1, b'{}',

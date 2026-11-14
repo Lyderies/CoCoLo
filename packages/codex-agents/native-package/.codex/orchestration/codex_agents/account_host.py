@@ -27,6 +27,7 @@ from .collector_client import COLLECTOR_RUNTIME_DIGEST
 from .collector_paths import CollectorPaths, _assert_no_symlink_components, _check_owner_mode
 from .history_contracts import HistoryError
 from .hosts import OWNER_CLIENT
+from .provider_observation_contracts import ObservationError, decode_observation_input
 from .learning_contracts import keyed_digest, parse_bounded_json
 from .owned_execution import OwnedExecutionRegistry
 from .service_enrollment import (
@@ -53,7 +54,8 @@ PROJECT_OPERATIONS = frozenset({
     'account.record_rate_limit_event',
 })
 # The owner's terminal (setup, status, attestation): reads that spend nothing, and
-# never an open, a claim or a probe.
+# never an open, a claim or a probe. Its provider observation is the standalone kind
+# (who is signed in): one for a run's launch evidence is refused.
 OWNER_OPERATIONS = frozenset({
     'account.health', 'account.project', 'account.owner_key', 'account.capacity_status',
     'account.observe_provider',
@@ -134,6 +136,14 @@ class AccountServiceHost:
         if (entry is None or entry.kind != 'account' or allowed is None or request.operation not in allowed
                 or account_request_digest(request) != entry.enrolled.request_digest):
             return None
+        if allowed is OWNER_OPERATIONS and request.operation == 'account.observe_provider':
+            # The owner's terminal sees who is signed in; it never refreshes a run's launch evidence.
+            try:
+                observation = decode_observation_input(request.payload)
+            except ObservationError:
+                return None
+            if observation.run_handle is not None or observation.phase is not None:
+                return None
         root = entry.enrolled.subject
         try:
             if self._views._ledger.project_for_root(Path(root)) != request.project_id:

@@ -609,6 +609,27 @@ class AttestTests(AttestHarness):
         self.assertFalse(any("Press Enter to use" in prompt for prompt in self.prompts))
         self.assert_used_a_removed_copy_of(own, next(c for c in self.world.calls if "-Y" in c))
 
+    def test_planted_public_files_and_names_cannot_hang_steer_or_drive_the_terminal(self) -> None:
+        (self.state / "owner-allowed-signers").write_text("codex-agents-owner ssh-ed25519 AAAAkey\n")
+        ssh = self.ssh_dir()
+        write_key(ssh / "a-planted")
+        os.mkfifo(ssh / "a-planted.pub")  # would block a plain read for ever
+        write_key(ssh / "b-planted")
+        os.symlink("/dev/zero", ssh / "b-planted.pub")  # would never end
+        odd = ssh / "own\x1b[2J-key"
+        write_key(odd)
+        Path(str(odd) + ".pub").write_text(f"ssh-ed25519 AAAAkey {COMMENT}\n")
+        self.set_providers(codex=True)
+        self.assertEqual(self.run_main(["y", "y", "y"]), 0)
+        self.assertNotIn("\x1b[2J", self.output)
+        self.assertIn("Using the owner key file at ~/.ssh/own?[2J-key", self.output)
+        # A key at a standard place, even without its .pub file, comes before any other name.
+        self.world.key_files.clear()
+        standard = ssh / "codex-agents-owner"
+        write_key(standard)
+        self.assertEqual(self.run_main(["y", "y", "y"]), 0)
+        self.assertIn("Using the owner key file at ~/.ssh/codex-agents-owner\n", self.output)
+
     def test_a_mistyped_location_is_asked_again(self) -> None:
         (self.state / "owner-allowed-signers").write_text("codex-agents-owner ssh-ed25519 AAAAkey\n")
         other = self.ssh_dir() / "elsewhere-key"

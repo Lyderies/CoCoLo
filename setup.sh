@@ -1636,7 +1636,8 @@ remember_project() {
       kept=$((kept + 1))
     done <"$PROJECTS_FILE"
   fi
-  ( umask 077; printf '%s\n%s' "$dir" "$rest" >"$PROJECTS_FILE.new" && mv -f "$PROJECTS_FILE.new" "$PROJECTS_FILE" ) 2>/dev/null
+  ( umask 077; new=$(mktemp "$PROJECTS_FILE.XXXXXX") || exit 1
+    printf '%s\n%s' "$dir" "$rest" >"$new" && mv -f "$new" "$PROJECTS_FILE" || rm -f "$new" ) 2>/dev/null
   return 0
 }
 

@@ -1029,12 +1029,29 @@ def fingerprint(key_type: str, blob: str) -> str:
 
 
 def shown(key: Path) -> str:
-    """The key as the owner knows it: ~/... inside the home folder."""
+    """The key as the owner knows it: ~/... inside the home folder, with any character that
+    could drive the terminal replaced (a file name in ~/.ssh is not ours to trust)."""
 
     try:
-        return "~/" + str(key.relative_to(account_home()))
+        text = "~/" + str(key.relative_to(account_home()))
     except ValueError:
-        return str(key)
+        text = str(key)
+    return re.sub(r"[^\x20-\x7e]", "?", text)
+
+
+def _read_public_file(path: Path) -> str:
+    """A .pub file's text, read once without following a link or blocking, at most 16 KiB."""
+
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("not a regular file")
+        data = os.read(descriptor, 16_385)
+    finally:
+        os.close(descriptor)
+    if len(data) > 16_384:
+        raise OSError("too large for a public key")
+    return data.decode("utf-8")
 
 
 def describe_key(key_type: str, blob: str) -> str:
@@ -1356,12 +1373,7 @@ def _default_key_file(configured: tuple[str, str]) -> Path | None:
 
     without_public = None
     standard = owner_key_locations()
-    try:
-        others = sorted(path for path in ssh_folder().iterdir()
-                        if path not in standard and not path.name.endswith(".pub"))
-    except OSError:
-        others = []
-    for key in [*standard, *others]:
+    for key in standard:
         try:
             check_key_location(key)
             if not stat.S_ISREG(key.lstat().st_mode):
@@ -1371,15 +1383,31 @@ def _default_key_file(configured: tuple[str, str]) -> Path | None:
         adjacent = Path(str(key) + ".pub")
         if not os.path.lexists(adjacent):
             # Only if no other file matches: this could be a key already replaced.
-            if key in standard:
-                without_public = without_public or key
+            without_public = without_public or key
             continue
         try:
-            if _split_public(adjacent.read_text()) == configured:
+            if _split_public(_read_public_file(adjacent)) == configured:
                 return key
         except (OSError, UnicodeDecodeError, AttestError):
             continue
-    return without_public
+    if without_public is not None:
+        return without_public  # A key at a standard place is preferred to any other name.
+    # Then a key of the owner's own naming, found by the .pub file beside it.
+    try:
+        others = sorted(path for path in ssh_folder().iterdir()
+                        if path not in standard and not path.name.endswith(".pub"))
+    except OSError:
+        others = []
+    for key in others:
+        try:
+            check_key_location(key)
+            if not stat.S_ISREG(key.lstat().st_mode):
+                continue
+            if _split_public(_read_public_file(Path(str(key) + ".pub"))) == configured:
+                return key
+        except (AttestError, OSError, UnicodeDecodeError):
+            continue
+    return None
 
 
 def locate_key_file(configured: tuple[str, str]) -> Path:
