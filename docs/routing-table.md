@@ -21,7 +21,8 @@ Effort is always passed explicitly and set per provider.
 
 - Codex's `ultra` level is never used, because it starts its own subagents.
 - `max` is never chosen automatically.
-- In v1 every child runs read-only, including on coding rows; children that edit files arrive with G3.
+- In this release every child runs read-only, including on coding rows; children that edit files
+  arrive with G3 (planned for release 0.4.0).
 
 Usage figures are estimates:
 

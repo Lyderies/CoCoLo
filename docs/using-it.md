@@ -1,16 +1,20 @@
 # Using it
 
-Your only command is `./setup.sh`. The orchestrator CLI is for the agent: you ask the primary session for
-the skill, and it routes the work, opens each run through admission, starts the child, has the result
-verified, runs operational QA and reports back, or stops with a `reason_code`.
+Your only command is `./setup.sh`. Everything else you do by asking the session you work in (the
+**primary**) for COCOLO's skill. The primary then picks a route, asks admission whether a child may
+start, starts the child, has its result checked, runs your project's own checks and reports back. If
+something is refused, it stops and tells you why, with a `reason_code`.
+
+The orchestrator's command-line tool (`cli.py`) is for the primary, which runs it through the skill.
+You never need to run it yourself, though this page names the commands so you know what you see.
 
 ## From Claude Code
 
 Open the project and ask for the `agent-orchestration` skill, for example: "Use the agent-orchestration
 skill to have the routed reviewer check the error handling in `src/`."
 
-It routes the task, opens the run, dispatches the child (Claude or Codex, always a separate read-only
-process), verifies the result, runs operational QA and reports.
+It routes the task, opens the run, starts the child (Claude or Codex, always a separate read-only
+process), has the result verified, runs operational QA and reports.
 
 ## From Codex
 
@@ -26,21 +30,108 @@ The skill first runs `host-command` and stops, with the reason, unless the Codex
 Do not start Codex from inside a Claude Code session, for example from Claude Code's terminal tool: it
 inherits Claude Code's environment markers, and the host check then refuses with `host_client_unknown`.
 
-## Read-only patch workflow
+## What children can and cannot do
 
-Children in this release are read-only. The primary writes code in the project and delegates bounded
-research and independent review. A coding route can ask a read-only implementation worker for a proposed
-patch in its result; the primary checks and applies that patch, runs the project checks and requests
-independent verification. A patch in a child's reply has not changed the project.
+Children in this release only read. The primary writes code in the project and hands out bounded
+research and independent review. For coding, a read-only implementation worker can propose a patch in
+its answer; the primary checks and applies that patch, runs the project checks and asks for independent
+verification. A patch in a child's answer has not changed the project.
 
-A project agent mapped to `workspace-write` is not eligible for a Codex child yet. Routing skips that
+A project agent mapped to `workspace-write` cannot be used for a Codex child yet. Routing skips that
 Codex candidate and tries the remaining eligible providers in policy order; it denies the task if none
-is eligible. In a Codex-only project that family is unavailable until its mapping is read-only. There is
-no automatic replacement with a packaged role. The project owner can align its mapping for read-only
-patch authorship; the primary can meanwhile write code and delegate eligible research and review tasks.
-The provider, model, effort and role still come from `learning-route`.
+is eligible. In a Codex-only project that task family is unavailable until its mapping is read-only.
+There is no automatic replacement with a packaged role. The project owner can change the mapping to
+read-only for patch proposals; meanwhile the primary can write code and hand out eligible research and
+review tasks. The provider, model, effort and role still come from `learning-route`.
 
-## Compact learning reports
+## Watching and stopping a child
+
+While a child runs you can ask the primary how it is doing, or ask it to stop the child. The commands it
+uses are:
+
+```
+cli.py learning-run-status --project-root <root> --orchestration-handle <orc> --run-handle <hrn>
+cli.py learning-cancel-run --project-root <root> --orchestration-handle <orc> --run-handle <hrn>
+```
+
+Status reports the child's `health`:
+
+| Health | Meaning |
+|---|---|
+| `starting` | Launched, no work seen yet |
+| `active` | Working |
+| `quiet` | No new work for two minutes |
+| `stale` | No new work for five minutes |
+| `stopping` | A stop was requested or decided |
+| `terminal` | Finished |
+
+A child is stopped without anyone asking when it does not start within three minutes, produces no new
+work for ten minutes, or reaches its deadline. It is stopped at once when its client starts in an invalid way,
+when it uses a prohibited tool, and when the client reports a paid or rejected rate-limit event. These thresholds are
+provisional: they have not yet been measured against real client timings.
+
+A cancellation reply means the stop was requested; the child's result then comes back marked
+`cancelled`. A stopped child is never retried automatically.
+
+Only the session that started a run can see or stop it, and one project never sees another's runs.
+From your own terminal (setup, for example) you can read status and provider observations, but nothing
+that starts work or spends usage.
+
+## Several projects, and how many children at once
+
+Each project has its own service, started when needed, that runs that project's children and keeps its
+history. Projects do not wait for each other.
+
+For now, at most two children run at once on the machine, and at most two per provider account; each
+project prepares up to four. A child that cannot get a place is refused with `claim_busy`: wait for a
+running child to finish, then ask again. If a project's service stops while one of its children holds a
+place, that place is freed by itself one hour after the child's hard deadline.
+
+A run that can never launch (for example because the account's billing statement went stale) closes by
+itself. Its place and storage are freed, `dispatch` gives the reason, and the next child can start. You
+do not need to run anything.
+
+## When a task is denied
+
+A denial comes back as a `reason_code`, and no child starts. Admission fails closed, for example on an
+API key in the environment, an unreviewed client version, a missing attestation, unknown or paid-usage
+billing, exhausted headroom or a run cap ([full list](security-model.md#what-cocolo-enforces)). Common
+messages and their fixes are in [troubleshooting](troubleshooting.md); nearly every fix is "run
+`./setup.sh` again".
+
+## Keeping it working
+
+- Run `./setup.sh` again to update the install, verify it, re-run the billing attestation or change the
+  owner key passphrase.
+- Re-attest whenever your billing settings change.
+- Close every Codex session in the project before installing or updating.
+- After every install or update (a Python upgrade needs one), trust the orchestrator's learning hooks
+  again in Codex's `/hooks` on a main checkout; linked worktrees load their main checkout's hooks.
+  The wizard tells you when.
+- Verify and run operational QA in the same working session as the work. The project's service keeps
+  what a verifier needs only while it runs, and stops after twelve idle hours.
+
+### Updating from release 0.2.x
+
+- Step 5 of the wizard asks before it upgrades your records, keeps a checked copy of them first, and
+  says where it is. All projects on the machine share those records, so update every project, one after
+  the other, while no child is running.
+- After the update, the first use of each project moves that project's learning history from the shared
+  ledger into the project's own store. It happens by itself when no child is running anywhere, and
+  waits for the next use otherwise. `learning-status` shows `learning_migration`: `complete`, `pending`
+  or `not_needed`. To do it by hand, or to undo it before anything new was learned:
+  `cli.py learning-migrate-project --project-root <root>` (`--status`, `--rollback`).
+- Commands that need the shared ledger to themselves (backup, owner-key replacement, migration and
+  similar) refuse while any child is running, with "a child run is active; nothing was changed". Try
+  again when it has finished.
+- The candidate commands (evaluation, comparison, promotion, canary, rollback, drift, calibration) are
+  not available for a project whose learning has moved to its own store; they return with release 0.4.0.
+
+## Command details
+
+You do not need this section to use COCOLO. It explains details the primary sees in command output.
+
+### Compact learning reports
 
 `learning-record-host-result`, `learning-record-operational-qa` and `learning-review-case`
 return a compact `learning_cycle` summary by default. It counts configurations, diagnosis
@@ -53,7 +144,7 @@ Add `--full-report` to the original command to receive the complete legacy respo
 the analysis and exact identifier lists. Choose this before recording when those details are
 needed. Repeating a mutation is not retrieval of its previous report: its incidental learning
 cycle may differ. This option does not create an artifact handle or change retry permission.
-This increment provides no later lookup for the omitted identifier lists.
+There is no later lookup for the omitted identifier lists.
 
 Outcomes, events, commits, receipts, verifier decisions and safe dispatch diagnostics remain
 complete in both modes. A successful record command can still contain rejected QA. Dispatch
@@ -61,7 +152,7 @@ results, result validation and explicit `learning-analyze`/`learning-run-cycle` 
 their complete output. The compact cycle summary is under 2 KiB; that bound does not truncate
 or impose a new limit on the authoritative fields beside it.
 
-## Previewing a bridge assignment
+### Previewing a bridge assignment
 
 Run `dispatch-preflight` with the same `--project-root`, `--task`, `--assignment` and
 `--parent-grant` used for validation. It lists committed file paths, sizes and object IDs,
@@ -87,7 +178,7 @@ turns through `--max-turns`. Neither bridge currently enforces that field as an 
 of tool executions; the preview reports that limit as unavailable. Filesystem declarations
 select exported content and do not provide per-path OS read isolation. Preflight reports
 configuration, and admission still checks the reviewed client and account before launch.
-Native routes are not supported by this bridge preview.
+The preview does not cover native routes.
 
 To request a model-turn limit explicitly on a Claude bridge assignment, add
 `"execution_limits": {"max_model_turns": 3}`. It may only narrow the existing
@@ -98,40 +189,14 @@ report's `effective_bounds` show the requested units, effective value and source
 
 An explicit `execution_limits.max_tool_calls` request, including zero, refuses
 before admission/export/launch because neither bridge can enforce that exact unit.
-Explicit model-turn requests also refuse on Codex and native routes. A single
+Explicit model-turn requests also refuse on Codex routes and on native routes (which only an
+older policy produces). A single
 Claude agentic turn can contain multiple tool calls; a turn limit is not a tool-call
 limit. The option's documented unit is [agentic turns](https://code.claude.com/docs/en/cli-reference).
 Real-client enforcement/calibration and the remaining LIVE-3 disposition remain
 release gates; fake-client stream tests establish host behavior only.
 
-## Watching and stopping a child
-
-While a child runs, the primary can ask how it is doing and can stop it; you can ask the primary to do
-either. The commands it uses are:
-
-```
-cli.py learning-run-status --project-root <root> --orchestration-handle <orc> --run-handle <hrn>
-cli.py learning-cancel-run --project-root <root> --orchestration-handle <orc> --run-handle <hrn>
-```
-
-Status reports `health`: `starting`, `active`, `quiet` (no new work for two minutes), `stale` (five
-minutes), then `stopping` or `terminal`. A child that produces no new work for ten minutes is stopped
-without anyone asking, and so is one that reaches its deadline. A cancellation reply means the stop was
-requested; the child's result then comes back marked `cancelled`. A stopped child is never retried
-automatically.
-
-Only the session that started a run can see or stop it, and one project never sees another's runs.
-Several projects can run children at the same time.
-
-## When a task is denied
-
-A denial comes back as a `reason_code`, and no child starts. Admission fails closed, for example on an
-API key in the environment, an unreviewed client version, a missing attestation, unknown or paid-usage
-billing, exhausted headroom or a run cap ([full list](security-model.md#what-v1-enforces)). Common
-messages and their fixes are in [troubleshooting](troubleshooting.md); nearly every fix is "run
-`./setup.sh` again".
-
-## Result-contract diagnostics
+### Result-contract diagnostics
 
 A client can finish successfully while its answer violates the assignment's result contract.
 The bridge still returns `outcome: invalid_result` and a failed fenced replacement. Its
@@ -157,8 +222,9 @@ The trusted bridge stores the reason in a version-3 `dispatch_result` record, al
 unchanged result digest and fence. Recording that exact host result returns the stored reason
 under `dispatch_diagnostics`. A primary cannot supply or replace this diagnostic. Version-1 and
 version-2 records remain readable with their original bytes; absent historical observations stay
-unknown. Historical rejected answers cannot be reconstructed from the fenced replacement. This record-format addition needs
-the updated runtime, but does not rewrite ledger tables or change outcome/verifier digests.
+unknown. Historical rejected answers cannot be reconstructed from the fenced replacement. This
+record-format addition needs the updated runtime, but does not rewrite ledger tables or change
+outcome/verifier digests.
 
 For Claude, `bridge_report.client_diagnostics` records a bounded process exit code, whether a final
 result frame was observed, its allowlisted subtype, and the most recent non-null assistant error code.
@@ -172,26 +238,3 @@ The existing `missing_result` outcome also covers nonzero client exits. A receiv
 and a nonzero exit can therefore coexist with that outcome; the separate observations identify
 those facts while preserving the exact failed replacement and terminal binding. Error fields follow
 the [documented Claude message types](https://code.claude.com/docs/en/agent-sdk/typescript#sdkassistantmessage).
-
-## Keeping it working
-
-- Run `./setup.sh` again to update the install, verify it, re-run the billing attestation or change the
-  owner key passphrase.
-- Updating from release 0.2.x: step 5 of the wizard asks before it upgrades your records, keeps a checked
-  copy of them first, and says where it is. All projects on the machine share those records, so update
-  every project, one after the other, while no child is running.
-- After an update, the first use of each project moves that project's learning history from the shared
-  ledger into the project's own store. It happens by itself when no child is running anywhere, and
-  waits for the next use otherwise. `learning-status` shows `learning_migration`: `complete`, `pending`
-  or `not_needed`. To do it by hand, or to undo it before anything new was learned:
-  `cli.py learning-migrate-project --project-root <root>` (`--status`, `--rollback`).
-- Commands that need the shared ledger to themselves (backup, owner-key replacement, migration and
-  similar) refuse while any child is running, with "a child run is active; nothing was changed". Try
-  again when it has finished.
-- The candidate commands (evaluation, comparison, promotion, canary, rollback) are not available for a
-  project whose learning has moved to its own store; they return with release 0.4.0.
-- Re-attest whenever your billing settings change.
-- Close every Codex session in the project before installing or updating.
-- After every install or update (a Python upgrade needs one), trust the orchestrator's learning hooks
-  again in Codex's `/hooks` on a main checkout; linked worktrees load their main checkout's hooks.
-  The wizard tells you when.

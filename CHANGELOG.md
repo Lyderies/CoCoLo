@@ -1,7 +1,19 @@
 # Changelog
 
-## Unreleased: 0.3.0 (in progress)
+What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
+## Unreleased: COCOLO 0.3.0 (in progress)
+
+- The product is now called COCOLO: Claude Orchestrator, Codex Orchestrator, Local Orchestrator. The
+  README, the user documentation and the setup wizard's header and welcome screen use the name. Folder,
+  package, skill, command, file and field names are unchanged, so nothing you type or see in command
+  output changes. The README is rewritten as a short, friendly introduction; the technical detail it
+  held (architecture, records, admitted client versions, known limits) is in the documentation pages,
+  which were reviewed against this release: how-it-works describes the project services, run health,
+  capacity limits and runs that close by themselves; the Codex commands rule is documented with its 27
+  everyday commands (it said 23); statements about native Claude children are removed or corrected;
+  troubleshooting explains `claim_busy`; and maintainers' design notes are listed separately, for
+  developers.
 - From the second real install: a finished Codex child never gave its slot back (Claude children did),
   so after two Codex runs no child could start anywhere on the machine (`claim_busy`). Real Codex runs
   short shell commands that it reaps itself; the process tracker could not tell such a vanished

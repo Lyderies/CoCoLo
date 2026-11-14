@@ -181,7 +181,7 @@ main `config.toml` is never edited.
 ## 6. Codex commands rule
 
 Codex's sandbox blocks the learning collector, so a Codex primary needs a Codex command rule that lets only
-this project's 23 everyday orchestrator commands run outside the sandbox. Use the `python3` your Codex
+this project's 27 everyday orchestrator commands run outside the sandbox. Use the `python3` your Codex
 sessions find first on `PATH`:
 
 ```sh

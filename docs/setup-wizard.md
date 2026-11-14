@@ -1,7 +1,7 @@
 # Setup wizard reference
 
-`./setup.sh [/path/to/project]`, run from the root of this repository, is a terminal wizard: arrow keys
-move, Enter selects, Space toggles, `?` shows what ran in the current step and `q` quits. It needs an
+`./setup.sh [/path/to/project]`, run from the root of this repository, is COCOLO's terminal wizard:
+arrow keys move, Enter selects, Space toggles, `?` shows what ran in the current step and `q` quits. It needs an
 interactive terminal and refuses to run piped or scripted, because the billing attestation is a human
 step. A failed step says why in the orchestrator's own words and reason code (see
 [troubleshooting](troubleshooting.md)); `?` lists each command the step ran, how it ended and its
@@ -11,7 +11,7 @@ details. `NO_COLOR=1` gives plain output. Paths accept a leading `~`,
 
 ## Steps
 
-1. **Checks.** The OS (macOS or Linux; on Linux, verify reports not ready because operational checks need
+1. **Checks.** The welcome screen names COCOLO and what the wizard does, then checks the OS (macOS or Linux; on Linux, verify reports not ready because operational checks need
    macOS), bash, a trusted `python3` 3.11 or later, a trusted Git, both sign-ins, and that no
    `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set. Each client is found and run only as the orchestrator
    runs it (from `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin` or `~/.local/bin`, its file
@@ -158,7 +158,7 @@ or a folder above it (a nested project's tree, `.git` and `.claude` included).
 - **Claude primaries cannot run owner commands through Claude Code's tools.** The installer merges deny
   rules into the project's `.claude/settings.json` and records which ones it added in your orchestrator
   records folder, outside the project, so nothing in the project can claim a rule for it: two `Bash` rules
-  for each owner-only CLI subcommand (every command that is not one of the 23 primary-host commands), in the
+  for each owner-only CLI subcommand (every command that is not one of the 27 primary-host commands), in the
   forms `Bash(*.codex/orchestration/cli.py <command>)` and `Bash(*.codex/orchestration/cli.py <command> *)`,
   plus `Edit` rules for `.codex/**`, `.agents/**`, `.claude/settings*.json` and `.git/**`. Existing
   settings are kept; `verify` reports missing rules and `remove` takes out only the entries that record

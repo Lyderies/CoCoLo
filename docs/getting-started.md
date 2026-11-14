@@ -1,7 +1,7 @@
 # Getting started
 
-This walks you from a fresh clone to a first routed review in one project. It takes one run of the setup
-wizard and one request in Claude Code or Codex.
+This walks you from a fresh clone of COCOLO to a first routed review in one project. It takes one run of
+the setup wizard and one request in Claude Code or Codex.
 
 ## 1. Check the requirements
 
@@ -9,7 +9,8 @@ wizard and one request in Claude Code or Codex.
 - **Git:** from the Command Line Tools, Xcode or Homebrew (`/usr/bin/git` on Linux).
 - **Python:** 3.11 or later from a trusted install such as Homebrew or python.org, first on `PATH`. Not a
   virtual environment, and not macOS's `/usr/bin/python3` shim.
-- **Clients:** Claude Code 2.1.x, Codex CLI 0.164.0 to 0.169.x or both, signed in with their subscriptions.
+- **Clients:** Claude Code 2.1.x, Codex CLI 0.164.0 to 0.169.x, or both, signed in with their
+  subscriptions. Other versions are refused until they have been reviewed.
 - **No API keys:** `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` must not be set.
 
 ## 2. Clone this repository
@@ -37,7 +38,8 @@ Close every Codex session in the project first. Then, from the root of this repo
 ./setup.sh /path/to/project
 ```
 
-Use the arrow keys, Enter and Space; `q` quits.
+Use the arrow keys, Enter and Space; `?` shows what ran in the current step, and `q` quits. The next
+time you run it, projects you set up before are offered in a list.
 
 | Step | What it does |
 |---|---|
@@ -45,7 +47,7 @@ Use the arrow keys, Enter and Space; `q` quits.
 | 2. Project | Picks the project (top of a Git working tree) and previews the install; changes nothing |
 | 3. Providers | Codex children, Claude children and models, and whether Codex sessions may start Claude children |
 | 4. Install | Installs, writes `provider-routing.json`, offers to commit only the changed files (never pushed), verifies |
-| 5. Collector | Registers the project with the local learning collector and starts it; on macOS it first asks to move your records to `~/.local/state/codex-agents`, once |
+| 5. Collector | Registers the project with the local learning collector and starts it. It asks first if your records need moving to `~/.local/state/codex-agents` (macOS, once) or upgrading from release 0.2.x |
 | 6. Billing | Hands the terminal to `attest.py`, which only you can complete |
 | 7. Profile | Only if Codex sessions may start Claude children: the `codex -p orchestrator` profile, network on |
 | 8. Commands | Only if Codex sessions orchestrate the project: the Codex commands rule and its protected copy |
@@ -86,7 +88,8 @@ repository, the home folder, a folder above it or `/`. Never add `~`, `~/.codex`
   created the profile) or `codex`, and ask for the `orchestrate-agents` skill with the same request.
 
 The primary routes the task, opens the run, starts a read-only child, has the result verified, runs your
-operational checks and reports back. If something is refused, the answer carries a `reason_code`; see
+operational checks and reports back. While the child runs you can ask the primary how it is doing, or
+ask it to stop the child. If something is refused, the answer carries a `reason_code`; see
 [troubleshooting](troubleshooting.md).
 
 ## Next

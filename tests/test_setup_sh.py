@@ -907,6 +907,12 @@ class SetupScriptTests(unittest.TestCase):
         self.assertIn("Keep this setup folder outside every folder you open in Codex", text)
         self.assertIn("including the Codex commands rule", text)
 
+    def test_header_and_welcome_name_the_product(self) -> None:
+        text = SETUP.read_text(encoding="utf-8")
+        self.assertIn("printf '%s%s COCOLO setup %s'", text)
+        self.assertNotIn("Agent orchestration setup %s", text)
+        self.assertIn('body "Welcome to COCOLO\nClaude Orchestrator, Codex Orchestrator, Local Orchestrator"', text)
+
     def test_wizard_messages_for_the_polished_screens(self) -> None:
         text = SETUP.read_text(encoding="utf-8")
         self.assertIn("Nothing to commit: the project already has these files committed", text)
@@ -1601,6 +1607,8 @@ class WizardTerminalTests(unittest.TestCase):
     def test_quit_on_the_first_screen_changes_nothing(self) -> None:
         self.start(self.base)
         self.expect("Step 1 of 9")
+        self.expect("Claude Orchestrator, Codex Orchestrator, Local Orchestrator")
+        self.assertIn("COCOLO setup", self.screen)
         self.expect("signed in (plan: max, login: x)")
         self.send("q")
         self.expect("Quit setup?")

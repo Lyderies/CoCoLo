@@ -1,7 +1,7 @@
 # Troubleshooting
 
-Your only command is `./setup.sh`, run from the root of this repository. Nearly every fix below is "run
-it again". See the [setup wizard](setup-wizard.md) for what each step does.
+Your only command for COCOLO is `./setup.sh`, run from the root of this repository. Nearly every fix
+below is "run it again". See the [setup wizard](setup-wizard.md) for what each step does.
 
 ## "That passphrase did not unlock the key."
 
@@ -18,9 +18,10 @@ whose `.pub` file beside it matches the owner key on record is found by itself, 
 
 ## "Collector status: not ready" or "provider observation unavailable" with `account_invalid_response`
 
-Seen with the first 0.3.0 candidate only: commands run from your own terminal (setup, status and the
-billing attestation) were refused by the orchestrator's account service. Update the install from a
-newer copy of this repository.
+Seen only with the first 0.3.0 test build: commands run from your own terminal (setup, status and the
+billing attestation) were refused by the orchestrator's account service. This release lets your terminal
+read status and observe providers. Update this repository (`git pull`), then run `./setup.sh` and choose
+"Update the install and walk through every step".
 
 ## "the owner key must be a file in your own ~/.ssh folder"
 
@@ -36,8 +37,8 @@ setup, choose "Update the install and walk through every step" first and skip th
 
 Replacing the key cancels every billing statement the old key signed, in every project, so each project's
 children are refused with `billing_attestation_missing` until you choose "Re-run the billing attestation
-only" there. A bridged child opened before the replacement is refused at launch too; a native Claude child
-is checked only when its run opens, so one opened earlier can still start. The old key file stays in
+only" there. A child whose run was opened before the replacement is refused at launch too. The old key
+file stays in
 `~/.ssh`; the new one is `codex-agents-owner-2` (or the next free number).
 
 Only billing statements and grants not yet used are cancelled. QA, calibrations and promotions the old key
@@ -163,6 +164,13 @@ The shared collector was started and did not answer within eight seconds, which 
 busy machine or when it cannot start at all. It keeps starting by itself: run the command again. If it
 keeps failing, run `./setup.sh` and choose "Update the install and walk through every step"; step 5
 (Collector) says what is wrong.
+
+## `claim_busy`
+
+Usually two children are already running on this machine, or on the same provider account, which is this
+release's limit. Wait for one to finish (or ask the primary to stop one), then ask
+again. A place held by a run whose project service stopped is freed by itself one hour after that run's
+deadline.
 
 ## `project_service_other_version`
 

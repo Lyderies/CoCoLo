@@ -958,7 +958,7 @@ repeat_char() { # repeat_char CHAR COUNT
 
 draw_header() {
   local i name line plain width filled bar sep="  "
-  printf '%s%s Agent orchestration setup %s' "$C_BOLD" "$C_MAGENTA" "$C_RESET"
+  printf '%s%s COCOLO setup %s' "$C_BOLD" "$C_MAGENTA" "$C_RESET"
   if [ "$STEP" -gt 0 ]; then
     printf '%s Step %d of %d%s' "$C_DIM" "$STEP" "$STEP_TOTAL" "$C_RESET"
   fi
@@ -1414,7 +1414,9 @@ step_checks() {
   while :; do
     begin_step 1
     hard=0; soft=0
-    body "Welcome. This wizard sets up delegation between Codex and Claude children in one of your Git projects. It uses only your existing subscription logins and never any metered API billing. First, a quick look at this machine."
+    body "Welcome to COCOLO
+Claude Orchestrator, Codex Orchestrator, Local Orchestrator"
+    body "This wizard sets up delegation between Codex and Claude children in one of your Git projects. It uses only your existing subscription logins and never any metered API billing. First, a quick look at this machine."
     body "Keep this setup folder outside every folder you open in Codex, so no Codex session can change the code that runs with your authority."
     os=$(uname -s)
     case "$os" in
