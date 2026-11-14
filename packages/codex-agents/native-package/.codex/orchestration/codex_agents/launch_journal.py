@@ -39,7 +39,7 @@ import stat
 import subprocess
 import time
 
-from .process_tree import (RUN_TAG, _born_before, process_gone, process_record, scan_until_stable,
+from .process_tree import (GONE, RUN_TAG, _born_before, process_gone, process_record, scan_until_stable,
                            session_reused_at, tagged_process_running)
 
 STATES = frozenset({'claimed', 'spawning', 'launched', 'watched', 'settled'})
@@ -378,12 +378,12 @@ MAX_SESSION_SCAN_PROCESSES = 32768
 
 
 def _listed_pids():
-    """Every process's pid from a fixed-path `ps`, without that `ps` itself; None when unavailable."""
+    """Every process's pid and listed parent from a fixed-path `ps`, without that `ps`; None when unavailable."""
     path = next((candidate for candidate in PS_PATHS if os.path.isfile(candidate)), None)
     if path is None:
         return None
     try:
-        with subprocess.Popen([path, '-A', '-o', 'pid='], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        with subprocess.Popen([path, '-A', '-o', 'pid=,ppid='], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL, env={'PATH': os.defpath, 'LC_ALL': 'C'}) as lister:
             try:
                 output, _ = lister.communicate(timeout=PS_TIMEOUT_SECONDS)
@@ -395,18 +395,25 @@ def _listed_pids():
         return None
     if lister.returncode != 0:
         return None
-    pids = output.decode('ascii', 'replace').split()
-    if not pids or not all(pid.isdigit() for pid in pids):
-        return None
-    # `ps` lists itself: a new pid in every listing, which would never look settled.
-    return [pid for pid in map(int, pids) if pid != lister.pid]
+    listed = {}
+    for line in output.decode('ascii', 'replace').splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        if len(fields) != 2 or not all(field.isdigit() for field in fields):
+            return None
+        listed[int(fields[0])] = int(fields[1])
+    # `ps` lists itself, a new pid every time; it is this process's own child, never a member.
+    listed.pop(lister.pid, None)
+    return listed or None
 
 
 def _session_members(sessions, births=None):
     """Whether any process is in one of these sessions; None when that cannot be read.
 
-    The listing is repeated until it adds no new process, so a member that forks
-    and exits between a listing and its read cannot hide its descendant. With
+    A member that forks and ends between a listing and its read leaves its
+    descendant unlisted, so the listing is repeated while such a process may
+    have been one (see `scan_until_stable`). With
     `births` (session id -> the birth of the process that started it): when that
     pid now belongs to a later process, which may lead a new session with the same
     id, only a member born before that process counts.
@@ -418,7 +425,7 @@ def _session_members(sessions, births=None):
         try:
             session = os.getsid(pid)
         except ProcessLookupError:
-            return False  # Exited since the listing; anything it forked shows in the next one.
+            return GONE  # Ended since the listing; anything it forked shows in the next one.
         except OSError:
             return None
         if session not in reused:
@@ -427,7 +434,7 @@ def _session_members(sessions, births=None):
             return True
         record = process_record(pid)
         if record is None:
-            return False if process_gone(pid) else None
+            return GONE if process_gone(pid) else None
         return _born_before(record[2], reused[session])
 
     return scan_until_stable(_listed_pids, check, limit=MAX_SESSION_SCAN_PROCESSES)

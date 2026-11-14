@@ -200,8 +200,9 @@ These are accepted limits of this release. A report that shows one is worse than
   environment, or, on macOS, runs one of Apple's own system tools (such as `sh` or `sleep`, whose
   environment macOS hides from other processes), and that also starts a new session and detaches
   between snapshots. Such a process can outlive cleanup; it stays inside the child's read-only,
-  network-disabled sandbox. Each check lists your processes again until a listing shows nothing new,
-  so one that forks and exits mid-check cannot hide what it started. On Linux two more cases apply,
+  network-disabled sandbox. When a process that could have carried the marker ends before a check
+  reads it, the check lists your processes again, so one that forks and exits mid-check cannot hide
+  what it started; processes ending under an ordinary parent (a busy build, say) do not hold it up. On Linux two more cases apply,
   because a process can make its own environment unreadable (`PR_SET_DUMPABLE`): such a process
   started during a run and detached (an `ssh-agent`, say) holds that run's place until it exits, and
   a marked process that does this and is adopted by a parent other than systemd (a container's init,

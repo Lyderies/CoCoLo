@@ -490,32 +490,63 @@ def _carries_tag(pid: int, entry: bytes, born: str, session: int | None = None,
     return None if table is None else _judged_by_parents(record, entry, born, session, table, reused_at)
 
 
-def scan_until_stable(listing, check, limit: int | None = None) -> bool | None:
-    """Check every listed pid, then list again and check the new ones, until none are new.
+# A check's answer for a process that ended before it was read (reaped, or a zombie).
+GONE = "gone"
 
-    `listing()` returns the pids (None when unavailable); `check(pid, listed)`
-    returns True (found), False, or None (cannot tell). True as soon as one is
-    found; False once a listing adds nothing and every check was False; None
-    otherwise, including a listing still growing after MAX_SCAN_ROUNDS.
+
+def _vanished_candidates(new: list[int], table: Table, results: dict) -> set[int]:
+    """The processes of this listing that ended unread and could have passed the marker on.
+
+    The environment follows parentage, so one that ended unread could have carried
+    the marker only if its listed parent could: launchd/init or a Linux subreaper
+    (it was already an orphan), a parent whose answer was unknown or that is not
+    listed, or another such process. One under a parent read as clean (a compiler
+    under `make`, say) could not.
+    """
+    candidates: set[int] = set()
+    grew = True
+    while grew:
+        grew = False
+        for pid in new:
+            if pid in candidates or results.get(pid) != GONE:
+                continue
+            parent = table.get(pid)
+            if (parent is None or parent <= 1 or parent not in table or parent in candidates
+                    or results.get(parent, False) is None or _subreaper(parent)):
+                candidates.add(pid)
+                grew = True
+    return candidates
+
+
+def scan_until_stable(listing, check, limit: int | None = None) -> bool | None:
+    """Check every listed process, listing again while one that ended unread could have hidden another.
+
+    `listing()` returns {pid: listed parent} (None when unavailable); `check(pid,
+    listed)` returns True (found), False, None (cannot tell) or GONE (ended before
+    it was read). A process that forks and ends between a listing and its read
+    leaves its descendant orphaned and unlisted, so after such a round the next
+    listing's new processes are checked too. True as soon as one is found; False
+    once a round leaves no such candidate and every answer was clean; None
+    otherwise, including candidates still appearing after MAX_SCAN_ROUNDS.
     """
     limit = MAX_TAG_SCAN_PROCESSES if limit is None else limit
-    seen: set[int] = set()
+    results: dict = {}
     unknown = False
     for _ in range(MAX_SCAN_ROUNDS):
         listed = listing()
         if listed is None:
             return None
-        new = sorted(pid for pid in listed if pid not in seen)
-        if seen and not new:
-            return None if unknown else False
-        if len(seen) + len(new) > limit:
+        new = sorted(pid for pid in listed if pid not in results)
+        if len(results) + len(new) > limit:
             return None
         for pid in new:
-            seen.add(pid)
             found = check(pid, listed)
-            if found:
+            if found is True:
                 return True
+            results[pid] = found
             unknown = unknown or found is None
+        if not _vanished_candidates(new, listed, results):
+            return None if unknown else False
     return None
 
 
@@ -526,7 +557,12 @@ def _tag_scan(tag: str, born: str, session: int | None) -> bool | None:
     def check(pid, table):
         if _excluded_pid(pid):
             return False
-        return _carries_tag(pid, entry, born, session, table, reused_at)
+        found = _carries_tag(pid, entry, born, session, table, reused_at)
+        if found is False:
+            record = process_record(pid)
+            if (record is None and process_gone(pid)) or (record is not None and record[3]):
+                return GONE  # Ended before or while it was read: its children are orphans now.
+        return found
 
     return scan_until_stable(process_table, check)
 

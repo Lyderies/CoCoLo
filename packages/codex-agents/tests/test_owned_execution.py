@@ -192,25 +192,32 @@ class ScanStabilityTests(unittest.TestCase):
         return [b"COCOLO_RUN_TAG=" + self.TAG.encode()]
 
     def test_a_tagged_process_forked_by_one_that_exited_before_it_was_read_is_found(self):
-        # 30000 was listed, forked 30001 and was reaped before its read; 30001 was not listed yet.
-        processes = {500: (1, "1.000000", []), 30000: (500, "11.000000", self.tagged()),
+        # 30000, already an orphan, was listed, forked 30001 and was reaped before its read;
+        # 30001 was not listed yet.
+        processes = {500: (1, "1.000000", []), 30000: (1, "11.000000", self.tagged()),
                      30001: (1, "12.000000", self.tagged())}
         self.assertIs(True, self.scan([{500, 30000}, {500, 30001}], processes, gone_after_listing={30000}))
 
-    def test_a_listing_that_stops_changing_ends_the_scan(self):
-        processes = {500: (1, "1.000000", []), 30000: (500, "11.000000", [b"A=1"])}
-        self.assertIs(False, self.scan([{500}, {500, 30000}, {500, 30000}], processes))
-
-    def test_a_listing_that_never_settles_is_not_proof(self):
+    def test_processes_ending_under_a_clean_parent_do_not_extend_the_scan(self):
+        # A busy machine: short-lived processes under a readable, untagged parent (`make`, say)
+        # end before they are read in every listing; they could not have carried the marker.
         processes = {500: (1, "1.000000", [])}
         listings = []
-        # A new process in every listing, for longer than every attempt's rounds together.
-        for index in range((process_tree.MAX_SCAN_ROUNDS + 1) * process_tree.TAG_SCAN_ATTEMPTS + 2):
+        for index in range(process_tree.MAX_SCAN_ROUNDS * process_tree.TAG_SCAN_ATTEMPTS + 2):
             processes[30000 + index] = (500, "11.%06d" % index, [b"A=1"])
-            listings.append({500} | {30000 + step for step in range(index + 1)})
-        listings.append(listings[-1] | {39999})
-        processes[39999] = (500, "12.000000", [b"A=1"])
-        self.assertIsNone(self.scan(listings, processes))
+            listings.append({500, 30000 + index})
+        gone = {30000 + index for index in range(len(listings))}
+        self.assertIs(False, self.scan(listings, processes, gone_after_listing=gone))
+
+    def test_orphans_that_keep_ending_unread_are_not_proof(self):
+        processes = {500: (1, "1.000000", [])}
+        listings = []
+        # A new orphan ending unread in every listing, for longer than every attempt's rounds.
+        for index in range((process_tree.MAX_SCAN_ROUNDS + 1) * process_tree.TAG_SCAN_ATTEMPTS + 2):
+            processes[30000 + index] = (1, "11.%06d" % index, [b"A=1"])
+            listings.append({500, 30000 + index})
+        gone = {30000 + index for index in range(len(listings))}
+        self.assertIsNone(self.scan(listings, processes, gone_after_listing=gone))
 
 
 class ReusedSessionIdTests(unittest.TestCase):

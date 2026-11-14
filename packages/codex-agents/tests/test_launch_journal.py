@@ -338,7 +338,7 @@ class LaunchJournalTests(unittest.TestCase):
 
     def test_a_session_member_forked_by_one_that_exited_before_it_was_read_is_found(self):
         # 40000 was listed and gone before its read; it had forked 40001 into the session.
-        listings = iter([[1, 40000], [1, 40001], [1, 40001]])
+        listings = iter([{1: 0, 40000: 1}, {1: 0, 40001: 1}, {1: 0, 40001: 1}])
         sessions = {1: 1, 40001: 20000}
         def getsid(pid):
             if pid not in sessions:
@@ -353,7 +353,7 @@ class LaunchJournalTests(unittest.TestCase):
         records = {20000: (1, 20000, '50.000000', False), 40001: (20000, 20000, '51.000000', False),
                    40002: (1, 20000, '20.000000', False)}
         def run(members):
-            with mock.patch.object(launch_journal, '_listed_pids', lambda: [1, 20000, *members]), \
+            with mock.patch.object(launch_journal, '_listed_pids', lambda: {1: 0, 20000: 1, **{member: 1 for member in members}}), \
                     mock.patch.object(launch_journal.os, 'getsid',
                                       side_effect=lambda pid: 1 if pid == 1 else 20000), \
                     mock.patch.object(launch_journal, 'process_record', side_effect=records.get), \
