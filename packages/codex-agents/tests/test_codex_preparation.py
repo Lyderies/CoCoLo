@@ -209,6 +209,16 @@ class CodexPreparationTests(unittest.TestCase):
         self.lane.retire(handle)
         self.discard(self.prepare()[0])  # Its slot is free again.
 
+    def test_a_preparation_without_its_recorded_worker_refuses_a_cleanup_retry_plainly(self):
+        handle, prepared = self.prepare()
+        self.addCleanup(codex_preparation.remove_private_directory, prepared.workspace)
+        job = self.lane._job(handle)
+        recorded, job.prepared_snapshot = job.prepared_snapshot, None
+        with self.assertRaisesRegex(PreparationError, 'preparation_busy'):
+            self.lane.retry_cleanup(handle)
+        job.prepared_snapshot = recorded
+        self.discard(handle)
+
     def test_a_dead_cleanup_worker_is_never_asked_again(self):
         handle, prepared = self.prepare()
         self.addCleanup(codex_preparation.remove_private_directory, prepared.workspace)

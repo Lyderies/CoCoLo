@@ -146,6 +146,19 @@ class GivenBackPreparationTests(unittest.TestCase):
         self.assertEqual(([], {}), (value._giving_back, value._cleanup_retry))
 
 
+    def test_a_removal_that_keeps_being_refused_is_asked_a_bounded_number_of_times_and_kept(self):
+        value = driver()
+        value._giving_back = ['preparation']
+        value._preparation.snapshot.side_effect = lambda handle: {'state': 'unknown'}
+        value._preparation.retry_cleanup.side_effect = project_driver.PreparationError('preparation_busy')
+        for _ in range(project_driver.MAX_CLEANUP_ATTEMPTS + 5):
+            value._retire_given_back()
+            value._clock.now += project_driver.CLEANUP_RETRY_MAX_SECONDS
+        self.assertEqual(project_driver.MAX_CLEANUP_ATTEMPTS, value._preparation.retry_cleanup.call_count)
+        # Its workspace may still be there, so it is kept rather than counted free.
+        self.assertEqual(['preparation'], value._giving_back)
+        value._preparation.retire.assert_not_called()
+
 class RetiredMonitorSlotTests(unittest.TestCase):
     BINDING = ('binding',)
 
