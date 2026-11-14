@@ -419,7 +419,8 @@ class ClaudeBridgeTests(BridgeTestCase):
         self.assertNotEqual(str(self.project), invocation["cwd"])
         self.assertTrue(invocation["cwd"].startswith(str(self.dispatch_parent)))
         self.assertEqual(
-            {"HOME", "LANG", "LOGNAME", "PATH", "TMPDIR", "USER", "xcrun_nocache"},
+            # COCOLO_RUN_TAG: the per-run marker its cleanup confirmation looks for.
+            {"COCOLO_RUN_TAG", "HOME", "LANG", "LOGNAME", "PATH", "TMPDIR", "USER", "xcrun_nocache"},
             set(invocation["env"]) - {"PWD", "SHLVL", "_", "__CF_USER_TEXT_ENCODING"},
         )
         self.assertEqual([], self.workspace_entries())

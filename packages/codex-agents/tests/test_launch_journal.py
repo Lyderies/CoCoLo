@@ -6,6 +6,7 @@ gone. Anything unreadable or ambiguous is not evidence.
 """
 import json
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -24,6 +25,8 @@ from codex_agents.launch_journal import LaunchJournal, JournalError, tree_state
 from codex_agents.process_tree import WATCHDOG_READY_SECONDS, await_ready, process_record, write_cleanup_marker
 
 BRIDGE = 'brg_' + '1' * 32
+# Fresh per test process, as each child's is: a parallel suite's processes never share one.
+TAG = secrets.token_hex(16)
 OTHER = 'brg_' + '2' * 32
 
 
@@ -75,7 +78,7 @@ class LaunchJournalTests(unittest.TestCase):
     def watched(self, journal, root, watchdog, *, confirmed=False):
         claimed(journal)
         journal.spawning(BRIDGE)
-        journal.launched(BRIDGE, root.pid, birth(root.pid))
+        journal.launched(BRIDGE, root.pid, birth(root.pid), TAG)
         journal.watched(BRIDGE, watchdog.pid, birth(watchdog.pid))
         if confirmed:
             self.confirm(journal, root.pid, birth(root.pid))
@@ -90,7 +93,7 @@ class LaunchJournalTests(unittest.TestCase):
         """The bridge's own detached watchdog for `root`, writing its confirmation beside the journal."""
         watchdog = subprocess.Popen(
             [sys.executable, *PYTHON_ISOLATION_FLAGS, str(WATCHDOG_SCRIPT), str(root.pid), birth(root.pid),
-             repr(time.monotonic() + deadline), str(journal.marker_path(BRIDGE)), BRIDGE],
+             repr(time.monotonic() + deadline), str(journal.marker_path(BRIDGE)), BRIDGE, TAG],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True,
             close_fds=True, env={'PATH': os.defpath})
         self.processes.append(watchdog)
@@ -100,7 +103,7 @@ class LaunchJournalTests(unittest.TestCase):
             watchdog.stdout.close()
         claimed(journal)
         journal.spawning(BRIDGE)
-        journal.launched(BRIDGE, root.pid, birth(root.pid))
+        journal.launched(BRIDGE, root.pid, birth(root.pid), TAG)
         journal.watched(BRIDGE, watchdog.pid, birth(watchdog.pid))
         return watchdog
 
@@ -158,7 +161,7 @@ class LaunchJournalTests(unittest.TestCase):
         journal.spawning(BRIDGE)
         self.assertEqual('unknown', tree_state(self.entry(journal)))
         root = self.sleeper()
-        journal.launched(BRIDGE, root.pid, birth(root.pid))
+        journal.launched(BRIDGE, root.pid, birth(root.pid), TAG)
         self.end(root)
         # The child is gone, but no watchdog ever confirmed its tree: nothing proves its descendants ended.
         self.assertEqual('unknown', tree_state(self.entry(journal)))
@@ -243,11 +246,14 @@ class LaunchJournalTests(unittest.TestCase):
         # An unrelated process in this test's own group and session now has the pid the
         # journal names, but it was born at another time: the child the journal saw is gone.
         unrelated, watchdog = self.started('/bin/sleep', '30'), self.sleeper()
+        # A moment earlier: a long-lived process of this user's (an ssh-agent, say) predates it.
+        real = birth(unrelated.pid)
+        earlier = '%d.000000' % (int(real.split('.')[0]) - 1) if '.' in real else str(int(real) - 1)
         claimed(journal)
         journal.spawning(BRIDGE)
-        journal.launched(BRIDGE, unrelated.pid, '1.000000')
+        journal.launched(BRIDGE, unrelated.pid, earlier, TAG)
         journal.watched(BRIDGE, watchdog.pid, birth(watchdog.pid))
-        self.confirm(journal, unrelated.pid, '1.000000')
+        self.confirm(journal, unrelated.pid, earlier)
         self.end(watchdog)
         self.assertEqual('gone', tree_state(self.entry(journal)))
         # The check signals nothing: the unrelated process is still running.
@@ -286,6 +292,31 @@ class LaunchJournalTests(unittest.TestCase):
                 if grandchild is not None:
                     self.wait_until(lambda: not self.running(grandchild))
                 self.wait_until(lambda: tree_state(self.entry(journal)) == 'gone')
+
+    def test_a_detached_process_carrying_the_runs_marker_keeps_it_from_settling(self):
+        # A descendant that started its own session after its parent exited between two of the
+        # watchdog's snapshots: never tracked, so the watchdog confirmed an empty tree.
+        journal = LaunchJournal(self.directory)
+        root, watchdog = self.sleeper(), self.sleeper()
+        entry = self.watched(journal, root, watchdog, confirmed=True)
+        escapee = self.started(sys.executable, '-I', '-c', 'import time; time.sleep(30)', start_new_session=True,
+                               env={'PATH': os.defpath, 'COCOLO_RUN_TAG': TAG})
+        self.end(root)
+        self.end(watchdog)
+        self.assertEqual('alive', tree_state(entry))
+        # Another run's marker, or none, is not this run's.
+        other = dict(entry, run_tag=secrets.token_hex(16))
+        self.assertEqual('gone', tree_state(other))
+        self.end(escapee)
+        self.assertEqual('gone', tree_state(entry))
+
+    def test_a_launched_entry_needs_its_runs_marker(self):
+        journal = LaunchJournal(self.directory)
+        claimed(journal)
+        journal.spawning(BRIDGE)
+        for tag in (None, 'E' * 32, 'e' * 31):
+            with self.subTest(tag=tag), self.assertRaises(JournalError):
+                journal.launched(BRIDGE, os.getpid(), birth(os.getpid()), tag)
 
     def test_the_kernel_checks_must_come_back_empty_twice(self):
         journal = LaunchJournal(self.directory)

@@ -4,10 +4,12 @@ from __future__ import annotations
 from copy import copy
 from copy import deepcopy
 import contextlib
+import itertools
 import json
 import os
 from pathlib import Path
 import signal
+import struct
 import sys
 import subprocess
 import tempfile
@@ -23,6 +25,67 @@ from codex_agents import learning_store
 from codex_agents import owned_execution
 from codex_agents.learning_store import LearningLedger, LedgerError
 from codex_agents.owned_execution import ExecutionCustodyError, ExecutionTicket, OwnedExecutionKey, OwnedExecutionRegistry
+
+
+def _kill_quietly(pid):
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+class RunMarkerParsingTests(unittest.TestCase):
+    """The per-run marker is read from each process's environment, never its arguments."""
+
+    def test_procargs2_yields_the_environment_after_argv(self):
+        raw = (struct.pack("=i", 2) + b"/bin/sh\0\0\0\0" + b"sh\0COCOLO_RUN_TAG=" + b"a" * 32
+               + b"\0A=1\0COCOLO_RUN_TAG=" + b"b" * 32 + b"\0\0ptr_munge=1\0")
+        self.assertEqual((b"/bin/sh", [b"A=1", b"COCOLO_RUN_TAG=" + b"b" * 32]), process_tree.parse_procargs2(raw))
+        # What macOS returns for one of its own signed tools: the arguments, no environment.
+        self.assertEqual((b"/bin/sleep", []),
+                         process_tree.parse_procargs2(struct.pack("=i", 2) + b"/bin/sleep\0\0\0/bin/sleep\x005\0\0\0"))
+        for broken in (b"", b"\1\0", struct.pack("=i", 5) + b"/bin/sh\0a\0b\0", struct.pack("=i", -1) + b"x\0",
+                       struct.pack("=i", 1) + b"/bin/sh-without-end"):
+            with self.subTest(raw=broken):
+                self.assertIsNone(process_tree.parse_procargs2(broken))
+
+    def test_linux_environ_splits_on_nul(self):
+        self.assertEqual([b"A=1", b"B="], process_tree.parse_environ(b"A=1\0B=\0"))
+        self.assertEqual([], process_tree.parse_environ(b""))
+
+    def test_a_marker_is_a_fresh_128_bit_value(self):
+        first, second = process_tree.new_run_tag(), process_tree.new_run_tag()
+        self.assertNotEqual(first, second)
+        self.assertRegex(first, r"\A[0-9a-f]{32}\Z")
+        self.assertEqual(b"COCOLO_RUN_TAG=" + first.encode(), process_tree.run_tag_entry(first))
+
+    def test_birth_times_compare_as_numbers(self):
+        self.assertTrue(process_tree._born_before("9.999999", "10.000000"))
+        self.assertFalse(process_tree._born_before("10.000000", "10.000000"))
+        self.assertTrue(process_tree._born_before("99", "100"))
+        self.assertFalse(process_tree._born_before("unreadable", "10.000000"))  # Unknown: it must be read.
+
+    @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"), "kernel process records")
+    def test_a_real_processs_environment_is_read(self):
+        tag = process_tree.new_run_tag()
+        # This interpreter, not a macOS system tool, whose environment macOS withholds.
+        process = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(30)"],
+                                   env={"PATH": os.defpath, "COCOLO_RUN_TAG": tag}, start_new_session=True)
+        try:
+            for _ in range(200):
+                environment = process_tree.process_environment(process.pid)
+                if environment is not None and process_tree.run_tag_entry(tag) in environment:
+                    break
+                time.sleep(0.01)
+            self.assertIn(process_tree.run_tag_entry(tag), environment)
+            own = process_tree.process_record(os.getpid())[2]
+            self.assertTrue(process_tree.tagged_process_running(tag, own))
+            # This process itself never counts, and a fresh marker matches nothing.
+            self.assertFalse(process_tree.tagged_process_running(process_tree.new_run_tag(), own))
+        finally:
+            process.kill()
+            process.wait()
+        self.assertFalse(process_tree.tagged_process_running(tag, own))
 
 
 class CleanupEvidenceTests(unittest.TestCase):
@@ -108,6 +171,149 @@ class CleanupEvidenceTests(unittest.TestCase):
             self.assertFalse(tree.cleanup_after_owned_wait(process))
         finally:
             os.killpg(process.pid, signal.SIGKILL)
+
+    def tagged(self, *, escapee=None, environment=None):
+        """An identified tree whose child carries a run marker; `escapee` is a detached process outside it."""
+        tag = "f" * 32
+        root, child = 20000, 20001
+        records = {root: (1, root, "root", False), child: (root, root, "child", True)}
+        tree = process_tree.ProcessTree(root, tag)
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get):
+            self.assertTrue(tree.identify({root: 1, child: root}))
+        if escapee is not None:
+            records[30000] = escapee
+        arguments = {30000: None if environment is None else (b"/opt/tool", environment)}
+        patches = contextlib.ExitStack()
+        patches.enter_context(mock.patch.object(process_tree, "process_record", side_effect=records.get))
+        patches.enter_context(mock.patch.object(process_tree, "process_gone", side_effect=lambda pid: pid not in records))
+        patches.enter_context(mock.patch.object(process_tree, "process_arguments", side_effect=arguments.get))
+        patches.enter_context(mock.patch.object(process_tree, "process_table",
+                                                return_value={30000: 1} if escapee else {}))  # The root is reaped.
+        patches.enter_context(mock.patch.object(process_tree.time, "sleep"))
+        self.sessions = {}
+        patches.enter_context(mock.patch.object(process_tree, "_in_session",
+                                                side_effect=lambda pid, session: self.sessions.get(pid) == session))
+        return tree, records, SimpleNamespace(pid=root, returncode=0), patches, tag
+
+    def test_a_detached_process_that_carries_the_run_marker_refuses_confirmation(self):
+        # A grandchild that called setsid after its parent exited between two snapshots:
+        # never adopted, reparented to init, still running with the child's environment.
+        tag = "f" * 32
+        tree, records, root, patches, _ = self.tagged(
+            escapee=(1, 30000, "late", False), environment=[b"PATH=/bin", b"COCOLO_RUN_TAG=" + tag.encode()])
+        with patches:
+            self.assertFalse(tree.cleanup_after_owned_wait(root))
+            records[20000] = (*records[20000][:3], True)
+            self.assertFalse(tree.cleanup_confirmed())
+            records[30000] = (1, 30000, "late", True)  # It exits: confirmation passes.
+            self.assertTrue(tree.cleanup_after_owned_wait(root))
+            self.assertTrue(tree.cleanup_confirmed())
+
+    def test_a_detached_process_without_the_marker_does_not_block_confirmation(self):
+        for environment in ([b"PATH=/bin"], [b"COCOLO_RUN_TAG=" + b"0" * 32], [b"COCOLO_RUN_TAG=" + b"f" * 31]):
+            with self.subTest(environment=environment):
+                tree, _, root, patches, _ = self.tagged(escapee=(1, 30000, "late", False), environment=environment)
+                with patches:
+                    self.assertTrue(tree.cleanup_after_owned_wait(root))
+
+    def test_an_unreadable_environment_counts_only_for_a_process_born_since_the_child(self):
+        tree, records, root, patches, _ = self.tagged(escapee=(1, 30000, "9.000000", False), environment=None)
+        with patches:
+            tree.root_birth = "10.000000"
+            records[20000] = (1, 20000, "10.000000", False)
+            tree._cleanup_seen = {(20000, "10.000000"): False, (20001, "child"): True}
+            # Born before the child: it cannot have inherited the marker, so it is not read at all.
+            self.assertTrue(tree.cleanup_after_owned_wait(root))
+            records[30000] = (1, 30000, "11.000000", False)
+            # Born since and unreadable: not proof.
+            self.assertFalse(tree.cleanup_after_owned_wait(root))
+            # Unreadable because its pid passed to a new process while being read: no longer counts.
+            reads = itertools.cycle([(1, 30000, "11.000000", False), (1, 30000, "12.000000", False)])
+            with mock.patch.object(process_tree, "process_record",
+                                   side_effect=lambda pid: next(reads) if pid == 30000 else records.get(pid)):
+                self.assertTrue(tree.cleanup_after_owned_wait(root))
+
+    def test_a_process_left_in_the_childs_session_refuses_confirmation(self):
+        # One that never called setsid: whatever its environment says (even nothing at all, as
+        # macOS shows for its own system tools), it is still in the session the child started.
+        tree, records, root, patches, _ = self.tagged(escapee=(1, 30000, "late", False), environment=[])
+        with patches:
+            self.assertTrue(tree.cleanup_after_owned_wait(root))
+            self.sessions[30000] = 20000
+            self.assertFalse(tree.cleanup_after_owned_wait(root))
+            records[30000] = (1, 30000, "late", True)
+            self.assertTrue(tree.cleanup_after_owned_wait(root))
+
+    def test_a_lost_process_table_or_too_many_processes_is_not_proof(self):
+        tree, _, root, patches, tag = self.tagged(escapee=(1, 30000, "late", False), environment=[b"PATH=/bin"])
+        with patches:
+            with mock.patch.object(process_tree, "process_table", return_value=None):
+                self.assertFalse(tree.cleanup_after_owned_wait(root))
+            with mock.patch.object(process_tree, "MAX_TAG_SCAN_PROCESSES", 0):
+                self.assertFalse(tree.cleanup_after_owned_wait(root))
+            self.assertTrue(tree.cleanup_after_owned_wait(root))
+        self.assertIsNone(process_tree.tagged_process_running("not-a-tag", "1.000000"))
+
+    @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"), "kernel process records")
+    def test_a_real_setsid_escapee_carrying_the_marker_refuses_confirmation(self):
+        # The child forks; that fork starts a new session, forks the sleeper and exits at once,
+        # so no snapshot ever links the sleeper to the tracked tree.
+        interpreter = [sys.executable, "-I", "-c", "import time; time.sleep(30)"]
+        cases = {
+            # A new session, but its environment can be read: the marker is found.
+            "setsid interpreter": (interpreter, True),
+            # No new session: found in the child's session, even as a macOS system tool,
+            # whose environment macOS withholds from other processes.
+            "system tool in the session": (["/bin/sleep", "30"], False),
+        }
+        if sys.platform.startswith("linux"):
+            cases["setsid system tool"] = (["/bin/sleep", "30"], True)  # Linux shows its environment.
+        for name, (sleeper, setsid) in cases.items():
+            with self.subTest(case=name):
+                self.real_escapee(sleeper, setsid)
+
+    def real_escapee(self, sleeper, setsid):
+        tag = process_tree.new_run_tag()
+        code = ("import os, sys, time\n"
+                "reader, writer = os.pipe()\n"
+                "middle = os.fork()\n"
+                "if middle == 0:\n"
+                "    if sys.argv[1] == 'setsid':\n"
+                "        os.setsid()\n"
+                "    grandchild = os.fork()\n"
+                "    if grandchild == 0:\n"
+                "        os.execv(sys.argv[2], sys.argv[2:])\n"
+                "    os.write(writer, b'%d\\n' % grandchild)\n"
+                "    os._exit(0)\n"
+                "os.waitpid(middle, 0)\n"
+                "sys.stdout.write(os.read(reader, 64).decode()); sys.stdout.flush()\n"
+                "time.sleep(0.5)\n")
+        process = subprocess.Popen([sys.executable, "-I", "-c", code, "setsid" if setsid else "stay", *sleeper],
+                                   stdout=subprocess.PIPE,
+                                   env={"PATH": os.defpath, process_tree.RUN_TAG_VARIABLE: tag},
+                                   start_new_session=True)
+        grandchild = int(process.stdout.readline())
+        process.stdout.close()
+        self.addCleanup(_kill_quietly, grandchild)
+        tree = process_tree.ProcessTree(process.pid, tag)
+        self.assertTrue(tree.identify(process_tree.process_table()))
+        self.assertNotIn(grandchild, tree.tracked)  # Already detached: never adopted.
+        while process.poll() is None:
+            table = process_tree.process_table()
+            if table is not None:
+                tree.update(table)
+        self.assertIs(True, process_tree.tagged_process_running(tag, tree.root_birth, tree.root))
+        self.assertFalse(tree.cleanup_after_owned_wait(process))
+        # The same tree without the marker would have been confirmed with the sleeper still running.
+        untagged = copy(tree)
+        untagged.run_tag = None
+        self.assertTrue(untagged.cleanup_after_owned_wait(process))
+        _kill_quietly(grandchild)
+        deadline = time.monotonic() + 10
+        while process_tree.tagged_process_running(tag, tree.root_birth, tree.root) is not False:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.05)
+        self.assertTrue(tree.cleanup_after_owned_wait(process))
 
     def test_positive_exit_survives_later_disappearance(self):
         tree, records, root = self.identified(child_exited=True)
