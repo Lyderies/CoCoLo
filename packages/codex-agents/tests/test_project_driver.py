@@ -552,7 +552,7 @@ class LifecycleBoundaryTests(DriverHarness):
 class HostRestartTests(DriverHarness):
     """The project host stops mid-run and starts again: nothing is claimed that is not known."""
 
-    def test_after_a_host_restart_the_run_is_reported_unavailable_and_the_primary_can_continue(self):
+    def test_after_a_host_restart_the_run_is_reported_lost_and_the_primary_can_continue(self):
         # The project host the harness started is replaced by one this test can stop alone.
         context, route_path, orchestration, run_handle = self.open_run()
         self.frames('codex', [{'type': 'thread.started', 'thread_id': 'orphan'}, {'sleep': 30},
@@ -564,15 +564,19 @@ class HostRestartTests(DriverHarness):
         self.assertIn(self.cli('learning-run-status', *target)['health'], {'starting', 'active', 'quiet'})
         self.restart_host()
         process.communicate(timeout=60)
-        # The new host does not know the old run: its state is unavailable, never a claimed outcome.
+        # The new host does not know the old run: it is lost (abandoned, outcome unknown), never an outcome.
         after = self.cli('learning-run-status', *target, expected=2)
         self.assertFalse(after['ready'])
         self.assertNotIn('health', after)
-        # Its slot stays claimed and counted: nothing confirmed that the child ended.
+        self.assertEqual(('run_lost', 'abandoned', 'unknown'),
+                         (after['reason_code'], after['terminal_state'], after['outcome']))
+        # The stopped host settled it on its way out, once its child and watchdog were gone:
+        # no release receipt is invented, but the binding is abandoned and the slot no longer counts.
         unsettled = [tuple(row) for row in self.ledger._connection.execute(
-            'SELECT released_at_ms,release_digest FROM active_run_capacity')]
-        self.assertEqual([(None, None)], unsettled)
-        self.assertFalse(self.ledger.drained())
+            'SELECT a.released_at_ms,a.release_digest,h.binding_state,h.abandoned_reason FROM active_run_capacity a '
+            'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest')]
+        self.assertEqual([(None, None, 'abandoned', 'service_lost')], unsettled)
+        self.assertTrue(self.ledger.drained())
         # The primary carries on: a new run in the same orchestration routes, opens and runs.
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         task = self.write('next-task.json', {**self.task(), 'id': 'task-next'})
@@ -585,7 +589,7 @@ class HostRestartTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled({**result(), 'assignment_id': 'next'})))
         dispatched = self.cli('dispatch', *nxt, '--route', nxt_route, '--run-handle', opened['run_handle'])
         self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        # The earlier run's claim is still unreleased, and neither child was started twice.
+        # The earlier run's claim keeps no release receipt, and neither child was started twice.
         claims = [row[0] for row in self.ledger._connection.execute(
             'SELECT released_at_ms FROM active_run_capacity ORDER BY claimed_at_ms')]
         self.assertEqual(2, len(claims))

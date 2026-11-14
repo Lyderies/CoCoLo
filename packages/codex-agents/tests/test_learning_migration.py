@@ -421,14 +421,14 @@ class DrainedRuleTests(unittest.TestCase):
         self.connection = sqlite3.connect(":memory:")
         self.addCleanup(self.connection.close)
         self.connection.executescript(
-            "CREATE TABLE host_run_bindings(project_id,handle_digest,binding_state);"
+            "CREATE TABLE host_run_bindings(project_id,handle_digest,binding_state,abandoned_reason);"
             "CREATE TABLE active_run_capacity(project_id,handle_digest,deadline_at_ms,released_at_ms,"
             "clock_reference_ns,execution_deadline_ns);")
         self.now = 10 * learning_store.CRASHED_CLAIM_GRACE_MS
         self.monotonic = self.now * 1_000_000  # Both clocks at the same instant, for simplicity.
 
-    def claim(self, name, *, deadline, released=None, binding="pending", monotonic_deadline="same"):
-        self.connection.execute("INSERT INTO host_run_bindings VALUES('p',?,?)", (name, binding))
+    def claim(self, name, *, deadline, released=None, binding="pending", monotonic_deadline="same", reason=None):
+        self.connection.execute("INSERT INTO host_run_bindings VALUES('p',?,?,?)", (name, binding, reason))
         if monotonic_deadline == "same":
             monotonic_deadline = None if deadline is None else deadline * 1_000_000
         self.connection.execute("INSERT INTO active_run_capacity VALUES('p',?,?,?,?,?)", (
@@ -442,7 +442,14 @@ class DrainedRuleTests(unittest.TestCase):
         self.claim("done", deadline=self.now, released=self.now, binding="terminal")
         self.claim("driven-by-the-project-service", deadline=self.now, released=self.now)
         self.claim("crashed", deadline=self.now - learning_store.CRASHED_CLAIM_GRACE_MS - 1)
+        # Settled by a later service of its project on kernel evidence that nothing of it runs.
+        self.claim("lost", deadline=self.now + 1, binding="abandoned", reason="service_lost")
         self.drained()
+
+    def test_a_run_abandoned_for_another_reason_still_blocks_while_it_may_run(self):
+        self.claim("classified", deadline=self.now + 1, binding="abandoned", reason="host_confirmed_gone")
+        with self.assertRaisesRegex(HistoryError, "history_unavailable"):
+            self.drained()
 
     def test_running_recent_and_unaccounted_runs_block(self):
         long_ago = self.now - learning_store.CRASHED_CLAIM_GRACE_MS - 1
