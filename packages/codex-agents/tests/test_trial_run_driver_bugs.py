@@ -153,6 +153,24 @@ class TrialRunDriverTests(DriverHarness):
         self.assertEqual(0, code, 'second run refused: %r; driver stopped at %r' % (report, self.stopped_runs[before:]))
         self.assertEqual('result', report['bridge_report']['outcome'])
 
+    @unittest.expectedFailure  # Open: the project monitor never forgets a finished attempt (fifth run refused).
+    def test_a_project_keeps_more_than_four_recorded_results(self):
+        # Third trial: each kept result reserved the largest possible body for hours, so a
+        # project's fifth run could not reserve space (history_result_capacity at arm).
+        orchestration = None
+        for index in range(6):
+            name = 'many%d' % index
+            context, route_path, orchestration, run_handle, _, _ = self.opened(
+                name, orchestration=orchestration, task_changes={'id': 'task-' + name},
+                assignment_changes={'assignment_id': name, 'task_id': 'task-' + name})
+            self.child_answers(name)
+            before = len(self.stopped_runs)
+            code, report = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+            self.assertEqual(0, code, 'run %d refused: %r; driver stopped at %r' % (
+                index + 1, report, self.stopped_runs[before:]))
+            self.record(name, context, route_path, run_handle, report)
+        self.assertEqual(6, len(self.executions()))
+
     def test_a_second_run_right_after_a_recorded_one_prepares_and_launches(self):
         context, route_path, orchestration, run_handle, _, _ = self.opened('first')
         self.child_answers()

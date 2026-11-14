@@ -871,11 +871,17 @@ class ProjectHistory:
         )
 
     def _check_result_capacity(self):
+        # A result not yet written may still need the largest body; a written one holds only
+        # the bytes it has (kept for its verifier). Charging every kept result the largest
+        # body let a project hold only four results at a time.
         counts = self._connection.execute(
-            "SELECT COUNT(*),SUM(CASE WHEN state!='expired' THEN 1 ELSE 0 END) "
-            "FROM result_reservations WHERE project_id=?", (self.project_id,),
+            "SELECT COUNT(*),"
+            "SUM(CASE WHEN state='reserved' OR (state!='expired' AND body_size IS NULL) THEN 1 ELSE 0 END),"
+            "SUM(CASE WHEN state IN ('committed','retiring') AND body_size IS NOT NULL "
+            "THEN MIN(MAX(body_size,0),?) ELSE 0 END) "
+            "FROM result_reservations WHERE project_id=?", (MAX_RESULT_BODY_BYTES, self.project_id),
         ).fetchone()
-        entries, charged = counts[0], counts[1] or 0
+        entries, charged, written = counts[0], counts[1] or 0, counts[2] or 0
         # Verify each bounded lease before trusting mutable state to exclude a
         # tombstone or bound row. SQL labels alone cannot free reserved space.
         positions = self._connection.execute("SELECT rowid FROM result_leases WHERE project_id=? LIMIT ?",
@@ -889,7 +895,7 @@ class ProjectHistory:
                 entries += 1
                 charged += value.state != "expired"
         if (entries >= self._result_capacity.max_entries
-                or (charged + 1) * MAX_RESULT_BODY_BYTES > self._result_capacity.max_reserved_bytes):
+                or (charged + 1) * MAX_RESULT_BODY_BYTES + written > self._result_capacity.max_reserved_bytes):
             raise HistoryError("history_result_capacity")
 
     def _insert_result_reservation(self, value):
