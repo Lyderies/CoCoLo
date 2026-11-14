@@ -1,9 +1,12 @@
 # Setup wizard reference
 
 `./setup.sh [/path/to/project]`, run from the root of this repository, is a terminal wizard: arrow keys
-move, Enter selects, Space toggles and `q` quits. It needs an interactive terminal and refuses to run
-piped or scripted, because the billing attestation is a human step. Full command output goes to a
-private log, shown only if something fails. `NO_COLOR=1` gives plain output. Paths accept a leading `~`,
+move, Enter selects, Space toggles, `?` shows what ran in the current step and `q` quits. It needs an
+interactive terminal and refuses to run piped or scripted, because the billing attestation is a human
+step. A failed step says why in the orchestrator's own words and reason code (see
+[troubleshooting](troubleshooting.md)); `?` lists each command the step ran, how it ended and its
+reason. Command output itself stays in a private log and is never shown, because it can hold account
+details. `NO_COLOR=1` gives plain output. Paths accept a leading `~`,
 `$HOME` or surrounding quotes. The commands each step runs are listed in [manual setup](manual-setup.md).
 
 ## Steps
@@ -16,7 +19,10 @@ private log, shown only if something fails. `NO_COLOR=1` gives plain output. Pat
    records from the last 14 days and warns, with Continue or Quit, about a session that could write this
    repository (the orchestrator clone), your orchestrator records or your home folder, or that was opened
    on a folder containing a set-up project. The warnings end with the rule for where to open Codex.
-2. **Project.** The top folder of a Git working tree. Nothing changes; it previews the install. A project
+2. **Project.** The top folder of a Git working tree. Nothing changes; it previews the install. Once a
+   project is set up, later runs offer a list of the projects set up on this machine (newest first, those
+   still installed), the folder you started in, and "Another folder..." for typing a path; the list is
+   kept in the installer folder of your orchestrator records. A project
    that has never been set up needs a prepared `operational-checks.json` (see the
    [recipe](manual-setup.md#operational-checks)); the wizard asks for its path and works from a private
    snapshot of it. An existing install offers: update the install and walk through every step, verify the

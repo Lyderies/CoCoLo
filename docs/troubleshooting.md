@@ -5,7 +5,22 @@ it again". See the [setup wizard](setup-wizard.md) for what each step does.
 
 ## "That passphrase did not unlock the key."
 
-`attest.py` asks `Try again or Exit? [T/e]`; press Enter to try again.
+`attest.py` asks `Try again or Exit? [T/e]`; press Enter to try again. The line before the prompt names
+the key it is unlocking, such as `~/.ssh/codex-agents-owner`. ssh-keygen's own prompt names a private
+copy of that file in a temporary folder; that is expected.
+
+## "That did not work: that private key file does not exist"
+
+The key location question hides what you type, in case a passphrase is typed there by mistake, so a typo
+is easy to miss. It asks again twice; paste the location to be sure. You rarely need to type it: a key
+whose `.pub` file beside it matches the owner key on record is found by itself, whatever its name in
+`~/.ssh`.
+
+## "Collector status: not ready" or "provider observation unavailable" with `account_invalid_response`
+
+Seen with the first 0.3.0 candidate only: commands run from your own terminal (setup, status and the
+billing attestation) were refused by the orchestrator's account service. Update the install from a
+newer copy of this repository.
 
 ## "the owner key must be a file in your own ~/.ssh folder"
 

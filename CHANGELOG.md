@@ -2,6 +2,15 @@
 
 ## Unreleased: 0.3.0 (in progress)
 
+- From the first real install: setup, `learning-status` and the billing attestation run in your own
+  terminal, with no Codex or Claude Code markers, and the account service refused them, so setup said
+  "Collector status: not ready" and attestation stopped with "provider observation unavailable". Your
+  terminal may now read status and observe providers (nothing that starts work or spends usage). A test
+  walks those steps with every client marker removed.
+- Setup is easier to follow: a failed step says why, with the orchestrator's reason code; `?` shows what
+  ran in the step; projects set up before are offered in a list; the attestation names your own key file
+  in its prompts, finds the key by its `.pub` file whatever its name, and asks again after a mistyped
+  key location instead of stopping.
 - Updating from 0.2.x: the wizard's Collector step asks before it upgrades your orchestrator records,
   keeps a checked copy of them first and says where it is. Every project on the machine shares those
   records and needs this release. Until this change the step failed on existing installs, and on a

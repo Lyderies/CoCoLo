@@ -669,7 +669,8 @@ def owner_tool(argv: list[str]) -> int:
     ``client-status codex|claude [PROJECT]`` runs that client's sign-in status command as the
     runtime would (client_status) and exits with its code, printing Claude's JSON for the
     wizard to parse and nothing for Codex; ``legacy-state`` prints legacy_state_report as JSON;
-    ``owner-key`` prints the state's owner key report as JSON.
+    ``owner-key`` prints the state's owner key report as JSON; ``projects-file`` prints
+    where setup keeps its list of the projects it set up.
     """
 
     try:
@@ -681,6 +682,15 @@ def owner_tool(argv: list[str]) -> int:
             return 0
         if len(argv) == 3 and argv[0] == "copy-input":
             copy_input(Path(argv[1]), Path(argv[2]))
+            return 0
+        if argv == ["projects-file"]:
+            # Where setup remembers the projects it set up: the installer's own folder in the
+            # records, only when that is a real folder of yours that only you can open.
+            folder = default_state_root() / "installer"
+            info = folder.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise AttestError("the installer folder is not private")
+            print(folder / "setup-projects")
             return 0
         if argv == ["legacy-state"]:
             print(json.dumps(legacy_state_report(), sort_keys=True))
@@ -699,8 +709,8 @@ def owner_tool(argv: list[str]) -> int:
                 sys.stdout.buffer.write(output)
                 sys.stdout.flush()
             return code
-    except AttestError as exc:
-        print(exc, file=sys.stderr)
+    except (AttestError, OSError) as exc:
+        print(exc if isinstance(exc, AttestError) else "the records folder could not be read", file=sys.stderr)
         return 1
     print("unknown owner tool", file=sys.stderr)
     return 2
