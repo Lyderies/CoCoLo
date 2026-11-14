@@ -496,9 +496,10 @@ class RunDriver:
         self._give_back(run)
 
     def _give_back(self, run):
-        """A run that stopped before launch gives its preparation back; one bound to an
-        execution keeps it, for that execution's own cleanup."""
-        if run.prepared is None:
+        """A run that stopped before the account admitted its claim gives its preparation
+        back. Once a claim is admitted (or the run bound to an execution) the preparation
+        stays, so local custody always matches what the account holds for the run."""
+        if run.prepared is None or run.receipt is not None:
             return
         try:
             self._preparation.discard(run.prepared)
@@ -510,9 +511,12 @@ class RunDriver:
     def _retire_given_back(self):
         for handle in list(self._giving_back):
             try:
-                if self._preparation.snapshot(handle)['state'] in {'cleaned', 'failed'}:
+                state = self._preparation.snapshot(handle)['state']
+                if state in {'cleaned', 'failed'}:
                     self._preparation.retire(handle)
                     self._giving_back.remove(handle)
+                elif state == 'unknown':
+                    self._giving_back.remove(handle)  # Its slot is lost to this host; never retried.
             except Exception:
                 pass  # Still cleaning up; asked again on the next step.
 

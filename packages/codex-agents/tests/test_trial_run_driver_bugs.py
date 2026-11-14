@@ -69,6 +69,30 @@ class TrialRunDriverTests(DriverHarness):
         code, report = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
         return code, report, (context, route_path, orchestration, run_handle)
 
+    def test_a_run_failing_after_its_claim_was_admitted_keeps_its_preparation(self):
+        # Local custody must match the account's: an admitted claim keeps the preparation.
+        from codex_agents import project_driver
+        failed = []
+        original = project_driver.RunDriver._fail
+
+        def fail_after_claim(driver, run, reason):
+            failed.append((run.receipt is not None, run.prepared is not None))
+            original(driver, run, reason)
+            failed.append((run.receipt is not None, run.prepared is not None))
+        context, route_path, _, run_handle, _, _ = self.opened('claimed')
+        self.child_answers()
+        bind = project_driver.RunDriver._advance
+
+        def break_after_claim(driver, run):
+            if run.state == 'binding':
+                raise RuntimeError('fault after the claim was admitted')
+            return bind(driver, run)
+        with mock.patch.object(project_driver.RunDriver, '_fail', fail_after_claim), \
+                mock.patch.object(project_driver.RunDriver, '_advance', break_after_claim):
+            code, _ = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertNotEqual(0, code)
+        self.assertIn((True, True), failed[1::2])  # Still prepared after the failure.
+
     def test_dispatch_names_every_reason_the_run_driver_gives(self):
         from codex_agents import client_runtime, project_driver
         self.assertLessEqual(project_driver.REASON_CODES, client_runtime.START_REASONS)
