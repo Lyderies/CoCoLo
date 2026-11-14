@@ -19,8 +19,8 @@ Clone it somewhere outside every folder you open in Codex. You will only ever ru
 never open Codex on it.
 
 ```sh
-git clone https://github.com/Lyderies/codex-claude-agent-orchestration.git
-cd codex-claude-agent-orchestration
+git clone https://github.com/Lyderies/cocolo.git
+cd cocolo
 ```
 
 ## 3. Prepare the operational checks

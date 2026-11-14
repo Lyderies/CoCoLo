@@ -2,7 +2,7 @@
 
 **Claude Orchestrator, Codex Orchestrator, Local Orchestrator**
 
-[![CI](https://github.com/Lyderies/codex-claude-agent-orchestration/actions/workflows/ci.yml/badge.svg)](https://github.com/Lyderies/codex-claude-agent-orchestration/actions/workflows/ci.yml)
+[![CI](https://github.com/Lyderies/cocolo/actions/workflows/ci.yml/badge.svg)](https://github.com/Lyderies/cocolo/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 You're deep in a Claude Code or Codex session and you'd love a second pair of eyes: someone to
