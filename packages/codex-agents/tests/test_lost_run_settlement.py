@@ -21,12 +21,21 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests.learning_support import attest_provider
 from tests.support import REPOSITORY_ROOT
-from tests.test_bridge import PARENT_GRANT, null_filled, result
+from tests.test_bridge import CLEAN, PARENT_GRANT, git, null_filled, result
 from tests.test_project_driver import DriverHarness
 
-from codex_agents import learning_store, project_driver
+from codex_agents import bridge, learning_store, project_driver, service_transport
 from codex_agents.account_api import AccountClient, AccountError
+from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
+from codex_agents.hosts import OWNER_CLIENT
+from codex_agents.learning_contracts import canonical_json, parse_bounded_json
+from codex_agents.learning_store import LedgerError
+from codex_agents.lost_run_contracts import SettleLostInput
+from codex_agents.service_enrollment import (
+    account_endpoint_path, enrollment_preamble, proof_directory, read_capability, withdraw_proof,
+)
 from codex_agents.active_run_capacity import CRASHED_CLAIM_GRACE_MS, ActiveRunLimits, crashed_claim
 from codex_agents.client_runtime import runtime_hint_path
 
@@ -323,6 +332,136 @@ class LostRunAfterStopTests(LostRunHarness):
         self.wait_for(lambda: not [p for p in self.journal().iterdir() if p.name.startswith('brg_')], seconds=10)
         self.restart_host()
         self.assertEqual([('pending', None, 1)], self.claimed_bindings())
+
+
+class LostRunAuthorityTests(LostRunHarness):
+    """Only the project that holds a run's custody, through its project role, can settle it."""
+
+    def admit(self, provider):
+        self.second = Path(self.temporary.name) / 'second'
+        self.second.mkdir()
+        (self.second / 'source.txt').write_text('second marker\n')
+        git(self.second, 'init', '-q')
+        git(self.second, 'config', 'user.email', 'tests@example.invalid')
+        git(self.second, 'config', 'user.name', 'Bridge Tests')
+        git(self.second, 'add', '.')
+        git(self.second, 'commit', '-qm', 'second')
+        fingerprint = super().admit(provider)
+        self.second_id = self.ledger.register_project(self.second, now_ms=1)
+        identity = self.ledger.observe_provider(self.second_id, provider, project_root=self.tools, environ=CLEAN)[0]
+        attest_provider(self.ledger, self.second_id, self.owner_key, provider, identity['account_fingerprint'])
+        return fingerprint
+
+    def settle_as(self, entry, *, role, host_client, root, project_id):
+        custody = canonical_json({'purpose': 'run', 'lease': entry['lease'], 'storage_evidence': entry['storage_evidence'],
+                                  'terminal_evidence': None, 'cleanup_evidence': None})
+        endpoint = account_endpoint_path(self.paths)
+        here = threading.get_ident()
+
+        def preamble(socket_path, message):
+            if threading.get_ident() != here or Path(socket_path) != endpoint:
+                return None
+            key, proofs = read_capability(self.paths, None, 'account'), proof_directory(socket_path)
+            line = enrollment_preamble(key, role, host_client, 1, message, proofs, subject=str(root), context=custody)
+            return line, lambda: withdraw_proof(proofs, line)
+
+        evidence = bytes.fromhex(entry['storage_evidence'])
+        settle = SettleLostInput(entry['run_handle'], entry['identity_digest'], entry['claim_request_id'],
+                                 entry['bridge_run_id'], parse_bounded_json(evidence)['lease']['lease_digest'])
+        enrollments = {'test-settle': preamble, **service_transport._ENROLLMENTS}
+        with mock.patch.object(service_transport, '_ENROLLMENTS', enrollments):
+            return AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=10).settle_lost_run(
+                settle, request_id='test-settle-' + entry['bridge_run_id'][4:20])
+
+    def test_only_the_runs_own_project_role_can_settle_it(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'held'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        dispatch = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(lambda: self.journal_states() == ['watched'], seconds=30)
+        entry = json.loads(next(self.journal().glob('brg_*.json')).read_text())
+        refused = []
+        for options in (
+                # A primary (host role), even with the run's own custody.
+                {'role': 'account', 'host_client': entry['host_client'], 'root': self.project,
+                 'project_id': self.project_id},
+                # The owner's terminal.
+                {'role': 'account', 'host_client': OWNER_CLIENT, 'root': self.project, 'project_id': self.project_id},
+                # Another project's service, with this project's custody, as itself or as this project.
+                {'role': 'project', 'host_client': entry['host_client'], 'root': self.second,
+                 'project_id': self.second_id},
+                {'role': 'project', 'host_client': entry['host_client'], 'root': self.second,
+                 'project_id': self.project_id}):
+            with self.assertRaises(AccountError) as caught:
+                self.settle_as(entry, **options)
+            refused.append(caught.exception.reason_code)
+        self.assertEqual(['account_not_authorized'] * 4, refused)
+        self.assertEqual([('pending', None, 0)], self.claimed_bindings())
+        self.assertEqual(1, self.counted())
+        # Its own project role, with its custody, is accepted (the project vouches for the evidence).
+        reply = self.settle_as(entry, role='project', host_client=entry['host_client'], root=self.project,
+                               project_id=self.project_id)
+        self.assertEqual(('settled', False), (reply['state'], reply['known']))
+        self.assertEqual([('abandoned', 'service_lost', 0)], self.claimed_bindings())
+        self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
+        dispatch.communicate(timeout=30)
+
+    def test_no_other_path_can_write_the_lost_run_reason(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        with self.assertRaises(LedgerError):
+            self.ledger.classify_host_run_abandoned(self.project_id, run_handle=run_handle, reason='service_lost')
+
+
+class SettleOnExitTests(unittest.TestCase):
+    def test_settling_on_exit_waits_for_the_sweep_and_the_account_call_and_writes_nothing_after(self):
+        from concurrent.futures import ThreadPoolExecutor
+        order = []
+        driver = project_driver.RunDriver.__new__(project_driver.RunDriver)
+        driver._sweeper, driver._executor = ThreadPoolExecutor(1), ThreadPoolExecutor(1)
+        driver._sweeper.submit(lambda: (time.sleep(0.4), order.append('sweep')))
+        driver._executor.submit(lambda: (time.sleep(0.4), order.append('account')))
+        driver._sweeper.shutdown(wait=False)
+        driver._executor.shutdown(wait=False)  # As close() leaves them.
+        driver._preamble, driver._owner_name = (lambda *a: None), 'test-exit'
+        driver._settle_lost = lambda own: order.append('settle')
+        driver._journal = mock.Mock(release=lambda: order.append('release'))
+        driver.settle_on_exit()
+        self.assertEqual(['account', 'release', 'settle', 'sweep'], sorted(order))
+        self.assertEqual(['settle', 'release'], order[2:])
+
+
+class WorkspaceRemovalTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from tests.support import TEMP_ROOT
+        self.temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        patcher = mock.patch.object(bridge, 'WORKSPACE_PARENT', str(self.base / 'scratch'))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        (self.base / 'scratch').mkdir()
+        self.outside = self.base / 'outside'
+        (self.outside / 'prepare-kept').mkdir(parents=True)
+
+    def test_a_workspace_is_removed_only_inside_the_real_scratch_container(self):
+        container = self.base / 'scratch' / bridge.SCRATCH_CONTAINER
+        container.mkdir()
+        (container / 'prepare-own').mkdir()
+        project_driver.RunDriver._remove_workspace(str(container / 'prepare-own'))
+        self.assertFalse((container / 'prepare-own').exists())
+        # A symlink in the container to a folder elsewhere is never followed or removed.
+        (container / 'prepare-link').symlink_to(self.outside / 'prepare-kept')
+        project_driver.RunDriver._remove_workspace(str(container / 'prepare-link'))
+        self.assertTrue((self.outside / 'prepare-kept').is_dir())
+        self.assertTrue((container / 'prepare-link').is_symlink())
+
+    def test_a_container_replaced_by_a_symlink_is_refused(self):
+        (self.base / 'scratch' / bridge.SCRATCH_CONTAINER).symlink_to(self.outside)
+        workspace = self.base / 'scratch' / bridge.SCRATCH_CONTAINER / 'prepare-kept'
+        project_driver.RunDriver._remove_workspace(str(workspace))
+        self.assertTrue((self.outside / 'prepare-kept').is_dir())
 
 
 if __name__ == '__main__':

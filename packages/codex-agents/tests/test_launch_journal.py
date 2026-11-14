@@ -16,8 +16,12 @@ from pathlib import Path
 
 from tests.support import TEMP_ROOT
 
-from codex_agents.launch_journal import LaunchJournal, tree_state
-from codex_agents.process_tree import process_record
+from unittest import mock
+
+from codex_agents import launch_journal
+from codex_agents.bridge import PYTHON_ISOLATION_FLAGS, WATCHDOG_SCRIPT
+from codex_agents.launch_journal import LaunchJournal, JournalError, tree_state
+from codex_agents.process_tree import WATCHDOG_READY_SECONDS, await_ready, process_record, write_cleanup_marker
 
 BRIDGE = 'brg_' + '1' * 32
 OTHER = 'brg_' + '2' * 32
@@ -68,12 +72,69 @@ class LaunchJournalTests(unittest.TestCase):
     def sleeper(self, seconds=30):
         return self.started('/bin/sleep', str(seconds), start_new_session=True)
 
-    def watched(self, journal, root, watchdog):
+    def watched(self, journal, root, watchdog, *, confirmed=False):
         claimed(journal)
         journal.spawning(BRIDGE)
         journal.launched(BRIDGE, root.pid, birth(root.pid))
         journal.watched(BRIDGE, watchdog.pid, birth(watchdog.pid))
+        if confirmed:
+            self.confirm(journal, root.pid, birth(root.pid))
         return self.entry(journal)
+
+    @staticmethod
+    def confirm(journal, pid, born, bridge=BRIDGE):
+        """What the real watchdog writes once the tree it tracked is confirmed empty."""
+        write_cleanup_marker(str(journal.marker_path(bridge)), bridge, pid, born)
+
+    def real_watchdog(self, journal, root, *, deadline=60.0):
+        """The bridge's own detached watchdog for `root`, writing its confirmation beside the journal."""
+        watchdog = subprocess.Popen(
+            [sys.executable, *PYTHON_ISOLATION_FLAGS, str(WATCHDOG_SCRIPT), str(root.pid), birth(root.pid),
+             repr(time.monotonic() + deadline), str(journal.marker_path(BRIDGE)), BRIDGE],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True,
+            close_fds=True, env={'PATH': os.defpath})
+        self.processes.append(watchdog)
+        try:
+            self.assertTrue(await_ready(watchdog.stdout, WATCHDOG_READY_SECONDS))
+        finally:
+            watchdog.stdout.close()
+        claimed(journal)
+        journal.spawning(BRIDGE)
+        journal.launched(BRIDGE, root.pid, birth(root.pid))
+        journal.watched(BRIDGE, watchdog.pid, birth(watchdog.pid))
+        return watchdog
+
+    def escaping_root(self, *, pause):
+        """A child whose own child starts a new session (setsid) and keeps running; the child then ends."""
+        code = ('import subprocess, sys, time\n'
+                "grandchild = subprocess.Popen(['/bin/sleep', '60'], start_new_session=True)\n"
+                'print(grandchild.pid, flush=True)\n'
+                'time.sleep(%r)\n' % pause)
+        root = subprocess.Popen([sys.executable, '-I', '-c', code], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, start_new_session=True)
+        self.processes.append(root)
+        grandchild = int(root.stdout.readline())
+        root.stdout.close()
+        self.addCleanup(self.kill_quietly, grandchild)
+        return root, grandchild
+
+    @staticmethod
+    def kill_quietly(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    @staticmethod
+    def running(pid):
+        record = process_record(pid)
+        return record is not None and not record[3]
+
+    def wait_until(self, condition, seconds=15):
+        end = time.monotonic() + seconds
+        while not condition():
+            self.assertLess(time.monotonic(), end)
+            time.sleep(0.05)
 
     @staticmethod
     def entry(journal, bridge=BRIDGE):
@@ -119,6 +180,13 @@ class LaunchJournalTests(unittest.TestCase):
         self.end(root)
         self.assertEqual('alive', tree_state(entry))  # Its watchdog still runs.
         self.end(watchdog)
+        # Both are gone, but no watchdog confirmed the tree it tracked: not evidence.
+        self.assertEqual('unknown', tree_state(entry))
+        self.confirm(journal, root.pid, entry['child']['birth'], bridge=OTHER)  # Another run's confirmation.
+        self.assertEqual('unknown', tree_state(entry))
+        self.confirm(journal, root.pid, '1.000000')  # Another child's.
+        self.assertEqual('unknown', tree_state(entry))
+        self.confirm(journal, root.pid, entry['child']['birth'])
         self.assertEqual('gone', tree_state(entry))
 
     def test_a_watchdog_that_is_gone_does_not_hide_a_running_child(self):
@@ -132,7 +200,7 @@ class LaunchJournalTests(unittest.TestCase):
         journal = LaunchJournal(self.directory)
         root = self.started('/bin/sh', '-c', '/bin/sleep 30 & sleep 0.3', start_new_session=True)
         watchdog = self.sleeper()
-        entry = self.watched(journal, root, watchdog)
+        entry = self.watched(journal, root, watchdog, confirmed=True)
         root.wait(5)
         self.end(watchdog)
         self.assertEqual('alive', tree_state(entry))  # The background sleep is still in the group.
@@ -149,7 +217,7 @@ class LaunchJournalTests(unittest.TestCase):
                 'time.sleep(0.3)\n')
         root = self.started(sys.executable, '-I', '-c', code, start_new_session=True)
         watchdog = self.sleeper()
-        entry = self.watched(journal, root, watchdog)
+        entry = self.watched(journal, root, watchdog, confirmed=True)
         root.wait(5)
         self.end(watchdog)
         self.assertEqual('alive', tree_state(entry))
@@ -179,11 +247,106 @@ class LaunchJournalTests(unittest.TestCase):
         journal.spawning(BRIDGE)
         journal.launched(BRIDGE, unrelated.pid, '1.000000')
         journal.watched(BRIDGE, watchdog.pid, birth(watchdog.pid))
+        self.confirm(journal, unrelated.pid, '1.000000')
         self.end(watchdog)
         self.assertEqual('gone', tree_state(self.entry(journal)))
         # The check signals nothing: the unrelated process is still running.
         self.assertIsNone(unrelated.poll())
         self.assertEqual(birth(unrelated.pid), process_record(unrelated.pid)[2])
+
+    def test_a_setsid_escapee_whose_watchdog_never_confirmed_the_tree_is_never_settled(self):
+        journal = LaunchJournal(self.directory)
+        root, grandchild = self.escaping_root(pause=2)
+        watchdog = self.real_watchdog(journal, root)
+        os.killpg(watchdog.pid, signal.SIGKILL)  # The watchdog ends before it could confirm anything.
+        watchdog.wait(5)
+        root.wait(10)
+        # Child and watchdog are gone and their groups and sessions are empty, but the
+        # grandchild runs on in a session of its own: only the missing confirmation shows it.
+        self.assertTrue(self.running(grandchild))
+        self.assertFalse(journal.marker_path(BRIDGE).exists())
+        self.assertEqual('unknown', tree_state(self.entry(journal)))
+
+    def test_a_watchdog_that_confirms_its_tracked_tree_lets_the_run_settle(self):
+        for escapes in (False, True):
+            with self.subTest(escapes=escapes):
+                journal = LaunchJournal(self.directory / str(escapes))
+                if escapes:
+                    # Seen by the watchdog before the child ends: it is killed with the tree.
+                    root, grandchild = self.escaping_root(pause=2)
+                else:
+                    root, grandchild = self.started(sys.executable, '-I', '-c', 'import time; time.sleep(1)',
+                                                    start_new_session=True), None
+                watchdog = self.real_watchdog(journal, root)
+                root.wait(10)
+                watchdog.wait(15)
+                self.assertEqual(0, watchdog.returncode)
+                self.assertTrue(journal.marker_path(BRIDGE).exists())
+                self.assertEqual(0o600, journal.marker_path(BRIDGE).stat().st_mode & 0o777)
+                if grandchild is not None:
+                    self.wait_until(lambda: not self.running(grandchild))
+                self.wait_until(lambda: tree_state(self.entry(journal)) == 'gone')
+
+    def test_the_kernel_checks_must_come_back_empty_twice(self):
+        journal = LaunchJournal(self.directory)
+        root, watchdog = self.sleeper(), self.sleeper()
+        entry = self.watched(journal, root, watchdog, confirmed=True)
+        self.end(root)
+        self.end(watchdog)
+        self.assertEqual('gone', tree_state(entry))
+        # Something joins one of the sessions between the first scan and the second.
+        answers = iter([False, True])
+        with mock.patch.object(launch_journal, '_session_members', lambda sessions: next(answers)):
+            self.assertEqual('alive', tree_state(entry))
+
+    def test_sessions_of_other_users_processes_can_be_read(self):
+        # launchd/init (pid 1) belongs to root. If getsid refused other users' processes,
+        # every session scan would be unknown and no run could ever be settled.
+        os.getsid(1)
+        self.assertIs(False, launch_journal._session_members({0x7FFFFFF0}))
+
+    def test_a_lock_file_appears_only_once_its_instance_holds_it(self):
+        other = LaunchJournal(self.directory)
+        original = launch_journal.fcntl.flock
+
+        def racing(descriptor, operation):
+            # Another instance tidies stopped instances while this one is starting.
+            for instance in other.instances():
+                other.forget_instance(instance)
+            return original(descriptor, operation)
+
+        with mock.patch.object(launch_journal.fcntl, 'flock', racing):
+            journal = LaunchJournal(self.directory)
+        self.assertTrue((self.directory / (journal.instance + '.lock')).exists())
+        self.assertFalse(other.instance_stopped(journal.instance))
+
+    def test_a_lock_is_kept_while_an_entry_cannot_be_read_or_counted(self):
+        journal = LaunchJournal(self.directory)
+        claimed(journal)
+        path = self.directory / (BRIDGE + '.json')
+        path.write_text('{"truncated"')
+        other = LaunchJournal(self.directory)
+        journal.release()
+        self.assertTrue((self.directory / (journal.instance + '.lock')).exists())
+        other.forget_instance(journal.instance)
+        self.assertTrue((self.directory / (journal.instance + '.lock')).exists())
+        path.unlink()
+        with mock.patch.object(launch_journal, 'MAX_ENTRIES', 0):
+            other.forget_instance(journal.instance)  # Nothing listed, but the listing is incomplete.
+        self.assertTrue((self.directory / (journal.instance + '.lock')).exists())
+        other.forget_instance(journal.instance)
+        self.assertFalse((self.directory / (journal.instance + '.lock')).exists())
+
+    def test_nothing_is_written_once_the_lock_is_released(self):
+        journal = LaunchJournal(self.directory)
+        claimed(journal)
+        journal.release()
+        with self.assertRaises(JournalError):
+            journal.spawning(BRIDGE)
+        with self.assertRaises(JournalError):
+            journal.settled(BRIDGE, 'settled')
+        with self.assertRaises(JournalError):
+            claimed(journal, OTHER)
 
     def test_entries_that_cannot_be_read_are_unknown_and_left_in_place(self):
         journal = LaunchJournal(self.directory)
