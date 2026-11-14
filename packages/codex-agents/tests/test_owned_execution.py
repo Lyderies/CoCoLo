@@ -56,7 +56,7 @@ class RunMarkerParsingTests(unittest.TestCase):
                          process_tree.parse_procargs2(_procargs2(b"/bin/sleep", [b"/bin/sleep", b"5"], [], [])))
         for broken in (b"", b"\1\0", struct.pack("=i", 5) + b"/bin/sh\0a\0b\0", struct.pack("=i", -1) + b"x\0",
                        struct.pack("=i", 1) + b"/bin/sh-without-end",
-                       struct.pack("=i", 1) + b"/bin/sh\0x\0"):  # Padding cut short by a string.
+                       struct.pack("=i", 1) + b"/bin/sleep\0x\0\0\0\0\0"):  # Padding cut short by a string.
             with self.subTest(raw=broken):
                 self.assertIsNone(process_tree.parse_procargs2(broken))
 

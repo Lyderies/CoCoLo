@@ -284,13 +284,16 @@ def parse_procargs2(raw: bytes) -> tuple[bytes, list[bytes]] | None:
     argc = struct.unpack_from("=i", raw, 0)[0]
     if argc < 0:
         return None
-    # The executable path, then NUL padding, then argv and the environment.
+    # The executable path, NUL-padded so argv starts 8-byte aligned after argc (so
+    # on every process checked), then argv and the environment. Skipping every NUL
+    # instead would also swallow an empty argv[0] and shift the environment by one.
     end = raw.find(b"\0", 4)
     if end < 0:
         return None
-    path, position = raw[4:end], end
-    while position < len(raw) and raw[position] == 0:
-        position += 1
+    path = raw[4:end]
+    position = 4 + -(-(len(path) + 1) // 8) * 8
+    if position > len(raw) or raw[end:position].strip(b"\0"):
+        return None
     strings = raw[position:].split(b"\0")
     if len(strings) < argc:
         return None
