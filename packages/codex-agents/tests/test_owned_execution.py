@@ -123,7 +123,7 @@ class UnreadableParentageTests(unittest.TestCase):
                 mock.patch.object(process_tree, "process_gone", side_effect=lambda pid: pid not in records), \
                 mock.patch.object(process_tree, "process_arguments", side_effect=arguments.get), \
                 mock.patch.object(process_tree, "_in_session",
-                                  side_effect=lambda pid, session: sessions.get(pid) == session), \
+                                  side_effect=lambda pid, session, *rest: sessions.get(pid) == session), \
                 mock.patch.object(process_tree.time, "sleep"):
             return process_tree.tagged_process_running(self.TAG, self.CHILD_BIRTH, 20000)
 
@@ -162,6 +162,74 @@ class UnreadableParentageTests(unittest.TestCase):
                     processes[1001 + index] = (1000 + index, "11.%06d" % index, None)
                 self.assertIs(expected, self.scan(processes))
 
+
+class ScanStabilityTests(unittest.TestCase):
+    """A scan lists again until no new process appears, so a fork-and-exit cannot slip between."""
+
+    TAG = "e" * 32
+    CHILD_BIRTH = "10.000000"
+
+    def scan(self, listings, processes, gone_after_listing=()):
+        """`listings`: the pid sets `ps` returns in turn (the last repeats); `processes`:
+        pid -> (parent, birth, environment); pids in `gone_after_listing` read as reaped."""
+        listings = list(listings)
+        def table():
+            pids = listings.pop(0) if len(listings) > 1 else listings[0]
+            return {pid: processes[pid][0] for pid in pids}
+        records = {pid: (value[0], pid, value[1], False) for pid, value in processes.items()
+                   if pid not in gone_after_listing}
+        arguments = {pid: (b"/opt/tool", value[2]) for pid, value in processes.items()
+                     if pid not in gone_after_listing}
+        with mock.patch.object(process_tree, "process_table", side_effect=table), \
+                mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "process_gone", side_effect=lambda pid: pid not in records), \
+                mock.patch.object(process_tree, "process_arguments", side_effect=arguments.get), \
+                mock.patch.object(process_tree, "_in_session", return_value=False), \
+                mock.patch.object(process_tree.time, "sleep"):
+            return process_tree.tagged_process_running(self.TAG, self.CHILD_BIRTH, 20000)
+
+    def tagged(self):
+        return [b"COCOLO_RUN_TAG=" + self.TAG.encode()]
+
+    def test_a_tagged_process_forked_by_one_that_exited_before_it_was_read_is_found(self):
+        # 30000 was listed, forked 30001 and was reaped before its read; 30001 was not listed yet.
+        processes = {500: (1, "1.000000", []), 30000: (500, "11.000000", self.tagged()),
+                     30001: (1, "12.000000", self.tagged())}
+        self.assertIs(True, self.scan([{500, 30000}, {500, 30001}], processes, gone_after_listing={30000}))
+
+    def test_a_listing_that_stops_changing_ends_the_scan(self):
+        processes = {500: (1, "1.000000", []), 30000: (500, "11.000000", [b"A=1"])}
+        self.assertIs(False, self.scan([{500}, {500, 30000}, {500, 30000}], processes))
+
+    def test_a_listing_that_never_settles_is_not_proof(self):
+        processes = {500: (1, "1.000000", [])}
+        listings = []
+        # A new process in every listing, for longer than every attempt's rounds together.
+        for index in range((process_tree.MAX_SCAN_ROUNDS + 1) * process_tree.TAG_SCAN_ATTEMPTS + 2):
+            processes[30000 + index] = (500, "11.%06d" % index, [b"A=1"])
+            listings.append({500} | {30000 + step for step in range(index + 1)})
+        listings.append(listings[-1] | {39999})
+        processes[39999] = (500, "12.000000", [b"A=1"])
+        self.assertIsNone(self.scan(listings, processes))
+
+
+class ReusedSessionIdTests(unittest.TestCase):
+    """After the child is reaped its pid may lead a new, unrelated session."""
+
+    def test_a_process_of_a_new_session_on_the_childs_reused_pid_is_not_counted(self):
+        child_birth = "10.000000"
+        records = {20000: (1, 20000, "50.000000", False)}  # A later shell now holds the child's pid.
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree.os, "getsid", return_value=20000):
+            reused = process_tree.session_reused_at(20000, child_birth)
+            self.assertEqual("50.000000", reused)
+            # Born after the new leader: a member of its session, not the child's.
+            self.assertFalse(process_tree._in_session(30000, 20000, "51.000000", reused))
+            # Born before it: still in the child's old session.
+            self.assertTrue(process_tree._in_session(30000, 20000, "20.000000", reused))
+        records = {20000: (1, 20000, child_birth, False)}
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get):
+            self.assertIsNone(process_tree.session_reused_at(20000, child_birth))
 
 class CleanupEvidenceTests(unittest.TestCase):
     def identified(self, child_exited=False):
