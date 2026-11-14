@@ -2,6 +2,16 @@
 
 ## Unreleased: 0.3.0 (in progress)
 
+- From the first real install's checks (the tests had used short time limits and one child per
+  project): a child with the route's standard time limit (6 hours) was refused at claim
+  (`claim_storage_expired`), because its result space was reserved for 30 minutes; the reservation
+  now covers the run's own limit. A project could prepare one child at a time and a refused run
+  never gave that back, so the next child failed (`run_unavailable`) until its service restarted;
+  a project now prepares up to four (as many as it may run) and a refused run frees its share.
+  `dispatch` now says why a run could not start, with the run's own reason code. The verifier's
+  `validate-assignment` and `result-preflight` no longer pause the shared collector (they were
+  refused while any child ran). Still open: a run refused at claim cannot yet be classified
+  abandoned by the primary; it expires by itself.
 - From the first real install: setup, `learning-status` and the billing attestation run in your own
   terminal, with no Codex or Claude Code markers, and the account service refused them, so setup said
   "Collector status: not ready" and attestation stopped with "provider observation unavailable". Your

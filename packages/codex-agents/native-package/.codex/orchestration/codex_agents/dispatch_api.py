@@ -41,8 +41,10 @@ _RATE_LIMIT_FIELDS = {'rate_limit_events', 'rate_limit_records_kept', 'rate_limi
 
 
 class DispatchError(RuntimeError):
-    def __init__(self, reason='dispatch_unavailable'):
-        self.reason_code = reason if type(reason) is str and reason in DISPATCH_REASONS else 'dispatch_unavailable'
+    def __init__(self, reason='dispatch_unavailable', *, known=frozenset()):
+        """`known` adds the fixed codes a caller may pass on, such as why a run could not start."""
+        allowed = type(reason) is str and (reason in DISPATCH_REASONS or reason in known)
+        self.reason_code = reason if allowed else 'dispatch_unavailable'
         super().__init__(self.reason_code)
 
 

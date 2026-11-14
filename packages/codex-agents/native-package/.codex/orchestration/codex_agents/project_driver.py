@@ -57,6 +57,9 @@ DISPATCH_SLOTS = 64  # Lifetime dispatch slots of one host, the dispatch service
 # Local custody of a released run waits for its primary to record the result,
 # or this long; dispatch status and the result read need that custody.
 RECORD_GRACE_SECONDS = 3_600
+# Runs this host may have prepared at once: as many as the project may run at once, so one run
+# waiting for its record (or one that failed) never turns the next away.
+PREPARATION_SLOTS = 4  # project_service.MAX_ACTIVE_ATTEMPTS
 MAX_REQUEST_BYTES = 4_096
 WAIT_SECONDS = 5.0
 ACCOUNT_TIMEOUT_SECONDS = 60
@@ -197,12 +200,15 @@ class RunDriver:
         self._history_endpoint = None if history_endpoint is None else Path(history_endpoint)
         self._scope, self._runtime, self._clock = scope, runtime, clock
         self._runs, self._closed, self._intake = {}, False, []
+        # Preparations of runs that failed or were abandoned before launch, until their slot is free.
+        self._giving_back = []
         # host outcome digest -> (host class, HostResultContext).
         self._workers = {}
         self._call = _Call()
         self._account = account_endpoint_path(state)
         self._preparation = runtime.bind_preparation(
-            PreparationLimits(1, MAX_PREPARATION_BYTES, MAX_PREPARATION_EXPORT_BYTES),
+            PreparationLimits(PREPARATION_SLOTS, PREPARATION_SLOTS * MAX_PREPARATION_BYTES,
+                              PREPARATION_SLOTS * MAX_PREPARATION_EXPORT_BYTES),
             authorizer=lambda context: any(run.preparation is context for run in self._runs.values()))
         self._dispatch = runtime.bind_dispatch(max_requests=DISPATCH_SLOTS, steps_per_cycle=1,
                                                authorizer=self._authorize_dispatch)
@@ -315,11 +321,7 @@ class RunDriver:
                 self._reply(connection, {'state': 'refused', 'reason_code': 'history_conflict'})
             else:
                 run = held[0]
-                if run.prepared is not None:
-                    try:
-                        self._preparation.discard(run.prepared)
-                    except Exception:
-                        pass
+                self._give_back(run)
                 del self._runs[run.key]
                 self._reply(connection, {'state': 'failed', 'reason_code': 'run_abandoned'})
             return
@@ -491,6 +493,28 @@ class RunDriver:
 
     def _fail(self, run, reason):
         run.state, run.reason = 'failed', reason
+        self._give_back(run)
+
+    def _give_back(self, run):
+        """A run that stopped before launch gives its preparation back; one bound to an
+        execution keeps it, for that execution's own cleanup."""
+        if run.prepared is None:
+            return
+        try:
+            self._preparation.discard(run.prepared)
+        except Exception:
+            return  # Bound to an execution, or the lane is gone: nothing is freed here.
+        self._giving_back.append(run.prepared)
+        run.prepared = None
+
+    def _retire_given_back(self):
+        for handle in list(self._giving_back):
+            try:
+                if self._preparation.snapshot(handle)['state'] in {'cleaned', 'failed'}:
+                    self._preparation.retire(handle)
+                    self._giving_back.remove(handle)
+            except Exception:
+                pass  # Still cleaning up; asked again on the next step.
 
     # The dispatch service names only runs this driver has made ready.
     def _authorize_dispatch(self, request, token):
@@ -552,6 +576,7 @@ class RunDriver:
         if self._closed:
             return
         self._read_intake()
+        self._retire_given_back()
         for run in list(self._runs.values()):
             try:
                 self._advance(run)

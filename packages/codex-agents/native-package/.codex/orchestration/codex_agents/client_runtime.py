@@ -43,6 +43,12 @@ from .service_transport import exchange_frame, install_enrollment
 
 ACCOUNT_GENERATION = 1  # account_host.GENERATION; that module is a persistence owner.
 BRIDGE_PROVIDERS = frozenset({"codex", "claude"})  # Read-only children the project host runs.
+# Why the project host could not start a run: its run driver's codes (project_driver.REASON_CODES)
+# and the account's (a refused claim, say). All fixed identifiers, safe to report.
+START_REASONS = frozenset({
+    'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable',
+    'run_abandoned',
+}) | ACCOUNT_REASON_CODES
 
 
 def runtime_hint_path(state, project_root):
@@ -860,7 +866,10 @@ def dispatch_codex_client(state_root, project_root, run_handle, task, route, ass
             break
         if prepared['state'] == 'refused' and prepared['reason_code'] == 'history_not_authorized':
             raise HostClientMismatch('host_client_mismatch')
-        if prepared['state'] in {'failed', 'refused'} or time.monotonic() >= deadline:
+        if prepared['state'] in {'failed', 'refused'}:
+            # Say why the run could not start: the driver's or the account's own fixed code.
+            raise DispatchError(prepared.get('reason_code'), known=START_REASONS)
+        if time.monotonic() >= deadline:
             raise DispatchError('dispatch_unavailable')
     old = {}
     if threading.current_thread() is threading.main_thread():

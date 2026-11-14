@@ -994,11 +994,9 @@ def _validated_assignment_route(
     if isinstance(task, dict) and task.get("verification_for_outcome") is not None:
         if project_root is None:
             raise LedgerError("verification_for_outcome requires --project-root")
-        ledger, project_id = _learning_ledger(args)
-        try:
-            ledger.verification_worker_result(project_id, task, with_result=False)
-        finally:
-            _close_ledger(ledger)
+        # The worker outcome itself is checked by the route and bound by the verifier's open,
+        # through the project's service. Checking it here took the shared ledger for itself,
+        # which pauses the collector and is refused while any child runs anywhere.
     if fallback_receipt is not None:
         ledger, project_id = _learning_ledger(args)
         try:
