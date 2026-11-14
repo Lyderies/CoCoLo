@@ -930,10 +930,7 @@ class ProjectHistory:
                                                 (self.project_id, binding.run_handle, binding.attempt)).fetchone() is not None):
                 raise HistoryError("history_conflict")
             self._check_result_capacity()
-            # The lease must outlast the run it holds space for: the claim requires the run's
-            # hard deadline to fall before it, so the reservation covers the assignment's own
-            # time limit (validated, never above the route's) and then the usual margin.
-            until = now + 1000 * assignment['bounds']['timeout_seconds'] + self._result_capacity.reservation_ms
+            until = now + self._result_capacity.reservation_ms
             value = ResultLease(binding, digest, now, until, "reserved", self._lease_digest(binding, digest, now, until))
             self._connection.execute("INSERT INTO result_leases VALUES(?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,?)",
                                      (self.project_id, binding.run_handle, binding.attempt, binding.claim_request_id,

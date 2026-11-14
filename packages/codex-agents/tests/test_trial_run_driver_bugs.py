@@ -93,6 +93,25 @@ class TrialRunDriverTests(DriverHarness):
         self.assertNotEqual(0, code)
         self.assertIn((True, True), failed[1::2])  # Still prepared after the failure.
 
+    def test_the_result_reservation_outlasts_the_longest_route_time_limit(self):
+        from tests.support import ORCHESTRATION_ROOT
+        from codex_agents import project_service
+        policy = json.loads((ORCHESTRATION_ROOT / 'config' / 'routing-policy.json').read_text())
+        limits = []
+
+        def walk(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key == 'timeout_seconds' and type(item) is int:
+                        limits.append(item)
+                    walk(item)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+        walk(policy)
+        self.assertEqual(max(limits), project_service.MAX_ROUTE_TIMEOUT_SECONDS)
+        self.assertGreater(project_service.RESULT_RESERVATION_MS, max(limits) * 1000)
+
     def test_dispatch_names_every_reason_the_run_driver_gives(self):
         from codex_agents import client_runtime, project_driver
         self.assertLessEqual(project_driver.REASON_CODES, client_runtime.START_REASONS)

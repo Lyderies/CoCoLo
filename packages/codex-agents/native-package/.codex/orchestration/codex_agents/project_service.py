@@ -34,6 +34,8 @@ PRIMARY_NAMESPACE = 'primary'
 # not yet calibrated against real client cadence.
 LIVENESS = LivenessLimits(180 * SECOND, 120 * SECOND, 300 * SECOND, 600 * SECOND)
 MAX_ACTIVE_ATTEMPTS = 4
+MAX_ROUTE_TIMEOUT_SECONDS = 21_600  # config/routing-policy.json; a test keeps them equal
+RESULT_RESERVATION_MS = (MAX_ROUTE_TIMEOUT_SECONDS + 1_800) * 1000
 # A host is started on demand, so one with no run and no client for this long
 # stops; the next command starts another. Its journals and scope are durable.
 IDLE_STOP_NS = 900 * SECOND
@@ -77,7 +79,9 @@ def _owned_directory(path):
 
 
 def _result_capacity():
-    return ResultCapacity(64, MAX_ACTIVE_ATTEMPTS * MAX_RESULT_BODY_BYTES, 1_800_000, 7 * 86_400_000)
+    # A lease must outlast the run it holds space for (the claim requires the run's hard deadline
+    # to fall inside it): the longest route time limit, then the usual 30-minute margin.
+    return ResultCapacity(64, MAX_ACTIVE_ATTEMPTS * MAX_RESULT_BODY_BYTES, RESULT_RESERVATION_MS, 7 * 86_400_000)
 
 
 def open_offline_history(state, project_id):

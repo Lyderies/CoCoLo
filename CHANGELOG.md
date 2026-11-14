@@ -5,7 +5,7 @@
 - From the first real install's checks (the tests had used short time limits and one child per
   project): a child with the route's standard time limit (6 hours) was refused at claim
   (`claim_storage_expired`), because its result space was reserved for 30 minutes; the reservation
-  now covers the run's own limit. A project could prepare one child at a time and a refused run
+  now outlasts the longest route time limit. A project could prepare one child at a time and a refused run
   never gave that back, so the next child failed (`run_unavailable`) until its service restarted;
   a project now prepares up to four (as many as it may run) and a refused run frees its share.
   `dispatch` now says why a run could not start, with the run's own reason code. The verifier's
