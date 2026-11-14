@@ -123,6 +123,10 @@ class ExecutionTicket:
         """The detached watchdog acknowledged tracking this execution's tree."""
         self._registry.watched(self, pid)
 
+    def watchdog_marker(self):
+        """(path, bridge run id) for the watchdog's cleanup confirmation, or None without a journal."""
+        return self._registry.watchdog_marker(self)
+
     def _signal_stop(self, process):
         self._registry._signal_stop(self, process)
 
@@ -545,6 +549,19 @@ class OwnedExecutionRegistry:
                 journal.launched(entry.key.bridge_run_id, process.pid, entry.birth)
             except Exception:
                 raise ExecutionCustodyError() from None
+
+    def watchdog_marker(self, ticket):
+        with self._lock:
+            entry = self._entry(ticket)
+            if self._pending.get(ticket) is not entry or entry.state != "active":
+                raise ExecutionCustodyError()
+        journal = self.launch_journal
+        if journal is None:
+            return None
+        try:
+            return str(journal.marker_path(entry.key.bridge_run_id)), entry.key.bridge_run_id
+        except Exception:
+            raise ExecutionCustodyError() from None
 
     def watched(self, ticket, pid):
         with self._lock:

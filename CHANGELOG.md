@@ -148,7 +148,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   verifier needs only while it runs (twelve idle hours when it holds recorded results).
 - If a project's service stops or crashes while a child is claimed, the project's next service
   settles that run by itself as soon as the operating system shows that the child, everything
-  left in its process group and session, and its deadline watchdog are gone (or that it never
+  left in its process group and session, and its deadline watchdog are gone, and the watchdog
+  confirmed before exiting that every process it tracked had stopped (or that it never
   started a child): the run is reported as `run_lost` (abandoned, outcome unknown, never an
   outcome) and its capacity slot is freed within seconds, exactly once (new account operation
   `account.settle_lost_run`, backed by a durable per-run launch journal in the project's state

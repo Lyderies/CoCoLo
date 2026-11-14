@@ -36,6 +36,7 @@ import json
 import math
 import os
 from pathlib import Path
+import stat
 from threading import Lock, local
 import time
 
@@ -1091,15 +1092,26 @@ class RunDriver:
         from .bridge import SCRATCH_CONTAINER, scratch_base
         from .host_paths import remove_private_directory
         try:
+            # Resolved on both sides: no component of either path may be a symlink.
             container = Path(os.path.realpath(scratch_base())) / SCRATCH_CONTAINER
             path = Path(workspace)
-            if path.parent == container and path.name.startswith('prepare-') and not path.is_symlink() and path.is_dir():
+            if (os.path.realpath(container) != str(container) or os.path.realpath(path) != str(path)
+                    or path.parent != container or not path.name.startswith('prepare-')):
+                return
+            info = os.lstat(path)
+            if stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid():
                 remove_private_directory(path)
         except Exception:
             pass
 
     def settle_on_exit(self):
-        """After every thread of this host stopped: settle its own runs, then let later hosts settle the rest."""
+        """After every thread of this host stopped: settle its own runs, then let later hosts settle the rest.
+
+        An in-flight sweep and account call are waited for first, so nothing of
+        this host writes its journal or reaches the account after its lock is gone.
+        """
+        self._sweeper.shutdown(wait=True)
+        self._executor.shutdown(wait=True)
         install_enrollment(self._preamble, owner=self._owner_name)
         try:
             self._settle_lost(True)

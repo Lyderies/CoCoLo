@@ -270,7 +270,7 @@ class LaunchJournalTests(unittest.TestCase):
     def test_a_watchdog_that_confirms_its_tracked_tree_lets_the_run_settle(self):
         for escapes in (False, True):
             with self.subTest(escapes=escapes):
-                journal = LaunchJournal(self.directory / str(escapes))
+                journal = LaunchJournal(Path(self.temporary.name) / ('launches-%s' % escapes))
                 if escapes:
                     # Seen by the watchdog before the child ends: it is killed with the tree.
                     root, grandchild = self.escaping_root(pause=2)
@@ -331,6 +331,8 @@ class LaunchJournalTests(unittest.TestCase):
         other.forget_instance(journal.instance)
         self.assertTrue((self.directory / (journal.instance + '.lock')).exists())
         path.unlink()
+        claimed(other, OTHER)  # Another instance's run, listed only when the listing is complete.
+        other.settled(OTHER, 'settled')
         with mock.patch.object(launch_journal, 'MAX_ENTRIES', 0):
             other.forget_instance(journal.instance)  # Nothing listed, but the listing is incomplete.
         self.assertTrue((self.directory / (journal.instance + '.lock')).exists())

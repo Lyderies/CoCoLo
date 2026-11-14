@@ -20,6 +20,7 @@ Standard library only: the deadline watchdog runs this file as a script.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import selectors
 import signal
@@ -293,6 +294,20 @@ class ProcessTree:
             stopped or identity == root for identity, stopped in self._cleanup_seen.items()
         )
 
+    def cleanup_confirmed(self) -> bool:
+        """Positive evidence that every process this tree ever tracked has stopped.
+
+        The watchdog's form of `cleanup_after_owned_wait`: it does not own the
+        root, so the root must also be seen stopped (a zombie, reaped, or its
+        pid reborn). An unreadable record, a lost snapshot or overflow is unknown.
+        """
+        if not self.identified or self._cleanup_incomplete or (self.root, self.root_birth) not in self._cleanup_seen:
+            return False
+        for (pid, birth), stopped in tuple(self._cleanup_seen.items()):
+            if not stopped:
+                self._remember_cleanup(pid, birth, process_record(pid))
+        return not self._cleanup_incomplete and all(self._cleanup_seen.values())
+
     def identify(self, table: Table | None, birth: str | None = None) -> bool:
         """Record the root, which must be unreaped, and adopt what is already visible.
 
@@ -419,7 +434,38 @@ def await_ready(stream, seconds: float) -> bool:
     return received == WATCHDOG_READY
 
 
-def watch(root: int, birth: str, deadline: float, announce) -> None:
+def write_cleanup_marker(path: str, bridge_run_id: str, pid: int, birth: str) -> bool:
+    """Record, owner-only and atomically, that the watched tree of this child is confirmed empty.
+
+    A project service's launch journal reads it before it settles a run whose
+    service was lost. Any failure leaves no marker, which is never evidence.
+    """
+    directory, name = os.path.split(path)
+    body = json.dumps({"version": 1, "bridge_run_id": bridge_run_id, "pid": pid, "birth": birth,
+                       "confirmed": True}, sort_keys=True, separators=(",", ":")).encode("ascii")
+    temporary = os.path.join(directory, ".%s.%d.tmp" % (name, os.getpid()))
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        try:
+            os.write(descriptor, body)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, path)
+        folder = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        return False
+    return True
+
+
+def watch(root: int, birth: str, deadline: float, announce, marker: str | None = None,
+          bridge_run_id: str | None = None) -> None:
     """The detached deadline watchdog for one bridged child.
 
     It verifies the child's identity from the bridge, which keeps the child
@@ -428,6 +474,8 @@ def watch(root: int, birth: str, deadline: float, announce) -> None:
     the tree is killed at the absolute monotonic deadline supplied by the bridge,
     or once the child itself has exited. Wall-clock corrections cannot shorten or
     extend that budget. Supported Python versions share this clock across processes.
+    With `marker`, once the tree it tracked is confirmed empty it records that
+    there before exiting (`write_cleanup_marker`).
     """
 
     tree = ProcessTree(root)
@@ -441,11 +489,10 @@ def watch(root: int, birth: str, deadline: float, announce) -> None:
         table = process_table()
         if table is not None:
             tree.update(table)
-        if tree.root_exited():
+        if tree.root_exited() or time.monotonic() >= deadline:
             tree.terminate()
-            return
-        if time.monotonic() >= deadline:
-            tree.terminate()
+            if marker is not None and bridge_run_id is not None and tree.cleanup_confirmed():
+                write_cleanup_marker(marker, bridge_run_id, root, tree.root_birth)
             return
         time.sleep(WATCHDOG_INTERVAL_SECONDS)
 
@@ -461,4 +508,5 @@ def _announce() -> None:
 
 
 if __name__ == "__main__":
-    watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce)
+    watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
+          *(sys.argv[4:6] if len(sys.argv) == 6 else ()))

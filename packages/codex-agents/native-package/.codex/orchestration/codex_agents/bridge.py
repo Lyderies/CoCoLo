@@ -573,14 +573,14 @@ class _WatchdogOwner:
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
 
-    def start(self, root: int, birth: str, deadline_monotonic: float) -> None:
+    def start(self, root: int, birth: str, deadline_monotonic: float, marker: tuple[str, str] | None = None) -> None:
         # The child remains unreaped through the acknowledgement, so its pid
         # cannot pass to another process. Output processing waits for verification.
         try:
             self._process = subprocess.Popen(
                 [
                     sys.executable, *PYTHON_ISOLATION_FLAGS, str(WATCHDOG_SCRIPT),
-                    str(root), birth, repr(deadline_monotonic),
+                    str(root), birth, repr(deadline_monotonic), *(marker or ()),
                 ],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -767,9 +767,17 @@ def run_child(
                 execution_bound = True
             except ExecutionCustodyError:
                 raise _Abort("process_tracking_unavailable") from None
+        marker = None
+        if _execution is not None:
+            # Where the watchdog confirms, before it exits, that the tree it tracked is empty.
+            try:
+                marker = _execution.watchdog_marker()
+            except ExecutionCustodyError:
+                raise _Abort("watchdog_unavailable") from None
         watchdog.start(
             process.pid, tree.root_birth,
             deadline + WATCHDOG_GRACE_SECONDS,
+            *(() if marker is None else (marker,)),
         )
         if _execution is not None:
             # The project service records the acknowledged watchdog durably, so a

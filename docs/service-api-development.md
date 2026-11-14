@@ -408,20 +408,34 @@ of the run can still be running:
   run can launch. The host's execution registry writes `spawning` immediately before
   `Popen`, and refuses the launch if that write fails, so a run still `claimed` never
   started a child; then `launched` (child pid and kernel birth time, at bind) and
-  `watched` (the detached watchdog's pid and birth, after its acknowledgement). A normal
-  release removes the file.
+  `watched` (the detached watchdog's pid and birth, after its acknowledgement). Beside
+  it the watchdog itself writes `<bridge_run_id>.done` (owner-only, written to a
+  temporary name, fsynced and renamed) just before it exits, and only when
+  `ProcessTree.cleanup_confirmed` shows every process it ever tracked stopped (a zombie,
+  reaped per `process_gone`, or its pid reborn): the confirmation the normal release
+  relies on, with the root seen stopped instead of waited for. It names the bridge run
+  and the child's pid and birth. A watchdog that was killed, or could not confirm, writes
+  nothing. A normal release removes both files.
 - Instance lock. Each driver holds an exclusive `flock` on its own
   `<instance>.lock` for as long as any of its threads may launch or own a child: the
   kernel frees it when the process dies, and a graceful stop frees it only after every
   runtime thread has stopped. Another instance's entry is considered only while that lock
-  can be taken; a missing lock file proves nothing.
+  can be taken; a missing lock file proves nothing. The lock is taken on a temporary name
+  and then linked into place, so `<instance>.lock` never exists unlocked. A lock file is
+  removed (by its instance on release, or by another once it is stopped) only when the
+  whole journal could be listed and read and none of that instance's runs is unsettled.
+  After its release an instance writes nothing more to the journal: its sweep and any
+  in-flight account call are waited for before it settles its own runs and releases.
 - Evidence (`launch_journal.tree_state`): `claimed` is gone (never spawned). `watched` is
   gone only when the child and the watchdog are each reaped (`process_gone`) or their pids
-  now have another birth time, `killpg(pid, 0)` answers ESRCH for both of their process
-  groups (each started a new session, so group and session ids are their pids), and no
-  process listed by `ps -A` has either as its session (`getsid`). Every other state,
-  and any unreadable, damaged or ambiguous entry or kernel read, is not evidence. Nothing
-  is ever signalled.
+  now have another birth time, the watchdog's confirmation matches this bridge run and
+  child, and twice, 0.2 s apart (so a process joining in between is seen),
+  `killpg(pid, 0)` answers ESRCH for both of their process groups (each started a new
+  session, so group and session ids are their pids) and no process listed by `ps -A` has
+  either as its session (`getsid`). `getsid` answers for every user's processes on macOS
+  (tested against pid 1) and on Linux within one pid namespace; an error makes the scan
+  unknown, never empty. Every other state, and any unreadable, damaged or ambiguous
+  entry, confirmation or kernel read, is not evidence. Nothing is ever signalled.
 - Settlement. Every second the driver's sweep thread checks the entries of stopped
   instances; for a gone one it sends `account.settle_lost_run` (role `project`, with the
   run's lease and the sealed storage evidence from the journal as its custody, retried
@@ -435,7 +449,8 @@ of the run can still be running:
   reports it `held`. A row its own host already released is answered `released`. The
   reply digest does not depend on time, so a repeated or lost request gets the same
   receipt and nothing is settled twice. The driver then removes the run's private
-  workspace (only a `prepare-` folder in the host scratch container) and keeps a
+  workspace (only a `prepare-` folder directly in the host scratch container, both paths
+  resolved with no symlink component, owned by this user) and keeps a
   tombstone for 24 hours, through which `run.describe`, `learning-run-status`
   (`reason_code: run_lost`, `terminal_state: abandoned`, `outcome: unknown`,
   `capacity_state` `released` or `held`) and the abandonment command report the run.
@@ -456,15 +471,27 @@ clock below the claim's reference means the machine rebooted since, which no chi
 survives. A claim without a monotonic deadline never qualifies. A late terminal still
 settles the row normally. No owner step is needed.
 
+Trust: the account accepts a settlement from any enrolled `project`-role caller whose root
+is registered to the project and who presents that run's lease and sealed storage evidence;
+it does not see the kernel evidence. So any holder of the project's custody material (a
+process that can write the state root and read the project's launch journal) can settle a
+run of that project, which is the trust level of every other project-role custody
+operation (terminal, release, fence). A primary (`host` role), the owner's terminal and
+another project's service are refused (`LostRunAuthorityTests`), and no other path can
+write the `service_lost` reason (`classify_host_run_abandoned` accepts only its own three
+reasons).
+
 Limits: the next host starts only with the project's next command, so a crashed
 project's run keeps counting (and can turn another project's claim away with
 `claim_busy`) until then or until the timed rule. A run that failed after its claim was
-admitted while its host keeps running is not settled until that host stops. Descendants
-that left both the child's process group and its session are seen only through the
-watchdog, which tracks the tree by polling (the same limit as the normal release). The
+admitted while its host keeps running is not settled until that host stops. A descendant
+that left both the child's process group and its session is caught only through the
+watchdog's confirmation; the watchdog tracks the tree by polling, so one that daemonized
+between two of its snapshots can still go unseen (the same limit as the normal release). The
 run's bound result lease in project history keeps its local slot until it expires or its
 orchestration closes. Tests: `tests/test_launch_journal.py` (evidence, pid reuse,
-group/session leftovers, unreadable entries, instance locks),
+group/session leftovers, a `setsid` escapee whose watchdog never confirmed, the real
+watchdog's confirmation, the double kernel check, unreadable entries, instance locks),
 `tests/test_lost_run_settlement.py` (a really SIGKILLed host process with the child
 finishing or still running, damaged evidence and the timed fallback, a graceful stop in
 each run state, a lost reply and repeated restarts),

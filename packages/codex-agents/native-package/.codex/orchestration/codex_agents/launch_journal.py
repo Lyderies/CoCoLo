@@ -12,7 +12,13 @@ project's own state folder, and moves it forward as the run goes:
 - ``watched``: the detached watchdog's pid and birth time, once it has
   acknowledged that it tracks the child's tree.
 
-A normal release removes the file. Each service instance holds an exclusive
+Beside a watched entry the watchdog itself writes ``<bridge_run_id>.done``
+before it exits, but only once the process tree it tracked is confirmed
+empty (`process_tree.ProcessTree.cleanup_confirmed`, the confirmation the
+normal release relies on). A watchdog that was killed or could not confirm
+writes nothing, and the run is then left to the account's timed rule.
+
+A normal release removes both files. Each service instance holds an exclusive
 lock on its own ``<instance>.lock`` for as long as any of its threads may
 launch or own a child; the kernel releases it when the process dies. A later
 instance settles an earlier one's run only when that lock is free and
@@ -39,6 +45,10 @@ MAX_ENTRY_BYTES = 65_536
 MAX_ENTRIES = 256
 # A settled run's tombstone answers status and abandonment for this long.
 TOMBSTONE_MS = 86_400_000
+# The kernel checks must find nothing twice, this far apart: a process that joins a
+# group or session between one look and the next is seen by the second.
+RECHECK_SECONDS = 0.2
+MAX_MARKER_BYTES = 4_096
 PS_PATHS = ('/bin/ps', '/usr/bin/ps')
 PS_TIMEOUT_SECONDS = 5
 _BRIDGE = re.compile(r'brg_[0-9a-f]{32}')
@@ -94,15 +104,24 @@ class LaunchJournal:
             if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
                 raise JournalError('launch journal folder is not owner-only')
             self.instance = secrets.token_hex(16)
-            self._lock_fd = os.open(self._lock_path(self.instance),
-                                    os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+            # Locked under a name no other instance looks at, then linked into place:
+            # `<instance>.lock` never exists unlocked, so nothing can take it for a stopped one.
+            temporary = self.directory / ('.%s.lock.tmp' % self.instance)
+            self._lock_fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0),
+                                    0o600)
         except OSError as error:
             raise JournalError('launch journal is unavailable') from error
+        self._released = False
         try:
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.link(temporary, self._lock_path(self.instance))
+            os.unlink(temporary)
+            self._sync_directory()
         except OSError as error:
             os.close(self._lock_fd)
             self._lock_fd = None
+            with contextlib.suppress(OSError):
+                temporary.unlink()
             raise JournalError('launch journal is unavailable') from error
 
     def _lock_path(self, instance):
@@ -113,6 +132,16 @@ class LaunchJournal:
             raise JournalError('bridge run id is invalid')
         return self.directory / (bridge_run_id + '.json')
 
+    def marker_path(self, bridge_run_id):
+        """Where the run's watchdog confirms that the tree it tracked is empty."""
+        if not _matches(bridge_run_id, _BRIDGE):
+            raise JournalError('bridge run id is invalid')
+        return self.directory / (bridge_run_id + '.done')
+
+    def _writable(self):
+        if self._released:
+            raise JournalError('launch journal is released')
+
     def _sync_directory(self):
         descriptor = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -122,6 +151,8 @@ class LaunchJournal:
 
     def _write(self, bridge_run_id, value):
         """Replace the entry atomically and durably: the file, then the folder, reach the disk."""
+        self._writable()
+        value = {name: item for name, item in value.items() if name != 'marker_path'}
         if checked_entry(value) is None:
             raise JournalError('launch entry is invalid')
         body = json.dumps(value, sort_keys=True, separators=(',', ':')).encode('ascii')
@@ -166,7 +197,8 @@ class LaunchJournal:
         value = checked_entry(value)
         if value is None or path.name != value['bridge_run_id'] + '.json':
             return None
-        return value
+        # Not stored: where `tree_state` reads the watchdog's confirmation, at the time it checks.
+        return {**value, 'marker_path': str(self.marker_path(value['bridge_run_id']))}
 
     def entry(self, bridge_run_id):
         return self._read(self._path(bridge_run_id))
@@ -187,8 +219,10 @@ class LaunchJournal:
                  'identity_digest': identity_digest, 'claim_request_id': claim_request_id,
                  'storage_evidence': storage_evidence.hex(), 'workspace': None if workspace is None else str(workspace),
                  'child': None, 'watchdog': None, 'outcome': None, 'settled_at_ms': None}
+        self._writable()
         known = self.entry(bridge_run_id)
         if known is not None:
+            known.pop('marker_path')
             if known != value:
                 raise JournalError('launch entry already exists')
             return
@@ -215,9 +249,14 @@ class LaunchJournal:
             return
         self._write(bridge_run_id, {**value, 'state': 'settled', 'outcome': outcome,
                                     'settled_at_ms': int(time.time() * 1000) if now_ms is None else now_ms})
+        with contextlib.suppress(OSError):
+            self.marker_path(bridge_run_id).unlink()
 
     def remove(self, bridge_run_id):
         """A run whose capacity its own service released: nothing is left to settle."""
+        self._writable()
+        with contextlib.suppress(OSError):
+            self.marker_path(bridge_run_id).unlink()
         try:
             self._path(bridge_run_id).unlink()
             self._sync_directory()
@@ -228,16 +267,27 @@ class LaunchJournal:
 
     def entries(self):
         """Every entry, at most MAX_ENTRIES; one that cannot be read is {'bridge_run_id', 'state': None}."""
+        return self._listing()[0]
+
+    def _listing(self):
+        """(entries, complete): complete only when every entry file was listed and could be read."""
         found = []
         try:
             names = sorted(name for name in os.listdir(self.directory)
                            if name.endswith('.json') and _matches(name[:-5], _BRIDGE))
         except OSError:
-            return found
+            return found, False
         for name in names[:MAX_ENTRIES]:
             value = self._read(self.directory / name)
             found.append(value if value is not None else {'bridge_run_id': name[:-5], 'state': None})
-        return found
+        complete = len(names) <= MAX_ENTRIES and all(entry['state'] is not None for entry in found)
+        return found, complete
+
+    def _unsettled(self, instance):
+        """Whether that instance may still have an unsettled run here (an unreadable entry may be one)."""
+        entries, complete = self._listing()
+        return not complete or any(entry['state'] != 'settled' and entry.get('instance') == instance
+                                   for entry in entries)
 
     def instance_stopped(self, instance):
         """Whether no thread of that service instance can still launch or own a child.
@@ -264,9 +314,7 @@ class LaunchJournal:
 
     def forget_instance(self, instance):
         """Remove a stopped instance's lock file once none of its runs is left unsettled."""
-        if not self.instance_stopped(instance):
-            return
-        if any(entry['state'] not in {'settled'} and entry.get('instance') == instance for entry in self.entries()):
+        if self._released or not self.instance_stopped(instance) or self._unsettled(instance):
             return
         with contextlib.suppress(OSError):
             self._lock_path(instance).unlink()
@@ -281,6 +329,8 @@ class LaunchJournal:
     def prune(self, *, now_ms=None):
         """Drop tombstones older than TOMBSTONE_MS."""
         now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+        if self._released:
+            return
         for entry in self.entries():
             if entry['state'] == 'settled' and now_ms - entry['settled_at_ms'] > TOMBSTONE_MS:
                 with contextlib.suppress(JournalError):
@@ -290,10 +340,10 @@ class LaunchJournal:
         """This instance's threads have stopped: later instances may settle its runs."""
         if self._lock_fd is None:
             return
-        if not any(entry['state'] not in {'settled'} and entry.get('instance') == self.instance
-                   for entry in self.entries()):
+        if not self._unsettled(self.instance):
             with contextlib.suppress(OSError):
                 self._lock_path(self.instance).unlink()
+        self._released = True  # Nothing is written here after the lock is gone.
         os.close(self._lock_fd)
         self._lock_fd = None
 
@@ -346,17 +396,55 @@ def _session_members(sessions):
     return False
 
 
+def _confirmed(value, path):
+    """Whether the run's own watchdog confirmed, for exactly this child, that its tracked tree is empty."""
+    if type(path) is not str:
+        return False
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    except OSError:
+        return False
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077
+                or info.st_nlink != 1 or info.st_size > MAX_MARKER_BYTES):
+            return False
+        raw = os.read(descriptor, MAX_MARKER_BYTES + 1)
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+    try:
+        marker = json.loads(raw)
+    except (ValueError, RecursionError):
+        return False
+    return marker == {'version': 1, 'bridge_run_id': value['bridge_run_id'], 'pid': value['child']['pid'],
+                      'birth': value['child']['birth'], 'confirmed': True}
+
+
+def _kernel_empty(identities):
+    """True when no process is in either group or session; None when that cannot be read."""
+    for identity in identities:
+        if not _group_empty(identity['pid']):
+            return False
+    members = _session_members({identity['pid'] for identity in identities})
+    return None if members is None else not members
+
+
 def tree_state(entry):
     """'gone', 'alive' or 'unknown' for a journal entry; only 'gone' is evidence.
 
     Gone means: the run never spawned (still ``claimed``), or it was watched
     and now the child and the watchdog are each reaped (or their pids belong
-    to processes born later), no process is in either one's process group,
-    and no process is in either one's session. The child and the watchdog each
-    started a new session, so their group and session ids are their pids.
-    Nothing is signalled.
+    to processes born later), the watchdog confirmed before it exited that
+    the whole tree it tracked is empty, and, twice, a short interval apart,
+    no process is in either one's process group or session. The child and
+    the watchdog each started a new session, so their group and session ids
+    are their pids. Nothing is signalled.
     """
-    value = checked_entry(entry) if entry.get('state') is not None else None
+    if entry.get('state') is None:
+        return 'unknown'
+    value = checked_entry({name: item for name, item in entry.items() if name != 'marker_path'})
     if value is None:
         return 'unknown'
     if value['state'] == 'claimed':
@@ -370,12 +458,17 @@ def tree_state(entry):
                 return 'alive'
             if not _identity_gone(identity):
                 return 'unknown'
-        for identity in identities:
-            if not _group_empty(identity['pid']):
-                return 'alive'
-        members = _session_members({identity['pid'] for identity in identities})
-        if members is None:
+        first = _kernel_empty(identities)
+        if first is not True:
+            return 'unknown' if first is None else 'alive'
+        if not _confirmed(value, entry.get('marker_path')):
+            # The watchdog was killed, or could not confirm its tree: a descendant may
+            # have escaped into a session of its own. Not evidence.
             return 'unknown'
-        return 'alive' if members else 'gone'
+        time.sleep(RECHECK_SECONDS)
+        second = _kernel_empty(identities)
+        if second is not True:
+            return 'unknown' if second is None else 'alive'
+        return 'gone'
     except Exception:
         return 'unknown'
