@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from tests.test_bridge import PARENT_GRANT, cli, null_filled, result
-from tests.test_project_driver import DriverHarness
+from tests.test_project_driver import ClaudeChildHarness, DriverHarness
 
 ACCEPTED = [{'status': 'accepted', 'reason_code': None, 'receipt_id': None}]
 
@@ -342,16 +342,33 @@ class TrialRunDriverTests(DriverHarness):
         self.assertEqual([], self.executions())
         self.assertIn(('recording_open', 'account_not_authorized'), self.stopped_runs)
         self.assert_closed(runs, given_back, run_handle, 'account_not_authorized')
-        # Open: the account still counts its never-claimed binding as pending; no account operation
-        # lets the project close one yet (an account change, not the driver's). Nothing here waits on it.
-        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
-        self.assertEqual((1, 0), (lifecycle['host_runs_pending'], lifecycle['host_runs_abandoned']), lifecycle)
+        self.assert_fenced(*runs[run_handle])
         closed = self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'failed')
         self.assertEqual('failed', closed['current']['snapshot']['status'])
         code, abandoned = self.attempt('learning-classify-host-run-abandoned', '--run-handle', run_handle,
                                        '--reason', 'host_confirmed_gone')
         self.assertEqual((0, 'already_closed'), (code, abandoned.get('classification')), abandoned)
         self.next_run_launches(0)
+
+    def late_claim(self, driver, run):
+        """The run's own claim sent again after it closed, as a delayed duplicate would arrive."""
+        from codex_agents.account_api import AccountClient
+        from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
+        call = driver._call
+        call.role, call.host_client, call.context = 'account', run.host_client, driver._custody(run, storage=run.evidence)
+        try:
+            client = AccountClient(driver._account, run.scope.project_id, COLLECTOR_RUNTIME_DIGEST, timeout=30)
+            return client.claim_launch(run.key[0], run.identity_digest, request_id=run.claim_request_id)
+        finally:
+            call.role = call.host_client = call.context = None
+
+    def assert_fenced(self, driver, run):
+        """The account fenced the run: nothing pending, and its own claim is refused from now on."""
+        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
+        self.assertEqual((0, 1), (lifecycle['host_runs_pending'], lifecycle['host_runs_abandoned']), lifecycle)
+        late = self.late_claim(driver, run)
+        self.assertEqual(('denied', 'claim_fenced'), (late['state'], late['reason_code']), late)
+        self.assertEqual([], self.executions())
 
     def assert_not_freed(self, runs, run_handle, orchestration):
         _, run = runs[run_handle]
@@ -364,29 +381,54 @@ class TrialRunDriverTests(DriverHarness):
                                        '--reason', 'host_confirmed_gone')
         self.assertEqual((2, 'history_conflict'), (code, abandoned.get('reason_code')), abandoned)
 
-    def test_a_claim_refused_without_a_receipt_is_never_freed(self):
-        # The account sends no proof with a refusal such as this, so the project cannot show its
-        # history that nothing was committed: the run keeps its lease, as before.
-        runs, _ = self.watched_runs()
+    def test_a_claim_refused_without_a_receipt_is_fenced_and_closes_by_itself(self):
+        # The refusal committed nothing; the account's fence makes that permanent and proves it.
+        runs, given_back = self.watched_runs()
         code, report, (_, _, orchestration, run_handle) = self.forced_refusal_at_claim()
         self.assertEqual((2, 'claim_storage_expired'), (code, report.get('reason_code')), report)
-        self.assert_not_freed(runs, run_handle, orchestration)
+        self.assertIn(('driver', 'fencing', 'settling'), self.stopped_runs)
+        self.assert_closed(runs, given_back, run_handle, 'claim_storage_expired')
+        self.assert_fenced(*runs[run_handle])
+        closed = self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'failed')
+        self.assertEqual('failed', closed['current']['snapshot']['status'])
+        self.next_run_launches(0)
 
-    def test_a_claim_whose_reply_was_lost_is_never_freed(self):
+    def lost_claim_reply(self, name, *, committed):
         from codex_agents.account_api import AccountClient, AccountError
-        runs, _ = self.watched_runs()
-        context, route_path, orchestration, run_handle, _, _ = self.opened('lost')
+        context, route_path, orchestration, run_handle, _, _ = self.opened(name)
         self.child_answers()
         claim = AccountClient.claim_launch
 
         def lost(client, *args, **options):
-            claim(client, *args, **options)  # The account admits it; the reply never arrives intact.
+            if committed:
+                claim(client, *args, **options)  # The account admits it; the reply never arrives intact.
             raise AccountError('account_invalid_response')
         with mock.patch.object(AccountClient, 'claim_launch', lost):
             code, report = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
         self.assertEqual((2, 'account_invalid_response'), (code, report.get('reason_code')), report)
         self.assertEqual([], self.executions())
+        return orchestration, run_handle
+
+    def test_a_claim_whose_reply_was_lost_after_it_was_admitted_is_never_fenced_or_freed(self):
+        runs, given_back = self.watched_runs()
+        orchestration, run_handle = self.lost_claim_reply('lost', committed=True)
+        # The fence found the admitted claim and changed nothing: the run keeps everything it holds.
+        _, run = runs[run_handle]
+        self.assertEqual('claimed', run.receipt['state'])
+        self.assertIsNotNone(run.prepared)
+        self.assertEqual({}, given_back)
+        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
+        self.assertEqual((1, 0), (lifecycle['host_runs_pending'], lifecycle['host_runs_abandoned']), lifecycle)
         self.assert_not_freed(runs, run_handle, orchestration)
+
+    def test_a_claim_whose_reply_was_lost_before_it_was_admitted_is_fenced_and_closes(self):
+        runs, given_back = self.watched_runs()
+        orchestration, run_handle = self.lost_claim_reply('lost', committed=False)
+        self.assert_closed(runs, given_back, run_handle, 'account_invalid_response')
+        self.assert_fenced(*runs[run_handle])
+        closed = self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'failed')
+        self.assertEqual('failed', closed['current']['snapshot']['status'])
+        self.next_run_launches(0)
 
     def test_a_run_refused_at_claim_closes_without_the_primary_and_then_blocks_nothing(self):
         code, report, (context, route_path, orchestration, run_handle) = self.denied_at_claim()
@@ -433,6 +475,29 @@ class TrialRunDriverTests(DriverHarness):
         finally:
             self.cli('learning-cancel-run', *target)
             process.communicate(timeout=30)
+
+
+class ClaudeChildRunClosingTests(ClaudeChildHarness):
+    """A bridged Claude child the account denies closes by itself like a Codex one."""
+    attempt = TrialRunDriverTests.attempt
+    executions = TrialRunDriverTests.executions
+    watched_runs = TrialRunDriverTests.watched_runs
+    lease_state = TrialRunDriverTests.lease_state
+    assert_closed = TrialRunDriverTests.assert_closed
+
+    def test_a_claude_run_denied_at_claim_closes_by_itself(self):
+        from codex_agents import providers
+        runs, given_back = self.watched_runs()
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        with mock.patch.object(providers, 'evaluate_launch', return_value='billing_unverified'):
+            code, report = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual((2, 'billing_unverified'), (code, report.get('reason_code')), report)
+        self.assertEqual([], [i for i in self.invocations('claude') if '-p' in i['argv']])
+        self.assert_closed(runs, given_back, run_handle, 'billing_unverified')
+        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
+        self.assertEqual((0, 1), (lifecycle['host_runs_pending'], lifecycle['host_runs_abandoned']), lifecycle)
+        closed = self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'failed')
+        self.assertEqual('failed', closed['current']['snapshot']['status'])
 
 
 if __name__ == '__main__':
