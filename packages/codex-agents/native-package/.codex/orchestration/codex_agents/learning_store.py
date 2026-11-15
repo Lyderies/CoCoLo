@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import sqlite3
 import stat
@@ -656,6 +657,32 @@ _BACKUP_RESTORE_SCHEMA += ('\n' + RELEASE_SCHEMA + ';\nALTER TABLE capacity_exec
 _BACKUP_RESTORE_SCHEMA += '\n' + OBSERVATION_ORIGIN_SCHEMA + ';\n' + OBSERVATION_SCHEMA + ';\n'
 _BACKUP_RESTORE_SCHEMA += '\n' + ';\n'.join(sql for _, _, sql in BILLING_PROBE_OBJECTS) + ';\n'
 
+def _check_backup_coverage(restored: sqlite3.Connection, schema_version: int) -> None:
+    """The cross-table coverage a restored partition of this ledger version must keep."""
+    if schema_version >= 9 and restored.execute(
+        "SELECT 1 FROM launch_claims c LEFT JOIN active_run_capacity a "
+        "ON a.project_id=c.project_id AND a.handle_digest=c.handle_digest "
+        "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
+    ).fetchone() is not None:
+        raise LedgerError("project backup capacity coverage is incomplete")
+    if schema_version >= 9 and restored.execute(
+        "SELECT 1 FROM active_run_capacity a LEFT JOIN capacity_completions c "
+        "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
+        "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
+        "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
+        "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
+        "WHERE a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
+        "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
+    ).fetchone() is not None:
+        raise LedgerError("project backup completion coverage is incomplete")
+    if schema_version >= 11 and not check_cleanup_coverage(restored):
+        raise LedgerError('project backup cleanup coverage is incomplete')
+    if schema_version >= 12 and not check_observation_coverage(restored):
+        raise LedgerError('account observation coverage is unavailable')
+    if schema_version >= 13 and not check_billing_probe_coverage(restored):
+        raise LedgerError('project backup billing probe coverage is incomplete')
+
+
 def _verify_project_backup_body(
     body: Any,
     *,
@@ -739,28 +766,7 @@ def _verify_project_backup_body(
         foreign_keys = restored.execute("PRAGMA foreign_key_check").fetchall()
         if foreign_keys:
             raise LedgerError("isolated project backup foreign-key check failed")
-        if schema_version >= 9 and restored.execute(
-            "SELECT 1 FROM launch_claims c LEFT JOIN active_run_capacity a "
-            "ON a.project_id=c.project_id AND a.handle_digest=c.handle_digest "
-            "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
-        ).fetchone() is not None:
-            raise LedgerError("project backup capacity coverage is incomplete")
-        if schema_version >= 9 and restored.execute(
-            "SELECT 1 FROM active_run_capacity a LEFT JOIN capacity_completions c "
-            "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
-            "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
-            "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
-            "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
-            "WHERE a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
-            "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
-        ).fetchone() is not None:
-            raise LedgerError("project backup completion coverage is incomplete")
-        if schema_version >= 11 and not check_cleanup_coverage(restored):
-            raise LedgerError('project backup cleanup coverage is incomplete')
-        if schema_version >= 12 and not check_observation_coverage(restored):
-            raise LedgerError('account observation coverage is unavailable')
-        if schema_version >= 13 and not check_billing_probe_coverage(restored):
-            raise LedgerError('project backup billing probe coverage is incomplete')
+        _check_backup_coverage(restored, schema_version)
         integrity = restored.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise LedgerError("isolated project backup integrity check failed")
@@ -1176,6 +1182,38 @@ INSTALLER_FOLDER = "installer"
 # the per-project copies taken with it are kept.
 UPGRADE_COPY_FOLDER = "ledger-before-upgrade"
 UPGRADE_BACKUP_MS = 30 * 24 * 60 * 60 * 1000
+# A project backup is streamed (project_backup.py), so memory never bounds it.
+# This bounds one project's planned file, and the disk must hold every planned
+# file twice over (each is checked before the next is written) plus a margin.
+MAX_PROJECT_BACKUP_BYTES = 16 * 1024 ** 3
+BACKUP_SPACE_FACTOR = 2
+BACKUP_SPACE_MARGIN_BYTES = 256 * 1_048_576
+
+
+class LedgerCapacityError(LedgerError):
+    """A backup cannot be made: one project is over the limit, or the disk is too small.
+
+    Raised before any backup file is written. It carries sizes and a project's
+    position in backup order, never an identifier, root or record.
+    """
+
+    def __init__(self, *, projects: int, project_number: int | None = None, needed_bytes: int,
+                 limit_bytes: int | None = None, available_bytes: int | None = None):
+        self.capacity = {"projects": projects, "project_number": project_number, "needed_bytes": needed_bytes,
+                         "limit_bytes": limit_bytes, "available_bytes": available_bytes}
+        super().__init__("project backup does not fit" if available_bytes is None
+                         else "project backups do not fit in the free disk space")
+
+
+def project_backup_bytes(connection: sqlite3.Connection, project_id: str, schema_version: int) -> int:
+    """The planned size of one project's backup in this ledger version."""
+    from .project_backup import estimate_bytes
+
+    return estimate_bytes(connection, project_id, schema_version)
+
+
+def _free_backup_bytes(path: Path) -> int:
+    return int(shutil.disk_usage(path).free)
 
 
 def _schema_behind(database: Path) -> int | None:
@@ -2157,17 +2195,21 @@ class LearningLedger:
                         path.rmdir()
 
     def _require_project_migration_backups(self, schema_version: int, target_version: int) -> None:
-        """Refuse migration until each active partition has an exact verified backup."""
+        """Refuse migration until each active partition has an exact verified backup.
 
-        projects = self._connection.execute(
+        Every project is sized, and the disk checked, before any backup is
+        written, so a project that cannot fit leaves the ledger unchanged.
+        """
+
+        projects = [str(row["project_id"]) for row in self._connection.execute(
             "SELECT project_id FROM projects WHERE status='active' ORDER BY project_id"
-        ).fetchall()
+        ).fetchall()]
         if self._backup_before_upgrade:
+            self._plan_project_backups(projects, schema_version)
             taken_at_ms = time.time_ns() // 1_000_000
-            for project in projects:
-                self._write_upgrade_backup(str(project["project_id"]), schema_version, taken_at_ms)
-        for project in projects:
-            project_id = str(project["project_id"])
+            for project_id in projects:
+                self._write_upgrade_backup(project_id, schema_version, taken_at_ms)
+        for project_id in projects:
             registrations = self._connection.execute(
                 "SELECT file_id,relative_path,content_digest,expires_at_ms FROM stored_files "
                 "WHERE project_id=? AND kind='backup' ORDER BY rowid DESC",
@@ -2187,28 +2229,11 @@ class LearningLedger:
                     _assert_no_symlink_components(path)
                     if path.parent != expected_parent or not path.is_file():
                         continue
-                    raw = path.read_bytes()
-                    if hashlib.sha256(raw).hexdigest() != str(
-                        registration["content_digest"]
-                    ):
-                        continue
-                    body, _, _ = _verify_backup_envelope(
-                        raw,
-                        expected_project_id=project_id,
-                        expected_ledger_schema_version=schema_version,
-                    )
-                    current = _snapshot_project_partition(
-                        self._connection, project_id, ledger_schema_version=schema_version
-                    )
-                    file_id = str(registration["file_id"])
-                    current["tables"]["stored_files"] = [
-                        row for row in current["tables"]["stored_files"]
-                        if row["file_id"] != file_id
-                    ]
-                    current["counts"]["stored_files"] = len(
-                        current["tables"]["stored_files"]
-                    )
-                    if canonical_json(current) != canonical_json(body):
+                    if path.suffix == ".sqlite3":
+                        self._verify_streamed_backup(
+                            path, project_id, str(registration["content_digest"]),
+                            schema_version=schema_version, exclude_file_id=str(registration["file_id"]))
+                    elif not self._legacy_backup_matches(path, registration, project_id, schema_version):
                         continue
                 except (LedgerError, OSError):
                     continue
@@ -2220,29 +2245,116 @@ class LearningLedger:
                     "project backup"
                 )
 
+    def _legacy_backup_matches(self, path: Path, registration, project_id: str, schema_version: int) -> bool:
+        """A format-2 (JSON) backup an earlier release made, read and compared whole."""
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != str(registration["content_digest"]):
+            return False
+        body, _, _ = _verify_backup_envelope(
+            raw, expected_project_id=project_id, expected_ledger_schema_version=schema_version)
+        current = _snapshot_project_partition(self._connection, project_id, ledger_schema_version=schema_version)
+        file_id = str(registration["file_id"])
+        current["tables"]["stored_files"] = [
+            row for row in current["tables"]["stored_files"] if row["file_id"] != file_id]
+        current["counts"]["stored_files"] = len(current["tables"]["stored_files"])
+        return canonical_json(current) == canonical_json(body)
+
+    def _plan_project_backups(self, projects: list[str], schema_version: int) -> None:
+        """Refuse, before writing anything, a backup that is over its limit or cannot fit on disk."""
+        sizes = [project_backup_bytes(self._connection, project_id, schema_version) for project_id in projects]
+        for number, size in enumerate(sizes, 1):
+            if size > MAX_PROJECT_BACKUP_BYTES:
+                raise LedgerCapacityError(projects=len(projects), project_number=number, needed_bytes=size,
+                                          limit_bytes=MAX_PROJECT_BACKUP_BYTES)
+        self.state.backups.mkdir(mode=0o700, parents=True, exist_ok=True)
+        needed = sum(sizes) * BACKUP_SPACE_FACTOR + BACKUP_SPACE_MARGIN_BYTES
+        available = _free_backup_bytes(self.state.backups)
+        if needed > available:
+            raise LedgerCapacityError(projects=len(projects), needed_bytes=needed, available_bytes=available)
+
     def _write_upgrade_backup(self, project_id: str, schema_version: int, taken_at_ms: int) -> None:
         """Keep one project's records exactly as the earlier version left them.
 
-        The same sealed, registered copy the owner's backup command writes, in the
-        layout of the schema being left; the check that follows restores and
-        compares it like any other. It expires like any other backup.
+        The same streamed, registered copy the owner's backup command writes, in
+        the layout of the schema being left; the check that follows compares it
+        with the records row by row. It expires like any other backup.
         """
+        self._write_streamed_backup(project_id, schema_version, f"upgrade_schema{schema_version}_{taken_at_ms}",
+                                    expires_at_ms=taken_at_ms + UPGRADE_BACKUP_MS)
 
-        body = _snapshot_project_partition(self._connection, project_id, ledger_schema_version=schema_version)
-        payload = canonical_json({"backup_sha256": hashlib.sha256(canonical_json(body)).hexdigest(), "body": body})
-        if len(payload) > 128 * 1024 * 1024:
-            raise LedgerError("sanitized backup is oversized")
-        file_id = f"upgrade_schema{schema_version}_{taken_at_ms}"
-        path = self._write_owner_file("backup", project_id, file_id, payload)
+    def _write_streamed_backup(self, project_id: str, schema_version: int, file_id: str, *,
+                               expires_at_ms: int) -> Path:
+        """Copy one partition into a new owner-only backup file, check it, then register it."""
+        from . import project_backup
+
+        if not file_id or len(file_id) > 160 or not file_id.replace("_", "").isalnum():
+            raise LedgerError("stored file identifier is invalid")
+        partition = self.state.backups / project_id
+        partition.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _assert_no_symlink_components(partition)
+        _check_owner_mode(partition, directory=True)
+        path = partition / (file_id + project_backup.SUFFIX)
+        partial = partition / f".{file_id}.partial"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        if path.exists() or path.is_symlink():
+            raise LedgerError("stored file already exists")
+        with contextlib.suppress(FileNotFoundError):
+            partial.unlink()  # Left by a write that was stopped; never registered.
+        os.close(os.open(partial, flags, 0o600))
         try:
-            self._register_stored_file(
-                project_id, file_id=file_id, kind="backup", path=path,
-                digest=hashlib.sha256(payload).hexdigest(), expires_at_ms=taken_at_ms + UPGRADE_BACKUP_MS,
-            )
+            project_backup.write(self._connection, partial, project_id, schema_version)
+            descriptor = os.open(partial, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                os.fsync(descriptor)
+                digest = project_backup.file_digest(descriptor)
+            finally:
+                os.close(descriptor)
+            self._verify_streamed_backup(partial, project_id, digest, schema_version=schema_version)
+            os.replace(partial, path)
+            directory = os.open(partition, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                partial.unlink()
+            raise
+        try:
+            self._register_stored_file(project_id, file_id=file_id, kind="backup", path=path,
+                                       digest=digest, expires_at_ms=expires_at_ms)
         except Exception:
             with contextlib.suppress(OSError):
                 path.unlink()
             raise
+        return path
+
+    def _verify_streamed_backup(self, path: Path, project_id: str, expected_digest: str, *,
+                                schema_version: int | None = None, exclude_file_id: str | None = None,
+                                compare: bool = True) -> dict[str, Any]:
+        """A format-3 backup: its digest, its own checks, and (by default) equality with the records."""
+        from . import project_backup
+
+        _assert_no_symlink_components(path)
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or before.st_mode & 0o077:
+                raise LedgerError("project backup file is not private")
+            if project_backup.file_digest(descriptor) != expected_digest:
+                raise LedgerError("project backup file digest disagrees with its registry")
+            result = project_backup.verify(
+                path, project_id=project_id, schema_version=schema_version,
+                compare=self._connection if compare else None, exclude_file_id=exclude_file_id)
+            # The file is read again by path above; it must still be the one that was hashed.
+            after = os.stat(path, follow_symlinks=False)
+            if ((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                    != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                    or project_backup.file_digest(descriptor) != expected_digest):
+                raise LedgerError("project backup changed while it was checked")
+        finally:
+            os.close(descriptor)
+        return {**result, "backup_sha256": expected_digest}
 
     def _initialize_launch_claims_locked(self, *, backfill: bool) -> None:
         """Owner-only schema step within the caller's migration transaction.
@@ -9881,39 +9993,14 @@ class LearningLedger:
         file_id: str,
         expires_at_ms: int,
     ) -> Path:
-        """Create a recoverable project-partition backup with a sealed manifest."""
+        """Create a recoverable project-partition backup: a streamed, checked, registered copy."""
 
         if expires_at_ms <= time.time_ns() // 1_000_000:
             raise LedgerError("sanitized backup expiry must be in the future")
         with self._lock:
-            body = _snapshot_project_partition(
-                self._connection,
-                project_id,
-                ledger_schema_version=LEDGER_SCHEMA_VERSION,
-            )
-            body_bytes = canonical_json(body)
-            envelope = {
-                "backup_sha256": hashlib.sha256(body_bytes).hexdigest(),
-                "body": body,
-            }
-            payload = canonical_json(envelope)
-            if len(payload) > 128 * 1024 * 1024:
-                raise LedgerError("sanitized backup is oversized")
-            path = self._write_owner_file("backup", project_id, file_id, payload)
-            try:
-                self._register_stored_file(
-                    project_id,
-                    file_id=file_id,
-                    kind="backup",
-                    path=path,
-                    digest=hashlib.sha256(payload).hexdigest(),
-                    expires_at_ms=expires_at_ms,
-                )
-            except Exception:
-                with contextlib.suppress(OSError):
-                    path.unlink()
-                raise
-            return path
+            self._plan_project_backups([project_id], LEDGER_SCHEMA_VERSION)
+            return self._write_streamed_backup(project_id, LEDGER_SCHEMA_VERSION, file_id,
+                                               expires_at_ms=expires_at_ms)
 
     def _capture_learning_source_image(
         self, project_id: str, file_id: str, *, expected_domain_digest: str, work_limits,
@@ -9944,6 +10031,12 @@ class LearningLedger:
             raise LedgerError("project backup is unavailable")
         path = self.state.root / str(row["relative_path"])
         _assert_no_symlink_components(path)
+        if path.suffix == ".sqlite3":
+            result = self._verify_streamed_backup(path, project_id, str(row["content_digest"]), compare=False)
+            return {"verified": True, "backup_sha256": result["backup_sha256"],
+                    "manifest_sha256": result["manifest_sha256"],
+                    "ledger_schema_version": result["ledger_schema_version"], "counts": result["counts"],
+                    "isolated_restore_integrity": "ok", "isolated_restore_foreign_keys": "ok"}
         raw = path.read_bytes()
         if hashlib.sha256(raw).hexdigest() != str(row["content_digest"]):
             raise LedgerError("project backup file digest disagrees with its registry")

@@ -63,7 +63,9 @@ details. `NO_COLOR=1` gives plain output. Paths accept a leading `~`,
      orchestrator (release 0.2.x), nothing is stopped or changed until the step has asked "Upgrade the
      records now?". "Yes" first keeps a checked copy of the whole ledger in `ledger-before-upgrade`
      inside the records folder, and of each project's records among its backups for thirty days, then
-     upgrades them and registers; the step says where the copy is. The records are shared, so the other
+     upgrades them and registers; the step says where the copy is. Every backup is sized, and the disk
+     checked, before any is written: if they cannot fit, the step says so with the sizes and changes
+     nothing. The records are shared, so the other
      projects on the machine stop working with the orchestrator until you run setup for each of them.
      Do it while no child is running in any project. "No" changes nothing and skips registration: this
      project cannot use the orchestrator until you upgrade, or install the earlier version here again.

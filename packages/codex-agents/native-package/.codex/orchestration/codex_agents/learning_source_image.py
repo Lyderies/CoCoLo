@@ -14,14 +14,29 @@ import sqlite3
 import stat
 import threading
 import time
+from dataclasses import dataclass
 
 from .collector_paths import StateError, _assert_no_symlink_components, _check_owner_mode
 from .history_contracts import HistoryError, _DIGEST, _PROJECT, matches
 from .learning_contracts import canonical_json, keyed_digest
 from .sql_read_budget import SQLReadConnection, SQLReadError, SQLReadLimits
 
+
+@dataclass(frozen=True)
+class SourceArchive:
+    """The verified backup file an image was observed from: where, which file, how large.
+
+    It grants nothing. A reader checks the file is still this one before and
+    after each use, and the image is captured again, and compared, at the end.
+    """
+    path: object
+    identity: tuple
+    size: int
+
 SCHEMA_VERSION = 13
-MAX_BACKUP_BYTES = 128 * 1_048_576
+# The registered backup is a streamed (format 3) SQLite file, read one batch at a
+# time; this bounds its size, not memory. It matches the ledger's own limit.
+MAX_BACKUP_BYTES = 16 * 1024 ** 3
 PAGE_ROWS = 32
 PAGE_BYTES = 256 * 1024
 # Measured from the original schema. Identifiers never come from a request or
@@ -237,7 +252,10 @@ def _page(connection, store, project_id, file_id, table, last):
     return rows
 
 
-def _compare(connection, store, project_id, file_id, body, limits, now):
+def _compare(connection, store, project_id, file_id, backup, limits, now):
+    """Every live row equals the backup's, page by page, in key order; neither side is held."""
+    from .project_backup import table_rows
+
     def project():
         _drained(connection, now)
         row = _one(connection, "SELECT " + ",".join(store._BACKUP_PROJECT_COLUMNS)
@@ -245,31 +263,37 @@ def _compare(connection, store, project_id, file_id, body, limits, now):
         return None if row is None else {
             name: store._backup_encode_value(row[name]) for name in store._BACKUP_PROJECT_COLUMNS}
 
-    if canonical_json(connection.transaction_read_call(limits, project)) != canonical_json(body["project"]):
+    names = store._BACKUP_PROJECT_COLUMNS
+    kept = backup.execute("SELECT " + ",".join(names) + " FROM projects").fetchone()
+    kept = None if kept is None else {name: store._backup_encode_value(value) for name, value in zip(names, kept)}
+    if canonical_json(connection.transaction_read_call(limits, project)) != canonical_json(kept):
         raise HistoryError("history_conflict")
     for table, keys in _KEYS.items():
-        expected = sorted(body["tables"][table], key=lambda row: _key(row, keys))
-        if any(_key(a, keys) == _key(b, keys) for a, b in zip(expected, expected[1:])):
-            raise HistoryError("history_incompatible")
-        index, last = 0, None
-        while True:
-            rows = connection.transaction_read_call(limits,
-                lambda: _page(connection, store, project_id, file_id, table, last))
-            if not rows:
-                if index != len(expected):
-                    raise HistoryError("history_conflict")
-                break
-            for row in rows:
-                if index >= len(expected) or canonical_json(row) != canonical_json(expected[index]):
-                    raise HistoryError("history_conflict")
-                index += 1
-            # Resume after the last CONSUMED row if the byte envelope stopped a
-            # page early. A fetched-but-unconsumed row is read again next page.
-            last = _key(rows[-1], keys)
+        columns = store._BACKUP_TABLE_COLUMNS[table]
+        expected = ({name: store._backup_encode_value(value) for name, value in zip(columns, row)}
+                    for row in table_rows(backup, table, list(columns), project_id=project_id, order=",".join(keys)))
+        try:
+            last = None
+            while True:
+                rows = connection.transaction_read_call(limits,
+                    lambda: _page(connection, store, project_id, file_id, table, last))
+                if not rows:
+                    if next(expected, None) is not None:
+                        raise HistoryError("history_conflict")
+                    break
+                for row in rows:
+                    wanted = next(expected, None)
+                    if wanted is None or canonical_json(row) != canonical_json(wanted):
+                        raise HistoryError("history_conflict")
+                # Resume after the last CONSUMED row if the byte envelope stopped a
+                # page early. A fetched-but-unconsumed row is read again next page.
+                last = _key(rows[-1], keys)
+        finally:
+            expected.close()
 
 
 def _open_backup(ledger, project_id, file_id, registration):
-    path = ledger.state.backups / project_id / (file_id + ".json")
+    path = ledger.state.backups / project_id / (file_id + ".sqlite3")
     if registration[0] != path.relative_to(ledger.state.root).as_posix():
         raise HistoryError("history_unsafe_path")
     _assert_no_symlink_components(path)
@@ -294,21 +318,24 @@ def _open_backup(ledger, project_id, file_id, registration):
         raise
 
 
-def _read_backup(descriptor):
+def _digest(descriptor):
+    """The backup file's SHA-256, read in bounded chunks; its size is checked first."""
     info = os.fstat(descriptor)
     if not 0 < info.st_size <= MAX_BACKUP_BYTES:
         raise HistoryError("history_learning_capacity")
     os.lseek(descriptor, 0, os.SEEK_SET)
-    chunks, size = [], 0
+    digest, size = hashlib.sha256(), 0
     while True:
-        chunk = os.read(descriptor, min(1_048_576, MAX_BACKUP_BYTES + 1 - size))
+        chunk = os.read(descriptor, 1_048_576)
         if not chunk:
             break
-        chunks.append(chunk)
         size += len(chunk)
         if size > MAX_BACKUP_BYTES:
             raise HistoryError("history_learning_capacity")
-    return b"".join(chunks)
+        digest.update(chunk)
+    if size != info.st_size:
+        raise HistoryError("history_conflict")
+    return digest.hexdigest()
 
 
 def _capture(ledger, project_id, file_id, expected_domain_digest, limits):
@@ -337,26 +364,32 @@ def _capture(ledger, project_id, file_id, expected_domain_digest, limits):
             raise HistoryError("history_conflict")
         path, descriptor, identity, parents = _open_backup(ledger, project_id, file_id, registration)
         try:
-            raw = _read_backup(descriptor)
-            backup_digest = hashlib.sha256(raw).hexdigest()
+            backup_digest = _digest(descriptor)
             if not hmac.compare_digest(backup_digest, registration[1]):
                 raise HistoryError("history_conflict")
-            body, counts, manifest_digest = store._verify_backup_envelope(
-                raw, expected_project_id=project_id, expected_ledger_schema_version=SCHEMA_VERSION)
-            if type(body["schema_version"]) is not int or type(body["ledger_schema_version"]) is not int:
-                raise HistoryError("history_incompatible")
-            if any(type(body["counts"][name]) is not int or body["counts"][name] != counts[name]
-                   for name in _KEYS):
-                raise HistoryError("history_incompatible")
-            if any(row["file_id"] == file_id for row in body["tables"]["stored_files"]):
-                raise HistoryError("history_conflict")
-            # Only bounded local SQLite/CPU work occurs under this read snapshot.
-            # File and key I/O must remain outside it, including on failure.
-            connection.execute("BEGIN").close()
+            from . import project_backup
             try:
-                _compare(connection, store, project_id, file_id, body, limits, started)
+                verified = project_backup.verify(path, project_id=project_id, schema_version=SCHEMA_VERSION)
+            except store.LedgerError:
+                raise HistoryError("history_incompatible") from None
+            counts = verified["counts"]
+            if set(counts) != set(_KEYS) or any(type(counts[name]) is not int for name in _KEYS):
+                raise HistoryError("history_incompatible")
+            backup = project_backup.open_backup(path)
+            try:
+                if backup.execute("SELECT 1 FROM stored_files WHERE file_id=? LIMIT 1", (file_id,)).fetchone():
+                    raise HistoryError("history_conflict")
+                # Only bounded local SQLite/CPU work occurs under this read snapshot.
+                # Key I/O stays outside it, including on failure.
+                connection.execute("BEGIN").close()
+                try:
+                    _compare(connection, store, project_id, file_id, backup, limits, started)
+                finally:
+                    connection.rollback()
+            except sqlite3.Error:
+                raise HistoryError("history_incompatible") from None
             finally:
-                connection.rollback()
+                backup.close()
             _schema(connection, store)
             if custody != _owner(ledger) or connection.total_changes != changes:
                 raise HistoryError("history_conflict")
@@ -373,7 +406,7 @@ def _capture(ledger, project_id, file_id, expected_domain_digest, limits):
                 info = parent.lstat()
                 if (info.st_dev, info.st_ino) != (device, inode):
                     raise HistoryError("history_conflict")
-            if hashlib.sha256(_read_backup(descriptor)).hexdigest() != backup_digest:
+            if _digest(descriptor) != backup_digest:
                 raise HistoryError("history_conflict")
             finished = _clock(ledger)
             if finished < started:
@@ -385,12 +418,14 @@ def _capture(ledger, project_id, file_id, expected_domain_digest, limits):
                     or _identity(os.fstat(descriptor)) != identity
                     or _identity(path.lstat()) != identity):
                 raise HistoryError("history_conflict")
+            # The archived image is the backup file itself, so its digest is the file's.
             metadata = {"project_id": project_id, "ledger_schema_version": SCHEMA_VERSION,
-                        "backup_digest": backup_digest, "manifest_digest": manifest_digest,
+                        "backup_digest": backup_digest, "manifest_digest": backup_digest,
                         "key_domain_digest": domain}
             return {**metadata, "source_identity_digest": keyed_digest(
                 key, b"learning-source-image-v1\0" + canonical_json(metadata)),
-                "body": canonical_json(body), "counts": tuple((name, counts[name]) for name in _KEYS),
+                "archive": SourceArchive(path, identity, identity[5]),
+                "counts": tuple((name, counts[name]) for name in _KEYS),
                 "learning_ready": False}
         finally:
             os.close(descriptor)
@@ -423,3 +458,39 @@ def capture_source_image(ledger, project_id, file_id, *, expected_domain_digest,
         pass
     # No raw SQL, payload, path or underlying exception chain crosses the boundary.
     raise HistoryError(reason)
+
+
+def _same_file(archive):
+    _assert_no_symlink_components(archive.path)
+    if _identity(archive.path.lstat()) != archive.identity:
+        raise HistoryError("history_conflict")
+
+
+def archive_chunks(archive, size):
+    """The archived backup's bytes, `size` at a time, from the file the image was observed in."""
+    _same_file(archive)
+    descriptor = os.open(archive.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        if _identity(os.fstat(descriptor)) != archive.identity:
+            raise HistoryError("history_conflict")
+        read = 0
+        while chunk := os.read(descriptor, size):
+            read += len(chunk)
+            yield chunk
+        if read != archive.size or _identity(os.fstat(descriptor)) != archive.identity:
+            raise HistoryError("history_conflict")
+    finally:
+        os.close(descriptor)
+
+
+def archive_rows(archive, project_id, table, columns, order):
+    """One table's rows from the archived backup, a batch at a time, in `order`."""
+    from .project_backup import open_backup, table_rows
+
+    _same_file(archive)
+    backup = open_backup(archive.path)
+    try:
+        yield from table_rows(backup, table, list(columns), project_id=project_id, order=order)
+    finally:
+        backup.close()
+    _same_file(archive)

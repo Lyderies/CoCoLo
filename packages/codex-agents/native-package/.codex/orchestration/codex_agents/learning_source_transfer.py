@@ -6,7 +6,6 @@ retired, adopted or activated here. No normal client endpoint exposes this path.
 """
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import threading
@@ -33,26 +32,47 @@ def _groups(items, size, *, maximum=64, byte_limit=262_144):
         yield group
 
 
-def _material(image):
-    from .learning_store import _backup_decode_value as decode
+class _Material:
+    """The image's records, signatures and QA rows, read again from its backup for each pass.
 
-    body = json.loads(image["body"])
-    records = [{name: decode(row[name]) for name in corpus._ENTRY_FIELDS - {"late"}} | {"late": bool(row["late"])}
-               for row in sorted(body["tables"]["records"], key=lambda row: row["source_sequence"])]
-    signatures = [{"subject_record_id": row["subject_record_id"], "signature": decode(row["signature"]),
-                   "observed_at_ms": row["attested_at_ms"]} for row in body["tables"]["owner_attestations"]]
-    rows = [{name: decode(row[name]) for name in qa._FIELDS}
-            for row in sorted(body["tables"]["operational_qa"], key=lambda row: row["qa_id"])]
-    if (len(records) > corpus.MAX_IMPORT_RECORDS or len(signatures) > len(records)
-            or len(rows) > qa.MAX_QA):
-        raise HistoryError("history_learning_capacity")
-    return records, signatures, rows
+    Each pass streams one table in a fixed order (records by source sequence,
+    signatures by subject, QA by identifier), so nothing holds a whole table.
+    """
+
+    def __init__(self, image):
+        from .learning_source_image import archive_rows
+
+        self._rows, self._image = archive_rows, image
+        counts = dict(image["counts"])
+        self.record_count, self.attestation_count = counts["records"], counts["owner_attestations"]
+        self.qa_count = counts["operational_qa"]
+        if (self.record_count > corpus.MAX_IMPORT_RECORDS or self.attestation_count > self.record_count
+                or self.qa_count > qa.MAX_QA):
+            raise HistoryError("history_learning_capacity")
+
+    def _read(self, table, columns, order):
+        return self._rows(self._image["archive"], self._image["project_id"], table, columns, order)
+
+    def records(self):
+        names = ("content", "source", "source_sequence", "observed_at_ms", "ingested_at_ms", "expires_at_ms", "late")
+        for row in self._read("records", names, "source_sequence"):
+            entry = dict(zip(names, row))
+            yield {**entry, "late": bool(entry["late"])}
+
+    def signatures(self):
+        names = ("subject_record_id", "signature", "attested_at_ms")
+        for subject, signature, attested in self._read("owner_attestations", names, "subject_record_id"):
+            yield {"subject_record_id": subject, "signature": signature, "observed_at_ms": attested}
+
+    def qa_rows(self):
+        for row in self._read("operational_qa", qa._FIELDS, "qa_id"):
+            yield dict(zip(qa._FIELDS, row))
 
 
-def _record_groups(records, signatures):
-    for group in _groups(records, lambda row: len(row["content"])):
+def _record_groups(material):
+    for group in _groups(material.records(), lambda row: len(row["content"])):
         yield group, []
-    for group in _groups(signatures, lambda row: len(row["signature"])):
+    for group in _groups(material.signatures(), lambda row: len(row["signature"])):
         yield [], group
 
 
@@ -74,7 +94,7 @@ def _transfer(ledger, history, project_id, file_id, import_id, work_limits):
         domain = history.learning_key_domain_digest()
         image = capture_source_image(ledger, project_id, file_id,
             expected_domain_digest=domain, work_limits=work_limits)
-        if len(image["body"]) > archive.MAX_BYTES:
+        if image["archive"].size > archive.MAX_BYTES:
             raise HistoryError("history_learning_capacity")
         changes = ledger._connection.total_changes
 
@@ -87,37 +107,39 @@ def _transfer(ledger, history, project_id, file_id, import_id, work_limits):
                     or ledger._connection.total_changes != changes):
                 raise HistoryError("history_conflict")
 
-        records, signatures, rows = _material(image)
-        chain = corpus.EMPTY_CHAIN_DIGEST
-        for batch, attestations in _record_groups(records, signatures):
+        material = _Material(image)
+        chain, total = corpus.EMPTY_CHAIN_DIGEST, 0
+        for batch, attestations in _record_groups(material):
             chain = corpus.next_chain_digest(chain, corpus.chunk_digest(batch, attestations))
+            total += sum(len(row["content"]) for row in batch) + sum(len(row["signature"]) for row in attestations)
         manifest = {"schema_version": 1, "scope": "learning-record-staging-v1", "project_id": project_id,
             "source_identity_digest": image["source_identity_digest"], "key_domain_digest": domain,
-            "record_count": len(records), "attestation_count": len(signatures),
-            "total_bytes": sum(len(row["content"]) for row in records) + sum(len(row["signature"]) for row in signatures),
-            "chain_digest": chain}
+            "record_count": material.record_count, "attestation_count": material.attestation_count,
+            "total_bytes": total, "chain_digest": chain}
         now = ledger._clock_ms()
         guard()
         history.begin_learning_import(import_id, manifest, now_ms=now, before_commit=guard)
         metadata = {name: image[name] for name in archive._FIELDS - {"total_bytes"}}
-        metadata["total_bytes"] = len(image["body"])
+        metadata["total_bytes"] = image["archive"].size
         archive.begin_image(history, import_id, metadata)
-        for index, offset in enumerate(range(0, len(image["body"]), archive.CHUNK_BYTES)):
+        from .learning_source_image import archive_chunks
+        for index, chunk in enumerate(archive_chunks(image["archive"], archive.CHUNK_BYTES)):
             guard()
-            archive.stage_image_chunk(history, import_id, index, image["body"][offset:offset + archive.CHUNK_BYTES])
-        for index, (batch, attestations) in enumerate(_record_groups(records, signatures)):
+            archive.stage_image_chunk(history, import_id, index, chunk)
+        for index, (batch, attestations) in enumerate(_record_groups(material)):
             history.stage_learning_import_chunk(import_id, index, batch, attestations,
                                                  now_ms=now, before_commit=guard)
         record_receipt = history.finish_learning_import(import_id, now_ms=now, before_commit=guard)
-        chain = qa.ZERO
-        for batch in _groups(rows, lambda row: len(row["content"])):
+        chain, total = qa.ZERO, 0
+        for batch in _groups(material.qa_rows(), lambda row: len(row["content"])):
             chain = qa.qa_chain_digest(chain, qa.qa_chunk_digest(batch))
+            total += sum(len(row["content"]) for row in batch)
         qa_manifest = {"schema_version": 1, "scope": "learning-operational-qa-staging-v1", "project_id": project_id,
             "records_manifest_digest": content_digest(manifest), "source_identity_digest": image["source_identity_digest"],
-            "key_domain_digest": domain, "qa_count": len(rows),
-            "total_bytes": sum(len(row["content"]) for row in rows), "chain_digest": chain}
+            "key_domain_digest": domain, "qa_count": material.qa_count,
+            "total_bytes": total, "chain_digest": chain}
         history.begin_learning_qa_import(import_id, qa_manifest, now_ms=now, before_commit=guard)
-        for index, batch in enumerate(_groups(rows, lambda row: len(row["content"]))):
+        for index, batch in enumerate(_groups(material.qa_rows(), lambda row: len(row["content"]))):
             history.stage_learning_qa_import_chunk(import_id, index, batch, now_ms=now, before_commit=guard)
         qa_receipt = history.finish_learning_qa_import(import_id, now_ms=now, before_commit=guard)
         guard()

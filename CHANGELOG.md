@@ -2,6 +2,24 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
+## 0.3.1: upgrading busy projects (Codex package 0.8.14)
+
+- From an owner's upgrade of a busy project to 0.3.0: its records (about 192,000 learning records,
+  312 MB) could not be upgraded at all. Each project's backup, taken before the upgrade and again before
+  its learning history moves to the project's own store, was built as one document in memory and refused
+  over 128 MiB, and the move read that whole document back in memory, with its own 128 MiB and
+  100,000-record limits. Backups are now streamed: each is a private SQLite file, written, checked and
+  compared with the records a batch at a time, so a step that held about twelve times a project's
+  records in memory now holds a few batches whatever its size. The move archives that file as its
+  source image and streams the records from it, and takes up to 10 million records. Backups made by
+  earlier releases can still be read.
+- Every project's backup is sized, and the disk checked, before any is written: when they cannot fit,
+  the upgrade stops with `ledger_upgrade_capacity`, says how much space is needed or which project is
+  too large (by position, never by name), and nothing is changed. Setup also says what stopped a failed
+  upgrade (`ledger_upgrade_failed`), when that is a plain fixed message, instead of nothing.
+- `provider-observe` and the billing probe report `account_unavailable` when COCOLO's own services
+  cannot be reached, so attestation says to run setup instead of telling you to sign in to the client.
+
 ## 0.3.0: COCOLO, watched and stoppable children (Codex package 0.8.13)
 
 - From the first CI run on Linux: the account service started only on macOS, because its owner-signature

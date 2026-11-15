@@ -24,8 +24,9 @@ from .learning_contracts import (
 )
 
 MAX_IMPORTS = 2
-MAX_IMPORT_RECORDS = 100_000
-MAX_IMPORT_BYTES = 128 * 1_048_576
+# A busy project's history: a 0.2.x ledger held 192,000 records (312 MB) for one.
+MAX_IMPORT_RECORDS = 10_000_000
+MAX_IMPORT_BYTES = 16 * 1024 ** 3
 MAX_CHUNK_ENTRIES = 64
 MAX_CHUNK_BYTES = 262_144
 MAX_SIGNATURE_BYTES = 16_384

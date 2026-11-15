@@ -131,8 +131,17 @@ project on this machine: they share the records and need this version too.
 ## `ledger_upgrade_failed`
 
 The records could not be upgraded and are as the earlier version left them; the message names a copy of
-them too. Install the earlier version in this project again to keep working, keep the copy, and report
-the problem.
+them too, and setup says what stopped it when that is a plain fixed message. Install the earlier version
+in this project again to keep working, keep the copy, and report the problem with that message.
+
+## `ledger_upgrade_capacity`
+
+The upgrade stopped before it wrote anything: every project's records are backed up before the upgrade,
+and those backups do not fit. Either there is not enough free disk space (setup says how much is needed
+and how much is free: free some and run setup again), or one project's backup would be over the 16 GiB
+limit (setup says which project, by its position, and its size: keep using the earlier version and
+report it). Release 0.3.0 refused any project over 128 MiB here; 0.3.1 streams the backups, so size
+alone no longer stops an upgrade.
 
 ## `registration_incomplete_after_upgrade` or `ledger_upgrade_unknown`
 
