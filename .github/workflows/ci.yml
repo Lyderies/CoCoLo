@@ -65,7 +65,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Integration tests
-        run: python scripts/parallel_tests.py --stage integration --jobs "$(getconf _NPROCESSORS_ONLN)"
+        # Integration tests mostly wait on child processes: two per core was fastest on a
+        # 4-core Linux machine (8 jobs 248 s, 4 jobs 288 s, 12 jobs 254 s with a load failure).
+        run: python scripts/parallel_tests.py --stage integration --jobs "$((2 * $(getconf _NPROCESSORS_ONLN)))"
 
   full:
     if: github.event_name != 'pull_request'
@@ -84,4 +86,4 @@ jobs:
       - name: End-to-end tests (and integration tests on macOS)
         env:
           MORE: ${{ matrix.os == 'macos-latest' && '--stage integration' || '' }}
-        run: python scripts/parallel_tests.py --stage e2e $MORE --jobs "$(getconf _NPROCESSORS_ONLN)"
+        run: python scripts/parallel_tests.py --stage e2e $MORE --jobs "$((2 * $(getconf _NPROCESSORS_ONLN)))"
