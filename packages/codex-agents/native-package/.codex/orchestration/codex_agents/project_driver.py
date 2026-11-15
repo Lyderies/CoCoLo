@@ -120,6 +120,8 @@ REASON_CODES = frozenset({
     'run_closed',
     # The client the account observed before launch is not the one prepared.
     'run_client_changed',
+    # An account or collector call for the run failed without a reason of its own.
+    'run_account_call_failed',
     # A run of an earlier, stopped service: settled (abandoned, outcome unknown, capacity no
     # longer counted), or not yet, because something of it may still run.
     'run_lost', 'run_lost_held',
@@ -534,8 +536,9 @@ class RunDriver:
             {'PATH': os.defpath}, expected_export_commit=run.commit, worker_result=worker_result))
         try:
             run.prepared = self._preparation.submit(run.preparation)
-        except PreparationError:
-            self._fail(run, 'run_unavailable')
+        except PreparationError as error:
+            # Say why the submission was refused: no room, busy, not authorized, invalid.
+            self._fail(run, error.reason_code if error.reason_code in PREPARATION_STAGE_REASONS else 'run_unavailable')
             return
         run.state = 'preparing'
 
@@ -815,7 +818,8 @@ class RunDriver:
                 return None
             self._fail(run, error.reason_code)
         except Exception:
-            self._fail(run, 'run_unavailable')
+            # An account or collector call failed without a fixed reason of its own.
+            self._fail(run, 'run_account_call_failed')
         return None
 
     def _advance(self, run):

@@ -8,4 +8,8 @@ PREPARATION_STAGE_REASONS = frozenset({
     'preparation_invalid_input', 'preparation_not_authorized', 'preparation_managed_configuration',
     'preparation_client_missing', 'preparation_client_unsupported', 'preparation_client_changed',
     'preparation_export_failed', 'preparation_backend_refused',
+    # No free preparation slot or budget, or the lane was busy, when the run was submitted.
+    'preparation_full', 'preparation_busy',
+    # An unexpected error inside preparation, at no named stage.
+    'preparation_unavailable',
 })

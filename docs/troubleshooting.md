@@ -188,6 +188,11 @@ The project's service prepares a child before launching it, and says which step 
   every path the assignment reads is committed;
 - `preparation_backend_refused`: the client is set to a metered (API) backend;
 - `preparation_invalid_input` or `preparation_not_authorized`: the run's inputs were refused; open a
+  fresh run;
+- `preparation_full` or `preparation_busy`: the project's service had no free preparation slot; wait for
+  a run to finish, or run `./setup.sh` to restart the service, then open a fresh run;
+- `preparation_unavailable`: an unexpected error while preparing; report it with the reason;
+- `run_account_call_failed`: a call to the account service failed; run `learning-status`, then open a
   fresh run.
 
 Release 0.3.1 and earlier said only `run_unavailable` for all of these.
