@@ -29,6 +29,13 @@ python3 -m unittest discover -s tests -v
 
 CI runs the identifier guard, Ruff and all three suites on Linux and macOS.
 
+`python3 -B scripts/parallel_tests.py` runs all three suites in parallel. Every test module has a
+stage in `scripts/test-stages.json`: `unit` (no process, socket or sleep; a unit test that does one
+fails), `integration` (real services, children, sockets, git, sandboxes) or `e2e` (the setup wizard
+and the installer run as programs). `--stage unit` runs only the unit tests, in seconds. A new
+module needs a stage; `python3 scripts/measure_test_behaviour.py` measures what each module does and
+proposes one.
+
 - Every runtime change needs a Codex package version bump and an entry in
   `packages/codex-agents/runtime-releases.json`.
 - Changes to authority, containment or billing logic need an independent security review before

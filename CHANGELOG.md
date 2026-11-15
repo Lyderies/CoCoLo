@@ -2,6 +2,12 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
+## 0.4.0 (in progress)
+
+- Tests are sorted into stages: `unit`, `integration` and `e2e` (`scripts/test-stages.json`).
+  `scripts/parallel_tests.py --stage unit` runs only the unit tests; a unit test that starts a
+  process, opens a socket or sleeps fails. `scripts/measure_test_behaviour.py` measures each module.
+
 ## 0.3.1: upgrading busy projects (Codex package 0.8.14)
 
 - From an owner's upgrade of a busy project to 0.3.0: its records (about 192,000 learning records,
