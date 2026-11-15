@@ -206,6 +206,23 @@ class ProjectDriverTests(DriverHarness):
                 self.assertEqual(reason, refused['reason_code'], refused)
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
+    def test_D1_D2_a_run_refused_before_its_claim_never_holds_an_update_back(self):
+        # 0.3.2 requirements (local-routing: project_service_other_version after an update,
+        # from runs admitted that morning whose dispatch failed before they claimed a slot).
+        # D1: a child launches only after its claim, so replacing the collector or a project
+        # service of another version never waits for an unclaimed run.
+        # D2: the learning move counts it until its binding expires; then it can never be claimed.
+        context, route_path, _, run_handle = self.open_run()
+        with mock.patch.object(codex_preparation.bridge, 'codex_managed_configuration_present', return_value=True):
+            self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        ledger = self.collector_ledger
+        self.assertEqual(0, ledger._connection.execute("SELECT COUNT(*) FROM active_run_capacity").fetchone()[0])
+        self.assertTrue(ledger.drained(children_only=True))                              # D1
+        self.assertFalse(ledger.drained())                                               # D2, before expiry
+        expires = ledger._connection.execute("SELECT MAX(expires_at_ms) FROM host_run_bindings").fetchone()[0]
+        with mock.patch.object(ledger, '_clock_ms', return_value=expires + 1):
+            self.assertTrue(ledger.drained())                                            # D2, after expiry
+
     def test_a_run_whose_client_changed_after_preparation_says_so(self):
         context, route_path, _, run_handle = self.open_run()
         original = codex_preparation.CodexPreparationLane.prepared
