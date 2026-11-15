@@ -21,7 +21,8 @@ Effort is always passed explicitly and set per provider.
 
 - Codex's `ultra` level is never used, because it starts its own subagents.
 - `max` is never chosen automatically.
-- In v1 every child runs read-only, including on coding rows; children that edit files arrive with G3.
+- In this release every child runs read-only, including on coding rows; children that edit files
+  arrive with G3 (planned for release 0.4.0).
 
 Usage figures are estimates:
 
@@ -45,7 +46,7 @@ Usage figures are estimates:
 | Hard end-to-end | Opus 5.5 (high; xhigh on retry), with a checklist and budget | GPT-6 Astra (high) on Pro plans; GPT-6.1 Sol (high) on Plus | Fable (high) last, from a reserved budget | 2.5–7% Max 5x | 45–90 | Low–medium |
 
 The evidence behind these rows comes from two research reports kept in `research/reports/` on the
-[`planning` branch](https://github.com/Lyderies/codex-claude-agent-orchestration/tree/planning/research/reports),
+[`planning` branch](https://github.com/Lyderies/cocolo/tree/planning/research/reports),
 "Codex and Claude model routing" and "Model routing cost and preferences". Community preference
 enters only as a small prior worth a few paired runs.
 

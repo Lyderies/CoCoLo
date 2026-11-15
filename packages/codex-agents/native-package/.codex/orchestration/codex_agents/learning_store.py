@@ -12,11 +12,10 @@ import secrets
 import socket
 import sqlite3
 import stat
-import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -25,17 +24,78 @@ try:  # AF_UNIX collector is currently supported on POSIX hosts.
 except ImportError:  # pragma: no cover - Windows has no supported collector transport yet.
     fcntl = None  # type: ignore[assignment]
 
+from .collector_paths import (
+    StateError as StateError,
+    UNMOVED_STATE as UNMOVED_STATE,
+    _assert_no_symlink_components as _assert_no_symlink_components,
+    _canonical_project_root as _canonical_project_root,
+    _check_owner_mode as _check_owner_mode,
+    _unmoved_legacy_state as _unmoved_legacy_state,
+    default_state_root as default_state_root,
+)
+from .collector_runtime import (
+    validate_collector_runtime as validate_collector_runtime,
+    CLIENT_HEALTH_CODES as CLIENT_HEALTH_CODES,
+    COLLECTOR_AUTHORIZATION_SCHEMA_VERSION as COLLECTOR_AUTHORIZATION_SCHEMA_VERSION,
+    HOOK_INGEST_REASON_CODES as HOOK_INGEST_REASON_CODES,
+    _client_health_data as _client_health_data,
+    _collector_runtime_authorization as _collector_runtime_authorization,
+    _start_collector_locked as _start_collector_locked,
+    authorized_collector_runtime as authorized_collector_runtime,
+    client_health_clear as client_health_clear,
+    client_health_increment as client_health_increment,
+    client_health_snapshot as client_health_snapshot,
+    ensure_collector as ensure_collector,
+    require_authorized_collector_runtime as require_authorized_collector_runtime,
+)
+from .collector_client import (
+    COLLECTOR_RUNTIME_DIGEST as COLLECTOR_RUNTIME_DIGEST,
+    PACKAGE_VERSION as PACKAGE_VERSION,
+    CollectorClient as CollectorClient,
+    empty_ingestion_snapshot as empty_ingestion_snapshot,
+)
+from .active_run_capacity import CAPACITY_OBJECTS, CAPACITY_SCHEMA, CAPACITY_PARENT_SCHEMA, CAPACITY_COMPLETIONS_SCHEMA, CAPACITY_EXECUTIONS_SCHEMA
+from .active_run_capacity import INSTALLED_ACTIVE_RUN_LIMITS
+from .active_run_capacity import CRASHED_CLAIM_GRACE_MS as CRASHED_CLAIM_GRACE_MS, crashed_claim
+from .owned_execution import ExecutionCustodyError, OwnedExecutionKey, OwnedExecutionRegistry
+from .capacity_status_contracts import CapacityStatusInput, checked_capacity_status
+from .account_open_schema import HISTORY_OWNER_COLUMN, OPEN_OBJECTS, assert_open_schema, install_open_schema
+from .account_cleanup_schema import RELEASE_COLUMN, RELEASE_COLUMNS, RELEASE_SCHEMA, assert_cleanup_schema, check_cleanup_coverage, install_cleanup_schema
+from .account_observation_schema import (OBSERVATION_COLUMNS, OBSERVATION_SCHEMA, assert_observation_schema,
+                                         OBSERVATION_ORIGIN_COLUMNS, OBSERVATION_ORIGIN_SCHEMA,
+                                         check_observation_coverage, install_observation_schema)
+from .billing_probe_schema import (BILLING_PROBE_COLUMNS, BILLING_PROBE_ORIGIN_COLUMNS,
+                                   BILLING_PROBE_OBJECTS, assert_billing_probe_schema,
+                                   check_billing_probe_coverage, install_billing_probe_schema)
+from .collector_contracts import (
+    COLLECTOR_PROTOCOL_VERSION as COLLECTOR_PROTOCOL_VERSION,
+    LEDGER_SCHEMA_VERSION as LEDGER_SCHEMA_VERSION,
+    MAX_REQUEST_BYTES as MAX_REQUEST_BYTES,
+    CollectorAuthorizationError as CollectorAuthorizationError,
+    CollectorBuildConflictError as CollectorBuildConflictError,
+    CollectorError as CollectorError,
+    CollectorNewerVersionError as CollectorNewerVersionError,
+    CollectorRestartError as CollectorRestartError,
+    CollectorUpgradeRequired as CollectorUpgradeRequired,
+    CollectorVersionError as CollectorVersionError,
+    _version_tuple,
+)
 from .contracts import (
+    LedgerError as LedgerError,
     HOST_OUTCOME_DIGEST,
     RESULT_VALIDATION_REASON_CODES,
     ContractError,
     result_axes,
     routing_task_slice,
     validate_assignment_shape,
+    validate_assignment_execution_limits,
     validate_result,
     validate_task,
 )
 from .learning_contracts import (
+    PRODUCER_AUTHORITY as PRODUCER_AUTHORITY,
+    PROVIDER_OBSERVATION_TYPES as PROVIDER_OBSERVATION_TYPES,
+    DISPATCH_RESULT_SCHEMA_VERSION,
     MAX_RECORD_BYTES,
     RECORD_TYPES,
     canonical_json,
@@ -49,61 +109,57 @@ from .learning_contracts import (
     validate_execution_configuration,
 )
 from .learning_adapters import HOOK_EVENTS, empty_usage, load_client_capabilities, reconcile_run
-from .runtime_files import ORCHESTRATION_PREFIX, RUNTIME_FILES, runtime_digest
+from .learning_eligibility import (
+    EligibilityError, check_candidate_eligibility, check_evaluation_case,
+)
+from .admission_metadata import EVIDENCE_HORIZON_MS as EVIDENCE_HORIZON_MS
+from .provider_restrictions import (
+    BILLING_RANK as BILLING_RANK,
+    CLAUDE_STATUS_RANK as CLAUDE_STATUS_RANK,
+    _effective_window_reset as _effective_window_reset,
+    _merged_restriction as _merged_restriction,
+    _more_restrictive as _more_restrictive,
+    _restriction_windows as _restriction_windows,
+    _window_covered as _window_covered,
+)
+from .owner_key_contracts import (
+    OWNER_SIGNER_LINE as OWNER_SIGNER_LINE,
+    OWNER_SIGNERS_MAX_BYTES as OWNER_SIGNERS_MAX_BYTES,
+    _is_minimal_positive_integer as _is_minimal_positive_integer,
+    _owner_key_identity as _owner_key_identity,
+    _require_canonical_key as _require_canonical_key,
+    _signer_fingerprint as _signer_fingerprint,
+    _ssh_key_parts as _ssh_key_parts,
+)
+from .result_contracts import MAX_RESULT_BODY_BYTES
+from .sql_read_budget import SQLReadConnection
+from .account_claim_contracts import (
+    CLAIM_DENIAL_CODES, MAX_CLAIM_INTEGER, ClaimError, LaunchClaimInput,
+    _DIGEST as _CLAIM_DIGEST, _REQUEST_ID as _CLAIM_REQUEST_ID, _PROJECT as _CLAIM_PROJECT,
+    _RUN as _CLAIM_RUN,
+    checked_claim_receipt, matches as claim_matches,
+)
 
-
-def _collector_runtime_digest() -> str:
-    """The digest of every runtime file this process runs from (`RUNTIME_FILES`)."""
-
-    orchestration_root = Path(__file__).resolve().parent.parent
-    return runtime_digest(
-        {relative: (orchestration_root / relative).read_bytes() for relative in RUNTIME_FILES}
-    )
-
-
-def _package_version() -> str:
-    bundle_root = Path(__file__).resolve().parent.parent.parent.parent
-    manifest_path = bundle_root / ".codex" / "orchestration" / "install-manifest.json"
-    if manifest_path.is_file():
-        try:
-            manifest = json.loads(manifest_path.read_bytes())
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError("installed package manifest is invalid") from exc
-        value = manifest.get("version") if isinstance(manifest, dict) else None
-    else:
-        value = (bundle_root / "VERSION").read_text(encoding="ascii").strip()
-    if not isinstance(value, str):
-        raise RuntimeError("package version is unavailable")
-    if len(value.split(".")) != 3 or not all(
-        part.isdigit() for part in value.split(".")
-    ):
-        raise RuntimeError("package VERSION must be a three-part numeric version")
-    return value
-
-
-def _version_tuple(value: Any) -> tuple[int, int, int] | None:
-    if not isinstance(value, str):
-        return None
-    parts = value.split(".")
-    if len(parts) != 3 or not all(part.isdigit() for part in parts):
-        return None
-    return tuple(int(part) for part in parts)  # type: ignore[return-value]
-
-
-LEDGER_SCHEMA_VERSION = 6
-COLLECTOR_PROTOCOL_VERSION = 1
-COLLECTOR_RUNTIME_DIGEST = _collector_runtime_digest()
-PACKAGE_VERSION = _package_version()
-COLLECTOR_AUTHORIZATION_SCHEMA_VERSION = 1
 # The one line `install_owner_public_key` writes; the allowed-signers file holds nothing else.
 # The owner's allowed-signers file is read whole up to this size; anything longer refuses.
 OWNER_KEY_REPLACE_HINT = "run ./setup.sh and choose Replace a lost owner key"
-OWNER_SIGNERS_MAX_BYTES = 4096
-OWNER_SIGNER_LINE = re.compile(
-    rb"codex-agents-owner (?:ssh-ed25519|sk-ssh-ed25519@openssh\.com|ssh-rsa|"
-    rb"ecdsa-sha2-nistp256|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/=]+\n"
-)
 DEFAULT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+# A project whose learning history moved to its own project store. The ledger
+# keeps that project's account rows and account-owned evidence; it accepts no
+# further learning records for it.
+# The first release whose collector hosts the account service that claims and
+# counts runs; an older collector's stop cannot take a run's account away.
+FIRST_RUN_DRIVING_VERSION = (0, 8, 13)
+LEARNING_MOVED_KEY = "project_learning_moved_v1:"
+# Set with the moved marker by a migration that still has to switch the copied
+# history on in the project store, and cleared when that is done.
+LEARNING_ACTIVATION_PENDING_KEY = "project_learning_activation_pending_v1:"
+LEARNING_MOVED_ERROR = "project learning has moved to its project store"
+LEARNING_MOVED_TYPES = frozenset({
+    "outcome", "feedback", "evaluation_case", "evaluation_assignment", "qa_evidence",
+    "evidence_review", "evaluation_trial", "candidate", "comparison", "canary_report",
+    "grader_calibration", "owner_grant", "promotion", "learning_export",
+})
 # A worker result kept for its verifier is raw child text, so it lives only while
 # its orchestration is open, and never longer than this; only digests stay.
 WORKER_RESULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
@@ -133,39 +189,19 @@ UPGRADE_RECONCILIATION_TTL_MS = 10 * 60 * 1000
 MAX_PENDING_OPERATIONAL_CHECKS = 256
 # The CLI reads a result as at most this many bytes, so a kept worker result
 # never needs more.
-MAX_WORKER_RESULT_BYTES = 1_048_576
+MAX_WORKER_RESULT_BYTES = MAX_RESULT_BODY_BYTES
 INGESTION_FRESH_MS = 30 * 60 * 1000
-MAX_REQUEST_BYTES = MAX_RECORD_BYTES + 16_384
-PRODUCER_AUTHORITY = {
-    "hook": {"event"},
-    "app_server": {"event"},
-    "host": {"event", "learning_export"},
-    "evaluator": {
-        "outcome", "evaluation_case", "evaluation_assignment", "evaluation_trial", "candidate",
-        "comparison", "canary_report",
-    },
-    "verifier": {"outcome", "qa_evidence", "evidence_review"},
-    "owner": {
-        "feedback", "owner_grant", "grader_calibration", "billing_attestation",
-    },
-    "lifecycle": {"promotion"},
-}
 # Runs opened with this client are bridged: only `dispatch` may run their child.
 BRIDGE_CLIENT_VERSION = "bridge-v1"
 # Billing evidence younger than this is reused instead of probing again.
 PROBE_REUSE_SECONDS = 300
 # A launched probe reserves its account for this long, whatever it returned.
 PROBE_COOLDOWN_SECONDS = 300
-# Only ledger methods that run the observation themselves may write these.
-PROVIDER_OBSERVATION_TYPES = {
-    "provider_identity", "provider_headroom", "provider_billing",
-    "observation_unavailable", "provider_usage",
-}
 # A run keeps only rate-limit events more restrictive than those it already
 # recorded, so this cap is reached only by a stream that keeps escalating.
 MAX_RUN_RATE_LIMIT_RECORDS = 64
-CLAUDE_STATUS_RANK = {None: 0, "allowed": 0, "allowed_warning": 1, "rejected": 2}
-BILLING_RANK = {False: 0, None: 1, True: 2}
+# How long after its hard deadline an unsettled claimed run still counts against
+# the account's active-run limits (a crashed project host never settles it).
 INSTALLED_ROUTING_POLICY = (
     Path(__file__).resolve().parent.parent / "config" / "routing-policy.json"
 )
@@ -180,12 +216,6 @@ SOURCE_BY_PRODUCER = {
     "provider": "provider",
 }
 HOOK_EVENT_CODES = tuple(value[0] for value in HOOK_EVENTS.values())
-HOOK_INGEST_REASON_CODES = {
-    "binding_invalid", "provenance_mismatch", "capability_mismatch",
-    "operation_rejected", "operation_invalid", "project_unregistered", "record_conflict",
-    "request_timeout", "request_oversized", "request_invalid", "protocol_mismatch",
-    "transport_unavailable", "response_invalid", "unknown_rejection",
-}
 HOOK_REJECTION_CODES = {
     "hook_normalization_rejected",
     "hook_binding_rejected",
@@ -193,93 +223,16 @@ HOOK_REJECTION_CODES = {
 }
 
 
-def empty_ingestion_snapshot(*, registered: bool) -> dict[str, Any]:
-    """Return the closed aggregate shape without exposing project or record identity."""
-
-    return {
-        "registered_project_state": "active" if registered else "unregistered",
-        "ingestion_state": "active" if registered else "inactive",
-        "accepted_hook_event_count": 0,
-        "last_accepted_hook_event_at_ms": None,
-        "rejected_hook_event_count": 0,
-        "last_rejected_hook_event_at_ms": None,
-        "freshness": {
-            "state": (
-                "awaiting_hook_review_or_first_event" if registered else "unregistered"
-            ),
-            "age_ms": None,
-            "message": (
-                "No events since the hooks were installed; open /hooks on the main checkout."
-                if registered else "Project is not registered."
-            ),
-        },
-        "hook_event_counts": {code: 0 for code in HOOK_EVENT_CODES},
-        "coverage": {
-            "root_lifecycle": True,
-            "child_lifecycle": True,
-            "tool_lifecycle": True,
-            "root_usage": False,
-            "child_usage": False,
-        },
-        "managed_lifecycle": {
-            "orchestrations_active": 0,
-            "orchestrations_paused": 0,
-            "orchestrations_closed": 0,
-            "host_runs_opened": 0,
-            "host_runs_terminal": 0,
-            "host_runs_pending": 0,
-            "host_runs_abandoned": 0,
-            "native_agent_bindings": 0,
-            "operational_qa_passed": 0,
-            "operational_qa_failed": 0,
-            "host_usage_complete": 0,
-            "host_usage_unknown": 0,
-        },
-    }
 
 
-class StateError(RuntimeError):
-    """Raised when local state would violate an accepted boundary."""
 
 
-class LedgerError(RuntimeError):
-    """Raised for controlled ledger failures without echoing record content."""
+class OwnerSignerNotConfigured(StateError):
+    """The checked signer file is empty; other unsafe states stay distinct."""
 
 
 class ProjectNotRegisteredError(LedgerError):
     """Raised when an exact project root has no active registration."""
-
-
-class CollectorError(RuntimeError):
-    """Raised for bounded collector protocol failures."""
-
-    def __init__(self, message: str, *, code: str | None = None) -> None:
-        super().__init__(message)
-        self.code = code
-
-
-class CollectorVersionError(CollectorError):
-    """Raised when a healthy collector runs a different package build."""
-
-
-class CollectorUpgradeRequired(CollectorVersionError):
-    """Raised when the active collector is older than this installed package."""
-
-
-class CollectorNewerVersionError(CollectorVersionError):
-    """Raised without replacement when a newer collector owns shared state."""
-
-
-class CollectorBuildConflictError(CollectorVersionError):
-    """Raised without replacement for divergent builds with the same version."""
-
-
-class CollectorAuthorizationError(CollectorVersionError):
-    """Raised when this package is not the owner-authorized collector runtime."""
-
-
-class CollectorRestartError(CollectorError):
-    """Raised after a ledger operation committed but collector recovery failed."""
 
 
 _BACKUP_PROJECT_COLUMNS = (
@@ -310,6 +263,22 @@ _BACKUP_TABLE_COLUMNS = {
         "receipt_id", "assignment_digest", "reason_code", "issued_at_ms",
         "expires_at_ms", "consumed_at_ms", "run_id",
     ),
+    "launch_claims": ("handle_digest", "run_id", "kind", "claimed_at_ms", "bridge_run_id"),
+    "launch_inputs": ("handle_digest", "run_id", "runtime_digest", "provider", "model", "effort", "hard_timeout_seconds"),
+    "launch_observations": ("handle_digest", "identity_digest", "observed_at_ms"),
+    "launch_receipts": ("scope_digest", "request_digest", "parameters_digest", "handle_digest", "receipt_digest",
+                        "run_id", "state", "reason_code", "bridge_run_id", "deadline_at_ms", "recorded_at_ms"),
+    "active_run_capacity": ("handle_digest", "run_id", "bridge_run_id", "kind", "provider", "account_fingerprint",
+                            "runtime_digest", "policy_digest", "claimed_at_ms", "deadline_at_ms",
+                            "clock_reference_ns", "execution_deadline_ns", "clock_owner_digest", "released_at_ms", "release_digest"),
+    "capacity_completions": ("handle_digest", "run_id", "bridge_run_id", "terminal_record_id", "terminal_content_digest",
+                             "released_at_ms", "receipt_digest"),
+    "capacity_executions": ("handle_digest", "run_id", "bridge_run_id", "owner_digest", "cleanup_reservation_digest"),
+    "account_cleanup_receipts": RELEASE_COLUMNS,
+    "account_observation_origins": OBSERVATION_ORIGIN_COLUMNS,
+    "account_observation_requests": OBSERVATION_COLUMNS,
+    "account_billing_probe_origins": BILLING_PROBE_ORIGIN_COLUMNS,
+    "account_billing_probe_requests": BILLING_PROBE_COLUMNS,
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -317,6 +286,7 @@ _BACKUP_TABLE_COLUMNS = {
         "native_assignment_id", "agent_type", "usage_complete", "binding_state",
         "abandoned_reason", "observation_started_at_ms",
         "observation_deadline_at_ms", "last_progress_at_ms", "deadline_observed",
+        "history_owner",
     ),
     "hook_ingestion": ("event_code", "accepted_count", "last_accepted_at_ms"),
     "orchestrations": (
@@ -338,12 +308,16 @@ _BACKUP_TABLE_COLUMNS = {
         "expires_at_ms", "consumed_at_ms", "report",
     ),
     "tombstones": ("deletion_id", "deleted_at_ms"),
+    "account_open_receipts": ("handle_digest", "run_id", "request_key", "scope_digest", "parameters_digest", "content", "content_seal"),
+    "account_open_requests": ("request_key", "original_key", "parameters_digest", "handle_digest", "run_id", "state", "opened_at_ms",
+                              "observation_deadline_at_ms", "receipt_digest", "request_seal"),
 }
 _BACKUP_V5_HOST_COLUMNS = tuple(
     column for column in _BACKUP_TABLE_COLUMNS["host_run_bindings"]
     if column not in {
         "binding_state", "abandoned_reason", "observation_started_at_ms",
         "observation_deadline_at_ms", "last_progress_at_ms", "deadline_observed",
+        "history_owner",
     }
 )
 _BACKUP_ORDER_COLUMNS = {
@@ -357,12 +331,26 @@ _BACKUP_ORDER_COLUMNS = {
     "owner_attestations": ("subject_record_id",),
     "repair_receipts": ("receipt_id",),
     "host_run_bindings": ("created_at_ms", "run_id"),
+    "launch_claims": ("handle_digest",),
+    "launch_inputs": ("handle_digest",),
+    "launch_observations": ("handle_digest",),
+    "launch_receipts": ("scope_digest", "request_digest"),
+    "active_run_capacity": ("handle_digest",),
+    "capacity_completions": ("handle_digest",),
+    "capacity_executions": ("handle_digest",),
+    "account_cleanup_receipts": ("handle_digest",),
+    "account_observation_origins": ("request_key",),
+    "account_observation_requests": ("request_key",),
+    "account_billing_probe_origins": ("request_key",),
+    "account_billing_probe_requests": ("request_key",),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
     "operational_qa": ("observed_at_ms", "qa_id"),
     "operational_check_receipts": ("issued_at_ms", "receipt_id"),
     "tombstones": ("deletion_id",),
+    "account_open_receipts": ("handle_digest",),
+    "account_open_requests": ("request_key",),
 }
 _BACKUP_BYTES_KEY = "$codex_agents_bytes_base64"
 
@@ -390,12 +378,39 @@ def _backup_decode_value(value: Any) -> Any:
 
 
 def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 13 and table in {"account_billing_probe_origins", "account_billing_probe_requests"}:
+        return ()
+    if schema_version < 12 and table in {"account_observation_origins", "account_observation_requests"}:
+        return ()
+    if schema_version < 11 and table == 'capacity_executions':
+        return _BACKUP_TABLE_COLUMNS[table][:-1] if schema_version >= 9 else ()
+    if schema_version < 9 and table in {"active_run_capacity", "capacity_completions", "capacity_executions"}:
+        return ()
+    if schema_version < 8 and table in {"launch_inputs", "launch_observations", "launch_receipts"}:
+        return ()
+    if schema_version < 7 and table == "launch_claims":
+        return ()
     if schema_version == 5:
         if table == "host_run_bindings":
             return _BACKUP_V5_HOST_COLUMNS
         if table == "orchestration_checkpoints":
             return ()
+    if schema_version < 10 and table == 'host_run_bindings':
+        return tuple(n for n in _BACKUP_TABLE_COLUMNS[table] if n != 'history_owner')
     return _BACKUP_TABLE_COLUMNS[table]
+
+
+def _backup_tables(schema_version: int) -> tuple[str, ...]:
+    # Preserve the exact old manifest. Older verified backups never contained
+    # a launch_claims entry, even an empty one.
+    return tuple(table for table in _BACKUP_TABLE_COLUMNS
+                 if (schema_version >= 7 or table != "launch_claims")
+                 and (schema_version >= 8 or table not in {"launch_inputs", "launch_observations", "launch_receipts"})
+                 and (schema_version >= 9 or table not in {"active_run_capacity", "capacity_completions", "capacity_executions"})
+                 and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'})
+                 and (schema_version >= 11 or table != 'account_cleanup_receipts')
+                 and (schema_version >= 12 or table not in {'account_observation_origins', 'account_observation_requests'})
+                 and (schema_version >= 13 or table not in {'account_billing_probe_origins', 'account_billing_probe_requests'}))
 
 
 def _snapshot_project_partition(
@@ -418,7 +433,7 @@ def _snapshot_project_partition(
         raise LedgerError("project binding is not active")
     tables: dict[str, list[dict[str, Any]]] = {}
     columns_manifest: dict[str, list[str]] = {}
-    for table, wanted in _BACKUP_TABLE_COLUMNS.items():
+    for table in _backup_tables(ledger_schema_version):
         exists = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
         ).fetchone()
@@ -464,10 +479,101 @@ def _snapshot_project_partition(
     }
 
 
+_LAUNCH_CLAIMS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS launch_claims (
+    project_id TEXT NOT NULL,
+    handle_digest TEXT NOT NULL CHECK(typeof(handle_digest)='text' AND length(handle_digest)=64
+        AND handle_digest NOT GLOB '*[^0-9a-f]*'),
+    run_id TEXT NOT NULL CHECK(typeof(run_id)='text' AND length(run_id) BETWEEN 1 AND 160),
+    kind TEXT NOT NULL CHECK(kind IN ('claimed','legacy_fenced')),
+    claimed_at_ms INTEGER NOT NULL CHECK(typeof(claimed_at_ms)='integer' AND claimed_at_ms>=0),
+    bridge_run_id TEXT,
+    PRIMARY KEY(project_id,handle_digest),
+    UNIQUE(project_id,run_id),
+    CHECK((kind='claimed' AND typeof(bridge_run_id)='text' AND length(bridge_run_id)=36
+        AND substr(bridge_run_id,1,4)='brg_' AND substr(bridge_run_id,5) NOT GLOB '*[^0-9a-f]*')
+        OR (kind='legacy_fenced' AND bridge_run_id IS NULL)),
+    FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+)
+"""
+
+
+_LAUNCH_INPUTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS launch_inputs (
+    project_id TEXT NOT NULL,
+    handle_digest TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    runtime_digest TEXT NOT NULL CHECK(length(runtime_digest)=64 AND runtime_digest NOT GLOB '*[^0-9a-f]*'),
+    provider TEXT NOT NULL CHECK(provider IN ('codex','claude')),
+    model TEXT NOT NULL CHECK(typeof(model)='text' AND length(model) BETWEEN 1 AND 160),
+    effort TEXT NOT NULL CHECK(typeof(effort)='text' AND length(effort) BETWEEN 1 AND 32),
+    hard_timeout_seconds INTEGER NOT NULL CHECK(typeof(hard_timeout_seconds)='integer' AND hard_timeout_seconds>0),
+    PRIMARY KEY(project_id,handle_digest),
+    UNIQUE(project_id,run_id),
+    FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+)
+"""
+
+_LAUNCH_RECEIPT_PARENT_SCHEMA = """
+CREATE UNIQUE INDEX IF NOT EXISTS launch_receipt_parent
+ON launch_claims(project_id,handle_digest,run_id,bridge_run_id)
+"""
+
+_LAUNCH_OBSERVATIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS launch_observations (
+    project_id TEXT NOT NULL,
+    handle_digest TEXT NOT NULL,
+    identity_digest TEXT NOT NULL CHECK(length(identity_digest)=64 AND identity_digest NOT GLOB '*[^0-9a-f]*'),
+    observed_at_ms INTEGER NOT NULL CHECK(typeof(observed_at_ms)='integer' AND observed_at_ms>=0),
+    PRIMARY KEY(project_id,handle_digest),
+    FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+)
+"""
+
+_LAUNCH_RECEIPTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS launch_receipts (
+    project_id TEXT NOT NULL,
+    scope_digest TEXT NOT NULL CHECK(length(scope_digest)=64 AND scope_digest NOT GLOB '*[^0-9a-f]*'),
+    request_digest TEXT NOT NULL CHECK(length(request_digest)=64 AND request_digest NOT GLOB '*[^0-9a-f]*'),
+    parameters_digest TEXT NOT NULL CHECK(length(parameters_digest)=64 AND parameters_digest NOT GLOB '*[^0-9a-f]*'),
+    handle_digest TEXT NOT NULL CHECK(length(handle_digest)=64 AND handle_digest NOT GLOB '*[^0-9a-f]*'),
+    receipt_digest TEXT NOT NULL CHECK(length(receipt_digest)=64 AND receipt_digest NOT GLOB '*[^0-9a-f]*'),
+    run_id TEXT,
+    state TEXT NOT NULL CHECK(state IN ('claimed','denied')),
+    reason_code TEXT,
+    bridge_run_id TEXT,
+    deadline_at_ms INTEGER,
+    recorded_at_ms INTEGER NOT NULL CHECK(typeof(recorded_at_ms)='integer' AND recorded_at_ms>=0),
+    PRIMARY KEY(project_id,scope_digest,request_digest),
+    UNIQUE(project_id,receipt_digest),
+    CHECK((state='claimed' AND run_id IS NOT NULL AND bridge_run_id IS NOT NULL
+        AND typeof(deadline_at_ms)='integer' AND deadline_at_ms>recorded_at_ms AND reason_code IS NULL)
+        OR (state='denied' AND bridge_run_id IS NULL AND deadline_at_ms IS NULL AND reason_code IN (
+""" + ",".join("'" + code + "'" for code in sorted(CLAIM_DENIAL_CODES)) + """))),
+    FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
+    FOREIGN KEY(project_id,handle_digest,run_id,bridge_run_id)
+        REFERENCES launch_claims(project_id,handle_digest,run_id,bridge_run_id)
+)
+"""
+
+_LAUNCH_CLEANUP_SCHEMA = """
+CREATE TRIGGER IF NOT EXISTS cleanup_launch_operation_state
+AFTER UPDATE OF status ON projects
+WHEN NEW.status='deleted' AND OLD.status<>'deleted'
+BEGIN
+    DELETE FROM launch_inputs WHERE project_id=NEW.project_id;
+    DELETE FROM launch_observations WHERE project_id=NEW.project_id;
+    DELETE FROM launch_receipts WHERE project_id=NEW.project_id;
+    DELETE FROM launch_claims WHERE project_id=NEW.project_id;
+END
+"""
+
+
 _BACKUP_RESTORE_SCHEMA = """
 CREATE TABLE projects(project_id TEXT PRIMARY KEY,canonical_root TEXT,root_digest TEXT,
  status TEXT NOT NULL CHECK(status IN ('active','deleted')),created_at_ms INTEGER NOT NULL,
  deleted_at_ms INTEGER);
+""" + _LAUNCH_CLAIMS_SCHEMA + ";\n" + _LAUNCH_RECEIPT_PARENT_SCHEMA + ";\n" + _LAUNCH_INPUTS_SCHEMA + ";\n" + _LAUNCH_OBSERVATIONS_SCHEMA + ";\n" + _LAUNCH_RECEIPTS_SCHEMA + ";\n" + CAPACITY_PARENT_SCHEMA + ";\n" + CAPACITY_SCHEMA + ";\n" + CAPACITY_COMPLETIONS_SCHEMA + ";\n" + CAPACITY_EXECUTIONS_SCHEMA + ";\n" + """
 CREATE TABLE sessions(project_id TEXT NOT NULL,session_digest TEXT NOT NULL,producer TEXT NOT NULL,
  created_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,session_digest,producer),
  FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE);
@@ -541,6 +647,15 @@ CREATE TABLE tombstones(project_id TEXT NOT NULL,deletion_id TEXT NOT NULL,delet
 """
 
 
+_BACKUP_RESTORE_SCHEMA += ('\nALTER TABLE host_run_bindings ADD COLUMN '+HISTORY_OWNER_COLUMN+';\n'
+                           + ';\n'.join(sql for _, _, sql in OPEN_OBJECTS)+';\n')
+_BACKUP_RESTORE_SCHEMA += ('\n' + RELEASE_SCHEMA + ';\nALTER TABLE capacity_executions ADD COLUMN '
+                           + RELEASE_COLUMN + ';\n')
+
+
+_BACKUP_RESTORE_SCHEMA += '\n' + OBSERVATION_ORIGIN_SCHEMA + ';\n' + OBSERVATION_SCHEMA + ';\n'
+_BACKUP_RESTORE_SCHEMA += '\n' + ';\n'.join(sql for _, _, sql in BILLING_PROBE_OBJECTS) + ';\n'
+
 def _verify_project_backup_body(
     body: Any,
     *,
@@ -553,7 +668,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -569,7 +684,7 @@ def _verify_project_backup_body(
     ):
         raise LedgerError("project backup project partition is invalid")
     tables, counts, columns = body["tables"], body["counts"], body["columns"]
-    expected_tables = set(_BACKUP_TABLE_COLUMNS)
+    expected_tables = set(_backup_tables(schema_version))
     if (
         not isinstance(tables, dict) or set(tables) != expected_tables
         or not isinstance(counts, dict) or set(counts) != expected_tables
@@ -587,12 +702,14 @@ def _verify_project_backup_body(
             project_values,
         )
         decoded_by_table: dict[str, list[dict[str, Any]]] = {}
-        for table in _BACKUP_TABLE_COLUMNS:
+        for table in _backup_tables(schema_version):
             declared = columns[table]
             expected = list(_backup_expected_columns(schema_version, table))
             rows = tables[table]
             if declared != expected or not isinstance(rows, list) or counts[table] != len(rows):
                 raise LedgerError("project backup count or column manifest is invalid")
+            if not declared and rows:
+                raise LedgerError("project backup absent table has rows")
             decoded_rows = []
             for row in rows:
                 if not isinstance(row, dict) or set(row) != set(declared):
@@ -622,6 +739,28 @@ def _verify_project_backup_body(
         foreign_keys = restored.execute("PRAGMA foreign_key_check").fetchall()
         if foreign_keys:
             raise LedgerError("isolated project backup foreign-key check failed")
+        if schema_version >= 9 and restored.execute(
+            "SELECT 1 FROM launch_claims c LEFT JOIN active_run_capacity a "
+            "ON a.project_id=c.project_id AND a.handle_digest=c.handle_digest "
+            "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
+        ).fetchone() is not None:
+            raise LedgerError("project backup capacity coverage is incomplete")
+        if schema_version >= 9 and restored.execute(
+            "SELECT 1 FROM active_run_capacity a LEFT JOIN capacity_completions c "
+            "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
+            "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
+            "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
+            "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
+            "WHERE a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
+            "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
+        ).fetchone() is not None:
+            raise LedgerError("project backup completion coverage is incomplete")
+        if schema_version >= 11 and not check_cleanup_coverage(restored):
+            raise LedgerError('project backup cleanup coverage is incomplete')
+        if schema_version >= 12 and not check_observation_coverage(restored):
+            raise LedgerError('account observation coverage is unavailable')
+        if schema_version >= 13 and not check_billing_probe_coverage(restored):
+            raise LedgerError('project backup billing probe coverage is incomplete')
         integrity = restored.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise LedgerError("isolated project backup integrity check failed")
@@ -642,7 +781,7 @@ def _verify_project_backup_body(
                 raise LedgerError("isolated project backup restoration changed rows")
     finally:
         restored.close()
-    return {name: int(counts[name]) for name in _BACKUP_TABLE_COLUMNS}
+    return {name: int(counts[name]) for name in _backup_tables(schema_version)}
 
 
 def _verify_backup_envelope(
@@ -672,22 +811,6 @@ def _verify_backup_envelope(
     return body, counts, manifest_digest
 
 
-def default_state_root() -> Path:
-    """`$XDG_STATE_HOME/codex-agents`, else `~/.local/state/codex-agents` in the
-    account's home folder (host_paths.default_state_root), macOS included."""
-
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA")
-        if not base:
-            raise StateError("LOCALAPPDATA is required on Windows")
-        return Path(base) / "codex-agents"
-    from .host_paths import HostPathError
-    from .host_paths import default_state_root as host_default_state_root
-
-    try:
-        return host_default_state_root()
-    except HostPathError as exc:
-        raise StateError(str(exc)) from None
 
 
 def _prepare_default_state_root() -> Path:
@@ -704,11 +827,6 @@ def _prepare_default_state_root() -> Path:
 # The pre-0.8.10 macOS folder (host_paths.legacy_state_root) is moved once, by the
 # owner's `learning-register`; every other use of the default state refuses while
 # only the old folder exists, so nothing starts a second, empty state beside it.
-UNMOVED_STATE = (
-    "the learning state is still in its old macOS folder "
-    "(~/Library/Application Support/codex-agents); ask the owner to run ./setup.sh "
-    "(collector step), which moves it to ~/.local/state/codex-agents"
-)
 BOTH_STATES = (
     "the learning state exists both in its old macOS folder "
     "(~/Library/Application Support/codex-agents) and in its new one "
@@ -754,19 +872,6 @@ STATE_SOCKET_TOO_LONG = (
 UNIX_SOCKET_PATH_MAX = 103 if sys.platform == "darwin" else 107
 
 
-def _unmoved_legacy_state() -> bool:
-    """Whether only the pre-0.8.10 macOS state folder exists."""
-
-    if os.name == "nt":
-        return False
-    from .host_paths import legacy_state_root
-
-    legacy = legacy_state_root()
-    return (
-        legacy is not None
-        and os.path.lexists(legacy)
-        and not os.path.lexists(default_state_root())
-    )
 
 
 # Not copied: the stale socket, lock files (recreated on use), the database and
@@ -1059,104 +1164,112 @@ def _inside_git_tree(path: Path) -> bool:
     return any((parent / ".git").exists() for parent in (path, *path.parents))
 
 
-def _assert_no_symlink_components(path: Path) -> None:
-    current = Path(path.anchor)
-    for part in path.parts[1:]:
-        current = current / part
-        if not current.exists():
-            continue
-        try:
-            mode = current.lstat().st_mode
-        except OSError as exc:
-            raise StateError("state path cannot be inspected") from exc
-        if stat.S_ISLNK(mode):
-            raise StateError("state path contains a symlink component")
 
 
-def _check_owner_mode(path: Path, *, directory: bool) -> None:
-    info = path.stat()
-    if hasattr(os, "getuid") and info.st_uid != os.getuid():
-        raise StateError("state path is not owned by the current user")
-    expected = 0o700 if directory else 0o600
-    if stat.S_IMODE(info.st_mode) != expected:
-        raise StateError("state path has unsafe permissions")
-    # A second hard link would let whoever holds it change the file in place.
-    if not directory and info.st_nlink != 1:
-        raise StateError("state file has another hard link")
 
 
-def _ssh_key_parts(blob: bytes) -> list[bytes]:
-    """The length-prefixed fields of a public key blob; nothing may be left over."""
-
-    parts: list[bytes] = []
-    position = 0
-    while position < len(blob):
-        length = int.from_bytes(blob[position:position + 4], "big")
-        end = position + 4 + length
-        if position + 4 > len(blob) or end > len(blob):
-            raise ValueError("truncated public key")
-        parts.append(blob[position + 4:end])
-        position = end
-    return parts
 
 
-def _require_canonical_key(key_type: str, parts: list[bytes]) -> None:
-    """Refuse a blob that is not its key type's one encoding of a usable key.
+# The folder setup keeps for itself in the state root (scripts/install.py OwnerState.FOLDER).
+INSTALLER_FOLDER = "installer"
+# Where the whole ledger is copied before the owner's approved upgrade, and how long
+# the per-project copies taken with it are kept.
+UPGRADE_COPY_FOLDER = "ledger-before-upgrade"
+UPGRADE_BACKUP_MS = 30 * 24 * 60 * 60 * 1000
 
-    One key must have one spelling: `ssh-keygen` treats a padded RSA integer as the same
-    key, so a second spelling could bring back a key the history has retired.
+
+def _schema_behind(database: Path) -> int | None:
+    """The schema of a ledger file an earlier version wrote, else None (current, newer, new or absent).
+
+    A ledger that is there but cannot be read is an error, never taken for a current one.
     """
 
-    if not parts or parts[0] != key_type.encode("ascii"):
-        raise ValueError("wrong public key type")
-    if key_type == "ssh-ed25519":
-        valid = len(parts) == 2 and len(parts[1]) == 32
-    elif key_type == "sk-ssh-ed25519@openssh.com":
-        valid = len(parts) == 3 and len(parts[1]) == 32 and bool(parts[2])
-    elif key_type == "ssh-rsa":
-        valid = (
-            len(parts) == 3
-            and all(_is_minimal_positive_integer(part) for part in parts[1:])
-            and len(parts[2].lstrip(b"\0")) >= 128
-        )
-    elif key_type in {"ecdsa-sha2-nistp256", "sk-ecdsa-sha2-nistp256@openssh.com"}:
-        valid = (
-            len(parts) == (3 if key_type.startswith("ecdsa") else 4)
-            and parts[1] == b"nistp256"
-            and len(parts[2]) == 65
-            and parts[2][0] == 4
-            and all(parts[3:])
-        )
-    else:
-        valid = False
-    if not valid:
-        raise ValueError("malformed public key")
-
-
-def _is_minimal_positive_integer(value: bytes) -> bool:
-    if not value or value[0] & 0x80 or not any(value):
-        return False
-    return value[0] != 0 or bool(value[1] & 0x80)
-
-
-def _owner_key_identity(signer_line: bytes) -> bytes:
-    """What makes two signer lines the same key, whichever way an older one was encoded."""
-
-    fields = signer_line.split()
     try:
-        parts = _ssh_key_parts(base64.b64decode(fields[2]))
-    except (ValueError, IndexError):
-        return signer_line
-    if fields[1] == b"ssh-rsa":
-        parts = [parts[0], *(part.lstrip(b"\0") for part in parts[1:])]
-    return b"\0".join(len(part).to_bytes(4, "big") + part for part in parts)
+        if not database.is_file() or not database.stat().st_size:
+            return None
+        # The path goes in as a URI built from the path itself, so no character
+        # in it can name another file or an option.
+        connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error, TypeError, ValueError) as error:
+        raise LedgerError("the ledger cannot be read to check which version wrote it") from error
+    return version if 5 <= version < LEDGER_SCHEMA_VERSION else None
 
 
-def _signer_fingerprint(signer_line: bytes) -> str:
-    """The SHA256 fingerprint `ssh-keygen -l` prints for a canonical signer line."""
+def ledger_schema_behind(state: "LearningState") -> int | None:
+    """The schema of this state root's ledger when an earlier version wrote it, else None."""
 
-    blob = base64.b64decode(signer_line.split()[2])
-    return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii").rstrip("=")
+    return _schema_behind(state.database)
+
+
+def legacy_ledger_schema_behind() -> int | None:
+    """The same for the pre-0.8.10 macOS folder while it is the only state there is.
+
+    Read only once the owner has approved that folder as theirs, so that both of
+    the owner's decisions (move it, upgrade it) are in hand before either is acted on.
+    """
+
+    from .host_paths import legacy_state_root
+
+    legacy = legacy_state_root()
+    if legacy is None or not os.path.lexists(legacy) or os.path.lexists(default_state_root()):
+        return None
+    return _schema_behind(Path(legacy) / "learning.sqlite3")
+
+
+def copy_ledger_before_upgrade(state: "LearningState", schema_version: int) -> Path:
+    """Copy the whole ledger, checked, before an upgrade changes it; the copy's path.
+
+    Called with the collector stopped. The copy is what puts everything back as it
+    was: SQLite writes it page by page from a consistent view, and it is accepted
+    only if it is sound, names the same schema and holds the same number of rows in
+    every table. It stays until the owner deletes it.
+    """
+
+    folder = state.root / UPGRADE_COPY_FOLDER
+    folder.mkdir(mode=0o700, exist_ok=True)
+    _assert_no_symlink_components(folder)
+    _check_owner_mode(folder, directory=True)
+    target = folder / f"learning-schema{schema_version}-{time.time_ns() // 1_000_000}.sqlite3"
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    os.close(descriptor)
+
+    def counts(connection: sqlite3.Connection) -> dict[str, int]:
+        tables = [str(row[0]) for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        return {name: int(connection.execute(f'SELECT count(*) FROM "{name}"').fetchone()[0]) for name in tables}
+
+    try:
+        source = sqlite3.connect(state.database.as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            copy = sqlite3.connect(target)
+            try:
+                source.backup(copy)
+                sound = (copy.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+                         and int(copy.execute("PRAGMA user_version").fetchone()[0]) == schema_version
+                         and counts(copy) == counts(source))
+            finally:
+                copy.close()
+        finally:
+            source.close()
+        if not sound:
+            raise LedgerError("the ledger could not be copied before its upgrade; nothing was changed")
+        os.chmod(target, 0o600)
+        descriptor = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except BaseException as error:
+        with contextlib.suppress(OSError):
+            target.unlink()
+        if isinstance(error, (OSError, ValueError, sqlite3.Error)):
+            raise LedgerError("the ledger could not be copied before its upgrade; nothing was changed") from error
+        raise
+    return target
 
 
 class LearningState:
@@ -1199,6 +1312,9 @@ class LearningState:
         self.client_health = self.root / "collector-client-health.json"
         self.key_path = self.root / "digest.key"
         self.allowed_signers_path = self.root / "owner-allowed-signers"
+        self.initializing = self.root / "ledger-initializing"
+        self.initialized = self.root / "ledger-initialized"
+        self._prepare_database(create=create)
         if create:
             self._create_empty_file(self.database)
             self._create_key(self.key_path)
@@ -1207,6 +1323,106 @@ class LearningState:
             _check_owner_mode(self.database, directory=False)
             _check_owner_mode(self.key_path, directory=False)
             _check_owner_mode(self.allowed_signers_path, directory=False)
+
+    def _marker_exists(self, path: Path) -> bool:
+        if not os.path.lexists(path):
+            return False
+        _assert_no_symlink_components(path)
+        _check_owner_mode(path, directory=False)
+        if not path.is_file():
+            raise StateError("ledger initialization marker is invalid")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode) or handle.read(3) != b"1\n":
+                raise StateError("ledger initialization marker is invalid")
+        return True
+
+    def _write_marker(self, path: Path) -> None:
+        if not self._marker_exists(path):
+            temporary = self.root / f".{path.name}.{secrets.token_hex(8)}.tmp"
+            try:
+                descriptor = os.open(
+                    temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                )
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(b"1\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                # Publish only the complete, durable contents. Process death
+                # while writing leaves no invalid authoritative marker.
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+        self._sync_root()
+
+    def _initial_bootstrap_entry(self, path: Path) -> bool:
+        if path in (self.artifacts, self.exports, self.backups):
+            return path.is_dir() and not any(path.iterdir())
+        if path == self.root / INSTALLER_FOLDER:
+            # Setup's own folder (which deny rules it added to each project). Setup
+            # installs a project before it first registers one, so a new owner's
+            # root already holds it. It is no part of a ledger and is never read here.
+            _assert_no_symlink_components(path)
+            _check_owner_mode(path, directory=True)
+            return path.is_dir()
+        if path in (self.client_health, self.client_health_lock):
+            # Counters a client kept when it found no collector yet: not authority either.
+            _assert_no_symlink_components(path)
+            _check_owner_mode(path, directory=False)
+            return path.is_file()
+        if re.fullmatch(r"\.ledger-initializing\.[0-9a-f]{16}\.tmp", path.name):
+            # A crash before initial publication can leave this untrusted
+            # scratch file. Preserve it; never read it or treat it as proof.
+            _assert_no_symlink_components(path)
+            _check_owner_mode(path, directory=False)
+            return path.is_file()
+        return False
+
+    def _sync_root(self) -> None:
+        descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _prepare_database(self, *, create: bool) -> None:
+        initialized = self._marker_exists(self.initialized)
+        pending = self._marker_exists(self.initializing)
+        if os.path.lexists(self.database):
+            if self.database.is_symlink():
+                raise StateError("database path is unsafe")
+            _assert_no_symlink_components(self.database)
+            _check_owner_mode(self.database, directory=False)
+            if not self.database.is_file():
+                raise StateError("database path is unsafe")
+            if self.database.stat().st_size:
+                # An existing ledger must never receive a replacement digest key.
+                for path in (self.key_path, self.allowed_signers_path):
+                    _assert_no_symlink_components(path)
+                    try:
+                        _check_owner_mode(path, directory=False)
+                    except OSError as exc:
+                        raise StateError("existing ledger authority file is unavailable") from exc
+                return
+        if initialized:
+            raise StateError("initialized ledger database is missing or empty; verified recovery is required")
+        if pending and (create or self.database.is_file()):
+            return
+        # Only an otherwise empty owner root can begin an initial bootstrap.
+        # Existing keys, authorization or backup material are not proof of a new store.
+        if create and all(
+            self._initial_bootstrap_entry(path)
+            for path in self.root.iterdir()
+        ):
+            self._write_marker(self.initializing)
+            return
+        raise StateError("ledger database is missing or empty; verified recovery is required")
+
+    def mark_initialized(self) -> None:
+        self._write_marker(self.initialized)
+        self.initializing.unlink(missing_ok=True)
+        self._sync_root()
 
     @staticmethod
     def _create_key(path: Path) -> None:
@@ -1300,25 +1516,56 @@ class LearningState:
         """
 
         content = self._owner_signer_content(public_key)
-        existing = self.allowed_signers_path.read_bytes()
-        if existing:
-            if existing == content:
-                return self.allowed_signers_path
-            raise StateError(
-                f"owner public key is already configured; to change it, {OWNER_KEY_REPLACE_HINT}"
-            )
-        recorded = self.recorded_owner_key()
-        if recorded is not None and recorded["signer_line"] != content:
-            raise StateError(
-                f"an owner key is already on record; to change it, {OWNER_KEY_REPLACE_HINT}"
-            )
-        return self._write_owner_signers(content)
+        # Looked at and written in one turn: of two first configurations at the same
+        # moment, the second finds the first one's key and follows the rule above.
+        with self._owner_key_turn():
+            existing = self.allowed_signers_path.read_bytes()
+            if existing:
+                if existing == content:
+                    return self.allowed_signers_path
+                raise StateError(
+                    f"owner public key is already configured; to change it, {OWNER_KEY_REPLACE_HINT}"
+                )
+            recorded = self.recorded_owner_key()
+            if recorded is not None and recorded["signer_line"] != content:
+                raise StateError(
+                    f"an owner key is already on record; to change it, {OWNER_KEY_REPLACE_HINT}"
+                )
+            return self._write_owner_signers(content)
+
+    @contextlib.contextmanager
+    def _owner_key_turn(self) -> Iterator[None]:
+        """One change of the owner's signer file at a time, across threads and processes.
+
+        Held on the state root itself, so it needs no file of its own there.
+        """
+
+        descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            if fcntl is not None:
+                deadline = time.monotonic() + OWNER_KEY_TURN_SECONDS
+                while True:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError as error:
+                        if time.monotonic() >= deadline:
+                            raise StateError("another owner key change is in progress; try again") from error
+                        time.sleep(0.01)
+            # Every writer holds this turn for as long as its temporary file exists, so
+            # one found now was left by a write that was interrupted (by this version or,
+            # under one fixed name, an earlier one). They hold a public key and were never
+            # the signer file.
+            for leftover in self.root.glob(".owner-allowed-signers*.tmp"):
+                with contextlib.suppress(OSError):
+                    leftover.unlink()
+            yield
+        finally:
+            os.close(descriptor)
 
     def _write_owner_signers(self, content: bytes) -> Path:
-        temporary = self.root / ".owner-allowed-signers.tmp"
-        # A leftover from an interrupted write would otherwise block every later one.
-        with contextlib.suppress(FileNotFoundError):
-            temporary.unlink()
+        # A name of its own, so no other writer's file is ever the one removed or renamed.
+        temporary = self.root / f".owner-allowed-signers.{secrets.token_hex(8)}.tmp"
         descriptor = os.open(
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -1331,7 +1578,7 @@ class LearningState:
                 os.fsync(handle.fileno())
             os.replace(temporary, self.allowed_signers_path)
             os.chmod(self.allowed_signers_path, 0o600)
-        except Exception:
+        except BaseException:
             with contextlib.suppress(OSError):
                 temporary.unlink()
             raise
@@ -1343,8 +1590,8 @@ class LearningState:
         self.owner_signer_line()
         return self.allowed_signers_path
 
-    def owner_signer_line(self) -> bytes:
-        """The allowed-signers bytes, only while they name exactly one owner key.
+    def _owner_signer_bytes(self) -> bytes:
+        """Bounded checked signer-file bytes; the persistence owner checks history.
 
         It must be exactly the single canonical line `install_owner_public_key` writes:
         `ssh-keygen -Y verify` accepts a signature from any key the file lists, so a second
@@ -1356,19 +1603,35 @@ class LearningState:
         # One owner-only file with a single hard link: a second link (say, in a
         # project) would let whoever holds it replace the owner's key.
         _check_owner_mode(self.allowed_signers_path, directory=False)
+        expected = self.allowed_signers_path.lstat()
+        if not stat.S_ISREG(expected.st_mode):
+            raise StateError("owner allowed-signers path is unsafe")
         descriptor = os.open(
-            self.allowed_signers_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            self.allowed_signers_path,
+            os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0),
         )
         with os.fdopen(descriptor, "rb") as handle:
-            if os.fstat(handle.fileno()).st_nlink != 1:
+            actual = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(actual.st_mode) or actual.st_nlink != 1
+                or stat.S_IMODE(actual.st_mode) != 0o600
+                or (hasattr(os, "getuid") and actual.st_uid != os.getuid())
+                or (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino)
+            ):
                 raise StateError("owner allowed-signers path is unsafe")
             content = handle.read(OWNER_SIGNERS_MAX_BYTES + 1)
         if not content:
-            raise StateError("owner public key is not configured")
+            raise OwnerSignerNotConfigured("owner public key is not configured")
         # The whole file must be the one line: ssh-keygen reads all of it, and a
         # key after an over-long first line would otherwise go unchecked.
         if len(content) > OWNER_SIGNERS_MAX_BYTES or OWNER_SIGNER_LINE.fullmatch(content) is None:
             raise StateError("owner allowed-signers must name exactly one owner key")
+        return content
+
+    def owner_signer_line(self) -> bytes:
+        """The checked signer line only while it agrees with recorded owner history."""
+
+        content = self._owner_signer_bytes()
         recorded = self.recorded_owner_key()
         if recorded is not None and recorded["signer_line"] != content:
             raise StateError(
@@ -1477,162 +1740,12 @@ def registered_project_roots() -> list[Path]:
     ]
 
 
-def validate_collector_runtime(cli_path: Path) -> dict[str, str | int]:
-    """Validate the complete installed package and return its collector identity."""
-
-    from .learning_engine import _installed_managed_files, _read_managed_bytes
-
-    try:
-        if cli_path.is_symlink():
-            raise ContractError("installed collector entry point is invalid")
-        resolved_cli = cli_path.resolve(strict=True)
-        bundle_root = resolved_cli.parents[2]
-        expected_cli = bundle_root / ".codex" / "orchestration" / "cli.py"
-        if resolved_cli != expected_cli:
-            raise ContractError("installed collector entry point is invalid")
-        paths, contents = _installed_managed_files(bundle_root)
-        manifest_relative = ".codex/orchestration/install-manifest.json"
-        manifest_path = bundle_root / manifest_relative
-        if manifest_path.is_symlink():
-            raise ContractError("installed package manifest is invalid")
-        if manifest_path.exists():
-            manifest = json.loads(
-                _read_managed_bytes(bundle_root, manifest_relative)
-            )
-            version = manifest.get("version") if isinstance(manifest, dict) else None
-        else:
-            version_path = bundle_root / "VERSION"
-            descriptor = os.open(
-                version_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            )
-            try:
-                info = os.fstat(descriptor)
-                if not stat.S_ISREG(info.st_mode):
-                    raise ContractError("package VERSION is invalid")
-                version = os.read(descriptor, 33).decode("ascii").strip()
-            finally:
-                os.close(descriptor)
-        if _version_tuple(version) is None:
-            raise ContractError("package VERSION is invalid")
-        # The runtime is this package's own file set, never whatever else the
-        # manifest lists: an extra module there is not runtime, and the digest
-        # covers every runtime file, configuration and schemas included.
-        if any(ORCHESTRATION_PREFIX + relative not in contents for relative in RUNTIME_FILES):
-            raise ContractError("installed collector runtime is incomplete")
-        digest = runtime_digest(
-            {relative: contents[ORCHESTRATION_PREFIX + relative] for relative in RUNTIME_FILES}
-        )
-        if version != PACKAGE_VERSION or digest != COLLECTOR_RUNTIME_DIGEST:
-            raise ContractError("installed collector identity is inconsistent")
-        return {
-            "schema_version": COLLECTOR_AUTHORIZATION_SCHEMA_VERSION,
-            "runtime_version": version,
-            "runtime_digest": digest,
-        }
-    except (
-        ContractError,
-        OSError,
-        UnicodeError,
-        json.JSONDecodeError,
-        IndexError,
-    ) as exc:
-        raise CollectorAuthorizationError(
-            "installed package integrity validation failed",
-            code="runtime_integrity_invalid",
-        ) from exc
 
 
-def _collector_runtime_authorization(
-    state: LearningState, *, allow_quiesced: bool
-) -> dict[str, str | int | bool]:
-    """Read a valid active or upgrade-quiesced collector identity."""
-
-    path = state.collector_authorization
-    if not path.exists():
-        raise CollectorAuthorizationError(
-            "collector runtime is not authorized; run learning-register",
-            code="runtime_authorization_missing",
-        )
-    if path.is_symlink():
-        raise CollectorAuthorizationError(
-            "collector runtime authorization is unsafe",
-            code="runtime_authorization_invalid",
-        )
-    try:
-        _check_owner_mode(path, directory=False)
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode):
-                raise StateError("collector runtime authorization is unsafe")
-            raw = os.read(descriptor, 1025)
-        finally:
-            os.close(descriptor)
-        if len(raw) > 1024:
-            raise StateError("collector runtime authorization is invalid")
-        value = json.loads(raw)
-    except (OSError, StateError, UnicodeError, json.JSONDecodeError) as exc:
-        raise CollectorAuthorizationError(
-            "collector runtime authorization is invalid",
-            code="runtime_authorization_invalid",
-        ) from exc
-    if (
-        not isinstance(value, dict)
-        or set(value) not in (
-            {"schema_version", "runtime_version", "runtime_digest"},
-            {
-                "schema_version", "runtime_version", "runtime_digest",
-                "quiesced_for_upgrade",
-            },
-        )
-        or value.get("schema_version") != COLLECTOR_AUTHORIZATION_SCHEMA_VERSION
-        or _version_tuple(value.get("runtime_version")) is None
-        or not isinstance(value.get("runtime_digest"), str)
-        or len(value["runtime_digest"]) != 64
-        or any(
-            character not in "0123456789abcdef"
-            for character in value["runtime_digest"]
-        )
-    ):
-        raise CollectorAuthorizationError(
-            "collector runtime authorization is invalid",
-            code="runtime_authorization_invalid",
-        )
-    if value.get("quiesced_for_upgrade") is not True and "quiesced_for_upgrade" in value:
-        raise CollectorAuthorizationError(
-            "collector runtime authorization is invalid",
-            code="runtime_authorization_invalid",
-        )
-    if value.get("quiesced_for_upgrade") is True and not allow_quiesced:
-        raise CollectorAuthorizationError(
-            "collector runtime is quiesced for an owner-authorized upgrade",
-            code="runtime_authorization_quiesced",
-        )
-    return value
 
 
-def authorized_collector_runtime(state: LearningState) -> dict[str, str | int]:
-    """Read the exact active collector identity authorized in owner-only state."""
-
-    return _collector_runtime_authorization(state, allow_quiesced=False)
 
 
-def require_authorized_collector_runtime(
-    state: LearningState,
-) -> dict[str, str | int]:
-    """Fail closed unless this process is the exact owner-authorized runtime."""
-
-    authorized = authorized_collector_runtime(state)
-    if (
-        authorized["runtime_version"] != PACKAGE_VERSION
-        or authorized["runtime_digest"] != COLLECTOR_RUNTIME_DIGEST
-    ):
-        raise CollectorAuthorizationError(
-            "installed collector differs from the owner-authorized runtime; "
-            "run learning-register from the intended package",
-            code="runtime_unauthorized",
-        )
-    return authorized
 
 
 def authorize_collector_runtime(
@@ -1689,15 +1802,6 @@ def authorize_collector_runtime(
     return identity
 
 
-def _canonical_project_root(path: Path) -> Path:
-    if not path.is_absolute():
-        raise StateError("project root must be absolute")
-    _assert_no_symlink_components(path)
-    resolved = path.resolve(strict=True)
-    if not resolved.is_dir():
-        raise StateError("project root must be a directory")
-    _assert_no_symlink_components(resolved)
-    return resolved
 
 
 @dataclass(frozen=True)
@@ -1712,97 +1816,45 @@ class SessionBinding:
     expires_at_ms: int
 
 
-def _window_covered(window: dict[str, Any], earlier: dict[str, Any]) -> bool:
-    """Whether an earlier window already restricts at least as much, as long."""
-
-    def used(item: dict[str, Any]) -> float:
-        return -1.0 if item["used_percent"] is None else float(item["used_percent"])
-
-    if (earlier["scope"], earlier["window_minutes"]) != (
-        window["scope"], window["window_minutes"]
-    ) or used(earlier) < used(window):
-        return False
-    if window["resets_at"] is None or earlier["resets_at"] is None:
-        return window["resets_at"] == earlier["resets_at"]
-    return earlier["resets_at"] >= window["resets_at"]
-
-
-def _more_restrictive(record: dict[str, Any], prior: list[dict[str, Any]]) -> bool:
-    """Whether a run's new rate-limit record restricts more than its earlier ones.
-
-    Billing is ranked usable over unknown over unusable, and only a higher rank
-    is kept, because admission reads the latest billing record. A headroom
-    record is kept for a higher status, or for any window that no earlier
-    record covers. Only an earlier record at least as restrictive in status can
-    cover a window, so a rejection is never hidden behind an allowed reading
-    that happened to last longer.
-    """
-
-    if not prior:
-        return True
-    if record["record_type"] == "provider_billing":
-        return BILLING_RANK[record["paid_usage_usable"]] > max(
-            BILLING_RANK[item["paid_usage_usable"]] for item in prior
-        )
-    status = CLAUDE_STATUS_RANK[record["status"]]
-    covering = [item for item in prior if CLAUDE_STATUS_RANK[item["status"]] >= status]
-    if not covering:
-        return True
-    earlier = [window for item in covering for window in item["windows"]]
-    return any(
-        not any(_window_covered(window, other) for other in earlier)
-        for window in record["windows"]
-    )
-
-
-def _merged_restriction(
-    records: list[dict[str, Any]], *, observed_at_ms: int
-) -> dict[str, Any]:
-    """One headroom record as restrictive as all of a run's: the highest status,
-    and per window the highest use and the latest effective reset.
-
-    A window with no reset time counts for a day from its own observation, so
-    that day's end is its effective reset. The merged window always carries an
-    explicit reset at least as late as every input's, so it never ends sooner.
-    """
-
-    from .providers import EVIDENCE_HORIZON_MS, headroom_record
-
-    status = max((item["status"] for item in records), key=CLAUDE_STATUS_RANK.__getitem__)
-    windows: dict[tuple[Any, Any], dict[str, Any]] = {}
-    for item in records:
-        for window in item["windows"]:
-            key = (window["scope"], window["window_minutes"])
-            effective_reset = (
-                window["resets_at"] if window["resets_at"] is not None
-                else item["observed_at_ms"] + EVIDENCE_HORIZON_MS
-            )
-            merged = windows.get(key)
-            if merged is None:
-                windows[key] = {**window, "resets_at": effective_reset}
-                continue
-            used = [value for value in (merged["used_percent"], window["used_percent"])
-                    if value is not None]
-            merged["used_percent"] = max(used) if used else None
-            merged["resets_at"] = max(merged["resets_at"], effective_reset)
-    last = records[-1]
-    return headroom_record(
-        provider=last["provider"],
-        account_fingerprint=last["account_fingerprint"],
-        windows=[windows[key] for key in sorted(windows, key=repr)],
-        status=status,
-        run_id=last["run_id"],
-        phase=last["phase"],
-        observed_at_ms=observed_at_ms,
-    )
-
-
 class _RecheckDenied(Exception):
     """An open's locked admission re-check denied; carries the decision to store."""
 
     def __init__(self, decision: dict[str, Any]) -> None:
         super().__init__(decision["reason_code"])
         self.decision = decision
+
+
+@dataclass(frozen=True, repr=False)
+class _PreparedAttestations:
+    """Owner-local verification work, not a serializable/native caller grant."""
+
+    origin: object
+    project_id: str
+    provider: str
+    owner: tuple[int, bytes, str, int] | None
+    signer: bytes | None
+    rows: tuple[tuple[str, int, bytes, str, str, bytes | None], ...]
+    verified: frozenset[str]
+
+
+@dataclass(frozen=True, repr=False)
+class _ClaimRequest:
+    """Captured owner-local request data; never a launch or caller capability."""
+
+    origin: object
+    project_id: str
+    runtime_digest: str
+    caller_scope: str
+    request_id: str
+    launch: LaunchClaimInput
+    handle: str
+    scope: str
+    request: str
+    parameters: str
+    run_context: tuple | None = None
+    storage_required: bool = False
+    storage_binding: object = None
+    storage_evidence: bytes | None = None
 
 
 class LearningLedger:
@@ -1814,12 +1866,24 @@ class LearningLedger:
         *,
         client_capabilities: dict[str, dict[str, Any]] | None = None,
         admission_policy: dict[str, Any] | None = None,
+        allow_schema_upgrade: bool = False,
+        backup_before_upgrade: bool = False,
     ) -> None:
+        if type(allow_schema_upgrade) is not bool or type(backup_before_upgrade) is not bool or (
+                backup_before_upgrade and not allow_schema_upgrade):
+            raise LedgerError('ledger schema upgrade option is invalid')
+        self._allow_schema_upgrade = allow_schema_upgrade
+        # The owner's approved upgrade (setup's registration): each active project's
+        # records are first kept as they are, then the migration checks those copies.
+        self._backup_before_upgrade = backup_before_upgrade
         self.state = state
         # Admission settings come from the installed routing policy, read at
         # each decision; a caller-supplied policy is for tests only.
         self._admission_policy = admission_policy
         self._lock = threading.RLock()
+        self._attestation_origin = object()
+        self._capacity_executions = OwnedExecutionRegistry()
+        self._capacity_execution_origin = secrets.token_hex(32)
         self._active_readers = 0
         self._client_capabilities = (
             client_capabilities
@@ -1841,17 +1905,20 @@ class LearningLedger:
                 os.fchmod(descriptor, 0o600)
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self._writer_descriptor = descriptor
-            except OSError as exc:
+            except BaseException as exc:
                 if descriptor is not None:
                     with contextlib.suppress(OSError):
                         os.close(descriptor)
-                raise LedgerError("another learning writer owns this state root") from exc
+                if isinstance(exc, OSError):
+                    raise LedgerError("another learning writer owns this state root") from exc
+                raise
         try:
             self._connection = self._connect()
             self._migrate()
             self._record_first_owner_key()
+            self.state.mark_initialized()
             self._reconcile_managed_files()
-        except Exception:
+        except BaseException:
             connection = getattr(self, "_connection", None)
             if connection is not None:
                 with contextlib.suppress(sqlite3.Error):
@@ -1863,21 +1930,41 @@ class LearningLedger:
             raise
 
     def _connect(self) -> sqlite3.Connection:
+        # Never let sqlite3 implicitly recreate a lost initialized database.
+        self.state._prepare_database(create=True)
         if self.state.database.is_symlink():
             raise StateError("database path is unsafe")
         connection = sqlite3.connect(
-            self.state.database,
+            self.state.database.as_uri() + "?mode=rw",
+            uri=True,
             timeout=5,
             isolation_level=None,
             check_same_thread=False,
+            factory=SQLReadConnection,
         )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = FULL")
-        connection.execute("PRAGMA secure_delete = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
-        self.state.harden_database_files()
+        try:
+            connection.row_factory = sqlite3.Row
+            version = connection.execute('PRAGMA user_version').fetchone()[0]
+            if version > LEDGER_SCHEMA_VERSION:
+                raise LedgerError('ledger schema is newer than this package')
+            if 5 <= version < LEDGER_SCHEMA_VERSION and not self._allow_schema_upgrade:
+                raise LedgerError('ledger schema upgrade requires explicit drained-owner authorization and verified backups')
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = FULL")
+            connection.execute("PRAGMA secure_delete = ON")
+            connection.execute("PRAGMA busy_timeout = 5000")
+            self.state.harden_database_files()
+            # New service wrappers must inherit the connection's actual origin, not
+            # adopt it on their construction thread or after a fork. Legacy collector
+            # paths still serialize cross-thread use themselves; this stamp does not
+            # change their contract. A Thread object avoids recycled numeric IDs.
+            self._connection_origin = (os.getpid(), threading.current_thread())
+        except BaseException:
+            # Until this function returns, __init__ cannot reach this connection.
+            with contextlib.suppress(sqlite3.Error):
+                connection.close()
+            raise
         return connection
 
     def _record_first_owner_key(self) -> None:
@@ -1907,15 +1994,10 @@ class LearningLedger:
                 "SELECT 1 FROM owner_key_history LIMIT 1"
             ).fetchone() is not None:
                 return
-            path = self.state.allowed_signers_path
-            if path.is_symlink() or not path.is_file():
-                return
             try:
-                content = path.read_bytes()[: OWNER_SIGNERS_MAX_BYTES + 1]
-            except OSError:
+                content = self.state._owner_signer_bytes()
+            except (StateError, OSError):
                 return  # opening the ledger must not depend on a damaged signer file
-            if OWNER_SIGNER_LINE.fullmatch(content) is None:
-                return
             self._connection.execute(
                 "INSERT INTO owner_key_history(signer_line,reason,recorded_at_ms) "
                 "VALUES(?,'enrolled',?)",
@@ -1964,7 +2046,8 @@ class LearningLedger:
                     "VALUES(?,'replaced',?)",
                     (content, timestamp),
                 )
-        self.state._write_owner_signers(content)
+        with self.state._owner_key_turn():
+            self.state._write_owner_signers(content)
         self.state.harden_database_files()
         return self.state.owner_key_report()
 
@@ -2065,7 +2148,7 @@ class LearningLedger:
                     if candidate.is_symlink():
                         raise StateError("managed storage contains a symlink")
                     relative = candidate.relative_to(self.state.root).as_posix()
-                    if relative not in registered:
+                    if relative not in registered and root != self.state.backups:
                         candidate.unlink()
             for current, directories, files in os.walk(root, topdown=False):
                 path = Path(current)
@@ -2073,12 +2156,16 @@ class LearningLedger:
                     with contextlib.suppress(OSError):
                         path.rmdir()
 
-    def _require_schema_five_project_backups(self) -> None:
-        """Refuse schema-6 migration until each active partition restores cleanly."""
+    def _require_project_migration_backups(self, schema_version: int, target_version: int) -> None:
+        """Refuse migration until each active partition has an exact verified backup."""
 
         projects = self._connection.execute(
             "SELECT project_id FROM projects WHERE status='active' ORDER BY project_id"
         ).fetchall()
+        if self._backup_before_upgrade:
+            taken_at_ms = time.time_ns() // 1_000_000
+            for project in projects:
+                self._write_upgrade_backup(str(project["project_id"]), schema_version, taken_at_ms)
         for project in projects:
             project_id = str(project["project_id"])
             registrations = self._connection.execute(
@@ -2108,10 +2195,10 @@ class LearningLedger:
                     body, _, _ = _verify_backup_envelope(
                         raw,
                         expected_project_id=project_id,
-                        expected_ledger_schema_version=5,
+                        expected_ledger_schema_version=schema_version,
                     )
                     current = _snapshot_project_partition(
-                        self._connection, project_id, ledger_schema_version=5
+                        self._connection, project_id, ledger_schema_version=schema_version
                     )
                     file_id = str(registration["file_id"])
                     current["tables"]["stored_files"] = [
@@ -2129,12 +2216,161 @@ class LearningLedger:
                 break
             if not verified:
                 raise LedgerError(
-                    "schema 6 migration requires a registered verified schema 5 "
+                    f"schema {target_version} migration requires a registered verified schema {schema_version} "
                     "project backup"
                 )
 
-    def _migrate_five_to_six(self) -> None:
-        """Apply the lifecycle migration as one rollback-safe write transaction."""
+    def _write_upgrade_backup(self, project_id: str, schema_version: int, taken_at_ms: int) -> None:
+        """Keep one project's records exactly as the earlier version left them.
+
+        The same sealed, registered copy the owner's backup command writes, in the
+        layout of the schema being left; the check that follows restores and
+        compares it like any other. It expires like any other backup.
+        """
+
+        body = _snapshot_project_partition(self._connection, project_id, ledger_schema_version=schema_version)
+        payload = canonical_json({"backup_sha256": hashlib.sha256(canonical_json(body)).hexdigest(), "body": body})
+        if len(payload) > 128 * 1024 * 1024:
+            raise LedgerError("sanitized backup is oversized")
+        file_id = f"upgrade_schema{schema_version}_{taken_at_ms}"
+        path = self._write_owner_file("backup", project_id, file_id, payload)
+        try:
+            self._register_stored_file(
+                project_id, file_id=file_id, kind="backup", path=path,
+                digest=hashlib.sha256(payload).hexdigest(), expires_at_ms=taken_at_ms + UPGRADE_BACKUP_MS,
+            )
+        except Exception:
+            with contextlib.suppress(OSError):
+                path.unlink()
+            raise
+
+    def _initialize_launch_claims_locked(self, *, backfill: bool) -> None:
+        """Owner-only schema step within the caller's migration transaction.
+
+        Old runs are ambiguous even without a retained intent. Fence all of them
+        instead of deriving unused authority from expiring history. Markers do
+        not reference expiring records/bindings or grant executable permission.
+        """
+        self._connection.execute(_LAUNCH_CLAIMS_SCHEMA)
+        if backfill:
+            self._connection.execute(
+                "INSERT INTO launch_claims(project_id,handle_digest,run_id,kind,claimed_at_ms,bridge_run_id) "
+                "SELECT project_id,handle_digest,run_id,'legacy_fenced',created_at_ms,NULL FROM host_run_bindings"
+            )
+
+    def _assert_launch_schema_locked(self, version: int) -> None:
+        schemas = [("table", "launch_claims", _LAUNCH_CLAIMS_SCHEMA)]
+        if version >= 8:
+            schemas += [("table", "launch_inputs", _LAUNCH_INPUTS_SCHEMA),
+                        ("table", "launch_observations", _LAUNCH_OBSERVATIONS_SCHEMA),
+                        ("table", "launch_receipts", _LAUNCH_RECEIPTS_SCHEMA),
+                        ("index", "launch_receipt_parent", _LAUNCH_RECEIPT_PARENT_SCHEMA),
+                        ("trigger", "cleanup_launch_operation_state", _LAUNCH_CLEANUP_SCHEMA)]
+        if version >= 9:
+            schemas += [entry for entry in CAPACITY_OBJECTS if version < 11 or entry[1] != 'capacity_executions']
+        if version >= 13:
+            try:
+                assert_billing_probe_schema(self._connection)
+            except ValueError:
+                raise LedgerError('billing probe schema is unavailable or incompatible') from None
+        if version >= 12:
+            try:
+                assert_observation_schema(self._connection)
+            except ValueError:
+                raise LedgerError("account observation schema is unavailable or incompatible") from None
+        if version >= 11:
+            try:
+                assert_cleanup_schema(self._connection)
+            except ValueError:
+                raise LedgerError('account cleanup schema is unavailable or incompatible') from None
+        if version >= 10:
+            try:
+                assert_open_schema(self._connection)
+            except ValueError:
+                raise LedgerError('account original-open schema is unavailable or incompatible') from None
+
+        def normalized(sql):
+            return " ".join(sql.replace("IF NOT EXISTS ", "").strip().rstrip(";").split())
+
+        for kind, name, expected in schemas:
+            row = self._connection.execute("SELECT sql FROM sqlite_master WHERE type=? AND name=?", (kind, name)).fetchone()
+            if row is None or type(row[0]) is not str or normalized(row[0]) != normalized(expected):
+                raise LedgerError("launch claim state is unavailable or incompatible")
+
+    def _initialize_launch_operations_locked(self) -> None:
+        self._connection.execute(_LAUNCH_RECEIPT_PARENT_SCHEMA)
+        self._connection.execute(_LAUNCH_INPUTS_SCHEMA)
+        self._connection.execute(_LAUNCH_OBSERVATIONS_SCHEMA)
+        self._connection.execute(_LAUNCH_RECEIPTS_SCHEMA)
+        self._connection.execute(_LAUNCH_CLEANUP_SCHEMA)
+        self._assert_launch_schema_locked(8)
+
+    def _initialize_active_capacity_locked(self):
+        for _kind, _name, sql in CAPACITY_OBJECTS:
+            self._connection.execute(sql)
+        # Historical consumption has no durable proof of confirmed cleanup.
+        # Retention, a consumed binding or a result record cannot free capacity.
+        self._connection.execute(
+            "INSERT INTO active_run_capacity(project_id,handle_digest,run_id,bridge_run_id,kind,claimed_at_ms) "
+            "SELECT c.project_id,c.handle_digest,c.run_id,c.bridge_run_id,'legacy_unknown',c.claimed_at_ms "
+            "FROM launch_claims c WHERE NOT EXISTS(SELECT 1 FROM active_run_capacity a "
+            "WHERE a.project_id=c.project_id AND a.handle_digest=c.handle_digest)"
+        )
+        self._assert_launch_schema_locked(9)
+
+    def _initialize_account_opens_locked(self):
+        try:
+            install_open_schema(self._connection)
+        except ValueError:
+            raise LedgerError('account original-open migration is unavailable or incompatible') from None
+
+    def _initialize_account_cleanup_locked(self):
+        try:
+            install_cleanup_schema(self._connection)
+        except ValueError:
+            raise LedgerError('account cleanup migration is unavailable or incompatible') from None
+
+    def _initialize_account_observations_locked(self):
+        try:
+            install_observation_schema(self._connection)
+        except ValueError:
+            raise LedgerError("account observation migration is unavailable or incompatible") from None
+
+    def _initialize_billing_probes_locked(self):
+        try:
+            install_billing_probe_schema(self._connection)
+        except ValueError:
+            raise LedgerError('billing probe migration is unavailable or incompatible') from None
+
+    def _migrate_six_or_seven_to_current(self, version: int) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._initialize_launch_claims_locked(backfill=version == 6)
+            if version == 7:
+                # Preserve existing consumption and fence every older ambiguous
+                # pending run; its approved launch inputs were not stored yet.
+                self._connection.execute(
+                    "INSERT INTO launch_claims(project_id,handle_digest,run_id,kind,claimed_at_ms,bridge_run_id) "
+                    "SELECT h.project_id,h.handle_digest,h.run_id,'legacy_fenced',h.created_at_ms,NULL "
+                    "FROM host_run_bindings h WHERE NOT EXISTS(SELECT 1 FROM launch_claims c "
+                    "WHERE c.project_id=h.project_id AND (c.handle_digest=h.handle_digest OR c.run_id=h.run_id))"
+                )
+            self._initialize_launch_operations_locked()
+            self._initialize_active_capacity_locked()
+            self._initialize_account_opens_locked()
+            self._initialize_account_cleanup_locked()
+            self._initialize_account_observations_locked()
+            self._initialize_billing_probes_locked()
+            self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+            self.state.harden_database_files()
+            self._connection.execute("COMMIT")
+        except BaseException:
+            with contextlib.suppress(sqlite3.Error):
+                self._connection.execute("ROLLBACK")
+            raise
+
+    def _migrate_five_to_current(self) -> None:
+        """Migrate lifecycle and launch consumption in one rollback-safe unit."""
 
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -2220,28 +2456,138 @@ class LearningLedger:
                 "goal_time_used_seconds,COALESCE(ended_at_ms,started_at_ms) "
                 "FROM orchestrations"
             )
-            self._connection.execute("PRAGMA user_version = 6")
+            self._initialize_launch_claims_locked(backfill=True)
+            self._initialize_launch_operations_locked()
+            self._initialize_active_capacity_locked()
+            self._initialize_account_opens_locked()
+            self._initialize_account_cleanup_locked()
+            self._initialize_account_observations_locked()
+            self._initialize_billing_probes_locked()
+            self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+            self.state.harden_database_files()
             self._connection.execute("COMMIT")
-        except Exception:
+        except BaseException:
             with contextlib.suppress(sqlite3.Error):
                 self._connection.execute("ROLLBACK")
             raise
 
     def _migrate(self) -> None:
         current = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+        if current == 0 and (
+            self.state._marker_exists(self.state.initialized)
+            or not self.state._marker_exists(self.state.initializing)
+        ):
+            raise StateError("initialized ledger schema is missing; verified recovery is required")
         if current > LEDGER_SCHEMA_VERSION:
             raise LedgerError("ledger schema is newer than this package")
+        if 0 < current < 5:
+            raise LedgerError("legacy ledger requires a verified drained staged migration")
         if current == 5:
-            self._require_schema_five_project_backups()
-            self._migrate_five_to_six()
+            self._require_project_migration_backups(5, LEDGER_SCHEMA_VERSION)
+            self._migrate_five_to_current()
             self.state.harden_database_files()
             return
+        if current in {6, 7}:
+            if current == 7:
+                self._assert_launch_schema_locked(7)
+            self._require_project_migration_backups(current, LEDGER_SCHEMA_VERSION)
+            self._migrate_six_or_seven_to_current(current)
+            self.state.harden_database_files()
+            return
+        if current == 8:
+            self._assert_launch_schema_locked(8)
+            self._require_project_migration_backups(8, LEDGER_SCHEMA_VERSION)
+            with self._account_transaction():
+                self._initialize_active_capacity_locked()
+                self._initialize_account_opens_locked()
+                self._initialize_account_cleanup_locked()
+                self._initialize_account_observations_locked()
+                self._initialize_billing_probes_locked()
+                self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+            return
+        if current >= 9:
+            self._assert_launch_schema_locked(current)
+            if self._connection.execute(
+                "SELECT 1 FROM launch_claims c LEFT JOIN active_run_capacity a "
+                "ON a.project_id=c.project_id AND a.handle_digest=c.handle_digest "
+                "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
+            ).fetchone() is not None:
+                raise LedgerError("active capacity coverage is unavailable")
+            if self._connection.execute(
+                "SELECT 1 FROM active_run_capacity a LEFT JOIN capacity_completions c "
+                "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
+                "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
+                "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
+            "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
+            "WHERE a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
+            "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
+            ).fetchone() is not None:
+                raise LedgerError("capacity completion coverage is unavailable")
+            if current == 9:
+                self._require_project_migration_backups(9, LEDGER_SCHEMA_VERSION)
+                with self._account_transaction():
+                    self._initialize_account_opens_locked()
+                    self._initialize_account_cleanup_locked()
+                    self._initialize_account_observations_locked()
+                    self._initialize_billing_probes_locked()
+                    self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
+                return
+            if current == 10:
+                self._require_project_migration_backups(10, LEDGER_SCHEMA_VERSION)
+                with self._account_transaction():
+                    self._initialize_account_cleanup_locked()
+                    self._initialize_account_observations_locked()
+                    self._initialize_billing_probes_locked()
+                    self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
+                return
+            if current >= 11:
+                if not check_cleanup_coverage(self._connection):
+                    raise LedgerError('account cleanup coverage is unavailable')
+            if current >= 12 and not check_observation_coverage(self._connection):
+                raise LedgerError('account observation coverage is unavailable')
+            if current == 11:
+                self._require_project_migration_backups(11, LEDGER_SCHEMA_VERSION)
+                with self._account_transaction():
+                    self._initialize_account_observations_locked()
+                    self._initialize_billing_probes_locked()
+                    self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                return
+            if current >= 13 and not check_billing_probe_coverage(self._connection):
+                raise LedgerError('billing probe coverage is unavailable')
+            if current == 12:
+                self._require_project_migration_backups(12, LEDGER_SCHEMA_VERSION)
+                with self._account_transaction():
+                    self._initialize_billing_probes_locked()
+                    self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                return
+        with self._account_transaction():
+            self._migrate_layout_locked(current)
+
+    def _execute_schema_script_locked(self, script: str) -> None:
+        """Execute compiled schema SQL without executescript's implicit COMMIT.
+
+        SQLite's parser recognizes complete trigger bodies and quoted semicolons.
+        Only the trusted migration constants below enter this helper.
+        """
+        if not self._connection.in_transaction:
+            raise LedgerError("schema migration requires an owned transaction")
+        pending: list[str] = []
+        for character in script:
+            pending.append(character)
+            if character == ";" and sqlite3.complete_statement("".join(pending)):
+                self._connection.execute("".join(pending))
+                pending.clear()
+        if trailing := "".join(pending).strip():
+            self._connection.execute(trailing)
+
+    def _migrate_layout_locked(self, current: int) -> None:
+        # The caller owns the single transaction, including all additive DDL.
         had_hook_ingestion = self._connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='hook_ingestion'"
         ).fetchone() is not None
         if current == 0:
-            with self._connection:
-                self._connection.executescript(
+            with contextlib.nullcontext():
+                self._execute_schema_script_locked(
                     """
                     CREATE TABLE projects (
                         project_id TEXT PRIMARY KEY,
@@ -2364,8 +2710,8 @@ class LearningLedger:
                     """
                 )
         elif current == 1:
-            with self._connection:
-                self._connection.executescript(
+            with contextlib.nullcontext():
+                self._execute_schema_script_locked(
                     """
                     CREATE TABLE owner_attestations (
                         project_id TEXT NOT NULL,
@@ -2403,8 +2749,8 @@ class LearningLedger:
                     """
                 )
         elif current == 2:
-            with self._connection:
-                self._connection.executescript(
+            with contextlib.nullcontext():
+                self._execute_schema_script_locked(
                     """
                     CREATE TABLE run_provenance (
                         project_id TEXT NOT NULL,
@@ -2432,8 +2778,8 @@ class LearningLedger:
                     """
                 )
         elif current == 3:
-            with self._connection:
-                self._connection.executescript(
+            with contextlib.nullcontext():
+                self._execute_schema_script_locked(
                     """
                     CREATE TABLE repair_receipts (
                         project_id TEXT NOT NULL,
@@ -2453,8 +2799,8 @@ class LearningLedger:
         # These tables are additive and deliberately keep user_version at 4 so a
         # registered 0.3.0 project can still cold-start the shared collector.
         if current <= LEDGER_SCHEMA_VERSION:
-            with self._connection:
-                self._connection.executescript(
+            with contextlib.nullcontext():
+                self._execute_schema_script_locked(
                     """
                     CREATE TABLE IF NOT EXISTS host_run_bindings (
                         project_id TEXT NOT NULL,
@@ -2603,8 +2949,8 @@ class LearningLedger:
                         "INSERT OR REPLACE INTO additive_migrations "
                         "VALUES('hook_ingestion_v1')"
                     )
-        with self._connection:
-            self._connection.executescript(
+        with contextlib.nullcontext():
+            self._execute_schema_script_locked(
                 """
                 CREATE TABLE IF NOT EXISTS orchestrations (
                     project_id TEXT NOT NULL,
@@ -2731,7 +3077,7 @@ class LearningLedger:
                 "deadline_observed=COALESCE(deadline_observed,0)"
             )
             if current < 6:
-                self._connection.executescript(
+                self._execute_schema_script_locked(
                     """
                     DROP TABLE IF EXISTS orchestration_checkpoints;
                     DROP INDEX IF EXISTS orchestration_status;
@@ -2770,7 +3116,7 @@ class LearningLedger:
                     DROP TRIGGER IF EXISTS cleanup_host_binding_with_event;
                     """
                 )
-            self._connection.executescript(
+            self._execute_schema_script_locked(
                 """
                 CREATE TABLE IF NOT EXISTS orchestration_checkpoints (
                     project_id TEXT NOT NULL,
@@ -2796,6 +3142,14 @@ class LearningLedger:
                     "goal_time_used_seconds,COALESCE(ended_at_ms,started_at_ms) "
                     "FROM orchestrations"
                 )
+            if current < 5:
+                self._initialize_launch_claims_locked(backfill=current != 0)
+                self._initialize_launch_operations_locked()
+                self._initialize_active_capacity_locked()
+                self._initialize_account_opens_locked()
+                self._initialize_account_cleanup_locked()
+                self._initialize_account_observations_locked()
+                self._initialize_billing_probes_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
         self.state.harden_database_files()
 
@@ -2828,6 +3182,132 @@ class LearningLedger:
                 (project_id, root_text, digest, "active", timestamp),
             )
             return project_id
+
+    def _learning_moved_locked(self, project_id: str) -> bool:
+        return self._connection.execute(
+            "SELECT 1 FROM additive_migrations WHERE feature_key=?",
+            (LEARNING_MOVED_KEY + project_id,),
+        ).fetchone() is not None
+
+    def has_learning_history(self, project_id: str) -> bool:
+        """Whether the ledger holds any learning record or QA row for the project."""
+
+        types = sorted(LEARNING_MOVED_TYPES)
+        with self._lock:
+            return self._connection.execute(
+                "SELECT 1 FROM records WHERE project_id=? AND record_type IN ("
+                + ",".join("?" for _ in types) + ") LIMIT 1",
+                (project_id, *types),
+            ).fetchone() is not None or self._connection.execute(
+                "SELECT 1 FROM operational_qa WHERE project_id=? LIMIT 1", (project_id,)
+            ).fetchone() is not None
+
+    def drained(self) -> bool:
+        """No run is active or unsettled anywhere (long-crashed claims aside)."""
+
+        from .history_contracts import HistoryError
+        from .learning_source_image import _drained
+
+        with self._lock:
+            try:
+                _drained(self._connection, self._clock_ms())
+            except HistoryError:
+                return False
+            return True
+
+    def mark_learning_moved_if_empty(self, project_id: str) -> bool:
+        """Retire the ledger for a project that has no learning history in it.
+
+        There is nothing to copy, so this needs no drain and no offline owner:
+        the running collector may do it. Returns whether the project is moved.
+        """
+
+        with self._lock, self._connection:
+            project = self._connection.execute(
+                "SELECT status FROM projects WHERE project_id=?", (project_id,)
+            ).fetchone()
+            if not project or project["status"] != "active":
+                raise LedgerError("project binding is not active")
+            if self._learning_moved_locked(project_id):
+                return True
+            if self.has_learning_history(project_id):
+                return False
+            # A run an earlier version opened here would still record its outcome in
+            # the ledger: while one is unsettled the project is not retired.
+            crashed, crashed_parameters = crashed_claim("a", self._clock_ms(), time.monotonic_ns())
+            if self._connection.execute(
+                "SELECT 1 FROM host_run_bindings h WHERE h.project_id=? "
+                "AND h.binding_state='pending' AND NOT EXISTS("
+                "SELECT 1 FROM active_run_capacity a WHERE a.project_id=h.project_id "
+                f"AND a.handle_digest=h.handle_digest AND (a.released_at_ms IS NOT NULL OR {crashed})) LIMIT 1",
+                (project_id, *crashed_parameters),
+            ).fetchone() is not None:
+                return False
+            self._connection.execute(
+                "INSERT INTO additive_migrations VALUES(?)", (LEARNING_MOVED_KEY + project_id,)
+            )
+            return True
+
+    def learning_activation_pending(self, project_id: str) -> bool:
+        """Whether a migration retired the ledger but has not yet switched the copy on."""
+
+        with self._lock:
+            return self._connection.execute(
+                "SELECT 1 FROM additive_migrations WHERE feature_key=?",
+                (LEARNING_ACTIVATION_PENDING_KEY + project_id,),
+            ).fetchone() is not None
+
+    def clear_learning_activation_pending(self, project_id: str) -> None:
+        if self._allow_schema_upgrade is not True or self._collector_active is not False:
+            raise LedgerError("learning store cutover requires the offline owner")
+        with self._lock, self._connection:
+            self._connection.execute(
+                "DELETE FROM additive_migrations WHERE feature_key=?",
+                (LEARNING_ACTIVATION_PENDING_KEY + project_id,),
+            )
+
+    def learning_moved(self, project_id: str) -> bool:
+        """Whether this project's learning history now lives in its project store."""
+
+        with self._lock:
+            return self._learning_moved_locked(project_id)
+
+    def set_learning_moved(
+        self, project_id: str, moved: bool, *, activation_pending: bool = False
+    ) -> bool:
+        """Retire (or, for a rollback, restore) the ledger as this project's learning store.
+
+        Offline owner work during a drained migration; returns whether it changed.
+        `activation_pending` records, in the same transaction, that a staged copy
+        still has to be switched on in the project store.
+        """
+
+        if self._allow_schema_upgrade is not True or self._collector_active is not False:
+            raise LedgerError("learning store cutover requires the offline owner")
+        with self._lock, self._connection:
+            project = self._connection.execute(
+                "SELECT status FROM projects WHERE project_id=?", (project_id,)
+            ).fetchone()
+            if not project or project["status"] != "active":
+                raise LedgerError("project binding is not active")
+            if self._learning_moved_locked(project_id) is moved:
+                return False
+            if moved:
+                self._connection.execute(
+                    "INSERT INTO additive_migrations VALUES(?)",
+                    (LEARNING_MOVED_KEY + project_id,),
+                )
+                if activation_pending:
+                    self._connection.execute(
+                        "INSERT OR IGNORE INTO additive_migrations VALUES(?)",
+                        (LEARNING_ACTIVATION_PENDING_KEY + project_id,),
+                    )
+            else:
+                self._connection.execute(
+                    "DELETE FROM additive_migrations WHERE feature_key IN (?,?)",
+                    (LEARNING_MOVED_KEY + project_id, LEARNING_ACTIVATION_PENDING_KEY + project_id),
+                )
+            return True
 
     def project_for_root(self, project_root: Path) -> str:
         root = _canonical_project_root(project_root)
@@ -2897,6 +3377,9 @@ class LearningLedger:
         *,
         now_ms: int | None = None,
     ) -> tuple[str, str, str]:
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
         if producer not in {"hook", "app_server"}:
             raise LedgerError("collector producer is not authorized")
         if not isinstance(session_id, str) or not session_id or len(session_id) > 1024:
@@ -2909,23 +3392,64 @@ class LearningLedger:
         root_run_id = external_id(
             self.state.digest_key(), "run", f"{client_version}\x00{session_id}\x00root"
         )
-        with self._lock, self._connection:
-            self._connection.execute(
-                "INSERT OR IGNORE INTO sessions VALUES(?,?,?,?)",
-                (project_id, session_digest, producer, timestamp),
-            )
-            new_run = self._connection.execute(
-                "INSERT OR IGNORE INTO run_provenance VALUES(?,?,?,?,?,?)",
-                (
-                    project_id, root_run_id, producer, client_version,
-                    session_digest, timestamp,
-                ),
-            ).rowcount == 1
-        if new_run:
-            self._admit_session_run(project_id, root_run_id)
-        return project_id, session_digest, root_run_id
+        def require_active() -> None:
+            row = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (project_id,)).fetchone()
+            if row is None or row["status"] != "active":
+                raise LedgerError("project binding is not active")
 
-    def _admit_session_run(self, project_id: str, run_id: str) -> None:
+        def root_bindings():
+            # At most the two native event producers may share this root.
+            # Inspect every existing binding before accepting either producer.
+            rows = self._connection.execute(
+                "SELECT producer,client_version,session_digest FROM run_provenance "
+                "WHERE project_id=? AND run_id=? LIMIT 3",
+                (project_id, root_run_id),
+            ).fetchall()
+            if len(rows) > 2 or any(
+                row["producer"] not in {"hook", "app_server"}
+                or row["client_version"] != client_version or row["session_digest"] != session_digest
+                for row in rows
+            ):
+                raise LedgerError("session provenance conflicts")
+            return rows
+
+        def persist(prepared: _PreparedAttestations | None) -> tuple[str, str, str]:
+            with self._account_transaction():
+                require_active()
+                # Admission belongs to the root run, not each event producer.
+                # Legacy provenance without admission remains unadmitted.
+                known_root = bool(root_bindings())
+                self._connection.execute(
+                    "INSERT OR IGNORE INTO sessions VALUES(?,?,?,?)",
+                    (project_id, session_digest, producer, timestamp),
+                )
+                self._connection.execute(
+                    "INSERT OR IGNORE INTO run_provenance VALUES(?,?,?,?,?,?)",
+                    (project_id, root_run_id, producer, client_version, session_digest, timestamp),
+                )
+                if not known_root:
+                    self._admit_session_run_locked(project_id, root_run_id, prepared)
+            return project_id, session_digest, root_run_id
+
+        with self._lock:
+            require_active()
+            bindings = root_bindings()
+            if bindings:
+                # Most hook binds are already known: no writer or crypto work.
+                if any(row["producer"] == producer for row in bindings):
+                    complete = self._connection.execute(
+                        "SELECT 1 FROM sessions WHERE project_id=? AND session_digest=? AND producer=?",
+                        (project_id, session_digest, producer),
+                    ).fetchone()
+                    if complete is not None:
+                        return project_id, session_digest, root_run_id
+                return persist(None)
+        prepared = self._prepare_attestations(project_id, "codex")
+        return persist(prepared)
+
+    def _admit_session_run_locked(
+        self, project_id: str, run_id: str, prepared: _PreparedAttestations | None,
+    ) -> None:
         """Decide admission once for a collector-bound Codex session run.
 
         These sessions never pass through open_host_run, so their admission is
@@ -2933,17 +3457,18 @@ class LearningLedger:
         still record events, but its result can never be committed.
         """
 
-        with self._lock, self._connection:
-            # The ledger's clock is read under the lock that orders decisions.
-            timestamp = self._clock_ms()
-            decision = self._evaluate_admission_locked(
-                project_id, provider="codex", environ=os.environ, timestamp=timestamp
+        if not self._connection.in_transaction or type(prepared) is not _PreparedAttestations:
+            raise LedgerError("session admission preparation is unavailable")
+        # The ledger's clock is read under the writer that orders decisions.
+        timestamp = self._clock_ms()
+        decision = self._evaluate_admission_locked(
+            project_id, provider="codex", environ=os.environ, timestamp=timestamp,
+            _prepared_attestations=prepared,
+        )
+        if decision["decision"] == "pass":
+            self._store_admission_locked(
+                project_id, decision, run_id=run_id, timestamp=timestamp
             )
-            if decision["decision"] == "pass":
-                self._store_admission_locked(
-                    project_id, decision, run_id=run_id, timestamp=timestamp
-                )
-        self.state.harden_database_files()
 
     def append(
         self,
@@ -2974,7 +3499,7 @@ class LearningLedger:
         if checked["record_type"] in PROVIDER_OBSERVATION_TYPES | {
             "admission_decision", "billing_attestation", "dispatch_intent",
             "dispatch_result", "host_run_profile", "probe_admission",
-            "verification_binding",
+            "verification_binding", "claim_denial_settlement", "host_result_admission", "execution_provenance", "host_open_provenance",
         }:
             raise LedgerError("provider evidence requires ledger-run observation")
         if (
@@ -3002,7 +3527,6 @@ class LearningLedger:
         """Derive candidate eligibility from persisted admitted outcomes."""
 
         evidence = candidate["evidence_digests"]
-        receipt = candidate["eligibility_receipt"]
         placeholders = ",".join("?" for _ in evidence)
         rows = self._connection.execute(
             "SELECT content_digest,record_type,content,source_sequence FROM records "
@@ -3013,14 +3537,6 @@ class LearningLedger:
             row["record_type"] != "outcome" for row in rows
         ):
             raise LedgerError("candidate evidence is not a complete outcome cohort")
-        outcomes = [
-            (
-                json.loads(bytes(row["content"])),
-                str(row["content_digest"]),
-                int(row["source_sequence"]),
-            )
-            for row in rows
-        ]
         accepted_operational_qa = {
             str(row["qa_digest"])
             for row in self._connection.execute(
@@ -3041,156 +3557,26 @@ class LearningLedger:
                 (project_id,),
             ).fetchall()
         }
-        accepted_qa = accepted_operational_qa | accepted_formal_qa
-        required_usage = {
-            "input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens",
-            "model_calls", "tool_calls", "latency_ms",
-        }
-        for outcome, _, _ in outcomes:
-            sources = outcome.get("usage_sources")
-            if (
-                outcome["task_slice"] != candidate["task_slice"]
-                or outcome["accepted"] is not True
-                or outcome.get("execution_state") != "completed"
-                or outcome.get("admission_state") != "accepted"
-                or outcome.get("semantic_verdict")
-                not in {"pass", "ready", "ready-with-corrections"}
-                or not isinstance(outcome.get("retry_attempt"), int)
-                or outcome["verification_required"] is not True
-                or outcome["verifier_digest"] is None
-                or outcome["verifier_disagreement"] is not False
-                or outcome["deterministic_pass"] is not True
-                or outcome["security_pass"] is not True
-                or outcome["required_criteria_passed"]
-                != outcome["required_criteria_total"]
-                or outcome["coverage"] != "end_to_end_complete"
-                or not (set(outcome["evidence_digests"]) & accepted_qa)
-                or any(outcome["usage"][field] is None for field in required_usage)
-                or not isinstance(sources, dict)
-                or any(
-                    sources.get(field, {}).get("source") == "unavailable"
-                    or sources.get(field, {}).get("coverage")
-                    != "end_to_end_complete"
-                    for field in required_usage
-                )
-            ):
-                raise LedgerError("candidate evidence fails a verified eligibility gate")
-        versions = {
-            (
-                outcome["package_digest"], outcome["policy_digest"],
-                outcome["client_digest"], outcome["task_slice"],
-            )
-            for outcome, _, _ in outcomes
-        }
-        if len(versions) != 1:
-            raise LedgerError("candidate evidence is version or task-mix confounded")
-        configuration_fields = (
-            "model", "effort", "role", "topology", "max_parallel",
-            "verification_required", "verifier_digest", "bounds_digest",
-            "package_digest", "policy_digest", "agent_digest", "skill_digests",
-            "prompt_digest", "client_digest",
-        )
-
-        def configuration(outcome: dict[str, Any]) -> dict[str, Any]:
-            return {field: outcome[field] for field in configuration_fields}
-
-        champion = [
-            outcome for outcome, _, _ in outcomes
-            if configuration(outcome) == candidate["champion_configuration"]
-        ]
-        challenger = [
-            outcome for outcome, _, _ in outcomes
-            if configuration(outcome) == candidate["candidate_configuration"]
-        ]
-        matched_fixtures = {
-            outcome["fixture_digest"] for outcome in champion
-        } & {
-            outcome["fixture_digest"] for outcome in challenger
-        }
-        if (
-            len(champion) + len(challenger) != len(outcomes)
-            or len(matched_fixtures) < 20
-            or any(
-                sum(item["fixture_digest"] == fixture for item in cohort) != 1
-                for fixture in matched_fixtures
-                for cohort in (champion, challenger)
-            )
-            or any(
-                item["fixture_digest"] not in matched_fixtures
-                for item, _, _ in outcomes
-            )
-            or receipt["independent_case_count"] != len(matched_fixtures)
-        ):
-            raise LedgerError("candidate evidence lacks a matched task cohort")
-
-        # Retry claims are only authoritative when their complete ancestry already
-        # exists in this project. Multiple records for one assignment are expected
-        # while an unverified host outcome is superseded by accepted QA, but every
-        # version must agree on its lineage and task fixture.
         lineage_rows = self._connection.execute(
             "SELECT content,source_sequence FROM records WHERE project_id=? "
             "AND record_type='outcome' ORDER BY source_sequence",
             (project_id,),
         ).fetchall()
-        lineage: dict[str, list[tuple[dict[str, Any], int]]] = {}
-        for row in lineage_rows:
-            outcome = json.loads(bytes(row["content"]))
-            lineage.setdefault(str(outcome["assignment_id"]), []).append(
-                (outcome, int(row["source_sequence"]))
+        try:
+            check_candidate_eligibility(
+                candidate,
+                [
+                    (json.loads(bytes(row["content"])), int(row["source_sequence"]))
+                    for row in rows
+                ],
+                accepted_qa=accepted_operational_qa | accepted_formal_qa,
+                project_outcomes=(
+                    (json.loads(bytes(row["content"])), int(row["source_sequence"]))
+                    for row in lineage_rows
+                ),
             )
-        for assignment_outcomes in lineage.values():
-            claims = {
-                (
-                    item.get("retry_attempt", 1),
-                    item.get("retry_of_assignment_id"),
-                    item["task_slice"],
-                    item["fixture_digest"],
-                )
-                for item, _ in assignment_outcomes
-            }
-            if len(claims) != 1:
-                raise LedgerError("persisted retry lineage is internally inconsistent")
-
-        def retry_root(outcome: dict[str, Any], source_sequence: int) -> str:
-            current = outcome
-            current_sequence = source_sequence
-            seen: set[str] = set()
-            while True:
-                assignment_id = str(current["assignment_id"])
-                if assignment_id in seen:
-                    raise LedgerError("candidate retry lineage is cyclic")
-                seen.add(assignment_id)
-                predecessor = current.get("retry_of_assignment_id")
-                attempt = current.get("retry_attempt")
-                if predecessor is None:
-                    if attempt != 1:
-                        raise LedgerError("candidate retry lineage is incomplete")
-                    return assignment_id
-                prior = [
-                    item
-                    for item in lineage.get(str(predecessor), [])
-                    if item[1] < current_sequence
-                ]
-                if not prior:
-                    raise LedgerError(
-                        "candidate retry predecessor is not an earlier persisted outcome"
-                    )
-                parent, parent_sequence = prior[-1]
-                if (
-                    parent["task_slice"] != current["task_slice"]
-                    or parent["fixture_digest"] != current["fixture_digest"]
-                    or parent.get("retry_attempt", 1) != attempt - 1
-                ):
-                    raise LedgerError("candidate retry predecessor changes task lineage")
-                current = parent
-                current_sequence = parent_sequence
-
-        roots = {
-            retry_root(outcome, source_sequence)
-            for outcome, _, source_sequence in outcomes
-        }
-        if len(roots) != len(outcomes) or len(roots) < 40:
-            raise LedgerError("candidate evidence is not independently retry-deduplicated")
+        except EligibilityError as error:
+            raise LedgerError(str(error)) from None
 
     def open_orchestration(
         self,
@@ -4168,6 +4554,45 @@ class LearningLedger:
             },
         }
 
+    @contextlib.contextmanager
+    def _account_transaction(self) -> Iterator[None]:
+        """Own one explicit account write unit; never borrow an outer transaction.
+
+        This connection uses autocommit. A connection context alone does not
+        begin a transaction. Call only locked helpers without connection contexts
+        here: an inner context could otherwise commit the outer unit early.
+        """
+
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+                # Check the fixed database/WAL paths before making the unit
+                # durable, so a mode/path refusal cannot lose a committed handle.
+                self.state.harden_database_files()
+                self._connection.commit()
+            except BaseException as original:
+                # Restoration can already have poisoned/closed this connection.
+                # Trusted cleanup must not replace the operation's interruption
+                # with the ordinary wrapper's unusable-connection error.
+                cleanup_failure = None
+                try:
+                    sqlite3.Connection.rollback(self._connection)
+                except BaseException as rollback_failure:
+                    cleanup_failure = rollback_failure
+                    self._connection._sql_unusable = True
+                    try:
+                        sqlite3.Connection.close(self._connection)
+                    except BaseException as close_failure:
+                        if isinstance(cleanup_failure, Exception):
+                            cleanup_failure = close_failure
+                if (isinstance(original, Exception) and cleanup_failure is not None
+                        and not isinstance(cleanup_failure, Exception)):
+                    raise cleanup_failure
+                raise
+
     def open_host_run(
         self,
         project_id: str,
@@ -4188,7 +4613,13 @@ class LearningLedger:
         process's environment; a denial is stored and raised before any binding.
         """
 
+        # Refuse an outer unit before admission preparation, not only at the
+        # final BEGIN. Preparation must not do crypto inside a caller's writer.
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
         checked_assignment = validate_assignment_shape(assignment)
+        validate_assignment_execution_limits(checked_assignment, route)
         checked_task = validate_task(task)
         checked_configuration = validate_execution_configuration(
             execution_configuration
@@ -4232,9 +4663,11 @@ class LearningLedger:
         provider = route.get("provider", "codex")
         # Admission runs on the ledger's clock, so a caller-chosen time cannot
         # make evidence look reset or stale.
+        prepared_attestations = self._prepare_attestations(project_id, provider)
         admitted_at = self._clock_ms()
         admission = self.evaluate_admission(
-            project_id, provider=provider, environ=os.environ, now_ms=admitted_at
+            project_id, provider=provider, environ=os.environ, now_ms=admitted_at,
+            _prepared_attestations=prepared_attestations,
         )
         run_handle = f"hrn_{secrets.token_hex(24)}"
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
@@ -4279,7 +4712,7 @@ class LearningLedger:
             }
         )
         try:
-            with self._lock, self._connection:
+            with self._account_transaction():
                 project = self._connection.execute(
                     "SELECT status FROM projects WHERE project_id=?", (project_id,)
                 ).fetchone()
@@ -4333,7 +4766,8 @@ class LearningLedger:
                 # lock is judged, and its decision stamped, at the time it holds it.
                 admitted_at = self._clock_ms()
                 admission = self._evaluate_admission_locked(
-                    project_id, provider=provider, environ=os.environ, timestamp=admitted_at
+                    project_id, provider=provider, environ=os.environ, timestamp=admitted_at,
+                    _prepared_attestations=prepared_attestations,
                 )
                 if admission["decision"] != "pass":
                     raise _RecheckDenied(admission)
@@ -4377,6 +4811,13 @@ class LearningLedger:
                     "INSERT OR IGNORE INTO sessions VALUES(?,?,?,?)",
                     (project_id, handle_digest, "host", timestamp),
                 )
+                if route.get("dispatch") == "bridge":
+                    self._connection.execute(
+                        "INSERT INTO launch_inputs VALUES(?,?,?,?,?,?,?,?)",
+                        (project_id, handle_digest, run_id, COLLECTOR_RUNTIME_DIGEST,
+                         provider, checked_assignment["model"], checked_assignment["effort"],
+                         min(route["bounds"]["timeout_seconds"], checked_assignment["bounds"]["timeout_seconds"])),
+                    )
                 self._connection.execute(
                     "INSERT INTO run_provenance VALUES(?,?,?,?,?,?)",
                     (
@@ -4430,14 +4871,12 @@ class LearningLedger:
                     )
         except _RecheckDenied as denied:
             # The denial is stored like any other, after the open is abandoned.
-            with self._lock, self._connection:
+            with self._account_transaction():
                 self._store_admission_locked(
                     project_id, denied.decision, run_id=None,
                     timestamp=denied.decision["observed_at_ms"],
                 )
-            self.state.harden_database_files()
             raise AdmissionDenied(denied.decision["reason_code"]) from None
-        self.state.harden_database_files()
         return {
             "run_handle": run_handle,
             "admission": admission["reason_code"],
@@ -4508,8 +4947,13 @@ class LearningLedger:
         if provider not in {"claude", "codex"}:
             raise LedgerError("provider is unsupported")
         if run_handle is not None:
-            with self._lock:
+            with self._account_transaction():
                 run_id = self._open_run_for_provider_locked(project_id, run_handle, provider)
+                if phase == "before":
+                    self._connection.execute(
+                        "DELETE FROM launch_observations WHERE project_id=? AND handle_digest=?",
+                        (project_id, keyed_digest(self.state.digest_key(), run_handle)),
+                    )
         timestamp = self._clock_ms()
         untrusted = self._registered_roots(project_id)
         # The client's TMPDIR is a fresh owner-only directory under the learning
@@ -4541,6 +4985,18 @@ class LearningLedger:
         finally:
             remove_private_directory(tmpdir)
         self._store_provider_observations(project_id, records, timestamp=timestamp)
+        if run_handle is not None and phase == "before":
+            with self._account_transaction():
+                self._open_run_for_provider_locked(project_id, run_handle, provider)
+                identities = [record for record in records if record["record_type"] == "provider_identity"]
+                if len(identities) != 1:
+                    raise LedgerError("launch observation has no single identity")
+                self._connection.execute(
+                    "INSERT INTO launch_observations VALUES(?,?,?,?) "
+                    "ON CONFLICT(project_id,handle_digest) DO UPDATE SET "
+                    "identity_digest=excluded.identity_digest,observed_at_ms=excluded.observed_at_ms",
+                    (project_id, keyed_digest(self.state.digest_key(), run_handle), content_digest(identities[0]), timestamp),
+                )
         return records
 
     def _registered_roots(self, project_id: str) -> tuple[Path, ...]:
@@ -4664,46 +5120,64 @@ class LearningLedger:
         self.state.harden_database_files()
         return record
 
+    def _launch_identity_locked(
+        self, project_id: str, run_handle: str, identity: dict[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        """Re-read the actual open run and its exact stored launch observation."""
+
+        if type(identity) is not dict:
+            raise LedgerError("launch identity is invalid")
+        run_id = self._open_run_for_provider_locked(
+            project_id, run_handle, identity.get("provider")
+        )
+        admission = self._run_admission_locked(project_id, run_id)
+        digest = content_digest(identity)
+        if (
+            identity.get("record_type") != "provider_identity"
+            or identity.get("account_fingerprint") != admission["account_fingerprint"]
+            or self._connection.execute(
+                "SELECT 1 FROM records WHERE project_id=? AND content_digest=? "
+                "AND record_type='provider_identity' AND source='provider'",
+                (project_id, digest),
+            ).fetchone() is None
+        ):
+            raise LedgerError("launch identity is not this run's stored observation")
+        return admission, digest
+
     def launch_recheck(
         self, project_id: str, *, run_handle: str, identity: dict[str, Any]
     ) -> str | None:
-        """Re-check an open, admitted run's billing, headroom and plan before launch.
+        """Re-check the actual admitted run against current launch restrictions.
 
-        `identity` must be this project's stored before-launch observation. The
-        account's billing and headroom from every project, including that
-        reading, are evaluated on the ledger's clock under the writer lock. The
-        run cap is not counted again. A denial is stored like any other and
-        its reason returned; None means the launch may proceed.
+        Verify immutable owner-signature inputs outside the ledger lock, then
+        reject any change to their owner generation, signer or complete rows.
+        Re-read the run, stored identity, shared billing/headroom and clock in
+        the final locked phase. Preparation never caches launch eligibility.
+        Denial records and links commit in one explicit unit. None is not a
+        durable launch claim. Call without already holding the private mutex.
+        This legacy primitive still reads JSON/filesystem under the final lock;
+        bounded service jobs and native caller enrollment remain separate gates.
         """
 
         from .providers import evaluate_launch
 
+        # Reject an invalid/foreign run before spending verification work. Never
+        # borrow or commit an outer write transaction while releasing this lock.
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
+            admission, _ = self._launch_identity_locked(project_id, run_handle, identity)
+        prepared = self._prepare_attestations(project_id, admission["provider"])
         denied = None
-        with self._lock, self._connection:
-            timestamp = self._clock_ms()
-            run_id = self._open_run_for_provider_locked(
-                project_id, run_handle, identity.get("provider")
-            )
-            admission = self._run_admission_locked(project_id, run_id)
-            digest = content_digest(identity)
-            if (
-                identity.get("record_type") != "provider_identity"
-                or identity.get("account_fingerprint") != admission["account_fingerprint"]
-                or self._connection.execute(
-                    "SELECT 1 FROM records WHERE project_id=? AND content_digest=? "
-                    "AND record_type='provider_identity' AND source='provider'",
-                    (project_id, digest),
-                ).fetchone() is None
-            ):
-                raise LedgerError("launch identity is not this run's stored observation")
+        with self._lock:
+            admission, digest = self._launch_identity_locked(project_id, run_handle, identity)
             provider = admission["provider"]
+            attestations = self._prepared_attestations_locked(prepared, project_id, provider)
             billing, _ = self._account_records_locked(project_id, "provider_billing", provider)
             headroom, _ = self._account_records_locked(
                 project_id, "provider_headroom", provider
             )
-            attestations = self._provider_records_locked(
-                project_id, "billing_attestation", provider
-            )
+            timestamp = self._clock_ms()
             reason = evaluate_launch(
                 provider=provider, identity=identity, billing=billing,
                 headroom=headroom, now_ms=timestamp, attestations=attestations,
@@ -4716,9 +5190,12 @@ class LearningLedger:
                     "account_fingerprint": admission["account_fingerprint"],
                     "evidence_digests": [digest], "observed_at_ms": timestamp,
                 }
-                self._store_admission_locked(
-                    project_id, denied, run_id=None, timestamp=timestamp
-                )
+                # Denial metadata and derived links are one explicit write
+                # unit, including mode checks before commit and full rollback.
+                with self._account_transaction():
+                    self._store_admission_locked(
+                        project_id, denied, run_id=None, timestamp=timestamp
+                    )
         self.state.harden_database_files()
         return None if denied is None else denied["reason_code"]
 
@@ -5029,6 +5506,140 @@ class LearningLedger:
             raise ContractError("host run recorded too many rate-limit events")
         return kept
 
+    def _record_project_rate_limit_event(self, project_id, *, runtime_digest, event, storage_binding, storage_evidence):
+        """A rate-limit event of a registered, unfinished Claude run of one project.
+
+        The run's lease and sealed storage evidence name the run; the event is
+        accepted only while its execution is registered and has no terminal.
+        A failure to keep it is recorded as a lost `during` reading before the
+        refusal, so the account never silently drops a restriction.
+        """
+        from .claim_storage import capture_storage_evidence, verify_bound_storage_evidence
+        from .rate_limit_contracts import RateLimitEventInput
+
+        if type(event) is not RateLimitEventInput:
+            raise ClaimError("claim_execution_invalid")
+        event = RateLimitEventInput(**event.payload())
+        expected, evidence = capture_storage_evidence(storage_binding, storage_evidence)
+        lease = verify_bound_storage_evidence(self.state.digest_key(), expected, evidence)
+        if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                or expected.run_handle != event.run_handle or lease.claim_id is None):
+            raise ClaimError("claim_execution_invalid")
+        handle_digest = keyed_digest(self.state.digest_key(), event.run_handle)
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT e.run_id FROM capacity_executions e JOIN active_run_capacity a "
+                "ON a.project_id=e.project_id AND a.handle_digest=e.handle_digest AND a.run_id=e.run_id "
+                "AND a.bridge_run_id=e.bridge_run_id "
+                "LEFT JOIN capacity_completions c ON c.project_id=e.project_id AND c.handle_digest=e.handle_digest "
+                "WHERE e.project_id=? AND e.handle_digest=? AND e.bridge_run_id=? AND e.run_id=? "
+                "AND a.provider='claude' AND a.released_at_ms IS NULL AND c.handle_digest IS NULL",
+                (project_id, handle_digest, lease.claim_id, expected.run_id),
+            ).fetchone()
+        if row is None:
+            raise ClaimError("claim_execution_unavailable")
+        try:
+            return self.record_claude_rate_limit_event(project_id, run_handle=event.run_handle,
+                                                       rate_limit_info=event.rate_limit_info)
+        except (ContractError, LedgerError):
+            with contextlib.suppress(ContractError, LedgerError):
+                self.record_observation_unavailable(project_id, run_handle=event.run_handle, provider="claude",
+                                                    phase="during", reason_code="observation_failed")
+            raise
+
+    def _owner_generation_locked(self) -> tuple[int, bytes, str, int] | None:
+        row = self._connection.execute(
+            "SELECT sequence,signer_line,reason,recorded_at_ms FROM owner_key_history "
+            "ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        if (
+            type(row[0]) is not int or row[0] < 1 or type(row[1]) is not bytes
+            or not 0 < len(row[1]) <= OWNER_SIGNERS_MAX_BYTES
+            or row[2] not in {"enrolled", "replaced"} or type(row[3]) is not int or row[3] < 0
+        ):
+            raise LedgerError("owner generation is incompatible")
+        return tuple(row)
+
+    def _attestation_rows_locked(
+        self, project_id: str, provider: str,
+    ) -> tuple[tuple[str, int, bytes, str, str, bytes | None], ...]:
+        rows = self._connection.execute(
+            "SELECT r.record_id,r.source_sequence,r.content,r.content_digest,r.source,a.signature "
+            "FROM records r LEFT JOIN owner_attestations a "
+            "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id "
+            "WHERE r.project_id=? AND r.record_type='billing_attestation' "
+            "AND json_extract(CAST(r.content AS TEXT),'$.provider')=? ORDER BY r.source_sequence",
+            (project_id, provider),
+        ).fetchall()
+        result = []
+        for row in rows:
+            if (
+                type(row[0]) is not str or type(row[1]) is not int or row[1] < 1
+                or type(row[2]) is not bytes or not 0 < len(row[2]) <= MAX_RECORD_BYTES
+                or type(row[3]) is not str or re.fullmatch(r"[0-9a-f]{64}", row[3]) is None
+                or hashlib.sha256(row[2]).hexdigest() != row[3] or type(row[4]) is not str
+                or (row[5] is not None and (type(row[5]) is not bytes or len(row[5]) > 16_384))
+            ):
+                raise LedgerError("admission attestation is incompatible")
+            result.append(tuple(row))
+        return tuple(result)
+
+    def _current_signer_bytes(self) -> bytes | None:
+        try:
+            return self.state._owner_signer_bytes()
+        except (StateError, OSError):
+            return None
+
+    def _prepare_attestations(self, project_id: str, provider: str) -> _PreparedAttestations:
+        """Verify immutable signature inputs outside the account lock/transaction.
+
+        This owner-only value never crosses a request API. It authenticates no
+        caller, cannot substitute a daemon's environment for launch facts, and
+        does not implement bounded service job scheduling or native enrollment.
+        """
+
+        from .learning_engine import OwnerGrantAuthority
+
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
+            owner = self._owner_generation_locked()
+            rows = self._attestation_rows_locked(project_id, provider)
+        signer = self._current_signer_bytes()
+        authority = None
+        if signer is not None and (owner is None or owner[1] == signer):
+            try:
+                authority = OwnerGrantAuthority(self.state.allowed_signers_path, signer_line=signer)
+            except (ContractError, OSError):
+                pass
+        verified = set()
+        if authority is not None:
+            for identifier, _, content, _, source, signature in rows:
+                if source != "owner" or not signature:
+                    continue
+                try:
+                    if authority.verify_owner_record(project_id, parse_bounded_json(content), signature):
+                        verified.add(identifier)
+                except (ContractError, TypeError, ValueError, OSError):
+                    pass
+        return _PreparedAttestations(self._attestation_origin, project_id, provider, owner, signer, rows, frozenset(verified))
+
+    def _prepared_attestations_locked(
+        self, prepared: _PreparedAttestations, project_id: str, provider: str,
+    ) -> list[tuple[dict[str, Any], str]]:
+        if (
+            type(prepared) is not _PreparedAttestations or prepared.origin is not self._attestation_origin
+            or prepared.project_id != project_id or prepared.provider != provider
+            or prepared.owner != self._owner_generation_locked()
+            or prepared.signer != self._current_signer_bytes()
+            or prepared.rows != self._attestation_rows_locked(project_id, provider)
+        ):
+            raise LedgerError("admission preparation is stale")
+        return [(parse_bounded_json(content), digest) for identifier, _, content, digest, source, _ in prepared.rows
+                if source == "owner" and identifier in prepared.verified]
+
     def _provider_records_locked(
         self, project_id: str, record_type: str, provider: str
     ) -> list[tuple[dict[str, Any], str]]:
@@ -5178,6 +5789,7 @@ class LearningLedger:
         environ: Any,
         timestamp: int,
         probe: bool = False,
+        _prepared_attestations: _PreparedAttestations | None = None,
     ) -> dict[str, Any]:
         from .providers import evaluate_admission
 
@@ -5187,8 +5799,10 @@ class LearningLedger:
         if not project or project["status"] != "active":
             raise LedgerError("project binding is not active")
         identities = self._provider_records_locked(project_id, "provider_identity", provider)
-        attestations = self._provider_records_locked(
-            project_id, "billing_attestation", provider
+        attestations = (
+            self._provider_records_locked(project_id, "billing_attestation", provider)
+            if _prepared_attestations is None
+            else self._prepared_attestations_locked(_prepared_attestations, project_id, provider)
         )
         billing, local_billing = self._account_records_locked(
             project_id, "provider_billing", provider
@@ -5224,6 +5838,7 @@ class LearningLedger:
         provider: str,
         environ: Any,
         now_ms: int | None = None,
+        _prepared_attestations: _PreparedAttestations | None = None,
     ) -> dict[str, Any]:
         """Evaluate admission from stored evidence; a denial is stored and raised.
 
@@ -5233,18 +5848,26 @@ class LearningLedger:
 
         from .providers import AdmissionDenied
 
+        prepared = (
+            self._prepare_attestations(project_id, provider)
+            if _prepared_attestations is None else _prepared_attestations
+        )
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock, self._connection:
+        with self._lock:
             decision = self._evaluate_admission_locked(
-                project_id, provider=provider, environ=environ, timestamp=timestamp
+                project_id, provider=provider, environ=environ, timestamp=timestamp,
+                _prepared_attestations=prepared,
             )
             if decision["decision"] == "deny":
-                self._store_admission_locked(
-                    project_id, decision, run_id=None, timestamp=timestamp
-                )
-        self.state.harden_database_files()
+                # Denials are durable metadata too. Begin explicitly only for
+                # their write; a successful informational evaluation stays read-only.
+                with self._account_transaction():
+                    self._store_admission_locked(
+                        project_id, decision, run_id=None, timestamp=timestamp
+                    )
         if decision["decision"] == "deny":
             raise AdmissionDenied(decision["reason_code"])
+        self.state.harden_database_files()
         return decision
 
     def _store_admission_locked(
@@ -5289,6 +5912,1143 @@ class LearningLedger:
             raise LedgerError("host run admission is not a pass")
         return decision
 
+    def _claim_context_locked(self, project_id, handle_digest, launch, timestamp):
+        from .providers import BILLING_MAX_AGE_MS
+
+        binding = self._connection.execute(
+            "SELECT * FROM host_run_bindings WHERE project_id=? AND handle_digest=?", (project_id, handle_digest),
+        ).fetchone()
+        if binding is None:
+            return "claim_not_open", None, None, None
+        if (binding["binding_state"] != "pending" or binding["consumed_at_ms"] is not None
+                or binding["client_version"] != "bridge-v1" or binding["expires_at_ms"] <= timestamp):
+            return "claim_not_open", binding, None, None
+        if self._connection.execute(
+            "SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?)",
+            (project_id, handle_digest, binding["run_id"]),
+        ).fetchone() is not None:
+            return "claim_already_consumed", binding, None, None
+        started, until = self._claim_observation_window(binding)
+        if not started <= timestamp < until:
+            return 'claim_not_open', binding, None, None
+        inputs = self._connection.execute(
+            "SELECT * FROM launch_inputs WHERE project_id=? AND handle_digest=?", (project_id, handle_digest),
+        ).fetchone()
+        if inputs is None or inputs["run_id"] != binding["run_id"]:
+            return "claim_context_missing", binding, None, None
+        if inputs["runtime_digest"] != COLLECTOR_RUNTIME_DIGEST:
+            return "claim_runtime_mismatch", binding, inputs, None
+        observed = self._connection.execute(
+            "SELECT identity_digest,observed_at_ms FROM launch_observations WHERE project_id=? AND handle_digest=?",
+            (project_id, handle_digest),
+        ).fetchone()
+        if (observed is None or observed["identity_digest"] != launch.identity_digest
+                or not binding["created_at_ms"] <= observed["observed_at_ms"] <= timestamp
+                or timestamp - observed["observed_at_ms"] > BILLING_MAX_AGE_MS):
+            return "claim_observation_missing", binding, inputs, None
+        row = self._connection.execute(
+            "SELECT content FROM records WHERE project_id=? AND content_digest=? "
+            "AND record_type='provider_identity' AND source='provider'", (project_id, launch.identity_digest),
+        ).fetchone()
+        if row is None:
+            return "claim_observation_missing", binding, inputs, None
+        identity = validate_learning_record(json.loads(bytes(row[0])))
+        admission, digest = self._launch_identity_locked(project_id, launch.run_handle, identity)
+        admitted = self.admitted_client(project_id, launch.run_handle)
+        if (digest != launch.identity_digest or identity["observed_at_ms"] != observed["observed_at_ms"]
+                or admission["provider"] != inputs["provider"]
+                or identity["client_version"] is None or identity["client_version"] != admitted["client_version"]):
+            return "claim_client_changed", binding, inputs, identity
+        if not self.client_version_reviewed(inputs["provider"], identity["client_version"]):
+            return "client_version_unreviewed", binding, inputs, identity
+        return None, binding, inputs, identity
+
+    def _claim_receipt_material(self, project_id, scope, request, parameters, handle, body):
+        return {"project_id": project_id, "scope": scope, "request": request,
+                "parameters": parameters, "handle": handle, **body}
+
+    def _known_claim_receipt_locked(self, project_id, scope, request, parameters):
+        row = self._connection.execute(
+            "SELECT * FROM launch_receipts WHERE project_id=? AND scope_digest=? AND request_digest=?",
+            (project_id, scope, request),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["parameters_digest"] != parameters:
+            raise ClaimError("claim_conflict")
+        body = {name: row[name] for name in
+                ("state", "run_id", "reason_code", "bridge_run_id", "deadline_at_ms", "recorded_at_ms")}
+        expected = keyed_digest(self.state.digest_key(), canonical_json(self._claim_receipt_material(
+            project_id, scope, request, parameters, row["handle_digest"], body,
+        )))
+        if expected != row["receipt_digest"]:
+            raise ClaimError("claim_unavailable")
+        return checked_claim_receipt({**body, "receipt_digest": expected, "known": True})
+
+    def _store_claim_receipt_locked(self, project_id, scope, request, parameters, handle, body):
+        digest = keyed_digest(self.state.digest_key(), canonical_json(self._claim_receipt_material(
+            project_id, scope, request, parameters, handle, body,
+        )))
+        result = checked_claim_receipt({**body, "receipt_digest": digest, "known": False})
+        self._connection.execute(
+            "INSERT INTO launch_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (project_id, scope, request, parameters, handle, digest, body["run_id"], body["state"],
+             body["reason_code"], body["bridge_run_id"], body["deadline_at_ms"], body["recorded_at_ms"]),
+        )
+        return result
+
+    def _claim_preflight(
+        self, project_id: str, *, runtime_digest: str, caller_scope: str,
+        request_id: str, launch: LaunchClaimInput, work_limits=None,
+        storage_required=False, storage_binding=None, storage_evidence=None,
+    ):
+        """Capture a request and current state; perform no signature work."""
+        if (not claim_matches(project_id, _CLAIM_PROJECT) or not claim_matches(runtime_digest, _CLAIM_DIGEST)
+                or runtime_digest != COLLECTOR_RUNTIME_DIGEST or not claim_matches(caller_scope, _CLAIM_DIGEST)
+                or not claim_matches(request_id, _CLAIM_REQUEST_ID) or type(launch) is not LaunchClaimInput):
+            raise ClaimError("claim_invalid_request")
+        launch = LaunchClaimInput(launch.run_handle, launch.identity_digest)
+        from .claim_storage import MAX_STORAGE_EVIDENCE_BYTES
+        from .result_contracts import ResultLeaseBinding
+
+        if (type(storage_required) is not bool
+                or (storage_binding is not None and type(storage_binding) is not ResultLeaseBinding)
+                or (storage_evidence is not None and
+                    (type(storage_evidence) is not bytes or not 0 < len(storage_evidence) <= MAX_STORAGE_EVIDENCE_BYTES))):
+            raise ClaimError("claim_storage_invalid")
+        if storage_binding is not None:
+            storage_binding = ResultLeaseBinding(**storage_binding.as_data())
+        key = self.state.digest_key()
+        handle = keyed_digest(key, launch.run_handle)
+        scope = keyed_digest(key, canonical_json({"project": project_id, "runtime": runtime_digest, "caller": caller_scope}))
+        request = keyed_digest(key, request_id)
+        parameters = keyed_digest(key, canonical_json(launch.payload()))
+        context = _ClaimRequest(self._attestation_origin, project_id, runtime_digest, caller_scope,
+                                request_id, launch, handle, scope, request, parameters,
+                                storage_required=storage_required or storage_binding is not None or storage_evidence is not None,
+                                storage_binding=storage_binding, storage_evidence=storage_evidence)
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("account write transaction is already active")
+            self.state.harden_database_files()
+            def read():
+                known, timestamp = self._claim_commit_header(context)
+                if known is not None:
+                    return known, None, None, None
+                check = self._claim_context_locked if work_limits is None else self._claim_scalar_context_locked
+                early, binding, inputs, observed = check(project_id, handle, launch, timestamp)
+                columns = None
+                if early is None:
+                    rows = ((binding, inputs, observed) if work_limits is not None
+                            else self._claim_run_rows_locked(project_id, handle))
+                    columns = self._claim_run_columns(*rows)
+                return None, early, None if inputs is None else inputs["provider"], columns
+
+            known, early_reason, provider, columns = (read() if work_limits is None else
+                                                     self._connection.read_call(work_limits, read))
+            if known is not None:
+                return context, known, None, None
+        return replace(context, run_context=columns), None, early_reason, provider
+
+    def _check_active_capacity_locked(self, provider, account):
+        """Bounded fresh counts inside the same transaction as consumption."""
+        from .active_run_capacity import ActiveRunLimits
+
+        policy = INSTALLED_ACTIVE_RUN_LIMITS
+        if (type(policy) is not ActiveRunLimits or provider not in {"codex", "claude"}
+                or (account is not None and not claim_matches(account, _CLAIM_DIGEST))):
+            raise ClaimError("claim_unavailable")
+        policy.__post_init__()
+        # A claimed run whose project host crashed never settles. Its hard
+        # deadline is enforced by the detached watchdog, so well past that
+        # deadline on both the wall and the monotonic clock the child cannot
+        # still be running: it stops counting against the limits, while its row
+        # stays unreleased (explicitly unconfirmed) and a late terminal still
+        # settles it normally.
+        now = self._clock_ms()
+        if type(now) is not int:
+            raise ClaimError("claim_unavailable")
+        crashed, crashed_parameters = crashed_claim("", now, self._capacity_clock_reference())
+        active = self._connection.execute(
+            "SELECT 1 FROM active_run_capacity INDEXED BY active_capacity_machine "
+            f"WHERE released_at_ms IS NULL AND NOT {crashed} LIMIT ?",
+            (*crashed_parameters, policy.machine),
+        ).fetchall()
+        probe_active = self._connection.execute(
+            "SELECT 1 FROM account_billing_probe_requests INDEXED BY billing_probe_active_machine "
+            "WHERE state='admitted' LIMIT ?", (policy.machine,),
+        ).fetchall()
+        if len(active)+len(probe_active) >= policy.machine:
+            raise ClaimError("claim_busy")
+        # A legacy unknown account consumes a slot for every candidate. A
+        # provider-known but account-unknown reservation counts for that whole
+        # provider. Machine counting first bounds this read to fewer than 64
+        # active rows even after a large conservative historical backfill.
+        account_active = self._connection.execute(
+            "SELECT 1 FROM active_run_capacity INDEXED BY active_capacity_account "
+            f"WHERE released_at_ms IS NULL AND NOT {crashed} "
+            "AND (provider IS NULL OR (provider=? "
+            "AND (? IS NULL OR account_fingerprint IS NULL OR account_fingerprint=?))) LIMIT ?",
+            (*crashed_parameters, provider, account, account, policy.account),
+        ).fetchall()
+        account_probes = ([] if provider != 'claude' else self._connection.execute(
+            "SELECT 1 FROM account_billing_probe_requests INDEXED BY billing_probe_active_account "
+            "WHERE state='admitted' AND (? IS NULL OR account_fingerprint=?) LIMIT ?",
+            (account, account, policy.account),
+        ).fetchall())
+        if len(account_active)+len(account_probes) >= policy.account:
+            raise ClaimError("claim_busy")
+        return policy
+
+    def _capacity_clock_reference(self):
+        try:
+            reference = time.monotonic_ns()
+        except Exception:
+            raise ClaimError("claim_unavailable") from None
+        if type(reference) is not int or not 0 <= reference <= (1 << 63) - 1:
+            raise ClaimError("claim_unavailable")
+        return reference
+
+    def _capacity_clock_owner(self, key, reference, deadline, claimed_at, wall_deadline):
+        return keyed_digest(self.state.digest_key(), canonical_json({
+            "domain": "capacity-claim-clock-v1", "project_id": key.project_id, "handle_digest": key.handle_digest,
+            "run_id": key.run_id, "bridge_run_id": key.bridge_run_id, "owner": self._capacity_execution_origin,
+            "runtime_digest": COLLECTOR_RUNTIME_DIGEST, "clock_reference_ns": reference,
+            "execution_deadline_ns": deadline, "claimed_at_ms": claimed_at, "deadline_at_ms": wall_deadline,
+        }))
+
+    def _reserve_active_capacity_locked(self, project, handle, run, bridge, provider, account, policy, timestamp, deadline, reference):
+        if not self._connection.in_transaction:
+            raise ClaimError("claim_unavailable")
+        deadline_ns = reference + (deadline - timestamp) * 1_000_000
+        now = self._capacity_clock_reference()
+        if not reference <= now < deadline_ns <= (1 << 63) - 1:
+            raise ClaimError("claim_unavailable")
+        clock_owner = self._capacity_clock_owner(
+            OwnedExecutionKey(project, handle, run, bridge), reference, deadline_ns, timestamp, deadline,
+        )
+        self._connection.execute(
+            "INSERT INTO active_run_capacity(project_id,handle_digest,run_id,bridge_run_id,kind,provider,"
+            "account_fingerprint,runtime_digest,policy_digest,claimed_at_ms,deadline_at_ms,"
+            "clock_reference_ns,execution_deadline_ns,clock_owner_digest) VALUES(?,?,?,?,'claimed',?,?,?,?,?,?,?,?,?)",
+            (project, handle, run, bridge, provider, account, COLLECTOR_RUNTIME_DIGEST, policy.digest, timestamp, deadline,
+             reference, deadline_ns, clock_owner),
+        )
+
+    def _close_denied_attempt(self, project_id, *, runtime_digest, caller_scope, closure, storage_binding, storage_evidence):
+        """Commit a permanent exact no-launch fence before freeing body storage.
+
+        Native peer/actor/epoch proof and old-capability drain remain activation
+        gates. Claimed, ambiguous, native-bound or foreign attempts cannot close.
+        """
+        from .claim_denial import CloseDeniedInput, decode_close_denied
+
+        if type(closure) is not CloseDeniedInput:
+            raise ClaimError('claim_denial_invalid')
+        return self._settle_unlaunched(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                       closure=decode_close_denied(closure.payload()), storage_binding=storage_binding,
+                                       storage_evidence=storage_evidence, fence=False)
+
+    def _fence_claim(self, project_id, *, runtime_digest, caller_scope, fence, storage_binding, storage_evidence):
+        """Close the run's own claim request for good, unless this account already admitted it.
+
+        In one account transaction: a receipt already held for the request is
+        returned unchanged, and a claimed one closes nothing. Otherwise a denied
+        receipt (`claim_not_open`: the run is closed to claims) is stored for
+        the request, so every later claim
+        with it gets that receipt back before any admission or capacity work
+        (an admission still in flight finds it at its commit), and the run is
+        settled exactly as a denied claim. A launch or capacity row for the run
+        without a receipt for this request is contradictory and refused, and a
+        refusal anywhere commits nothing.
+        """
+        from .claim_denial import FenceClaimInput, decode_fence_claim
+
+        if type(fence) is not FenceClaimInput:
+            raise ClaimError('claim_denial_invalid')
+        return self._settle_unlaunched(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                       closure=decode_fence_claim(fence.payload()), storage_binding=storage_binding,
+                                       storage_evidence=storage_evidence, fence=True)
+
+    def _settle_unlaunched(self, project_id, *, runtime_digest, caller_scope, closure, storage_binding, storage_evidence,
+                           fence):
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+        from .claim_denial import DENIAL_LEGACY_READ_LIMITS, binding_digest, denial_closure, denial_record_id
+        from .claim_storage import capture_storage_evidence, verify_pending_storage_evidence
+        from .sql_read_budget import SQLReadError, SQLReadLimits
+
+        expected, raw = capture_storage_evidence(storage_binding, storage_evidence)
+        if expected is None:
+            raise ClaimError('claim_storage_required')
+        launch = LaunchClaimInput(closure.run_handle, closure.identity_digest)
+        original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', closure.claim_request_id,
+                                  project_id, runtime_digest, launch.payload())
+        if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                or expected.run_handle != closure.run_handle or expected.claim_request_id != closure.claim_request_id
+                or expected.claim_request_digest != account_request_digest(original)):
+            raise ClaimError('claim_denial_invalid')
+        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                                    request_id=closure.claim_request_id, launch=launch, storage_binding=expected)
+        if fence and known is not None and known['state'] == 'claimed':
+            return {'receipt': known, 'closure': None}  # Admitted: nothing here is closed.
+        if not fence and (known is None or known['state'] != 'denied'
+                          or known['receipt_digest'] != closure.denial_receipt_digest):
+            raise ClaimError('claim_denial_unavailable')
+        if known is not None and known['run_id'] != expected.run_id:
+            raise ClaimError('claim_denial_unavailable')
+        key = self.state.digest_key()
+        identity = denial_record_id(key, project_id, closure.lease_digest)
+        with self._lock:
+            prior_hint = self._connection.execute('SELECT 1 FROM records WHERE project_id=? AND record_id=?',
+                                                  (project_id, identity)).fetchone() is not None
+        lease = None if prior_hint else verify_pending_storage_evidence(key, expected, raw)
+        with self._account_transaction():
+            current = self._known_claim_receipt_locked(project_id, context.scope, context.request, context.parameters)
+            if fence:
+                if current is not None and current['state'] == 'claimed':
+                    return {'receipt': current, 'closure': None}
+                if current is None:
+                    self._fence_claim_request_locked(project_id, context, expected)
+                    current = self._known_claim_receipt_locked(project_id, context.scope, context.request,
+                                                               context.parameters)
+                known = current
+            if current != known or known['state'] != 'denied' or known['run_id'] != expected.run_id:
+                raise ClaimError('claim_denial_unavailable')
+            facts = {'run_id': expected.run_id, 'handle_digest': context.handle, 'scope_digest': context.scope,
+                     'request_digest': context.request, 'parameters_digest': context.parameters,
+                     'binding_digest': binding_digest(key, expected), 'lease_digest': closure.lease_digest, 'denial': known}
+            binding = self._connection.execute(
+                'SELECT h.*,l.provider FROM host_run_bindings h '
+                'LEFT JOIN launch_inputs l ON l.project_id=h.project_id AND l.handle_digest=h.handle_digest '
+                'WHERE h.project_id=? AND h.handle_digest=?', (project_id, context.handle),
+            ).fetchone()
+            orchestration_digest = self._claim_original_orchestration_digest(expected, 'claim_denial_unavailable')
+            # Any durable consumed/unknown launch or capacity is contradictory.
+            if (self._connection.execute('SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?) LIMIT 1',
+                                         (project_id, context.handle, expected.run_id)).fetchone() is not None
+                    or self._connection.execute('SELECT 1 FROM active_run_capacity WHERE project_id=? AND (handle_digest=? OR run_id=?) LIMIT 1',
+                                                (project_id, context.handle, expected.run_id)).fetchone() is not None):
+                raise ClaimError('claim_denial_unavailable')
+            def legacy_intent():
+                return self._connection.execute(
+                    "SELECT 1 FROM records WHERE project_id=? AND record_type IN ('dispatch_intent','dispatch_result') "
+                    "AND json_extract(CAST(content AS TEXT),'$.run_id')=? LIMIT 1", (project_id, expected.run_id)).fetchone()
+            limited = False
+            try:
+                legacy = self._connection.transaction_read_call(SQLReadLimits(*DENIAL_LEGACY_READ_LIMITS), legacy_intent)
+            except SQLReadError:
+                limited = True
+            if limited:
+                raise ClaimError('claim_busy')
+            if legacy is not None:
+                raise ClaimError('claim_denial_unavailable')
+            prior = self._connection.execute('SELECT record_type,source,content_digest,length(content) AS content_size '
+                                             'FROM records WHERE project_id=? AND record_id=?', (project_id, identity)).fetchone()
+            if prior is not None:
+                if (prior['record_type'] != 'claim_denial_settlement' or prior['source'] != 'lifecycle'
+                        or type(prior['content_size']) is not int or not 0 < prior['content_size'] <= 16_384):
+                    raise ClaimError('claim_denial_conflict')
+                invalid = False
+                try:
+                    encoded = bytes(self._connection.execute('SELECT content FROM records WHERE project_id=? AND record_id=?',
+                                                             (project_id, identity)).fetchone()[0])
+                    record = validate_learning_record(parse_bounded_json(encoded, max_bytes=16_384))
+                    invalid = (prior['record_type'] != 'claim_denial_settlement' or prior['source'] != 'lifecycle'
+                               or record['record_id'] != identity or encoded != canonical_json(record)
+                               or prior['content_digest'] != content_digest(record)
+                               or any(record[n] != value for n, value in facts.items())
+                               or (binding is not None and (binding['run_id'] != expected.run_id
+                                   or binding['binding_state'] != 'abandoned' or binding['abandoned_reason'] != 'claim_denied'
+                                   or binding['assignment_digest'] != record['assignment_digest']
+                                   or binding['native_assignment_id'] is not None or binding['consumed_at_ms'] is not None)))
+                except Exception:
+                    invalid = True
+                if invalid:
+                    raise ClaimError('claim_denial_conflict')
+                result = denial_closure(key, expected, record, known=True)
+                return {'receipt': known, 'closure': result} if fence else result
+            if lease is None:
+                raise ClaimError('claim_denial_unavailable')  # Never reconstruct a vanished known settlement.
+            now = self._clock_ms()
+            if (binding is None or binding['run_id'] != expected.run_id or binding['client_version'] != 'bridge-v1'
+                    or binding['provider'] not in {'codex', 'claude'} or binding['binding_state'] != 'pending'
+                    or binding['consumed_at_ms'] is not None or binding['native_assignment_id'] is not None
+                    or binding['usage_complete'] is not None
+                    or binding['assignment_digest'] != lease.assignment_digest or lease.lease_digest != closure.lease_digest
+                    or orchestration_digest != keyed_digest(key, expected.orchestration_handle)
+                    or not lease.created_at_ms <= known['recorded_at_ms']
+                    or type(now) is not int or not known['recorded_at_ms'] <= now <= MAX_CLAIM_INTEGER):
+                raise ClaimError('claim_denial_unavailable')
+            record = validate_learning_record({**facts, 'schema_version': 1, 'record_type': 'claim_denial_settlement',
+                                               'record_id': identity, 'assignment_digest': lease.assignment_digest,
+                                               'observed_at_ms': now})
+            self._append_checked_locked(project_id, record, producer='lifecycle', timestamp=now)
+            self._connection.execute("UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='claim_denied' "
+                                     "WHERE project_id=? AND handle_digest=? AND binding_state='pending'",
+                                     (project_id, context.handle))
+        result = denial_closure(key, expected, record, known=False)
+        return {'receipt': known, 'closure': result} if fence else result
+
+    def _fence_claim_request_locked(self, project_id, context, expected):
+        """Inside the fence's transaction: a denied receipt for a request this account never answered."""
+        binding = self._connection.execute('SELECT run_id FROM host_run_bindings WHERE project_id=? AND handle_digest=?',
+                                           (project_id, context.handle)).fetchone()
+        if (binding is None or binding['run_id'] != expected.run_id
+                or self._connection.execute('SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?) '
+                                            'LIMIT 1', (project_id, context.handle, expected.run_id)).fetchone() is not None
+                or self._connection.execute('SELECT 1 FROM active_run_capacity WHERE project_id=? AND (handle_digest=? '
+                                            'OR run_id=?) LIMIT 1',
+                                            (project_id, context.handle, expected.run_id)).fetchone() is not None):
+            raise ClaimError('claim_denial_unavailable')
+        now = self._clock_ms()
+        if type(now) is not int or not 0 <= now <= MAX_CLAIM_INTEGER:
+            raise ClaimError('claim_unavailable')
+        self._store_claim_receipt_locked(project_id, context.scope, context.request, context.parameters, context.handle, {
+            'state': 'denied', 'run_id': expected.run_id, 'reason_code': 'claim_not_open', 'bridge_run_id': None,
+            'deadline_at_ms': None, 'recorded_at_ms': now,
+        })
+
+    def _attest_run_provenance(self, project_id, *, runtime_digest, caller_scope, request,
+                              storage_binding, storage_evidence, work_limits):
+        from .account_run_provenance import attest_run_provenance
+        return attest_run_provenance(self, project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                     request=request, storage_binding=storage_binding,
+                                     storage_evidence=storage_evidence, work_limits=work_limits)
+
+    def _attest_open_provenance(self, project_id, *, runtime_digest, caller_scope, request,
+                               storage_binding, storage_evidence, work_limits):
+        from .account_host_open import attest_open_provenance
+        return attest_open_provenance(self, project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                      request=request, storage_binding=storage_binding,
+                                      storage_evidence=storage_evidence, work_limits=work_limits)
+
+    def _register_project_execution(self, project_id, *, runtime_digest, caller_scope, registration,
+                                    storage_binding, storage_evidence):
+        """Durable one-use registration for an independently enrolled project.
+
+        This creates no account-local process ticket. Native service identity,
+        supervisor epoch and account/project transport are separate activation
+        gates; JSON/source labels and these data do not establish them.
+        """
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+        from .claim_storage import capture_storage_evidence, verify_bound_storage_evidence
+        from .execution_grant import ExecutionRegistrationInput, sign_execution_grant
+        from .history_contracts import AttemptBinding
+        from .result_contracts import LEASE_SCOPE_FIELDS
+
+        if type(registration) is not ExecutionRegistrationInput:
+            raise ClaimError("claim_execution_invalid")
+        registration = ExecutionRegistrationInput(**registration.payload())
+        expected, evidence = capture_storage_evidence(storage_binding, storage_evidence)
+        key = self.state.digest_key()
+        lease = verify_bound_storage_evidence(key, expected, evidence)
+        if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                or expected.run_handle != registration.run_handle or expected.claim_request_id != registration.claim_request_id
+                or lease.claim_id != registration.bridge_run_id or lease.claim_digest != registration.claim_digest):
+            raise ClaimError("claim_execution_invalid")
+        launch = LaunchClaimInput(registration.run_handle, registration.identity_digest)
+        original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, "account.claim_launch", registration.claim_request_id,
+                                  project_id, runtime_digest, launch.payload())
+        if expected.claim_request_digest != account_request_digest(original):
+            raise ClaimError("claim_execution_invalid")
+        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                                    request_id=registration.claim_request_id, launch=launch, storage_binding=expected)
+        if (known is None or known["state"] != "claimed" or known["bridge_run_id"] != registration.bridge_run_id
+                or known["receipt_digest"] != registration.claim_digest):
+            raise ClaimError("claim_execution_unavailable")
+        binding = AttemptBinding(**{name: getattr(expected, name) for name in LEASE_SCOPE_FIELDS},
+                                 claim_id=registration.bridge_run_id, claim_digest=registration.claim_digest)
+        claim_binding = keyed_digest(key, canonical_json({
+            "domain": "project-result-claim-binding-v1", "lease_digest": lease.lease_digest,
+            "binding": binding.as_data(), "hard_deadline_at_ms": lease.hard_deadline_at_ms,
+        }))
+        if not secrets.compare_digest(claim_binding, lease.claim_binding_digest):
+            raise ClaimError("claim_execution_invalid")
+        with self._account_transaction():
+            current = self._known_claim_receipt_locked(project_id, context.scope, context.request, context.parameters)
+            if current is None or current["receipt_digest"] != known["receipt_digest"]:
+                raise ClaimError("claim_execution_unavailable")
+            row = self._connection.execute(
+                "SELECT a.*,h.assignment_digest,h.task_digest,h.route_digest,h.configuration_digest,"
+                "h.native_assignment_id,h.binding_state,h.consumed_at_ms,h.client_version,"
+                "e.owner_digest AS registered_digest "
+                "FROM active_run_capacity a JOIN host_run_bindings h "
+                "ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id "
+                "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
+                "WHERE a.project_id=? AND a.handle_digest=? AND a.bridge_run_id=?",
+                (project_id, context.handle, registration.bridge_run_id),
+            ).fetchone()
+            orchestration_digest = self._claim_original_orchestration_digest(expected, 'claim_execution_unavailable')
+            if (row is None or row["kind"] != "claimed" or row["runtime_digest"] != runtime_digest
+                    or row["provider"] not in {"codex", "claude"} or row["run_id"] != expected.run_id
+                    or row["assignment_digest"] != lease.assignment_digest
+                    or orchestration_digest != keyed_digest(key, expected.orchestration_handle)
+                    or row["deadline_at_ms"] != lease.hard_deadline_at_ms):
+                raise ClaimError("claim_execution_invalid")
+            grant = sign_execution_grant(
+                key, binding=binding, handle_digest=context.handle, assignment_digest=row["assignment_digest"],
+                task_digest=row["task_digest"], route_digest=row["route_digest"], configuration_digest=row["configuration_digest"],
+                lease_digest=lease.lease_digest, clock_owner_digest=row["clock_owner_digest"],
+                clock_reference_ns=row["clock_reference_ns"], deadline_ns=row["execution_deadline_ns"],
+                claimed_at_ms=row["claimed_at_ms"], deadline_at_ms=row["deadline_at_ms"],
+            )
+            if row["registered_digest"] is not None:
+                if not secrets.compare_digest(row["registered_digest"], grant.registration_digest):
+                    raise ClaimError("claim_execution_conflict")
+                registered = self._connection.execute('SELECT cleanup_reservation_digest FROM capacity_executions '
+                    'WHERE project_id=? AND handle_digest=?', (project_id, context.handle)).fetchone()
+                if registered is not None and registered['cleanup_reservation_digest'] is not None:
+                    from .account_cleanup import original_journal
+                    original_journal(self, expected, grant)
+                return {"grant": grant.as_data(), "known": True}
+            clock = self._capacity_clock_reference()
+            now = self._clock_ms()
+            owned_key = OwnedExecutionKey(project_id, context.handle, expected.run_id, registration.bridge_run_id)
+            native_id = external_id(key, "asg", registration.bridge_run_id)
+            if (row["released_at_ms"] is not None or row["binding_state"] != "pending"
+                    or row["consumed_at_ms"] is not None or row["client_version"] != "bridge-v1"
+                    or row["native_assignment_id"] not in {None, native_id}
+                    or type(now) is not int or not row["claimed_at_ms"] <= now < row["deadline_at_ms"]
+                    or not row["clock_reference_ns"] <= clock < row["execution_deadline_ns"]
+                    or not secrets.compare_digest(row["clock_owner_digest"], self._capacity_clock_owner(
+                        owned_key, row["clock_reference_ns"], row["execution_deadline_ns"],
+                        row["claimed_at_ms"], row["deadline_at_ms"]))):
+                raise ClaimError("claim_execution_unavailable")
+            from .account_cleanup import reserve_cleanup
+            cleanup = reserve_cleanup(self, expected, grant) if lease.cleanup_reservation_digest is not None else None
+            self._connection.execute("INSERT INTO capacity_executions VALUES(?,?,?,?,?,?)",
+                                     (project_id, context.handle, expected.run_id, registration.bridge_run_id,
+                                      grant.registration_digest, cleanup))
+            self._connection.execute("UPDATE host_run_bindings SET native_assignment_id=? WHERE project_id=? AND handle_digest=?",
+                                     (native_id, project_id, context.handle))
+        return {"grant": grant.as_data(), "known": False}
+
+    def _accept_project_terminal(self, project_id, *, runtime_digest, caller_scope, submission,
+                                 storage_binding, storage_evidence, terminal_evidence, require_known=False):
+        """Accept exact safe terminal metadata; never infer cleanup or release.
+
+        Native project enrollment/current authority and protected evidence
+        publication remain activation gates. Account SQL records the original
+        registered claim's completion digest without opening a project store,
+        receiving a result body or reconstructing process custody.
+        """
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+        from .claim_storage import capture_storage_evidence, verify_bound_storage_evidence
+        from .terminal_delivery import TerminalSubmissionInput, decode_terminal_submission, terminal_receipt, verify_terminal_evidence
+
+        if type(submission) is not TerminalSubmissionInput:
+            raise ClaimError('claim_terminal_invalid')
+        submission = decode_terminal_submission(submission.payload())
+        expected, bound_raw = capture_storage_evidence(storage_binding, storage_evidence)
+        key = self.state.digest_key()
+        lease = verify_bound_storage_evidence(key, expected, bound_raw)
+        evidence = verify_terminal_evidence(key, expected, terminal_evidence)
+        grant, delivery = evidence.grant, evidence.delivery
+        terminal_record = parse_bounded_json(evidence.record)
+        observed = terminal_record['observed_at_ms']
+        registration = submission.registration
+        launch = LaunchClaimInput(registration.run_handle, registration.identity_digest)
+        original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', registration.claim_request_id,
+                                  project_id, runtime_digest, launch.payload())
+        if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                or expected.claim_request_id != registration.claim_request_id
+                or expected.claim_request_digest != account_request_digest(original)
+                or grant.binding.run_handle != registration.run_handle or grant.binding.claim_id != registration.bridge_run_id
+                or grant.binding.claim_digest != registration.claim_digest
+                or lease.claim_id != grant.binding.claim_id or lease.claim_digest != grant.binding.claim_digest
+                or lease.lease_digest != grant.lease_digest or lease.assignment_digest != grant.assignment_digest
+                or lease.hard_deadline_at_ms != grant.deadline_at_ms
+                or grant.registration_digest != submission.registration_digest
+                or delivery.record_id != submission.terminal_record_id
+                or delivery.record_content_digest != submission.terminal_content_digest
+                or delivery.result_digest != submission.result_digest):
+            raise ClaimError('claim_terminal_invalid')
+        claim_binding = keyed_digest(key, canonical_json({
+            'domain': 'project-result-claim-binding-v1', 'lease_digest': lease.lease_digest,
+            'binding': grant.binding.as_data(), 'hard_deadline_at_ms': grant.deadline_at_ms,
+        }))
+        if not secrets.compare_digest(claim_binding, lease.claim_binding_digest):
+            raise ClaimError('claim_terminal_invalid')
+        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+                                                    request_id=registration.claim_request_id, launch=launch, storage_binding=expected)
+        if (known is None or known['state'] != 'claimed' or known['bridge_run_id'] != registration.bridge_run_id
+                or known['receipt_digest'] != registration.claim_digest):
+            raise ClaimError('claim_terminal_unavailable')
+        with self._account_transaction():
+            current = self._known_claim_receipt_locked(project_id, context.scope, context.request, context.parameters)
+            if current is None or current['receipt_digest'] != registration.claim_digest:
+                raise ClaimError('claim_terminal_unavailable')
+            row = self._connection.execute(
+                'SELECT a.*,h.assignment_digest,h.task_digest,h.route_digest,h.configuration_digest,'
+                'h.native_assignment_id,h.binding_state,h.consumed_at_ms,h.client_version,'
+                'e.owner_digest FROM active_run_capacity a '
+                'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id '
+                'JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest '
+                'AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id '
+                'WHERE a.project_id=? AND a.handle_digest=? AND a.bridge_run_id=?',
+                (project_id, context.handle, registration.bridge_run_id),
+            ).fetchone()
+            orchestration_digest = self._claim_original_orchestration_digest(expected, 'claim_terminal_unavailable')
+            if (row is None or row['kind'] != 'claimed' or row['provider'] not in {'codex', 'claude'}
+                    # Only the Claude client reports diagnostics; the record validator closed their values.
+                    or (terminal_record['client_diagnostics'] is not None and row['provider'] != 'claude')
+                    or row['runtime_digest'] != runtime_digest or row['run_id'] != grant.binding.run_id
+                    or row['client_version'] != 'bridge-v1' or row['owner_digest'] != grant.registration_digest
+                    or orchestration_digest != keyed_digest(key, grant.binding.orchestration_handle)
+                    or row['native_assignment_id'] != external_id(key, 'asg', registration.bridge_run_id)
+                    or row['execution_deadline_ns'] != grant.deadline_ns
+                    or any(row[n] != getattr(grant, n) for n in (
+                        'handle_digest', 'assignment_digest', 'task_digest', 'route_digest', 'configuration_digest',
+                        'clock_owner_digest', 'clock_reference_ns', 'claimed_at_ms', 'deadline_at_ms'))):
+                raise ClaimError('claim_terminal_unavailable')
+            prior = self._connection.execute('SELECT * FROM capacity_completions WHERE project_id=? AND handle_digest=?',
+                                             (project_id, context.handle)).fetchone()
+            if prior is not None:
+                if (prior['run_id'] != grant.binding.run_id or prior['bridge_run_id'] != grant.binding.claim_id
+                        or prior['terminal_record_id'] != delivery.record_id
+                        or prior['terminal_content_digest'] != delivery.record_content_digest):
+                    raise ClaimError('claim_terminal_conflict')
+                from .account_cleanup import record_terminal
+                record_terminal(self, expected, grant, delivery, known=True)
+                # A terminal ACK must not hide corrupt release metadata.
+                completed = self._capacity_completion_locked(OwnedExecutionKey(
+                    project_id, context.handle, grant.binding.run_id, grant.binding.claim_id))
+                if completed['released_at_ms'] is not None and not secrets.compare_digest(
+                        self._capacity_completion_digest(completed, completed['released_at_ms']), completed['receipt_digest']):
+                    raise ClaimError('claim_terminal_unavailable')
+                return terminal_receipt(key, grant, delivery, known=True)
+            if require_known:
+                raise ClaimError('claim_terminal_unavailable')
+            now = self._clock_ms()
+            if (row['released_at_ms'] is not None or row['binding_state'] != 'pending' or row['consumed_at_ms'] is not None
+                    or type(now) is not int or not grant.claimed_at_ms <= observed <= now <= MAX_CLAIM_INTEGER):
+                raise ClaimError('claim_terminal_unavailable')
+            from .account_cleanup import record_terminal
+            record_terminal(self, expected, grant, delivery, known=False, recorded_at_ms=now)
+            self._connection.execute(
+                'INSERT INTO capacity_completions(project_id,handle_digest,run_id,bridge_run_id,'
+                'terminal_record_id,terminal_content_digest) VALUES(?,?,?,?,?,?)',
+                (project_id, context.handle, grant.binding.run_id, grant.binding.claim_id,
+                 delivery.record_id, delivery.record_content_digest),
+            )
+        return terminal_receipt(key, grant, delivery, known=False)
+
+    def _new_owned_execution(self, project_id, run_handle, bridge_run_id):
+        """Internal fixed-bridge registration, not a caller-selected PID API."""
+        handle = keyed_digest(self.state.digest_key(), run_handle)
+        with self._account_transaction():
+            row = self._connection.execute(
+                "SELECT a.run_id,a.bridge_run_id,a.kind,a.runtime_digest,a.released_at_ms,a.claimed_at_ms,a.deadline_at_ms,"
+                "a.clock_reference_ns,a.execution_deadline_ns,a.clock_owner_digest,"
+                "EXISTS(SELECT 1 FROM capacity_executions e WHERE e.project_id=a.project_id "
+                "AND e.handle_digest=a.handle_digest) AS execution_registered "
+                "FROM active_run_capacity a "
+                "JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id "
+                "WHERE a.project_id=? AND a.handle_digest=? AND h.binding_state='pending' AND h.consumed_at_ms IS NULL "
+                "AND h.client_version='bridge-v1' AND h.native_assignment_id=? "
+                "AND NOT EXISTS(SELECT 1 FROM capacity_completions c "
+                "WHERE c.project_id=a.project_id AND c.handle_digest=a.handle_digest)",
+                (project_id, handle, external_id(self.state.digest_key(), "asg", bridge_run_id)),
+            ).fetchone()
+            if (row is None or row["kind"] != "claimed" or row["released_at_ms"] is not None
+                    or row["bridge_run_id"] != bridge_run_id or row["runtime_digest"] != COLLECTOR_RUNTIME_DIGEST):
+                raise LedgerError("owned execution is unavailable")
+            if row["execution_registered"]:
+                raise LedgerError("owned execution was already registered")
+            key = OwnedExecutionKey(project_id, handle, row["run_id"], bridge_run_id)
+            monotonic_reference = time.monotonic_ns()
+            now = self._clock_ms()
+            if (type(now) is not int or not row["claimed_at_ms"] <= now < row["deadline_at_ms"]
+                    or type(monotonic_reference) is not int
+                    or not row["clock_reference_ns"] <= monotonic_reference < row["execution_deadline_ns"]
+                    or not secrets.compare_digest(row["clock_owner_digest"], self._capacity_clock_owner(
+                        key, row["clock_reference_ns"], row["execution_deadline_ns"],
+                        row["claimed_at_ms"], row["deadline_at_ms"]))):
+                raise LedgerError("owned execution deadline is unavailable")
+            # Only the claiming owner retains this clock-domain association.
+            # A later wall sample or reopened owner cannot recreate its budget.
+            deadline_ns = row["execution_deadline_ns"]
+            owner = self._capacity_execution_owner(key)
+            try:
+                self._connection.execute("INSERT INTO capacity_executions(project_id,handle_digest,run_id,bridge_run_id,owner_digest) VALUES(?,?,?,?,?)",
+                                         (project_id, handle, row["run_id"], bridge_run_id, owner))
+            except sqlite3.IntegrityError:
+                raise LedgerError("owned execution was already registered") from None
+        # Issue usable process custody only after the registration is durable.
+        # A rolled-back commit must not burn an unreturned registry key/slot.
+        try:
+            return self._capacity_executions.issue(key, deadline_ns=deadline_ns, run_handle=run_handle)
+        except ExecutionCustodyError:
+            raise LedgerError("owned execution deadline is unavailable") from None
+
+    def _capacity_execution_owner(self, key):
+        return keyed_digest(self.state.digest_key(), canonical_json({
+            "domain": "capacity-execution-owner-v1", "project_id": key.project_id, "handle_digest": key.handle_digest,
+            "run_id": key.run_id, "bridge_run_id": key.bridge_run_id, "owner": self._capacity_execution_origin,
+        }))
+
+    def _capacity_completion_locked(self, key):
+        row = self._connection.execute(
+            "SELECT a.*,c.terminal_record_id,c.terminal_content_digest,c.released_at_ms AS completion_released_at_ms,"
+            "c.receipt_digest,e.owner_digest AS execution_owner_digest,e.cleanup_reservation_digest "
+            "FROM active_run_capacity a JOIN capacity_completions c "
+            "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
+            "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
+            "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
+            "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
+            "WHERE a.project_id=? AND a.handle_digest=? AND a.run_id=? AND a.bridge_run_id=?",
+            (key.project_id, key.handle_digest, key.run_id, key.bridge_run_id),
+        ).fetchone()
+        if row is None or row["kind"] != "claimed":
+            raise LedgerError("capacity completion is unavailable")
+        if (row["released_at_ms"] != row["completion_released_at_ms"]
+                or row["release_digest"] != row["receipt_digest"]):
+            raise LedgerError("capacity completion is unavailable")
+        return row
+
+    def _capacity_completion_digest(self, row, timestamp):
+        if row['cleanup_reservation_digest'] is not None:
+            from .account_cleanup import checked_completion_digest
+            try:
+                return checked_completion_digest(self, row, timestamp)
+            except ClaimError:
+                raise LedgerError('capacity completion is unavailable') from None
+        material = {"domain": "active-capacity-release-v1", **{name: row[name] for name in (
+            "project_id", "handle_digest", "run_id", "bridge_run_id", "provider", "account_fingerprint",
+            "runtime_digest", "policy_digest", "claimed_at_ms", "deadline_at_ms", "terminal_record_id", "terminal_content_digest",
+            "clock_reference_ns", "execution_deadline_ns", "clock_owner_digest", "execution_owner_digest",
+        )}, "released_at_ms": timestamp}
+        return keyed_digest(self.state.digest_key(), canonical_json(material))
+
+    def _release_active_capacity(self, ticket):
+        key = self._capacity_executions.key(ticket)
+        with self._account_transaction():
+            row = self._capacity_completion_locked(key)
+            known = row["released_at_ms"] is not None
+            if known:
+                timestamp = row["released_at_ms"]
+                digest = self._capacity_completion_digest(row, timestamp)
+                if not secrets.compare_digest(digest, row["receipt_digest"]):
+                    raise LedgerError("capacity completion is unavailable")
+            else:
+                # Actual retained fixed-runner custody must establish cleanup.
+                # A constructed ticket or a durable terminal row is insufficient.
+                self._capacity_executions.key(ticket, cleaned=True)
+                registered = self._connection.execute(
+                    "SELECT owner_digest FROM capacity_executions WHERE project_id=? AND handle_digest=? "
+                    "AND run_id=? AND bridge_run_id=?", (key.project_id, key.handle_digest, key.run_id, key.bridge_run_id),
+                ).fetchone()
+                if registered is None or not secrets.compare_digest(registered[0], self._capacity_execution_owner(key)):
+                    raise LedgerError("owned execution is unavailable")
+                timestamp = self._clock_ms()
+                if type(timestamp) is not int or not row["claimed_at_ms"] <= timestamp <= MAX_CLAIM_INTEGER:
+                    raise LedgerError("capacity completion is unavailable")
+                digest = self._capacity_completion_digest(row, timestamp)
+                self._connection.execute(
+                    "UPDATE capacity_completions SET released_at_ms=?,receipt_digest=? "
+                    "WHERE project_id=? AND handle_digest=?", (timestamp, digest, key.project_id, key.handle_digest),
+                )
+                self._connection.execute(
+                    "UPDATE active_run_capacity SET released_at_ms=?,release_digest=? "
+                    "WHERE project_id=? AND handle_digest=?", (timestamp, digest, key.project_id, key.handle_digest),
+                )
+        # Commit precedes registry acknowledgement. A lost acknowledgement
+        # retrieves the exact existing receipt, including after clock rollback.
+        self._capacity_executions.acknowledge_release(ticket)
+        return {"state": "released", "receipt_digest": digest, "released_at_ms": timestamp, "known": known}
+
+    def _finish_owned_execution(self, ticket):
+        try:
+            return self._release_active_capacity(ticket)
+        except (ExecutionCustodyError, LedgerError, StateError, sqlite3.Error):
+            # A completed result remains its own fact. Missing cleanup or failed
+            # completion delivery retains capacity and never replays model work.
+            return {"state": "held", "receipt_digest": None, "released_at_ms": None, "known": False}
+
+    def _known_capacity_release(self, project_id, run_handle, bridge_run_id):
+        """Owner metadata reconciliation; never launches or releases anything."""
+        handle = keyed_digest(self.state.digest_key(), run_handle)
+        with self._lock:
+            cap = self._connection.execute(
+                "SELECT run_id,released_at_ms FROM active_run_capacity "
+                "WHERE project_id=? AND handle_digest=? AND bridge_run_id=?", (project_id, handle, bridge_run_id),
+            ).fetchone()
+            if cap is None or cap["released_at_ms"] is None:
+                return None
+            row = self._capacity_completion_locked(OwnedExecutionKey(project_id, handle, cap["run_id"], bridge_run_id))
+            digest = self._capacity_completion_digest(row, row["released_at_ms"])
+            if not secrets.compare_digest(digest, row["receipt_digest"]):
+                raise LedgerError("capacity completion is unavailable")
+            return {"state": "released", "receipt_digest": digest, "released_at_ms": row["released_at_ms"], "known": True}
+
+    def _capacity_status(self, project_id, status):
+        """Current bounded owner view; never releases, registers or launches.
+
+        Expired, terminal or unreconciled reservations stay held. Missing
+        scoped metadata is unknown, not proof of a free slot or absent process.
+        Released observations require the original keyed completion receipt.
+        """
+        if not claim_matches(project_id, _CLAIM_PROJECT) or type(status) is not CapacityStatusInput:
+            raise LedgerError("capacity status is unavailable")
+        status.__post_init__()
+        with self._lock:
+            if self._connection.in_transaction:
+                raise LedgerError("capacity status is unavailable")
+            self.state.harden_database_files()
+            handle = keyed_digest(self.state.digest_key(), status.run_handle)
+            cap = self._connection.execute(
+                "SELECT run_id,released_at_ms FROM active_run_capacity "
+                "WHERE project_id=? AND handle_digest=? AND bridge_run_id=?",
+                (project_id, handle, status.bridge_run_id),
+            ).fetchone()
+            result = {"state": "unknown", "receipt_digest": None, "released_at_ms": None}
+            if cap is not None:
+                result["state"] = "held"
+                if cap["released_at_ms"] is not None:
+                    key = OwnedExecutionKey(project_id, handle, cap["run_id"], status.bridge_run_id)
+                    row = self._capacity_completion_locked(key)
+                    digest = self._capacity_completion_digest(row, row["released_at_ms"])
+                    if not secrets.compare_digest(digest, row["receipt_digest"]):
+                        raise LedgerError("capacity status is unavailable")
+                    result = {"state": "released", "receipt_digest": digest, "released_at_ms": row["released_at_ms"]}
+            return checked_capacity_status(result)
+
+    def claim_launch(
+        self, project_id: str, *, runtime_digest: str, caller_scope: str,
+        request_id: str, launch: LaunchClaimInput, storage_required=False, storage_binding=None, storage_evidence=None,
+    ) -> dict[str, Any]:
+        """Legacy synchronous owner reference; replies are metadata, never grants.
+
+        The asynchronous service path uses the same preflight and commit with an
+        actually returned fixed signature job. Native caller/environment custody,
+        bounded final admission work and normal-client migration remain required.
+        AccountService requires storage evidence by default; this direct library
+        reference does not grant a normal client a database or fallback path.
+        """
+        context, known, early_reason, provider = self._claim_preflight(
+            project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
+            request_id=request_id, launch=launch,
+            storage_required=storage_required, storage_binding=storage_binding, storage_evidence=storage_evidence,
+        )
+        if known is not None:
+            return known
+        prepared = None if early_reason else self._prepare_attestations(project_id, provider)
+        return self._claim_commit(context, prepared, early_reason)
+
+    def _claim_from_signature_job(self, context, pool, handle):
+        """Consume only an actually returned job from this owner's fixed pool.
+
+        No caller-selected indices, snapshot, callback or verification flag is
+        accepted. A pool/dataclass alone is not proof: the registered pool's
+        private completion registry and original retained inputs must agree.
+        The coordinator retains the reservation through commit/publication.
+        """
+        from .signature_worker_pool import SignatureWorkerPool
+
+        self._check_claim_context(context)
+        intake = getattr(self, "_signature_job_intake", None)
+        if (type(pool) is not SignatureWorkerPool or intake is None or pool._intake is not intake
+                or getattr(intake, "_signature_worker_pool", None) is not pool
+                or intake._views._ledger is not self):
+            raise ClaimError("claim_unavailable")
+        pool._owner()
+        result = pool.result(handle)
+        inputs = intake.returned_inputs(handle)
+        if (inputs.origin is not self._attestation_origin or inputs.project_id != context.project_id):
+            raise ClaimError("claim_unavailable")
+        admission, work_limits = intake.returned_admission(handle)
+        # Even a failed verification job may retrieve a durable receipt produced
+        # independently while it waited. This never releases an active worker.
+        with self._lock:
+            known = self._connection.read_call(work_limits, lambda: self._known_claim_for_request_locked(context))
+        if known is not None:
+            return known
+        if result.reason != "signature_execution_completed":
+            raise ClaimError("claim_preparation_failed")
+        from .claim_admission import PreparedClaimAdmission, admission_signature_rows
+
+        if (type(result.prepared) is not PreparedClaimAdmission or result.prepared.snapshot is not admission
+                or admission.origin is not intake._views._admission_capture_origin
+                or admission.project_id != context.project_id or admission.provider != inputs.provider
+                or admission.owner != inputs.owner or admission.signer != inputs.signer
+                or inputs.rows != admission_signature_rows(admission)):
+            raise ClaimError("claim_unavailable")
+        prepared = _PreparedAttestations(
+            self._attestation_origin, inputs.project_id, inputs.provider, inputs.owner, inputs.signer,
+            inputs.rows, frozenset(inputs.rows[index][0] for index in result.indices),
+        )
+        return self._claim_commit(context, prepared, None, admission=result.prepared, work_limits=work_limits)
+
+    def _check_claim_context(self, context):
+        if type(context) is not _ClaimRequest or context.origin is not self._attestation_origin:
+            raise ClaimError("claim_invalid_request")
+
+    def _known_claim_for_request_locked(self, context):
+        """Original managed integrity also applies to clock-free known replies."""
+        known = self._known_claim_receipt_locked(context.project_id, context.scope, context.request, context.parameters)
+        if known is None:
+            return None
+        origin = self._connection.execute('SELECT history_owner FROM host_run_bindings WHERE project_id=? AND handle_digest=?',
+                                          (context.project_id, context.handle)).fetchone()
+        managed = any(self._connection.execute('SELECT 1 FROM '+table+' WHERE project_id=? AND handle_digest=?',
+                                              (context.project_id, context.handle)).fetchone() is not None
+                      for table in ('account_open_receipts', 'account_open_requests'))
+        if not managed and ((origin is not None and origin[0] == 'legacy')
+                            or (origin is None and known['state'] != 'claimed')):
+            return known
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+
+        expected = context.storage_binding
+        original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', context.request_id,
+                                  context.project_id, context.runtime_digest, context.launch.payload())
+        if (expected is None or expected.project_id != context.project_id or expected.runtime_digest != context.runtime_digest
+                or expected.run_handle != context.launch.run_handle or expected.run_id != known['run_id']
+                or expected.claim_request_id != context.request_id or expected.claim_request_digest != account_request_digest(original)):
+            raise ClaimError('claim_storage_invalid')
+        self._claim_original_orchestration_digest(expected, 'claim_storage_invalid')
+        return known
+
+    def _claim_commit_header(self, context, *, capture_clock=False):
+        project = self._connection.execute("SELECT status FROM projects WHERE project_id=?", (context.project_id,)).fetchone()
+        if project is None or project[0] != "active":
+            raise ClaimError("claim_unavailable")
+        known = self._known_claim_for_request_locked(context)
+        if known is not None:
+            return (known, None, None) if capture_clock else (known, None)
+        reference = self._capacity_clock_reference() if capture_clock else None
+        timestamp = self._clock_ms()
+        if type(timestamp) is not int or not 0 <= timestamp <= MAX_CLAIM_INTEGER:
+            raise ClaimError("claim_unavailable")
+        return (known, timestamp, reference) if capture_clock else (known, timestamp)
+
+    def _claim_run_rows_locked(self, project_id, handle):
+        """Read all fixed scalar inputs before any eligibility short circuit."""
+        binding = self._connection.execute(
+            "SELECT run_id,binding_state,consumed_at_ms,client_version,expires_at_ms,created_at_ms,assignment_digest,orchestration_id,"
+            "observation_started_at_ms,observation_deadline_at_ms,history_owner "
+            "FROM host_run_bindings WHERE project_id=? AND handle_digest=?", (project_id, handle),
+        ).fetchone()
+        inputs = self._connection.execute(
+            "SELECT run_id,provider,runtime_digest,model,effort,hard_timeout_seconds "
+            "FROM launch_inputs WHERE project_id=? AND handle_digest=?", (project_id, handle),
+        ).fetchone()
+        observed = self._connection.execute(
+            "SELECT identity_digest,observed_at_ms FROM launch_observations WHERE project_id=? AND handle_digest=?",
+            (project_id, handle),
+        ).fetchone()
+        return binding, inputs, observed
+
+    def _claim_scalar_context_locked(self, project_id, handle, launch, timestamp, *, rows=None):
+        """Fresh fixed run/observation columns; never parse stored JSON here."""
+        from .providers import BILLING_MAX_AGE_MS
+
+        binding, inputs, observed = self._claim_run_rows_locked(project_id, handle) if rows is None else rows
+        if binding is None:
+            return "claim_not_open", None, None, None
+        if (binding["binding_state"] != "pending" or binding["consumed_at_ms"] is not None
+                or binding["client_version"] != "bridge-v1" or binding["expires_at_ms"] <= timestamp):
+            return "claim_not_open", binding, None, None
+        if not claim_matches(binding["run_id"], _CLAIM_RUN):
+            raise ClaimError("claim_unavailable")
+        if self._connection.execute(
+            "SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?)",
+            (project_id, handle, binding["run_id"]),
+        ).fetchone() is not None:
+            return "claim_already_consumed", binding, None, None
+        started, until = self._claim_observation_window(binding)
+        if not started <= timestamp < until:
+            return 'claim_not_open', binding, None, None
+        if inputs is None or inputs["run_id"] != binding["run_id"] or inputs["provider"] not in {"codex", "claude"}:
+            return "claim_context_missing", binding, None, None
+        if inputs["runtime_digest"] != COLLECTOR_RUNTIME_DIGEST:
+            return "claim_runtime_mismatch", binding, inputs, None
+        if (observed is None or observed["identity_digest"] != launch.identity_digest
+                or not binding["created_at_ms"] <= observed["observed_at_ms"] <= timestamp
+                or timestamp - observed["observed_at_ms"] > BILLING_MAX_AGE_MS):
+            return "claim_observation_missing", binding, inputs, None
+        return None, binding, inputs, observed
+
+    @staticmethod
+    def _claim_observation_window(binding):
+        started, until = binding['observation_started_at_ms'], binding['observation_deadline_at_ms']
+        if (type(started) is not int or type(until) is not int or type(binding['created_at_ms']) is not int
+                or not 0 <= binding['created_at_ms'] <= started < until <= MAX_CLAIM_INTEGER):
+            raise ClaimError('claim_unavailable')
+        return started, until
+
+    @staticmethod
+    def _claim_run_columns(binding, inputs, observed):
+        # A bounded metadata tuple retained with the already reserved ticket.
+        # No unbounded database string is retained as preparation context.
+        if (type(inputs["model"]) is not str or not 0 < len(inputs["model"].encode()) <= 160
+                or type(inputs["effort"]) is not str or not 0 < len(inputs["effort"].encode()) <= 32
+                or type(inputs["hard_timeout_seconds"]) is not int or inputs["hard_timeout_seconds"] < 1
+                or type(binding["created_at_ms"]) is not int or binding["created_at_ms"] < 0
+                or type(binding["expires_at_ms"]) is not int or binding["expires_at_ms"] < binding["created_at_ms"]):
+            raise ClaimError("claim_unavailable")
+        return (tuple(binding), tuple(inputs), tuple(observed))
+
+    def _claim_admission_context(self, context, prepared, work_limits):
+        from .admission_inputs import AdmissionCaptureLimits
+        from .claim_admission import claim_identity, same_admission_inputs
+
+        intake = self._signature_job_intake
+        view, limits = intake._views, intake._limits
+        snapshot = prepared.snapshot
+        signer = self._current_signer_bytes()
+        policy = view._claim_policy(snapshot.provider)
+
+        def read():
+            current = view._capture_admission_rows_locked(
+                context.project_id, snapshot.provider, policy,
+                AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer,
+            )
+            if not same_admission_inputs(snapshot, current):
+                raise ClaimError("claim_preparation_stale")
+            rows = self._claim_run_rows_locked(context.project_id, context.handle)
+            if context.run_context != tuple(None if row is None else tuple(row) for row in rows):
+                raise ClaimError("claim_preparation_stale")
+            state = self._claim_scalar_context_locked(
+                context.project_id, context.handle, context.launch, current.captured_at_ms, rows=rows,
+            )
+            return (*state, current.captured_at_ms)
+
+        reason, binding, inputs, observed, timestamp = self._connection.transaction_read_call(work_limits, read)
+        identity = admission = None
+        if reason is None:
+            if inputs["provider"] != snapshot.provider:
+                raise ClaimError("claim_preparation_stale")
+            reason, admission, identity = claim_identity(prepared, binding["run_id"], context.launch.identity_digest)
+            if reason is None and identity["observed_at_ms"] != observed["observed_at_ms"]:
+                reason = "claim_client_changed"
+            if reason is None and identity["client_version"] not in prepared.reviewed_versions:
+                reason = "client_version_unreviewed"
+        return reason, binding, inputs, identity, admission, timestamp
+
+    def _claim_original_orchestration_digest(self, expected, error_code):
+        from .account_open_contracts import OpenError
+        from .account_original_open import original_orchestration_digest
+
+        try:
+            return original_orchestration_digest(self, expected)
+        except OpenError:
+            raise ClaimError(error_code) from None
+
+    def _check_claim_storage(self, context, run_id, timestamp, deadline, work_limits):
+        from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountRequest, account_request_digest
+        from .claim_storage import verify_storage_evidence
+
+        if context.storage_binding is None or context.storage_evidence is None:
+            raise ClaimError("claim_storage_required")
+        def metadata():
+            row = self._connection.execute(
+                "SELECT h.assignment_digest FROM host_run_bindings h "
+                "WHERE h.project_id=? AND h.handle_digest=? AND h.run_id=?", (context.project_id, context.handle, run_id),
+            ).fetchone()
+            if row is None:
+                raise ClaimError("claim_storage_invalid")
+            return row[0], self._claim_original_orchestration_digest(context.storage_binding, 'claim_storage_invalid')
+        assignment, orchestration = (metadata() if work_limits is None else
+                                     self._connection.transaction_read_call(work_limits, metadata))
+        request = AccountRequest(ACCOUNT_PROTOCOL_VERSION, "account.claim_launch", context.request_id,
+                                 context.project_id, context.runtime_digest, context.launch.payload())
+        verify_storage_evidence(
+            self.state.digest_key(), context.storage_binding, context.storage_evidence,
+            project_id=context.project_id, runtime_digest=context.runtime_digest, run_handle=context.launch.run_handle,
+            run_id=run_id, request_id=context.request_id, request_digest=account_request_digest(request),
+            assignment_digest=assignment, orchestration_digest=orchestration, now_ms=timestamp, deadline_ms=deadline,
+        )
+
+    def _claim_commit(self, context, prepared, early_reason, *, admission=None, work_limits=None):
+        self._check_claim_context(context)
+        project_id, launch = context.project_id, context.launch
+        scope, request, parameters, handle = context.scope, context.request, context.parameters, context.handle
+        with self._account_transaction():
+            def header():
+                return self._claim_commit_header(context, capture_clock=True)
+            known, timestamp, monotonic_reference = (header() if work_limits is None else
+                                                     self._connection.transaction_read_call(work_limits, header))
+            if known is not None:
+                return known
+            if admission is None and work_limits is None and early_reason is None:
+                rows = self._claim_run_rows_locked(project_id, handle)
+                if context.run_context != tuple(None if row is None else tuple(row) for row in rows):
+                    raise ClaimError('claim_preparation_stale')
+            if admission is not None:
+                reason, binding, inputs, identity, admitted, fresh_timestamp = self._claim_admission_context(
+                    context, admission, work_limits,
+                )
+                if fresh_timestamp < timestamp:
+                    raise ClaimError("claim_unavailable")
+                timestamp = fresh_timestamp
+            elif work_limits is not None:
+                if early_reason is None:
+                    raise ClaimError("claim_unavailable")
+                reason, binding, inputs, identity = self._connection.transaction_read_call(
+                    work_limits, lambda: self._claim_scalar_context_locked(project_id, handle, launch, timestamp),
+                )
+            else:
+                reason, binding, inputs, identity = self._claim_context_locked(project_id, handle, launch, timestamp)
+            reason = early_reason or reason
+            run_id = None if binding is None else binding["run_id"]
+            if not claim_matches(run_id, _CLAIM_RUN):
+                # Older fenced bindings can retain historical identifiers
+                # outside this wire contract. Do not reinterpret or export one.
+                run_id = None
+            if reason is None:
+                from .providers import evaluate_launch
+
+                if admission is None:
+                    admitted, identity_digest = self._launch_identity_locked(project_id, launch.run_handle, identity)
+                    attestations = self._prepared_attestations_locked(prepared, project_id, inputs["provider"])
+                    billing, _ = self._account_records_locked(project_id, "provider_billing", inputs["provider"])
+                    headroom, _ = self._account_records_locked(project_id, "provider_headroom", inputs["provider"])
+                else:
+                    identity_digest = launch.identity_digest
+                    billing, headroom = admission.billing, admission.headroom
+                    attestations = [(record, digest) for identifier, record, digest in admission.attestations
+                                    if identifier in prepared.verified]
+                reason = evaluate_launch(
+                    provider=inputs["provider"], identity=identity, billing=billing, headroom=headroom,
+                    now_ms=timestamp, attestations=attestations, bootstrap=admitted["admission_basis"] == "bootstrap",
+                )
+                if reason is not None:
+                    self._store_admission_locked(project_id, {
+                        "provider": inputs["provider"], "decision": "deny", "reason_code": reason,
+                        "admission_basis": None, "account_fingerprint": admitted["account_fingerprint"],
+                        "evidence_digests": [identity_digest], "observed_at_ms": timestamp,
+                    }, run_id=None, timestamp=timestamp)
+            bridge = deadline = None
+            if reason is None:
+                # Waiting for signatures/export cannot restart the original
+                # host-open budget. Both wall and monotonic capacity deadlines
+                # are derived below from this same remaining window.
+                deadline = min(timestamp + inputs["hard_timeout_seconds"] * 1000,
+                               self._claim_observation_window(binding)[1])
+                if not timestamp < deadline <= MAX_CLAIM_INTEGER:
+                    raise ClaimError("claim_unavailable")
+                if context.storage_required:
+                    self._check_claim_storage(context, run_id, timestamp, deadline, work_limits)
+                def capacity():
+                    return self._check_active_capacity_locked(inputs["provider"], admitted["account_fingerprint"])
+                policy = (capacity() if work_limits is None else
+                          self._connection.transaction_read_call(work_limits, capacity))
+                bridge = "brg_" + secrets.token_hex(16)
+                material = {"schema_version": 1, "record_type": "dispatch_intent", "run_id": run_id,
+                            "bridge_run_id": bridge, "provider": inputs["provider"], "model": inputs["model"],
+                            "effort": inputs["effort"], "deadline_at_ms": deadline, "observed_at_ms": timestamp}
+                record = validate_learning_record({**material, "record_id": "dispatch_intent:" + content_digest(material)})
+                self._connection.execute("INSERT INTO launch_claims VALUES(?,?,?,'claimed',?,?)",
+                                         (project_id, handle, run_id, timestamp, bridge))
+                self._reserve_active_capacity_locked(project_id, handle, run_id, bridge, inputs["provider"],
+                                                     admitted["account_fingerprint"], policy, timestamp, deadline,
+                                                     monotonic_reference)
+                self._append_checked_locked(project_id, record, producer="lifecycle", timestamp=timestamp)
+            return self._store_claim_receipt_locked(project_id, scope, request, parameters, handle, {
+                "state": "claimed" if reason is None else "denied", "run_id": run_id, "reason_code": reason,
+                "bridge_run_id": bridge, "deadline_at_ms": deadline, "recorded_at_ms": timestamp,
+            })
+
     def record_dispatch_intent(
         self,
         project_id: str,
@@ -5304,15 +7064,23 @@ class LearningLedger:
 
         The run must still be pending and bound to exactly this assignment, task
         and route, with a passing admission for the route's provider. A second
-        claim for the same run is refused, so a launch is never resent. With
+        claim for the same run is refused, even after history expiry or clock
+        rollback. Consumption is owner metadata, not an expiring event. With
         `claim` false the same checks run and nothing is written, so a refusal
         can happen before anything is exported or launched.
         """
 
+        if type(claim) is not bool:
+            raise LedgerError("dispatch claim flag is invalid")
+        try:
+            monotonic_reference = self._capacity_clock_reference() if claim else None
+        except ClaimError:
+            raise LedgerError("dispatch deadline is unavailable") from None
         timestamp = self._clock_ms()
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
         bridge_run_id = f"brg_{secrets.token_hex(16)}"
-        with self._lock, self._connection:
+        # Preflight reads do not acquire SQLite's write reservation.
+        with self._account_transaction() if claim else self._lock:
             binding = self._connection.execute(
                 "SELECT run_id,binding_state,consumed_at_ms,assignment_digest,"
                 "task_digest,route_digest,expires_at_ms FROM host_run_bindings "
@@ -5343,11 +7111,20 @@ class LearningLedger:
             if admission["provider"] != route.get("provider"):
                 raise LedgerError("host run admission differs from the dispatched provider")
             if self._connection.execute(
+                "SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?)",
+                (project_id, handle_digest, run_id),
+            ).fetchone() is not None:
+                raise LedgerError("host run was already dispatched")
+            if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='dispatch_intent' "
                 "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
                 (project_id, run_id),
             ).fetchone() is not None:
                 raise LedgerError("host run was already dispatched")
+            try:
+                policy = self._check_active_capacity_locked(route["provider"], admission["account_fingerprint"])
+            except ClaimError as error:
+                raise LedgerError("active launch capacity is unavailable") from error
             if not claim:
                 return {"run_id": run_id}
             material = {
@@ -5367,10 +7144,20 @@ class LearningLedger:
                 )
             except ContractError as exc:
                 raise LedgerError("dispatch intent is invalid") from exc
+            self._connection.execute(
+                "INSERT INTO launch_claims(project_id,handle_digest,run_id,kind,claimed_at_ms,bridge_run_id) "
+                "VALUES(?,?,?,'claimed',?,?)",
+                (project_id, handle_digest, run_id, timestamp, bridge_run_id),
+            )
+            try:
+                self._reserve_active_capacity_locked(project_id, handle_digest, run_id, bridge_run_id,
+                                                     route["provider"], admission["account_fingerprint"], policy, timestamp,
+                                                     record["deadline_at_ms"], monotonic_reference)
+            except ClaimError:
+                raise LedgerError("dispatch deadline is unavailable") from None
             self._append_checked_locked(
                 project_id, record, producer="lifecycle", timestamp=timestamp
             )
-        self.state.harden_database_files()
         return {
             "bridge_run_id": bridge_run_id,
             "run_id": run_id,
@@ -5388,6 +7175,8 @@ class LearningLedger:
         fenced: bool,
         reviewed: bool,
         terminal_state: str | None,
+        result_validation_reason_code: str | None = None,
+        client_diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Bind what a dispatched child returned to its run, once.
 
@@ -5399,7 +7188,7 @@ class LearningLedger:
 
         timestamp = self._clock_ms()
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
-        with self._lock, self._connection:
+        with self._account_transaction():
             binding = self._connection.execute(
                 "SELECT run_id,binding_state,consumed_at_ms FROM host_run_bindings "
                 "WHERE project_id=? AND handle_digest=?",
@@ -5418,11 +7207,13 @@ class LearningLedger:
                 "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
                 (project_id, run_id),
             ).fetchall()
-            if (
-                len(intents) != 1
-                or json.loads(bytes(intents[0]["content"]))["bridge_run_id"] != bridge_run_id
-            ):
+            if len(intents) != 1:
                 raise LedgerError("only the dispatched run records its child's result")
+            intent = json.loads(bytes(intents[0]["content"]))
+            if intent["bridge_run_id"] != bridge_run_id:
+                raise LedgerError("only the dispatched run records its child's result")
+            if client_diagnostics is not None and intent["provider"] != "claude":
+                raise LedgerError("client observations require a Claude dispatch")
             if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='dispatch_result' "
                 "AND json_extract(CAST(content AS TEXT),'$.run_id')=?",
@@ -5430,7 +7221,7 @@ class LearningLedger:
             ).fetchone() is not None:
                 raise LedgerError("the dispatched child's result is already recorded")
             material = {
-                "schema_version": 1,
+                "schema_version": DISPATCH_RESULT_SCHEMA_VERSION,
                 "record_type": "dispatch_result",
                 "run_id": run_id,
                 "bridge_run_id": bridge_run_id,
@@ -5438,6 +7229,8 @@ class LearningLedger:
                 "fenced": fenced,
                 "reviewed": reviewed,
                 "terminal_state": terminal_state,
+                "result_validation_reason_code": result_validation_reason_code,
+                "client_diagnostics": client_diagnostics,
                 "observed_at_ms": timestamp,
             }
             try:
@@ -5449,7 +7242,11 @@ class LearningLedger:
             self._append_checked_locked(
                 project_id, record, producer="lifecycle", timestamp=timestamp
             )
-        self.state.harden_database_files()
+            self._connection.execute(
+                "INSERT INTO capacity_completions(project_id,handle_digest,run_id,bridge_run_id,"
+                "terminal_record_id,terminal_content_digest) VALUES(?,?,?,?,?,?)",
+                (project_id, handle_digest, run_id, bridge_run_id, record["record_id"], content_digest(record)),
+            )
         return {"run_id": run_id, "bridge_run_id": bridge_run_id}
 
     def host_owner(
@@ -5707,6 +7504,7 @@ class LearningLedger:
             }
         # Every result path needs the run's stored passing admission, including
         # collector-bound sessions, whose admission is decided when they bind.
+        dispatch_diagnostics = {}
         with self._lock:
             self._run_admission_locked(project_id, checked_observation["run_id"])
             if client_version == BRIDGE_CLIENT_VERSION and self._connection.execute(
@@ -5729,6 +7527,14 @@ class LearningLedger:
                 if len(dispatched) != 1:
                     raise LedgerError("a bridged run has no recorded child result")
                 recorded = json.loads(bytes(dispatched[0]["content"]))
+                # Diagnostics come only from the bridge's durable record, never
+                # the primary's observation or its (already fenced) result.
+                reason = recorded.get("result_validation_reason_code")
+                if reason is not None:
+                    dispatch_diagnostics["result_validation_reason_code"] = reason
+                client_diagnostics = recorded.get("client_diagnostics")
+                if client_diagnostics is not None:
+                    dispatch_diagnostics["client_diagnostics"] = client_diagnostics
                 if not secrets.compare_digest(
                     keyed_digest(self.state.digest_key(), canonical_json(result)),
                     recorded["result_digest"],
@@ -5948,6 +7754,7 @@ class LearningLedger:
             "worker_result_stored": stored_result is not None,
             "event_commit": event_result,
             "outcome_commit": outcome_result,
+            **({"dispatch_diagnostics": dispatch_diagnostics} if dispatch_diagnostics else {}),
         }
 
     def _write_worker_result(
@@ -6342,6 +8149,10 @@ class LearningLedger:
         from .providers import _latest, credits_waived
 
         provider = record.get("provider")
+        if provider != "codex":
+            # The original rule never waives Claude overage. No owner-signature
+            # lookup or second connection is needed to display that fixed fact.
+            return credits_waived(provider, record, None)
         with self._lock:
             attestations = self._provider_records_locked(
                 project_id, "billing_attestation", provider
@@ -6786,6 +8597,11 @@ class LearningLedger:
             raise LedgerError("authenticated owner record type is unsupported")
         from .learning_engine import OwnerGrantAuthority
 
+        with self._lock:
+            # A key added while this ledger was already open (a new machine: register, then
+            # attest) is recorded before its first signature counts, as opening would have.
+            if not self._connection.in_transaction and self._owner_generation_locked() is None:
+                self._record_first_owner_key()
         authority = OwnerGrantAuthority.for_state(self.state)
         if not authority.verify_owner_record(project_id, checked, signature):
             raise LedgerError("owner record signature is invalid")
@@ -6996,81 +8812,27 @@ class LearningLedger:
                 "AND record_type='outcome'",
                 (project_id, checked["source_outcome_id"]),
             ).fetchone()
-            if not source:
-                raise LedgerError("evaluation case source outcome is missing")
-            source_record = json.loads(bytes(source["content"]))
-            if (
-                source_record["task_slice"] != checked["task_slice"]
-                or source_record["fixture_digest"] != checked["fixture_digest"]
-            ):
-                raise LedgerError("evaluation case differs from its source outcome")
-            if source_record["run_id"] in self._owner_invalidated_run_ids_locked(
-                project_id
-            ):
-                raise LedgerError("evaluation case source was invalidated by owner feedback")
             previous_id = checked["supersedes_case_id"]
-            if previous_id is None:
-                if checked["corpus_state"] != "development":
-                    raise LedgerError("controlled evaluation case must supersede a development case")
-            else:
-                previous = self._connection.execute(
-                    "SELECT content FROM records WHERE project_id=? AND record_id=? "
-                    "AND record_type='evaluation_case'",
-                    (project_id, previous_id),
-                ).fetchone()
-                if not previous:
-                    raise LedgerError("superseded evaluation case is missing")
-                previous_record = json.loads(bytes(previous["content"]))
-                immutable = {
-                    "source_outcome_id", "task_slice", "fixture_digest",
-                    "criteria_digest", "lineage_digest",
-                }
-                if any(previous_record[field] != checked[field] for field in immutable):
-                    raise LedgerError("evaluation case revision changes immutable evidence")
-                if previous_record["similarity_group_digest"] not in {
-                    None, checked["similarity_group_digest"]
-                }:
-                    raise LedgerError("evaluation case revision changes its similarity group")
+            previous = None if previous_id is None else self._connection.execute(
+                "SELECT content FROM records WHERE project_id=? AND record_id=? "
+                "AND record_type='evaluation_case'",
+                (project_id, previous_id),
+            ).fetchone()
             related_rows = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? "
                 "AND record_type='evaluation_case' AND record_id<>?",
                 (project_id, previous_id or checked["record_id"]),
             ).fetchall()
-            related = [json.loads(bytes(row["content"])) for row in related_rows]
-            controlled = [
-                record for record in related
-                if record["corpus_state"] != "development"
-                and record["record_id"] != checked["record_id"]
-            ]
-            if previous_id is not None and any(
-                record["supersedes_case_id"] == previous_id for record in controlled
-            ):
-                raise LedgerError("development case already entered a controlled corpus")
-            split_key = (
-                checked["source_outcome_id"], checked["fixture_digest"],
-                checked["criteria_digest"], checked["lineage_digest"],
-            )
-            if checked["corpus_state"] != "development" and any(
-                (
-                    record["source_outcome_id"], record["fixture_digest"],
-                    record["criteria_digest"], record["lineage_digest"],
-                ) == split_key
-                for record in controlled
-            ):
-                raise LedgerError("evaluation evidence already belongs to a controlled corpus")
-            same_group = [
-                record for record in related
-                if record["similarity_group_digest"] is not None
-                if record["similarity_group_digest"]
-                == checked["similarity_group_digest"]
-            ]
-            if any(
-                record["corpus_state"] != checked["corpus_state"]
-                for record in same_group
-            ):
-                raise LedgerError(
-                    "reviewed similarity group already exists in the project corpus"
+            try:
+                check_evaluation_case(
+                    checked,
+                    source_outcome=json.loads(bytes(source["content"])) if source else None,
+                    previous_case=json.loads(bytes(previous["content"])) if previous else None,
+                    related_cases=(json.loads(bytes(row["content"])) for row in related_rows),
+                    invalidated_run_ids=self._owner_invalidated_run_ids_locked(project_id),
                 )
+            except EligibilityError as error:
+                raise LedgerError(str(error)) from None
             return
         if checked["record_type"] == "evaluation_assignment":
             candidate_rows = self._connection.execute(
@@ -7679,6 +9441,10 @@ class LearningLedger:
         producer: str,
         timestamp: int,
     ) -> dict[str, Any]:
+        if checked["record_type"] in LEARNING_MOVED_TYPES and self._learning_moved_locked(
+            project_id
+        ):
+            raise LedgerError(LEARNING_MOVED_ERROR)
         if checked["record_type"] == "candidate":
             self._validate_candidate_eligibility_locked(project_id, checked)
         source = SOURCE_BY_PRODUCER[producer]
@@ -7691,6 +9457,7 @@ class LearningLedger:
                 "evaluation_case", "qa_evidence", "evidence_review", "evaluation_trial", "candidate", "comparison", "canary_report",
                 "grader_calibration", "owner_grant", "promotion", "learning_export",
                 "billing_attestation",
+                "claim_denial_settlement",
             }
             else timestamp + DEFAULT_RETENTION_MS
         )
@@ -8148,6 +9915,21 @@ class LearningLedger:
                 raise
             return path
 
+    def _capture_learning_source_image(
+        self, project_id: str, file_id: str, *, expected_domain_digest: str, work_limits,
+    ) -> dict[str, Any]:
+        """Explicit offline-owner source rows; no native or activation authority.
+
+        Normal clients have no endpoint for this operation. The checker reuses
+        this existing owner/key and requires its explicit offline intent and
+        recorded drain checks; it never opens or takes over another live store.
+        Complete provenance, retained files and durable writer retirement still
+        precede use of the staged corpus.
+        """
+        from .learning_source_image import capture_source_image
+        return capture_source_image(self, project_id, file_id,
+                                    expected_domain_digest=expected_domain_digest, work_limits=work_limits)
+
     def verify_sanitized_backup(
         self, project_id: str, *, file_id: str
     ) -> dict[str, Any]:
@@ -8544,6 +10326,10 @@ class LearningLedger:
         references = checked["routing_evidence_refs"]
         if not references:
             return frozenset()
+        if self.learning_moved(project_id):
+            # The owner may have rejected a run in the project store since the move;
+            # this frozen copy cannot vouch for any.
+            raise LedgerError(LEARNING_MOVED_ERROR)
         expected_task_id = keyed_digest(self.state.digest_key(), checked["id"])
         accepted: set[str] = set()
         with self._lock:
@@ -8611,6 +10397,8 @@ class LearningLedger:
             ).fetchone()
             if not project or project["status"] != "active":
                 raise LedgerError("project binding is not active")
+            if self._learning_moved_locked(project_id):
+                raise LedgerError(LEARNING_MOVED_ERROR)
             outcome_rows = self._connection.execute(
                 "SELECT content,content_digest FROM records WHERE project_id=? "
                 "AND record_type='outcome' ORDER BY source_sequence LIMIT 10001",
@@ -9034,15 +10822,19 @@ class LearningLedger:
                 "FROM hook_ingestion WHERE project_id=? ORDER BY event_code",
                 (project_id,),
             ).fetchall()
+            # A run the project's own service drove settles through its capacity
+            # row; its binding here is never consumed by the ledger.
             host_row = self._connection.execute(
                 "SELECT COUNT(*) AS opened,"
-                "SUM(consumed_at_ms IS NOT NULL) AS terminal,"
-                "SUM(binding_state='pending') AS pending,"
-                "SUM(native_assignment_id IS NOT NULL) AS native_bound,"
-                "SUM(usage_complete=1) AS usage_complete,"
-                "SUM(usage_complete=0) AS usage_unknown,"
-                "SUM(binding_state='abandoned') AS abandoned "
-                "FROM host_run_bindings WHERE project_id=?",
+                "SUM(h.consumed_at_ms IS NOT NULL OR c.released_at_ms IS NOT NULL) AS terminal,"
+                "SUM(h.binding_state='pending' AND c.released_at_ms IS NULL) AS pending,"
+                "SUM(h.native_assignment_id IS NOT NULL) AS native_bound,"
+                "SUM(h.usage_complete=1) AS usage_complete,"
+                "SUM(h.usage_complete=0) AS usage_unknown,"
+                "SUM(h.binding_state='abandoned') AS abandoned "
+                "FROM host_run_bindings AS h LEFT JOIN active_run_capacity AS c "
+                "ON c.project_id=h.project_id AND c.handle_digest=h.handle_digest "
+                "WHERE h.project_id=?",
                 (project_id,),
             ).fetchone()
             orchestration_rows = self._connection.execute(
@@ -9298,6 +11090,17 @@ class LearningLedger:
         with self._lock:
             if self._active_readers:
                 raise LedgerError("project deletion requires closed scoped readers")
+            if self._connection.execute(
+                "SELECT 1 FROM account_billing_probe_requests "
+                "WHERE project_id=? AND state='admitted' LIMIT 1",
+                (project_id,),
+            ).fetchone() is not None:
+                raise LedgerError("project_has_active_billing_probe")
+            if self._connection.execute(
+                "SELECT 1 FROM active_run_capacity WHERE project_id=? AND released_at_ms IS NULL LIMIT 1",
+                (project_id,),
+            ).fetchone() is not None:
+                raise LedgerError("project_has_active_launch_capacity")
             # Account restrictions are read from every project, so deleting the
             # project that holds one would lift it. The ledger's own clock
             # decides, never the caller's time.
@@ -9309,6 +11112,8 @@ class LearningLedger:
             self._begin_exclusive_maintenance()
             try:
                 self._connection.execute("DELETE FROM hook_ingestion WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM account_billing_probe_requests WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM account_billing_probe_origins WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM records WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM sessions WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM run_provenance WHERE project_id=?", (project_id,))
@@ -9316,6 +11121,11 @@ class LearningLedger:
                 self._connection.execute("DELETE FROM collector_health WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM repair_receipts WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM host_run_bindings WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM launch_receipts WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM launch_observations WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM launch_inputs WHERE project_id=?", (project_id,))
+                self._connection.execute("DELETE FROM active_run_capacity WHERE project_id=? AND released_at_ms IS NOT NULL", (project_id,))
+                self._connection.execute("DELETE FROM launch_claims WHERE project_id=?", (project_id,))
                 updated = self._connection.execute(
                     "UPDATE projects SET canonical_root=NULL,root_digest=NULL,status='deleted',deleted_at_ms=? "
                     "WHERE project_id=? AND status='active'",
@@ -9671,6 +11481,46 @@ class CollectorServer:
                     request["reason_code"],
                 )
                 return {"ok": True, "receipt_id": receipt_id}
+            if request.get("op") == "register" and set(request) == {
+                "protocol", "op", "project_root",
+            }:
+                # The owner's registration on the running compatible collector, so
+                # another project's running children keep their collector.
+                return {"ok": True, "project_id": self.ledger.register_project(Path(request["project_root"]))}
+            if request.get("op") in {
+                "owner_record_payload", "commit_owner_record", "verify_owner_record",
+            } and set(request) == {
+                "protocol", "op", "project_root", "record",
+                *({"signature_b64"} if request.get("op") != "owner_record_payload" else ()),
+            }:
+                from .learning_engine import OwnerGrantAuthority
+                project_id = self.ledger.project_for_root(Path(request["project_root"]))
+                record = request["record"]
+                if type(record) is not dict:
+                    return {"ok": False, "code": "operation_rejected"}
+                if request["op"] == "owner_record_payload":
+                    payload = OwnerGrantAuthority.for_state(self.ledger.state).owner_record_payload(project_id, record)
+                    return {"ok": True, "signing_payload_b64": base64.b64encode(payload).decode("ascii")}
+                if request["op"] == "verify_owner_record":
+                    # For a project's own service, which stores the record itself: the
+                    # owner key and its check stay with this owner. Nothing is stored here.
+                    checked = validate_learning_record(record)
+                    signature = base64.b64decode(request["signature_b64"], validate=True)
+                    return {"ok": True, "valid": checked["record_type"] == "feedback" and bool(
+                        OwnerGrantAuthority.for_state(self.ledger.state).verify_owner_record(
+                            project_id, checked, signature))}
+                # The owner's signature is the authority; the ledger verifies it.
+                signature = base64.b64decode(request["signature_b64"], validate=True)
+                committed = self.ledger.commit_owner_record(project_id, record=record, signature=signature)
+                return {"ok": True, "committed": committed}
+            if request.get("op") == "project" and set(request) == {
+                "protocol", "op", "project_root",
+            }:
+                # Registry lookup only: an unregistered root is never registered here.
+                return {
+                    "ok": True,
+                    "project_id": self.ledger.project_for_root(Path(request["project_root"])),
+                }
             if request.get("op") == "health" and set(request) in (
                 {"protocol", "op"},
                 {"protocol", "op", "project_root"},
@@ -9698,6 +11548,28 @@ class CollectorServer:
                         ),
                     )
                 return response
+            if request.get("op") == "learning_migration" and set(request) == {
+                "protocol", "op", "project_root",
+            }:
+                project_id = self.ledger.project_for_root(Path(request["project_root"]))
+                return {
+                    "ok": True,
+                    "moved": self.ledger.learning_moved(project_id),
+                    "has_learning": self.ledger.has_learning_history(project_id),
+                    "drained": self.ledger.drained(),
+                    "activation_pending": self.ledger.learning_activation_pending(project_id),
+                }
+            if request.get("op") == "learning_moved_if_empty" and set(request) == {
+                "protocol", "op", "project_root",
+            }:
+                project_id = self.ledger.project_for_root(Path(request["project_root"]))
+                return {"ok": True, "moved": self.ledger.mark_learning_moved_if_empty(project_id)}
+            if request.get("op") == "shutdown_if_drained" and set(request) == {"protocol", "op"}:
+                # For a migration tool: never taken away from under an active run.
+                if not self.ledger.drained():
+                    return {"ok": False, "code": "collector_busy"}
+                self._stop.set()
+                return {"ok": True}
             if request.get("op") == "shutdown" and set(request) == {"protocol", "op"}:
                 self._stop.set()
                 return {"ok": True}
@@ -9728,394 +11600,18 @@ class CollectorServer:
         return not self._thread.is_alive()
 
 
-class CollectorClient:
-    """Bounded, fail-fast client used by hook and App Server adapters."""
-
-    def __init__(self, socket_path: Path, *, timeout: float = 0.25) -> None:
-        self.socket_path = socket_path
-        self.timeout = timeout
-
-    def _request(self, request: dict[str, Any]) -> dict[str, Any]:
-        payload = canonical_json(request) + b"\n"
-        if len(payload) > MAX_REQUEST_BYTES:
-            raise CollectorError("collector request is oversized")
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.settimeout(self.timeout)
-        try:
-            client.connect(str(self.socket_path))
-            client.sendall(payload)
-            raw = bytearray()
-            while b"\n" not in raw:
-                chunk = client.recv(8192)
-                if not chunk:
-                    break
-                raw.extend(chunk)
-                if len(raw) > 16_384:
-                    raise CollectorError("collector response is oversized")
-        except OSError as exc:
-            raise CollectorError("collector is unavailable", code="transport_unavailable") from exc
-        finally:
-            client.close()
-        try:
-            response = json.loads(bytes(raw).split(b"\n", 1)[0])
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise CollectorError("collector response is invalid", code="response_invalid") from exc
-        if not isinstance(response, dict) or response.get("ok") is not True:
-            code = response.get("code", "unknown") if isinstance(response, dict) else "unknown"
-            raise CollectorError(f"collector rejected request: {code}", code=code)
-        return response
-
-    def bind(
-        self, project_root: Path, session_id: str, producer: str, client_version: str
-    ) -> str:
-        response = self._request(
-            {
-                "protocol": COLLECTOR_PROTOCOL_VERSION,
-                "op": "bind",
-                "project_root": str(project_root.resolve()),
-                "session_id": session_id,
-                "producer": producer,
-                "client_version": client_version,
-            }
-        )
-        return str(response["binding_token"])
-
-    def ingest(self, binding_token: str, record: dict[str, Any]) -> dict[str, Any]:
-        return self._request(
-            {
-                "protocol": COLLECTOR_PROTOCOL_VERSION,
-                "op": "ingest",
-                "binding_token": binding_token,
-                "record": record,
-            }
-        )
-
-    def health(self, project_root: Path | None = None) -> dict[str, Any]:
-        request: dict[str, Any] = {
-            "protocol": COLLECTOR_PROTOCOL_VERSION,
-            "op": "health",
-        }
-        if project_root is not None:
-            request["project_root"] = str(project_root.resolve())
-        response = self._request(request)
-        server_schema = response.get("schema_version")
-        server_version = _version_tuple(response.get("runtime_version"))
-        client_version = _version_tuple(PACKAGE_VERSION)
-        if client_version is None:  # guarded when PACKAGE_VERSION is loaded
-            raise CollectorError("installed package version is invalid")
-        if (
-            server_version is not None
-            and server_version > client_version
-        ) or (
-            isinstance(server_schema, int)
-            and not isinstance(server_schema, bool)
-            and server_schema > LEDGER_SCHEMA_VERSION
-        ):
-            raise CollectorNewerVersionError(
-                "a newer collector owns the shared learning state; update this project",
-                code="runtime_newer",
-            )
-        if (
-            not isinstance(server_schema, int)
-            or isinstance(server_schema, bool)
-            or server_schema < LEDGER_SCHEMA_VERSION
-            or server_version is None
-            or server_version < client_version
-        ):
-            raise CollectorUpgradeRequired(
-                "collector runtime is older than the installed package",
-                code="runtime_upgrade_required",
-            )
-        if response.get("runtime_digest") != COLLECTOR_RUNTIME_DIGEST:
-            raise CollectorBuildConflictError(
-                "collector build conflicts with this package version",
-                code="runtime_conflict",
-            )
-        return response
-
-    def shutdown(self) -> None:
-        self._request(
-            {"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "shutdown"}
-        )
-
-    def issue_result_repair(
-        self,
-        project_root: Path,
-        assignment_digest: str,
-        reason_code: str,
-    ) -> str:
-        response = self._request(
-            {
-                "protocol": COLLECTOR_PROTOCOL_VERSION,
-                "op": "issue_result_repair",
-                "project_root": str(project_root.resolve()),
-                "assignment_digest": assignment_digest,
-                "reason_code": reason_code,
-            }
-        )
-        return str(response["receipt_id"])
 
 
-CLIENT_HEALTH_CODES = {
-    "collector_start_failed",
-    "collector_unavailable",
-    "maintenance_active",
-    "hook_normalization_rejected",
-    "hook_binding_rejected",
-    "hook_ingest_rejected",
-}
 
 
-def _client_health_data(state: LearningState) -> dict[str, Any]:
-    if not state.client_health.exists():
-        return {"schema_version": 1, "projects": {}}
-    if state.client_health.is_symlink():
-        raise StateError("client health path is unsafe")
-    _check_owner_mode(state.client_health, directory=False)
-    try:
-        raw = state.client_health.read_bytes()
-        if len(raw) > 65_536:
-            raise StateError("client health state is invalid")
-        value = json.loads(raw)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise StateError("client health state is invalid") from exc
-    if (
-        not isinstance(value, dict)
-        or value.get("schema_version") != 1
-        or not isinstance(value.get("projects"), dict)
-    ):
-        raise StateError("client health state is invalid")
-    allowed_codes = CLIENT_HEALTH_CODES
-    for project_digest, counters in value["projects"].items():
-        if (
-            not isinstance(project_digest, str)
-            or len(project_digest) != 64
-            or any(character not in "0123456789abcdef" for character in project_digest)
-            or not isinstance(counters, dict)
-            or set(counters) - allowed_codes
-        ):
-            raise StateError("client health state is invalid")
-        for counter in counters.values():
-            if (
-                not isinstance(counter, dict)
-                or set(counter) not in ({"count", "updated_at_ms"},
-                                        {"count", "updated_at_ms", "last_reason_code"})
-                or ("last_reason_code" in counter
-                    and (not isinstance(counter["last_reason_code"], str)
-                         or counter["last_reason_code"] not in HOOK_INGEST_REASON_CODES))
-                or not isinstance(counter["count"], int)
-                or isinstance(counter["count"], bool)
-                or counter["count"] < 1
-                or not isinstance(counter["updated_at_ms"], int)
-                or isinstance(counter["updated_at_ms"], bool)
-                or counter["updated_at_ms"] < 0
-            ):
-                raise StateError("client health state is invalid")
-    return value
 
 
-def client_health_increment(
-    state: LearningState,
-    project_root: Path,
-    code: str,
-    *,
-    now_ms: int | None = None,
-    reason_code: str | None = None,
-) -> None:
-    """Persist one content-free, project-keyed client failure counter."""
-
-    if code not in CLIENT_HEALTH_CODES or fcntl is None:
-        return
-    root = _canonical_project_root(project_root)
-    project_digest = keyed_digest(state.digest_key(), str(root))
-    descriptor = os.open(
-        state.client_health_lock,
-        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    try:
-        os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        data = _client_health_data(state)
-        projects = data["projects"]
-        if project_digest not in projects and len(projects) >= 4096:
-            return
-        project = projects.setdefault(project_digest, {})
-        current = project.get(code, {"count": 0, "updated_at_ms": 0})
-        timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        project[code] = {
-            "count": int(current.get("count", 0)) + 1,
-            "updated_at_ms": timestamp,
-        }
-        if reason_code is not None and code == "hook_ingest_rejected":
-            project[code]["last_reason_code"] = (
-                reason_code if isinstance(reason_code, str) and reason_code in HOOK_INGEST_REASON_CODES
-                else "unknown_rejection"
-            )
-        temporary = state.root / f".collector-client-health.{secrets.token_hex(8)}.tmp"
-        payload = canonical_json(data) + b"\n"
-        file_descriptor = os.open(
-            temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-        )
-        try:
-            with os.fdopen(file_descriptor, "wb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, state.client_health)
-            os.chmod(state.client_health, 0o600)
-        finally:
-            with contextlib.suppress(FileNotFoundError):
-                temporary.unlink()
-    finally:
-        with contextlib.suppress(OSError):
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
 
 
-def client_health_snapshot(state: LearningState, project_root: Path) -> dict[str, Any]:
-    root = _canonical_project_root(project_root)
-    project_digest = keyed_digest(state.digest_key(), str(root))
-    return dict(_client_health_data(state)["projects"].get(project_digest, {}))
 
 
-def client_health_clear(state: LearningState, project_root: Path) -> None:
-    """Remove one deleted project's content-free client counters."""
-
-    if fcntl is None or not state.client_health.exists():
-        return
-    root = _canonical_project_root(project_root)
-    project_digest = keyed_digest(state.digest_key(), str(root))
-    descriptor = os.open(
-        state.client_health_lock,
-        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    try:
-        os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        data = _client_health_data(state)
-        if data["projects"].pop(project_digest, None) is None:
-            return
-        temporary = state.root / f".collector-client-health.{secrets.token_hex(8)}.tmp"
-        descriptor_out = os.open(
-            temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-        )
-        try:
-            with os.fdopen(descriptor_out, "wb") as handle:
-                handle.write(canonical_json(data) + b"\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, state.client_health)
-            os.chmod(state.client_health, 0o600)
-        finally:
-            with contextlib.suppress(FileNotFoundError):
-                temporary.unlink()
-    finally:
-        with contextlib.suppress(OSError):
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
 
 
-def ensure_collector(
-    state: LearningState,
-    cli_path: Path,
-    *,
-    project_root: Path,
-    timeout: float = 1.0,
-) -> dict[str, Any]:
-    """Ensure one detached collector is healthy without storing its project path."""
-
-    require_authorized_collector_runtime(state)
-    client = CollectorClient(state.socket)
-    try:
-        return client.health()
-    except CollectorVersionError:
-        client_health_increment(state, project_root, "collector_start_failed")
-        raise
-    except CollectorError:
-        pass
-    if fcntl is None:
-        client_health_increment(state, project_root, "collector_start_failed")
-        raise CollectorError("collector auto-start is unavailable")
-    descriptor = os.open(
-        state.runtime_lock,
-        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-        0o600,
-    )
-    try:
-        os.fchmod(descriptor, 0o600)
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            client_health_increment(state, project_root, "maintenance_active")
-            raise CollectorError("collector maintenance is active") from exc
-        return _start_collector_locked(
-            state,
-            cli_path,
-            project_root=project_root,
-            timeout=timeout,
-        )
-    finally:
-        with contextlib.suppress(OSError):
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
-
-
-def _start_collector_locked(
-    state: LearningState,
-    cli_path: Path,
-    *,
-    project_root: Path,
-    timeout: float = 1.0,
-) -> dict[str, Any]:
-    """Start the collector while the caller owns the runtime maintenance lock."""
-
-    require_authorized_collector_runtime(state)
-    client = CollectorClient(state.socket)
-    try:
-        return client.health()
-    except CollectorVersionError:
-        client_health_increment(state, project_root, "collector_start_failed")
-        raise
-    except CollectorError:
-        pass
-    from .host_paths import PYTHON_ISOLATION_FLAGS
-
-    subprocess.Popen(
-        [
-            sys.executable,
-            # Isolated, no bytecode in managed paths (isolated mode ignores
-            # PYTHONDONTWRITEBYTECODE), and no site-packages, so no .pth file or
-            # sitecustomize a sandboxed session could reach runs in the collector.
-            *PYTHON_ISOLATION_FLAGS,
-            str(cli_path.resolve(strict=True)),
-            "learning-serve",
-            "--state-root",
-            str(state.root),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        cwd="/",
-        close_fds=True,
-        # No inherited environment; macOS developer tools skip the xcrun lookup cache
-        # under $TMPDIR, which a sandboxed session can write.
-        env={"PATH": os.defpath, "xcrun_nocache": "1"},
-        start_new_session=True,
-    )
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            return client.health()
-        except CollectorError:
-            time.sleep(0.02)
-    client_health_increment(state, project_root, "collector_start_failed")
-    raise CollectorError("collector did not become healthy")
 
 
 def _wait_for_writer_release(state: LearningState, deadline: float) -> bool:
@@ -10160,6 +11656,17 @@ def _wait_for_collector_shutdown(
     return False
 
 
+# How long one owner-key change waits for another to finish.
+OWNER_KEY_TURN_SECONDS = 10.0
+# How long a collector that accepted a stop but outlived the caller's wait is
+# given before it is started again.
+STOP_RECOVERY_SECONDS = 3.0
+# How long a command waits for another command's maintenance to end. The other
+# one stops the collector, does its work and waits for the collector to start
+# again, so this is longer than a start; the wait ends as soon as the lock is free.
+MAINTENANCE_LOCK_SECONDS = 20.0
+
+
 class CollectorMaintenance:
     """Temporarily quiesce an active collector for one direct ledger command."""
 
@@ -10185,8 +11692,15 @@ class CollectorMaintenance:
         project_root: Path,
         *,
         timeout: float = 2.0,
+        lock_timeout: float = MAINTENANCE_LOCK_SECONDS,
         owner_registration: bool = False,
     ) -> "CollectorMaintenance":
+        """Stop the collector for one direct ledger command, never from under a run.
+
+        The collector stops only if no run is active or unsettled anywhere;
+        otherwise this raises with code `collector_busy` and everything keeps
+        running. A collector from before that check existed drives no runs.
+        """
         if not owner_registration:
             require_authorized_collector_runtime(state)
         if fcntl is None:
@@ -10197,7 +11711,7 @@ class CollectorMaintenance:
             0o600,
         )
         os.fchmod(descriptor, 0o600)
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + lock_timeout
         while True:
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -10207,6 +11721,8 @@ class CollectorMaintenance:
                     os.close(descriptor)
                     raise CollectorError("collector maintenance lock is busy") from exc
                 time.sleep(0.02)
+        # The collector's stop is timed from here, whatever the lock took.
+        deadline = time.monotonic() + timeout
         transferred = False
         try:
             client = CollectorClient(state.socket)
@@ -10222,11 +11738,55 @@ class CollectorMaintenance:
                     transferred = True
                     return cls(state, cli_path, project_root, descriptor, False)
                 raise CollectorError("collector writer did not stop for maintenance")
-            client.shutdown()
-            if _wait_for_collector_shutdown(client, state, deadline):
+            try:
+                client.shutdown(only_if_drained=True)
+            except CollectorError as error:
+                if error.code == "collector_busy":
+                    raise CollectorError(
+                        "a child run is active; nothing was changed, try again when none is running",
+                        code="collector_busy",
+                    ) from None
+                # Only a collector of a release from before project services may
+                # lack the drained stop: those drive no runs (their CLIs run
+                # children themselves and pause the collector for every command).
+                # Anything else, this version with an older schema included,
+                # fails closed.
+                if error.code != "operation_invalid" or not owner_registration:
+                    raise
+                try:
+                    reported = _version_tuple(client._request(
+                        {"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "health"}
+                    ).get("runtime_version"))
+                except CollectorError:
+                    reported = None
+                if reported is None or reported >= FIRST_RUN_DRIVING_VERSION:
+                    raise
+                client.shutdown()
+            # The stop was accepted: a collector that is slow to go down is waited
+            # for a little longer than the caller asked before this gives up.
+            if (_wait_for_collector_shutdown(client, state, deadline)
+                    or _wait_for_collector_shutdown(client, state, time.monotonic() + STOP_RECOVERY_SECONDS)):
                 transferred = True
                 return cls(state, cli_path, project_root, descriptor, True)
-            raise CollectorError("collector did not stop for maintenance")
+            # It may still go down after this returns. Start it again if it already
+            # has, and say which it is: nothing here can wait for it for ever, and
+            # any later command starts a collector that is missing.
+            # Asked plainly first, whatever version answers: a collector this runtime may
+            # not start (another version's, during an update) can still be the one running.
+            try:
+                client._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "health"})
+            except CollectorError:
+                pass
+            else:
+                raise CollectorError("collector did not stop for maintenance; it is still running")
+            try:
+                _start_collector_locked(state, cli_path, project_root=project_root)
+            except (CollectorError, StateError, OSError):
+                raise CollectorError(
+                    "collector did not stop for maintenance and is not answering; the next command starts it "
+                    "again, or run setup if it does not") from None
+            raise CollectorError(
+                "collector stopped too late for this command and was started again; run the command again")
         finally:
             if not transferred:
                 with contextlib.suppress(OSError):

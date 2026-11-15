@@ -669,7 +669,8 @@ def owner_tool(argv: list[str]) -> int:
     ``client-status codex|claude [PROJECT]`` runs that client's sign-in status command as the
     runtime would (client_status) and exits with its code, printing Claude's JSON for the
     wizard to parse and nothing for Codex; ``legacy-state`` prints legacy_state_report as JSON;
-    ``owner-key`` prints the state's owner key report as JSON.
+    ``owner-key`` prints the state's owner key report as JSON; ``projects-file`` prints
+    where setup keeps its list of the projects it set up.
     """
 
     try:
@@ -681,6 +682,15 @@ def owner_tool(argv: list[str]) -> int:
             return 0
         if len(argv) == 3 and argv[0] == "copy-input":
             copy_input(Path(argv[1]), Path(argv[2]))
+            return 0
+        if argv == ["projects-file"]:
+            # Where setup remembers the projects it set up: the installer's own folder in the
+            # records, only when that is a real folder of yours that only you can open.
+            folder = default_state_root() / "installer"
+            info = folder.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise AttestError("the installer folder is not private")
+            print(folder / "setup-projects")
             return 0
         if argv == ["legacy-state"]:
             print(json.dumps(legacy_state_report(), sort_keys=True))
@@ -699,8 +709,8 @@ def owner_tool(argv: list[str]) -> int:
                 sys.stdout.buffer.write(output)
                 sys.stdout.flush()
             return code
-    except AttestError as exc:
-        print(exc, file=sys.stderr)
+    except (AttestError, OSError) as exc:
+        print(exc if isinstance(exc, AttestError) else "the records folder could not be read", file=sys.stderr)
         return 1
     print("unknown owner tool", file=sys.stderr)
     return 2
@@ -858,8 +868,29 @@ def run_cli(target: Path, args: list[str], state_root: Path | None, *, stdin: st
         report = None
     if result.returncode != 0 or not isinstance(report, dict) or report.get("ready") is not True:
         reason = report.get("error") if isinstance(report, dict) else None
-        raise AttestError(f"the orchestration CLI refused {args[0]}: {reason or 'no usable output'}")
+        code = report.get("reason_code") if isinstance(report, dict) else None
+        code = code if isinstance(code, str) and REASON_CODE.fullmatch(code) else None
+        message = f"the orchestration CLI refused {args[0]}: {reason or 'no usable output'}"
+        if code:
+            message += f" (reason: {code})"
+        raise AttestError(message + "\n" + REASON_HELP.get(code, REASON_HELP[None]))
     return report
+
+
+# Reason codes are fixed identifiers, so one that matches this is safe to show.
+REASON_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+REASON_HELP = {
+    None: "Run ./setup.sh again. If it happens again, choose Update the install and walk through "
+          "every step, and keep the reason shown above for a report.",
+    "account_invalid_response": "The orchestrator's account service did not accept this request. Run "
+                                "./setup.sh again; if it repeats, update the install from ./setup.sh.",
+    "account_unavailable": "The orchestrator's account service is not running. Run ./setup.sh again; it "
+                           "starts the service.",
+    "observation_unavailable": "The orchestrator could not reach the provider's client. Check that the "
+                               "client is installed and signed in, then run ./setup.sh again.",
+    "billing_attestation_missing": "No billing statement is recorded for this provider yet. Choose Re-run "
+                                   "the billing attestation only in ./setup.sh.",
+}
 
 
 def enabled_providers(target: Path) -> list[str]:
@@ -997,6 +1028,32 @@ def fingerprint(key_type: str, blob: str) -> str:
     return fields[1]
 
 
+def shown(key: Path) -> str:
+    """The key as the owner knows it: ~/... inside the home folder, with any character that
+    could drive the terminal replaced (a file name in ~/.ssh is not ours to trust)."""
+
+    try:
+        text = "~/" + str(key.relative_to(account_home()))
+    except ValueError:
+        text = str(key)
+    return re.sub(r"[^\x20-\x7e]", "?", text)
+
+
+def _read_public_file(path: Path) -> str:
+    """A .pub file's text, read once without following a link or blocking, at most 16 KiB."""
+
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("not a regular file")
+        data = os.read(descriptor, 16_385)
+    finally:
+        os.close(descriptor)
+    if len(data) > 16_384:
+        raise OSError("too large for a public key")
+    return data.decode("utf-8")
+
+
 def describe_key(key_type: str, blob: str) -> str:
     return f"{key_type} {fingerprint(key_type, blob)}"
 
@@ -1055,7 +1112,9 @@ def key_snapshot(key: Path):
     content = _read_key_once(key)
     folder = make_scratch("key-")
     try:
-        snapshot = folder / "owner-key"
+        # Named like the owner's file, so ssh-keygen's prompt shows a name the owner knows.
+        name = key.name if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", key.name) else "owner-key"
+        snapshot = folder / name
         descriptor = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         try:
             view = memoryview(content)
@@ -1132,6 +1191,8 @@ def derive_public(key: Path, snapshot: Path | None = None) -> tuple[str, str]:
     if snapshot is None:
         with key_snapshot(key) as copy:
             return derive_public(key, copy)
+    print(f"Unlock your owner key {shown(key)}: enter its passphrase when asked (nothing is shown as you type).")
+    print("ssh-keygen names a private copy of that file in a temporary folder; that is expected.")
     while True:
         result = ssh(["-y", "-f", str(snapshot)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode == 0:
@@ -1186,6 +1247,10 @@ def choose_new_key() -> Path:
     if not entered:
         raise AttestError("no owner key chosen")
     return _accept_location(entered)
+
+
+# Refusals that mean the entry itself was wrong (a typo, a passphrase typed by mistake).
+RETRY_ENTRY = ("does not exist", "That is not a file location", "not a regular file", "not a private key")
 
 
 def read_location(prompt: str) -> str:
@@ -1307,7 +1372,8 @@ def _default_key_file(configured: tuple[str, str]) -> Path | None:
     """
 
     without_public = None
-    for key in owner_key_locations():
+    standard = owner_key_locations()
+    for key in standard:
         try:
             check_key_location(key)
             if not stat.S_ISREG(key.lstat().st_mode):
@@ -1320,11 +1386,28 @@ def _default_key_file(configured: tuple[str, str]) -> Path | None:
             without_public = without_public or key
             continue
         try:
-            if _split_public(adjacent.read_text()) == configured:
+            if _split_public(_read_public_file(adjacent)) == configured:
                 return key
         except (OSError, UnicodeDecodeError, AttestError):
             continue
-    return without_public
+    if without_public is not None:
+        return without_public  # A key at a standard place is preferred to any other name.
+    # Then a key of the owner's own naming, found by the .pub file beside it.
+    try:
+        others = sorted(path for path in ssh_folder().iterdir()
+                        if path not in standard and not path.name.endswith(".pub"))
+    except OSError:
+        others = []
+    for key in others:
+        try:
+            check_key_location(key)
+            if not stat.S_ISREG(key.lstat().st_mode):
+                continue
+            if _split_public(_read_public_file(Path(str(key) + ".pub"))) == configured:
+                return key
+        except (AttestError, OSError, UnicodeDecodeError):
+            continue
+    return None
 
 
 def locate_key_file(configured: tuple[str, str]) -> Path:
@@ -1333,17 +1416,27 @@ def locate_key_file(configured: tuple[str, str]) -> Path:
     key = _default_key_file(configured)
     found = key is not None
     if found:
-        print(f"Using the owner key file at {key}")
-    else:
-        print("Where is the private key file for this owner key? It must be in your own ~/.ssh folder.")
-        print("This asks for a file location, not your passphrase.")
-        print("What you type is not shown.")
+        print(f"Using the owner key file at {shown(key)}")
+        validate_private_key(key)
+        return key
+    print("No file in your ~/.ssh folder matches the owner key on record.")
+    print("Where is the private key file for this owner key? It must be in your own ~/.ssh folder.")
+    print("This asks for a file location, not your passphrase. What you type is not shown,")
+    print("so you can paste it: for example ~/.ssh/my-key")
+    for attempt in range(3):
         entered = read_location(f"Press Enter to use {DEFAULT_KEY}, or type another file location: ")
-        key = _accept_location(entered) if entered else default_key()
-    validate_private_key(key)
-    if not found:
-        print(f"Using the private key file at {key}")  # only after it validated as a key file
-    return key
+        try:
+            key = _accept_location(entered) if entered else default_key()
+            validate_private_key(key)
+        except AttestError as exc:
+            # Only a slip in the entry is worth another try; a key in an unsafe place stays refused.
+            if attempt == 2 or not any(text in str(exc) for text in RETRY_ENTRY):
+                raise
+            print(f"That did not work: {exc}. What you typed was hidden, so check it and try again.")
+            continue
+        print(f"Using the private key file at {shown(key)}")  # only after it validated as a key file
+        return key
+    raise AttestError("no owner key chosen")
 
 
 _TEMP_ROOTS = ("/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp", "/private/var/folders")
@@ -1665,7 +1758,7 @@ def sign_in_memory(key: Path, payload: bytes, snapshot: Path | None = None) -> b
     if snapshot is None:
         with key_snapshot(key) as copy:
             return sign_in_memory(key, payload, copy)
-    print("Now sign the statement. Enter your key's passphrase when asked.")
+    print(f"Now sign the statement. Enter the passphrase of {shown(key)} when asked.")
     while True:
         signed = ssh(["-Y", "sign", "-f", str(snapshot), "-n", NAMESPACE], input=payload,
                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)

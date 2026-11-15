@@ -74,6 +74,7 @@ PRIMARY_HOST_COMMANDS = (
     "learning-route",
     "validate-assignment",
     "result-preflight",
+    "dispatch-preflight",
     "validate-result",
     "learning-status",
     "learning-open-orchestration",
@@ -82,7 +83,10 @@ PRIMARY_HOST_COMMANDS = (
     "learning-resume-orchestration",
     "learning-close-orchestration",
     "learning-orchestration-report",
+    "learning-orchestration-status",
     "learning-open-host-run",
+    "learning-run-status",
+    "learning-cancel-run",
     "learning-bind-host-agent",
     "learning-observe-host-run",
     "learning-classify-host-run-abandoned",
@@ -956,7 +960,8 @@ def _validate_runtime(cli: Path) -> None:
     `runtime-releases.json` records for its version).
     """
 
-    from .learning_store import CollectorAuthorizationError, validate_collector_runtime
+    from .collector_contracts import CollectorAuthorizationError
+    from .collector_runtime import validate_collector_runtime
 
     try:
         validate_collector_runtime(cli)
@@ -981,7 +986,7 @@ def install_runtime_copy(
     created owner-only through no-follow descriptors.
     """
 
-    from .learning_store import COLLECTOR_RUNTIME_DIGEST, PACKAGE_VERSION
+    from .collector_client import COLLECTOR_RUNTIME_DIGEST, PACKAGE_VERSION
 
     root, cli = project_cli(project_root)
     codex_home(environ)

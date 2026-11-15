@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -46,8 +48,10 @@ from codex_agents.learning_store import (
     default_state_root,
     ensure_collector,
     _snapshot_project_partition,
+    _verify_project_backup_body,
     _start_collector_locked,
 )
+from codex_agents import learning_store
 from codex_agents.learning_adapters import load_client_capabilities
 from codex_agents.learning_contracts import (
     candidate_base_digest,
@@ -314,6 +318,20 @@ class LearningStoreTests(unittest.TestCase):
 
     def _downgrade_fixture_to_schema_five(self) -> None:
         with self.ledger._connection:
+            from tests.test_account_launch_claims import drop_account_cleanup_for_legacy_fixture
+            drop_account_cleanup_for_legacy_fixture(self.ledger)
+            self.ledger._connection.execute('DROP TABLE account_open_requests')
+            self.ledger._connection.execute('DROP TABLE account_open_receipts')
+            self.ledger._connection.execute('ALTER TABLE host_run_bindings DROP COLUMN history_owner')
+            self.ledger._connection.execute("DROP TRIGGER preserve_active_capacity_on_project_deletion")
+            self.ledger._connection.execute("DROP TABLE capacity_completions")
+            self.ledger._connection.execute("DROP TABLE capacity_executions")
+            self.ledger._connection.execute("DROP TABLE active_run_capacity")
+            self.ledger._connection.execute("DROP INDEX active_capacity_parent")
+            self.ledger._connection.execute("DROP TRIGGER cleanup_launch_operation_state")
+            for name in ("launch_inputs", "launch_observations", "launch_receipts"):
+                self.ledger._connection.execute("DROP TABLE " + name)
+            self.ledger._connection.execute("DROP TABLE launch_claims")
             self.ledger._connection.execute("DROP TABLE orchestration_checkpoints")
             for column in (
                 "deadline_observed",
@@ -566,7 +584,7 @@ class LearningStoreTests(unittest.TestCase):
             empty_ingestion_snapshot(registered=False)["registered_project_state"],
         )
 
-    def test_goal_statistics_migration_uses_schema_six(self) -> None:
+    def test_goal_statistics_and_original_open_use_schema_ten(self) -> None:
         version = self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         tables = {
             str(row[0])
@@ -574,7 +592,10 @@ class LearningStoreTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        self.assertEqual(6, version)
+        self.assertEqual(13, version)
+        self.assertIn('account_open_receipts', tables)
+        self.assertIn('account_open_requests', tables)
+        self.assertIn("active_run_capacity", tables)
         self.assertIn("host_run_bindings", tables)
         self.assertIn("hook_ingestion", tables)
         self.assertIn("orchestrations", tables)
@@ -614,7 +635,7 @@ class LearningStoreTests(unittest.TestCase):
         connection.close()
         self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
         snapshot = self.ledger.ingestion_snapshot(self.project_a_id, now_ms=30)
-        self.assertEqual(6, self.ledger._connection.execute(
+        self.assertEqual(13, self.ledger._connection.execute(
             "PRAGMA user_version"
         ).fetchone()[0])
         self.assertEqual(1, snapshot["accepted_hook_event_count"])
@@ -2509,6 +2530,48 @@ class LearningStoreTests(unittest.TestCase):
         with self.ledger.repository(self.project_a_id) as repository:
             self.assertEqual([], repository.records())
 
+    def _seed_billing_probes(self, states):
+        db = self.ledger._connection
+        for index, state in enumerate(states):
+            key = 'probe-' + str(index)
+            db.execute(
+                'INSERT INTO account_billing_probe_origins VALUES(?,?,?,?,?)',
+                (self.project_a_id, key, 'd' * 64, 1, 'opaque-origin-seal-' + key))
+            row = (
+                self.project_a_id, key, 'd' * 64, 'r' * 64, 'host',
+                1, 2, state,
+                None if state == 'reserved' else 'a' * 64,
+                None if state == 'reserved' else 'original-admission',
+                None if state == 'reserved' else 'b' * 64,
+                '{"original":"reference"}' if state == 'committed' else None,
+                'opaque-state-seal-' + key)
+            db.execute(
+                'INSERT INTO account_billing_probe_requests VALUES(' +
+                ','.join('?' for _ in row) + ')', row)
+
+    def test_billing_probe_backup_expiry_and_restart_preserve_all_sealed_cells(self):
+        self._seed_billing_probes(('reserved', 'admitted', 'committed'))
+        names = ('account_billing_probe_origins', 'account_billing_probe_requests')
+        before = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        path = self.ledger.create_sanitized_backup(
+            self.project_a_id, file_id='sealed_probes',
+            expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
+        body = json.loads(path.read_bytes())['body']
+        report = self.ledger.verify_sanitized_backup(self.project_a_id, file_id='sealed_probes')
+        self.assertEqual(13, report['ledger_schema_version'])
+        for table in names:
+            self.assertEqual(3, report['counts'][table])
+            self.assertEqual(before['tables'][table], body['tables'][table])
+        self.ledger.expire(self.project_a_id, now_ms=10 ** 15)
+        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        for table in names:
+            self.assertEqual(before['tables'][table], after['tables'][table])
+        self.ledger.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        for table in names:
+            self.assertEqual(before['tables'][table], after['tables'][table])
+
     def test_backup_roundtrips_complete_project_authority_and_lifecycle_rows(self) -> None:
         self.ledger.bind_session(
             self.project_a, "backup-session", "hook", "codex-hooks-v1", now_ms=5
@@ -2595,9 +2658,17 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(set(body["tables"]), {
             "sessions", "run_provenance", "records", "record_links",
             "stored_files", "collector_health", "consumed_grants",
-            "owner_attestations", "repair_receipts", "host_run_bindings",
+            "owner_attestations", "repair_receipts", "host_run_bindings", "launch_claims",
+            "launch_inputs", "launch_observations", "launch_receipts",
+            "active_run_capacity",
+            "capacity_completions",
+            "capacity_executions",
             "hook_ingestion", "orchestrations", "orchestration_checkpoints",
             "operational_qa", "operational_check_receipts", "tombstones",
+            'account_open_receipts', 'account_open_requests',
+            'account_cleanup_receipts',
+            'account_observation_origins', 'account_observation_requests',
+            'account_billing_probe_origins', 'account_billing_probe_requests',
         })
         self.assertEqual(
             {"$codex_agents_bytes_base64": "AP8="},
@@ -2608,6 +2679,26 @@ class LearningStoreTests(unittest.TestCase):
         )
         self.assertEqual("ok", report["isolated_restore_integrity"])
         self.assertEqual("ok", report["isolated_restore_foreign_keys"])
+
+    def test_billing_probe_backup_rejects_missing_or_changed_original_coverage(self):
+        self._seed_billing_probes(('reserved',))
+        original = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        for defect in ('missing_request', 'missing_origin', 'digest', 'created_at'):
+            with self.subTest(defect=defect):
+                body = deepcopy(original)
+                requests = body['tables']['account_billing_probe_requests']
+                if defect == 'missing_request':
+                    body['tables']['account_billing_probe_requests'] = []
+                    body['counts']['account_billing_probe_requests'] = 0
+                elif defect == 'missing_origin':
+                    body['tables']['account_billing_probe_origins'] = []
+                    body['counts']['account_billing_probe_origins'] = 0
+                elif defect == 'digest':
+                    requests[0]['parameters_digest'] = 'e' * 64
+                else:
+                    requests[0]['created_at_ms'] = 0
+                with self.assertRaises(LedgerError):
+                    _verify_project_backup_body(body, expected_project_id=self.project_a_id)
 
     def test_backup_relational_verifier_rejects_constraint_corruption(self) -> None:
         path = self.ledger.create_sanitized_backup(
@@ -2710,38 +2801,46 @@ class LearningStoreTests(unittest.TestCase):
         with self.ledger.repository(self.project_a_id) as repository:
             self.assertEqual([], repository.records())
 
-    def test_schema_one_migrates_and_legacy_owner_records_remain_unattested(self) -> None:
+    def test_legacy_schema_one_refuses_automatic_upgrade_before_any_schema_changes(self) -> None:
         self.ledger.close()
         connection = sqlite3.connect(self.state.database)
-        connection.execute("DROP TABLE owner_attestations")
-        connection.execute("DROP TABLE repair_receipts")
-        connection.execute("PRAGMA user_version = 1")
-        connection.commit()
-        connection.close()
-        self.ledger = LearningLedger(
-            self.state, client_capabilities=self.clients
-        )
-        version = self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
-        tables = {
-            row[0]
-            for row in self.ledger._connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        attestations = self.ledger._connection.execute(
-            "SELECT COUNT(*) FROM owner_attestations"
-        ).fetchone()[0]
-        self.assertEqual(6, version)
-        self.assertIn("owner_attestations", tables)
-        self.assertIn("repair_receipts", tables)
-        self.assertEqual(0, attestations)
+        try:
+            connection.execute("DROP TABLE owner_attestations")
+            connection.execute("DROP TABLE repair_receipts")
+            connection.execute("PRAGMA user_version = 1")
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaisesRegex(LedgerError, "verified drained staged migration"):
+            LearningLedger(self.state, client_capabilities=self.clients)
+        connection = sqlite3.connect(self.state.database)
+        try:
+            self.assertEqual(1, connection.execute("PRAGMA user_version").fetchone()[0])
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertNotIn("owner_attestations", tables)
+            self.assertNotIn("repair_receipts", tables)
+        finally:
+            connection.close()
+        self._leave_ledger_closed()
+
+    def test_schema_five_absent_checkpoint_table_cannot_verify_phantom_rows(self) -> None:
+        self._downgrade_fixture_to_schema_five()
+        body = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=5)
+        self.assertEqual([], body["columns"]["orchestration_checkpoints"])
+        self.assertEqual(0, _verify_project_backup_body(body)["orchestration_checkpoints"])
+        for rows, count in (([{}], 1), ([{}, {}], 2), ([], 1)):
+            malformed = deepcopy(body)
+            malformed["tables"]["orchestration_checkpoints"] = rows
+            malformed["counts"]["orchestration_checkpoints"] = count
+            with self.subTest(rows=len(rows), count=count), self.assertRaisesRegex(LedgerError, "absent table|count or column"):
+                _verify_project_backup_body(malformed)
 
     def test_schema_five_refuses_migration_without_current_verified_backups(self) -> None:
         self._downgrade_fixture_to_schema_five()
         self.ledger.close()
 
         with self.assertRaisesRegex(LedgerError, "registered verified schema 5"):
-            LearningLedger(self.state, client_capabilities=self.clients)
+            LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
 
         connection = sqlite3.connect(self.state.database)
         try:
@@ -2787,10 +2886,10 @@ class LearningStoreTests(unittest.TestCase):
         )
         self.ledger.close()
 
-        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
 
         self.assertEqual(
-            6, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+            13, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
         )
         checkpoint = self.ledger._connection.execute(
             "SELECT sequence,status,observed_at_ms FROM orchestration_checkpoints "
@@ -2805,6 +2904,11 @@ class LearningStoreTests(unittest.TestCase):
             (self.project_a_id,),
         ).fetchone()
         self.assertEqual(("pending", 11, None, 11, 0), tuple(binding))
+        marker = self.ledger._connection.execute(
+            "SELECT kind,bridge_run_id FROM launch_claims WHERE project_id=? AND run_id='legacy-run'",
+            (self.project_a_id,),
+        ).fetchone()
+        self.assertEqual(("legacy_fenced", None), tuple(marker))
 
     def test_schema_five_rejects_stale_or_nonmatching_backup(self) -> None:
         self._downgrade_fixture_to_schema_five()
@@ -2824,8 +2928,35 @@ class LearningStoreTests(unittest.TestCase):
         self.ledger.close()
 
         with self.assertRaisesRegex(LedgerError, "registered verified schema 5"):
-            LearningLedger(self.state, client_capabilities=self.clients)
+            LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
         self._leave_ledger_closed()
+
+    def test_schema_five_launch_migration_interruption_rolls_back_the_whole_upgrade(self) -> None:
+        class FixtureStop(BaseException):
+            pass
+
+        self._downgrade_fixture_to_schema_five()
+        self._register_schema_five_backup(project_id=self.project_a_id)
+        self._register_schema_five_backup(project_id=self.project_b_id, file_id="schema5_backup_b")
+        self.ledger.close()
+        initialize = LearningLedger._initialize_launch_claims_locked
+
+        def interrupted(ledger, **arguments):
+            initialize(ledger, **arguments)
+            raise FixtureStop()
+
+        with mock.patch.object(LearningLedger, "_initialize_launch_claims_locked", autospec=True, side_effect=interrupted), \
+                self.assertRaises(FixtureStop):
+            LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
+        connection = sqlite3.connect(self.state.database)
+        try:
+            self.assertEqual(5, connection.execute("PRAGMA user_version").fetchone()[0])
+            self.assertIsNone(connection.execute("SELECT 1 FROM sqlite_master WHERE name='launch_claims'").fetchone())
+            self.assertNotIn("binding_state", {row[1] for row in connection.execute("PRAGMA table_info(host_run_bindings)")})
+        finally:
+            connection.close()
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
+        self.assertEqual(13, self.ledger._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def test_schema_five_migration_rolls_back_an_injected_schema_failure(self) -> None:
         self._downgrade_fixture_to_schema_five()
@@ -2840,7 +2971,7 @@ class LearningStoreTests(unittest.TestCase):
         self.ledger.close()
 
         with self.assertRaises(sqlite3.OperationalError):
-            LearningLedger(self.state, client_capabilities=self.clients)
+            LearningLedger(self.state, client_capabilities=self.clients, allow_schema_upgrade=True)
 
         connection = sqlite3.connect(self.state.database)
         try:
@@ -3006,6 +3137,29 @@ class LearningStoreTests(unittest.TestCase):
                 self.project_a_id, now_ms=90 * 24 * 60 * 60 * 1000
             ),
         )
+
+    def test_admitted_billing_probe_refuses_project_deletion_after_deadline(self):
+        self._seed_billing_probes(('admitted',))
+        before = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        with self.assertRaisesRegex(LedgerError, '^project_has_active_billing_probe$'):
+            self.ledger.delete_project(self.project_a_id, now_ms=10 ** 15)
+        after = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        self.assertEqual(before, after)
+        self.ledger.delete_project(self.project_b_id, now_ms=10)
+
+    def test_project_deletion_scrubs_inactive_probe_origins_requests_and_backup(self):
+        self._seed_billing_probes(('reserved', 'committed'))
+        path = self.ledger.create_sanitized_backup(
+            self.project_a_id, file_id='inactive_probes',
+            expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
+        self.ledger.verify_sanitized_backup(self.project_a_id, file_id='inactive_probes')
+        self.ledger.delete_project(self.project_a_id, now_ms=10)
+        for table in ('account_billing_probe_origins', 'account_billing_probe_requests'):
+            self.assertEqual(0, self.ledger._connection.execute(
+                'SELECT COUNT(*) FROM ' + table + ' WHERE project_id=?',
+                (self.project_a_id,)).fetchone()[0])
+        self.assertFalse(path.exists())
+        self.assertEqual([], self.ledger.storage_residuals())
 
     def test_project_delete_requires_closed_readers_and_leaves_only_tombstone(self) -> None:
         with self.ledger._connection:
@@ -3296,6 +3450,42 @@ class LearningStoreTests(unittest.TestCase):
                 self.project_a_id, forged, producer="lifecycle", now_ms=10
             )
 
+    def test_billing_probe_restart_refuses_changed_origin_coverage_without_repair(self):
+        self._seed_billing_probes(('reserved',))
+        self.ledger._connection.execute(
+            'UPDATE account_billing_probe_requests SET parameters_digest=?', ('e' * 64,))
+        self.ledger.close()
+        original = self.state.database.read_bytes()
+        with self.assertRaisesRegex(LedgerError, 'billing probe coverage'):
+            LearningLedger(self.state, client_capabilities=self.clients)
+        self.assertEqual(original, self.state.database.read_bytes())
+        self._leave_ledger_closed()
+
+    def test_billing_probe_active_indexes_are_strictly_checked(self):
+        from codex_agents.billing_probe_schema import BILLING_PROBE_OBJECTS
+        for kind, name, sql in BILLING_PROBE_OBJECTS:
+            if kind != 'index':
+                continue
+            with self.subTest(index=name):
+                self.ledger._connection.execute('DROP INDEX ' + name)
+                with self.assertRaisesRegex(LedgerError, 'billing probe schema'):
+                    self.ledger._assert_launch_schema_locked(13)
+                self.ledger._connection.execute(sql)
+                self.ledger._assert_launch_schema_locked(13)
+
+    def test_schema_twelve_client_refuses_schema_thirteen_probe_state(self):
+        self._seed_billing_probes(('admitted',))
+        body = _snapshot_project_partition(self.ledger._connection, self.project_a_id, ledger_schema_version=13)
+        self.ledger.close()
+        original = self.state.database.read_bytes()
+        with mock.patch.object(learning_store, 'LEDGER_SCHEMA_VERSION', 12):
+            with self.assertRaisesRegex(LedgerError, 'newer'):
+                LearningLedger(self.state, client_capabilities=self.clients)
+        self.assertEqual(original, self.state.database.read_bytes())
+        with self.assertRaisesRegex(LedgerError, 'ledger version'):
+            _verify_project_backup_body(body, expected_ledger_schema_version=12)
+        self.ledger = LearningLedger(self.state, client_capabilities=self.clients)
+
     def test_forward_database_schema_is_rejected(self) -> None:
         self.ledger.close()
         connection = sqlite3.connect(self.state.database)
@@ -3345,9 +3535,10 @@ class LearningStoreTests(unittest.TestCase):
     def test_collector_rejects_forged_binding_and_unavailability_is_bounded(self) -> None:
         server = CollectorServer(self.ledger)
         server.start()
+        self.addCleanup(server.stop)
         client = CollectorClient(self.state.socket, timeout=0.2)
         health = client.health(self.project_a)
-        self.assertEqual(6, health["schema_version"])
+        self.assertEqual(13, health["schema_version"])
         self.assertEqual(PACKAGE_VERSION, health["runtime_version"])
         self.assertEqual(COLLECTOR_RUNTIME_DIGEST, health["runtime_digest"])
         self.assertIsInstance(health["started_at_ms"], int)
@@ -3395,7 +3586,7 @@ class LearningStoreTests(unittest.TestCase):
             "_request",
             return_value={
                 "ok": True,
-                "schema_version": 6,
+                "schema_version": learning_store.LEDGER_SCHEMA_VERSION,
                 "runtime_version": PACKAGE_VERSION,
                 "runtime_digest": "0" * 64,
             },
@@ -3423,7 +3614,7 @@ class LearningStoreTests(unittest.TestCase):
     def test_missing_or_spoofed_authorization_cannot_start_collector(self) -> None:
         self.state.collector_authorization.unlink()
         with mock.patch(
-            "codex_agents.learning_store.subprocess.Popen"
+            "codex_agents.collector_runtime.subprocess.Popen"
         ) as popen, self.assertRaisesRegex(CollectorError, "not authorized"):
             ensure_collector(
                 self.state,
@@ -3434,13 +3625,13 @@ class LearningStoreTests(unittest.TestCase):
         authorize_collector_runtime(self.state, ORCHESTRATION_ROOT / "cli.py")
         with (
             mock.patch(
-                "codex_agents.learning_store.PACKAGE_VERSION", "99.0.0"
+                "codex_agents.collector_runtime.PACKAGE_VERSION", "99.0.0"
             ),
             mock.patch(
                 "codex_agents.learning_store.CollectorClient.health"
             ) as health,
             mock.patch(
-                "codex_agents.learning_store.subprocess.Popen"
+                "codex_agents.collector_runtime.subprocess.Popen"
             ) as popen,
             self.assertRaisesRegex(
                 CollectorError, "differs from the owner-authorized runtime"
@@ -3454,6 +3645,49 @@ class LearningStoreTests(unittest.TestCase):
         health.assert_not_called()
         popen.assert_not_called()
 
+    def test_a_collector_that_takes_seconds_to_start_is_waited_for_except_by_a_hook(self) -> None:
+        from codex_agents import collector_runtime
+
+        def start(ended=None, **arguments):
+            clock = [0.0]
+            answers = iter([CollectorError("down")] * 6)  # Down, then five polls before it answers.
+            self.polls = clock
+
+            def health(_client):
+                clock[0] += 0.5
+                failure = next(answers, None)
+                if failure is not None:
+                    raise failure
+                return {"ready": True}
+
+            with (
+                mock.patch("codex_agents.collector_runtime.subprocess.Popen") as popen,
+                mock.patch("codex_agents.collector_runtime.CollectorClient.health", health),
+                mock.patch("codex_agents.collector_runtime.time.monotonic", lambda: clock[0]),
+                mock.patch("codex_agents.collector_runtime.time.sleep"),
+            ):
+                if ended is not None:
+                    popen.return_value.poll.return_value = ended
+                try:
+                    return ensure_collector(
+                        self.state, ORCHESTRATION_ROOT / "cli.py", project_root=self.project_a, **arguments)
+                finally:
+                    popen.assert_called_once()
+
+        # Two interpreters and the account services: it answered after three seconds.
+        self.assertEqual({"ready": True}, start())
+        self.assertGreaterEqual(collector_runtime.COLLECTOR_START_SECONDS, 5)
+        # A hook does not hold its session up that long; the collector it started keeps starting.
+        with self.assertRaisesRegex(CollectorError, "^collector did not become healthy$"):
+            start(timeout=collector_runtime.HOOK_START_SECONDS)
+        # A collector that ended without serving is not waited for at all.
+        with self.assertRaisesRegex(CollectorError, "^collector did not become healthy$"):
+            start(ended=1)
+        self.assertEqual(1.5, self.polls[0])  # The two checks before starting and one poll, not eight seconds of them.
+        hook = (ORCHESTRATION_ROOT / "learning_hook.py").read_text()
+        self.assertEqual(1, hook.count("timeout=HOOK_START_SECONDS"))
+        self.assertEqual(1, hook.count("ensure_collector("))
+
     def test_upgrade_quiescence_blocks_restart_until_owner_registration(self) -> None:
         authorization = json.loads(self.state.collector_authorization.read_bytes())
         authorization["quiesced_for_upgrade"] = True
@@ -3462,7 +3696,7 @@ class LearningStoreTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "codex_agents.learning_store.subprocess.Popen"
+                "codex_agents.collector_runtime.subprocess.Popen"
             ) as popen,
             self.assertRaisesRegex(CollectorError, "quiesced"),
         ):
@@ -3605,7 +3839,7 @@ class LearningStoreTests(unittest.TestCase):
         shutdown.assert_not_called()
 
         healthy = {
-            "schema_version": 6,
+            "schema_version": learning_store.LEDGER_SCHEMA_VERSION,
             "runtime_version": PACKAGE_VERSION,
             "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
         }
@@ -3633,12 +3867,127 @@ class LearningStoreTests(unittest.TestCase):
                 owner_registration=True,
             )
             maintenance.resume()
-        shutdown.assert_called_once_with()
+        shutdown.assert_called_once_with(only_if_drained=True)
         start.assert_called_once_with(
             self.state,
             ORCHESTRATION_ROOT / "cli.py",
             project_root=self.project_a,
         )
+
+    def test_maintenance_never_stops_a_collector_from_under_a_run(self) -> None:
+        def acquire(shutdown_effect, health=True):
+            with (
+                mock.patch("codex_agents.learning_store.CollectorClient.health", return_value={})
+                if health else contextlib.nullcontext(),
+                mock.patch("codex_agents.learning_store.CollectorClient.shutdown",
+                           side_effect=shutdown_effect) as shutdown,
+                mock.patch("codex_agents.learning_store._wait_for_collector_shutdown", return_value=True),
+                mock.patch("codex_agents.learning_store._start_collector_locked", return_value={}) as start,
+            ):
+                try:
+                    CollectorMaintenance.acquire(
+                        self.state, ORCHESTRATION_ROOT / "cli.py", self.project_a, owner_registration=True,
+                    ).resume()
+                finally:
+                    calls = [call.kwargs for call in shutdown.call_args_list]
+                return calls, start.call_count
+
+        # A collector with an active run refuses; nothing is stopped or restarted.
+        with self.assertRaises(CollectorError) as busy:
+            acquire(CollectorError("collector rejected request: collector_busy", code="collector_busy"))
+        self.assertEqual("collector_busy", busy.exception.code)
+        self.assertIn("nothing was changed", str(busy.exception))
+        # The maintenance lock was released: the next command can take it.
+        self.assertEqual(([{"only_if_drained": True}], 1), acquire(None))
+        # A collector of this version that does not know the drained stop is not
+        # assumed idle: nothing is stopped.
+        with self.assertRaises(CollectorError) as unknown:
+            acquire(CollectorError("collector rejected request: operation_invalid", code="operation_invalid"))
+        self.assertEqual("operation_invalid", unknown.exception.code)
+        # Only a collector of a release from before project services, which drives no
+        # runs, is stopped as before; this version with an older schema is not.
+        for reported, stopped in (("0.8.12", True), ("0.8.13", False), ("not-a-version", False)):
+            answers = iter([CollectorError("collector rejected request: operation_invalid",
+                                           code="operation_invalid"), None])
+            with self.subTest(reported=reported), \
+                    mock.patch("codex_agents.learning_store.CollectorClient.health",
+                               side_effect=CollectorUpgradeRequired("older runtime")), \
+                    mock.patch("codex_agents.learning_store.CollectorClient._request",
+                               return_value={"ok": True, "runtime_version": reported}):
+                if stopped:
+                    self.assertEqual(([{"only_if_drained": True}, {}], 1),
+                                     acquire(lambda **_: _raise_or_return(next(answers)), health=False))
+                else:
+                    with self.assertRaises(CollectorError) as refused:
+                        acquire(lambda **_: _raise_or_return(next(answers)), health=False)
+                    self.assertEqual("operation_invalid", refused.exception.code)
+        # Any other refusal is not treated as permission.
+        with self.assertRaises(CollectorError) as other:
+            acquire(CollectorError("collector rejected request: operation_rejected", code="operation_rejected"))
+        self.assertEqual("operation_rejected", other.exception.code)
+
+    def test_a_collector_that_outlives_the_wait_for_its_stop_is_reported_as_it_is(self) -> None:
+        def acquire(stops, restart, answering=True):
+            waits: list[float] = []
+            answers = iter(stops)
+            with (
+                mock.patch("codex_agents.learning_store.CollectorClient.health", return_value={}),
+                mock.patch("codex_agents.learning_store.CollectorClient._request",
+                           side_effect=None if answering else CollectorError("collector is unavailable"),
+                           return_value={"ok": True}),
+                mock.patch("codex_agents.learning_store.CollectorClient.shutdown") as shutdown,
+                mock.patch("codex_agents.learning_store._wait_for_collector_shutdown",
+                           side_effect=lambda client, state, deadline: waits.append(deadline) or next(answers)),
+                mock.patch("codex_agents.learning_store._start_collector_locked", side_effect=[restart]) as start,
+            ):
+                try:
+                    return CollectorMaintenance.acquire(self.state, ORCHESTRATION_ROOT / "cli.py", self.project_a)
+                finally:
+                    shutdown.assert_called_once_with(only_if_drained=True)
+                    self.waits, self.starts = waits, start.call_args_list
+
+        # Slow to go down, but down within the extra wait: the command simply goes ahead.
+        maintenance = acquire([False, True], {})
+        self.assertEqual((2, []), (len(self.waits), self.starts))
+        self.assertGreater(self.waits[1], self.waits[0])
+        with mock.patch("codex_agents.learning_store._start_collector_locked", return_value={}) as start:
+            maintenance.resume()
+        start.assert_called_once_with(self.state, ORCHESTRATION_ROOT / "cli.py", project_root=self.project_a)
+        # Still up after both waits: it is asked to start (which finds it answering) and the
+        # refusal says it is still running; if it has gone and cannot be started, it says that.
+        # Which it is comes from asking the collector itself first: one this runtime may not start
+        # (another version's, during an update) can still be the one running, and one that is
+        # answering is not started a second time.
+        running = "collector did not stop for maintenance; it is still running"
+        gone = ("collector did not stop for maintenance and is not answering; the next command starts it again, "
+                "or run setup if it does not")
+        late = "collector stopped too late for this command and was started again; run the command again"
+        for restart, answering, said, started in (
+                ({}, True, running, 0),
+                (CollectorError("collector runtime differs from the owner-authorized runtime"), True, running, 0),
+                (CollectorError("collector did not become healthy"), False, gone, 1),
+                ({}, False, late, 1)):
+            with self.subTest(said=said, restart=restart), self.assertRaises(CollectorError) as refused:
+                acquire([False, False], restart, answering)
+            self.assertEqual(said, str(refused.exception))
+            self.assertEqual(started, len(self.starts))
+            # The maintenance lock was released either way.
+            descriptor = os.open(self.state.runtime_lock, os.O_RDWR)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(descriptor)
+
+    def test_client_rejects_older_or_newer_schema_with_matching_runtime(self) -> None:
+        client = CollectorClient(self.state.socket)
+        cases = [(schema, CollectorUpgradeRequired) for schema in range(6, learning_store.LEDGER_SCHEMA_VERSION)]
+        cases.append((learning_store.LEDGER_SCHEMA_VERSION+1, CollectorNewerVersionError))
+        for schema, error in cases:
+            with self.subTest(schema=schema), mock.patch.object(client, "_request", return_value={
+                "ok": True, "schema_version": schema,
+                "runtime_version": PACKAGE_VERSION, "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
+            }), self.assertRaises(error):
+                client.health()
 
     def test_client_orders_collector_versions_without_downgrade(self) -> None:
         client = CollectorClient(self.state.socket)
@@ -3672,7 +4021,7 @@ class LearningStoreTests(unittest.TestCase):
                 "codex_agents.learning_store.CollectorClient.health",
                 side_effect=CollectorNewerVersionError("newer runtime"),
             ),
-            mock.patch("codex_agents.learning_store.subprocess.Popen") as popen,
+            mock.patch("codex_agents.collector_runtime.subprocess.Popen") as popen,
         ):
             with self.assertRaises(CollectorNewerVersionError):
                 _start_collector_locked(
@@ -3685,7 +4034,7 @@ class LearningStoreTests(unittest.TestCase):
     def test_detached_collector_receives_no_inherited_environment(self) -> None:
         healthy = {
             "ok": True,
-            "schema_version": 6,
+            "schema_version": learning_store.LEDGER_SCHEMA_VERSION,
             "runtime_version": PACKAGE_VERSION,
             "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
             "started_at_ms": 1,
@@ -3695,7 +4044,7 @@ class LearningStoreTests(unittest.TestCase):
                 "codex_agents.learning_store.CollectorClient.health",
                 side_effect=[CollectorError("unavailable"), healthy],
             ),
-            mock.patch("codex_agents.learning_store.subprocess.Popen") as popen,
+            mock.patch("codex_agents.collector_runtime.subprocess.Popen") as popen,
         ):
             self.assertEqual(
                 healthy,
@@ -3778,6 +4127,12 @@ class LearningStoreTests(unittest.TestCase):
         with self.ledger.repository(self.project_a_id) as repository:
             records = repository.records("event")
         self.assertEqual("turn_started", records[0]["event_code"])
+
+
+def _raise_or_return(value):
+    if isinstance(value, BaseException):
+        raise value
+    return value
 
 
 if __name__ == "__main__":

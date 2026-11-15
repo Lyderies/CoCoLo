@@ -170,19 +170,27 @@ class HostileOwnRepositoryTests(unittest.TestCase):
                 self.assert_never_ran()
         subcommands: list[str] = []
         real_run = subprocess.run
+        real_popen = subprocess.Popen
 
         def recording(argv, **options):
             if argv[0] == self.executable:
                 subcommands.append(argv[argv.index("-C") + 2])
             return real_run(argv, **options)
 
-        with mock.patch.object(git_plumbing.subprocess, "run", recording):
+        def recording_popen(argv, **options):
+            if argv[0] == self.executable:
+                subcommands.append(argv[argv.index("-C") + 2])
+            return real_popen(argv, **options)
+
+        with mock.patch.object(git_plumbing.subprocess, "run", recording), \
+                mock.patch.object(git_plumbing.subprocess, "Popen", recording_popen):
             load_operational_check_configuration(self.project)
             export = self.base / "export"
             export.mkdir()
             self.assertEqual(1, export_committed_paths(self.project, ["docs"], export))
         self.assertEqual("hello\n", (export / "docs" / "readme.txt").read_text())
         self.assertLessEqual(set(subcommands), {"rev-parse", "ls-tree", "cat-file", "config"})
+        self.assertLessEqual({"ls-tree", "cat-file"}, set(subcommands))
         self.assert_never_ran()
 
     def test_modified_files_are_still_detected(self) -> None:

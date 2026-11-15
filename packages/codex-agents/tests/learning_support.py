@@ -477,7 +477,7 @@ def provider_fixture(name: str) -> bytes:
 # pauses, a {"raw": text} line prints text as is, and every invocation (arguments, working directory, environment
 # names and the files it can see) is logged for the test to inspect.
 FAKE_CHILD = """\
-import json, os, sys, time
+import json, os, signal, sys, time
 
 
 def strict(schema):
@@ -533,6 +533,10 @@ def child(directory, name):
     if "-o" in sys.argv and os.path.exists(last):
         with open(sys.argv[sys.argv.index("-o") + 1], "w") as handle:
             handle.write(open(last).read())
+    # A fixture can request only this fake client's own fixed termination signal.
+    if os.path.exists(os.path.join(directory, name + "-terminate-self")):
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        os.kill(os.getpid(), signal.SIGTERM)
     code = os.path.join(directory, name + "-exit-code")
     sys.exit(int(open(code).read()) if os.path.exists(code) else 0)
 

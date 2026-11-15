@@ -17,6 +17,12 @@ from .contracts import ContractError
 CODEX_HOST_CLIENT = "codex-host-v1"
 CLAUDE_HOST_CLIENT = "claude-host-v1"
 HOST_CLIENTS = (CODEX_HOST_CLIENT, CLAUDE_HOST_CLIENT)
+# The owner's own terminal commands (setup, status, attestation), which run with
+# no client's markers. Like the host classes it is a label, not an identity: a
+# project's service accepts it only for the owner learning operations, the
+# account owner only for reads that spend nothing, and it never owns a run or
+# an orchestration.
+OWNER_CLIENT = "owner-cli-v1"
 # Set by Codex shells (verified live); CODEX_SANDBOX alone also appears in
 # sandboxed tool runs, so the thread markers decide.
 CODEX_THREAD_MARKERS = ("CODEX_THREAD_ID", "CODEX_SESSION_ID")

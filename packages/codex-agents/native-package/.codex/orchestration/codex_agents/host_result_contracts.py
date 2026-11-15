@@ -1,0 +1,159 @@
+"""Project result-admission values; no SQLite, keys or caller authority.
+
+Native enrollment and endpoint authentication remain separate activation gates.
+Clients name an already durable terminal, never supply a replacement result,
+repair receipt, observation, accepted outcome or execution configuration.
+"""
+from dataclasses import asdict, dataclass
+
+from .history_contracts import AttemptBinding, HistoryError, _DIGEST, _ID, matches
+from .learning_contracts import canonical_json, parse_bounded_json
+from .result_contracts import MAX_ASSIGNMENT_CANONICAL_BYTES
+
+MAX_HOST_RESULT_CONTEXT_BYTES = 3 * MAX_ASSIGNMENT_CANONICAL_BYTES
+
+
+@dataclass(frozen=True, repr=False)
+class WorkerResultContext:
+    """Independent original worker scope and protected prospective verifier task.
+
+    This exists before the verifier is opened. Native adapters must establish
+    current primary permission and original task/scope custody independently.
+    Neither a caller-selected task nor this value is that authentication.
+    """
+    binding: AttemptBinding
+    task: dict
+
+    def snapshot(self):
+        invalid = False
+        try:
+            if type(self.binding) is not AttemptBinding or type(self.task) is not dict:
+                raise ValueError()
+            raw = canonical_json({'binding': self.binding.as_data(), 'task': self.task})
+            if not 0 < len(raw) <= MAX_HOST_RESULT_CONTEXT_BYTES:
+                raise ValueError()
+            value = parse_bounded_json(raw, max_bytes=MAX_HOST_RESULT_CONTEXT_BYTES)
+        except Exception:
+            invalid = True
+        if invalid:
+            raise HistoryError('history_not_authorized')
+        return raw, value
+
+
+@dataclass(frozen=True)
+class HostResultContext:
+    """Original inputs supplied by a trusted server adapter, never request JSON.
+
+    Hashes are checked against the actual consumed account registration. Native
+    caller/session/generation/revocation and original input custody must still
+    be independently proved by that adapter. This type proves neither.
+    """
+    binding: AttemptBinding
+    assignment: dict
+    task: dict
+    route: dict
+    client_capability: dict
+
+    def snapshot(self):
+        invalid = False
+        try:
+            fields = ("assignment", "task", "route", "client_capability")
+            if (type(self.binding) is not AttemptBinding
+                    or any(type(getattr(self, name)) is not dict for name in fields)):
+                raise ValueError()
+            raw = canonical_json({"binding": self.binding.as_data(), **{name: getattr(self, name) for name in fields}})
+            if not 0 < len(raw) <= MAX_HOST_RESULT_CONTEXT_BYTES:
+                raise ValueError()
+            value = parse_bounded_json(raw, max_bytes=MAX_HOST_RESULT_CONTEXT_BYTES)
+        except Exception:
+            invalid = True
+        if invalid:
+            raise HistoryError("history_not_authorized")
+        return raw, value
+
+
+@dataclass(frozen=True)
+class HostResultReference:
+    binding: AttemptBinding
+    terminal_record_id: str
+    terminal_content_digest: str
+    result_digest: str
+
+    def __post_init__(self):
+        if (type(self.binding) is not AttemptBinding
+                or not matches(self.terminal_record_id, _ID)
+                or not matches(self.terminal_content_digest, _DIGEST)
+                or not matches(self.result_digest, _DIGEST)):
+            raise HistoryError("history_invalid_input")
+        self.binding.as_data()
+
+    def as_data(self):
+        self.__post_init__()
+        return asdict(self)
+
+
+@dataclass(frozen=True, repr=False)
+class OperationalQAContext:
+    """Two independently held original inputs, never taken from QA request JSON.
+
+    Native identity, current permission and original input custody remain the
+    server adapter's responsibility. Registered claim labels are not process
+    identity or proof that the same-user caller is authorized.
+    """
+    worker: HostResultContext
+    verifier: HostResultContext
+
+    def snapshot(self):
+        if type(self.worker) is not HostResultContext or type(self.verifier) is not HostResultContext:
+            raise HistoryError('history_not_authorized')
+        value = {name: getattr(self, name).snapshot()[1] for name in ('worker', 'verifier')}
+        raw = canonical_json(value)
+        if len(raw) > 2 * MAX_HOST_RESULT_CONTEXT_BYTES:
+            raise HistoryError('history_not_authorized')
+        return raw, value
+
+    @classmethod
+    def from_snapshot(cls, value):
+        return cls(**{name: HostResultContext(**{**value[name],
+            'binding': AttemptBinding(**value[name]['binding'])}) for name in ('worker', 'verifier')})
+
+
+@dataclass(frozen=True, repr=False)
+class OperationalCheckContext:
+    """Original fixed-runner report and original pair held by the server adapter.
+
+    This value does not authenticate a check runner. Native adapters must prove
+    actual approved runner/report custody and current caller authority; normal
+    request JSON cannot supply a report, passed flags or this context.
+    """
+    qa_context: OperationalQAContext
+    report: dict
+
+    def snapshot(self):
+        if type(self.qa_context) is not OperationalQAContext or type(self.report) is not dict:
+            raise HistoryError('history_not_authorized')
+        try:
+            encoded = canonical_json(self.report)
+            if not 0 < len(encoded) <= 65_536:
+                raise ValueError()
+            report = parse_bounded_json(encoded, max_bytes=65_536)
+            value = {'qa_context': self.qa_context.snapshot()[1], 'report': report}
+            raw = canonical_json(value)
+        except Exception:
+            raise HistoryError('history_not_authorized') from None
+        return raw, value
+
+
+def decode_host_result_reference(value):
+    invalid = False
+    try:
+        if type(value) is not dict or value.keys() != {
+            "binding", "terminal_record_id", "terminal_content_digest", "result_digest",
+        } or type(value["binding"]) is not dict:
+            raise ValueError()
+        reference = HostResultReference(**{**value, "binding": AttemptBinding(**value["binding"])})
+    except Exception:
+        invalid = True
+    if invalid:
+        raise HistoryError("history_invalid_input")
+    return reference

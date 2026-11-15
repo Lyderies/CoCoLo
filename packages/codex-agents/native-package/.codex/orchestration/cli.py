@@ -72,6 +72,7 @@ sys.path.append(str(ORCHESTRATION_ROOT))
 from codex_agents.bridge import BridgeRefused  # noqa: E402
 from codex_agents.bridge import signal_guard as bridge_signal_guard  # noqa: E402
 from codex_agents.bridge import dispatch as dispatch_bridge  # noqa: E402
+from codex_agents.bridge import dispatch_preflight  # noqa: E402
 from codex_agents.catalog import CatalogError, discover, load_discovery_policy  # noqa: E402
 from codex_agents.contracts import (  # noqa: E402
     ContractError,
@@ -82,6 +83,7 @@ from codex_agents.contracts import (  # noqa: E402
     validate_assignment,
     validate_assignment_shape,
     validate_result,
+    validate_task,
 )
 from codex_agents.evaluation import evaluate, load_jsonl  # noqa: E402
 from codex_agents.learning_adapters import (  # noqa: E402
@@ -95,6 +97,7 @@ from codex_agents.learning_contracts import (  # noqa: E402
     load_released_candidate_digests,
     parse_bounded_json,
     parse_bounded_json_value,
+    provider_for_model,
     validate_learning_record,
 )
 from codex_agents.learning_engine import (  # noqa: E402
@@ -116,33 +119,53 @@ from codex_agents.learning_engine import (  # noqa: E402
     runtime_fixture_digest,
     validate_runtime_candidate,
 )
-from codex_agents.learning_store import (  # noqa: E402
+from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient  # noqa: E402
+from codex_agents.collector_paths import UNMOVED_STATE, CollectorPaths  # noqa: E402
+from codex_agents.client_runtime import (  # noqa: E402
+    RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
+    billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
+    HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client, learning_cycle_client,
+    routing_evidence_client, owner_learning_client, orchestration_report_client, runtime_hint_path,
+    run_control_client, bridged_run_owner, abandon_bridged_run,
+)
+from codex_agents.dispatch_api import DispatchError  # noqa: E402
+from codex_agents.history_contracts import HistoryError  # noqa: E402
+from codex_agents.project_host_client import (  # noqa: E402
+    ensure_project_host, other_version_host, project_host_serving, withdraw_project_host,
+)
+from codex_agents.admission_metadata import api_keys_present  # noqa: E402
+from codex_agents.host_paths import PYTHON_ISOLATION_FLAGS  # noqa: E402
+from codex_agents.cli_reports import command_report, unavailable_cycle  # noqa: E402
+from codex_agents.collector_contracts import (  # noqa: E402
     CollectorError,
-    CollectorClient,
-    CollectorMaintenance,
+    CollectorTransportError,
     CollectorRestartError,
-    CollectorServer,
     CollectorVersionError,
+)
+from codex_agents.collector_runtime import validate_collector_runtime  # noqa: E402
+from codex_agents.learning_store import (  # noqa: E402
+    CollectorMaintenance,
     LearningLedger,
     LearningState,
     LedgerError,
     StateError,
     authorize_collector_runtime,
     client_health_clear,
-    client_health_snapshot,
+    copy_ledger_before_upgrade,
     default_state_root,
-    empty_ingestion_snapshot,
     ensure_collector,
+    ledger_schema_behind,
+    legacy_ledger_schema_behind,
     migrate_legacy_state,
     registered_project_roots,
     require_authorized_collector_runtime,
-    validate_collector_runtime,
 )
 from codex_agents.hosts import (  # noqa: E402
     CLAUDE_HOST_CLIENT,
     CODEX_HOST_CLIENT,
     CODEX_THREAD_MARKERS,
     HOST_CLIENTS,
+    OWNER_CLIENT,
     HostClientMismatch,
     HostClientUnknown,
     resolve_host_client,
@@ -263,6 +286,10 @@ def _print(data: object) -> None:
     print(json.dumps(data, indent=2, sort_keys=True))
 
 
+def _print_command_report(args: argparse.Namespace, report: dict) -> None:
+    _print(command_report(args.command, report, full=getattr(args, "full_report", False)))
+
+
 def _add_assignment_context(
     parser: argparse.ArgumentParser, *, allow_policy_override: bool = True
 ) -> None:
@@ -282,6 +309,16 @@ def _add_assignment_context(
 def _add_learning_project(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--state-root", type=Path)
     parser.add_argument("--project-root", required=True, type=Path)
+
+
+_COLLECTOR_RESTART_ERROR = (
+    "the collector was stopped for a moment and did not start again; "
+    "run learning-status for a registered project"
+)
+_COMPLETED_LEDGER_RESTART_ERROR = (
+    "ledger operation completed; collector restart failed; "
+    "run learning-status for a registered project"
+)
 
 
 class _RestartingLedger:
@@ -311,10 +348,7 @@ class _RestartingLedger:
             self._maintenance.resume()
         except CollectorError as exc:
             if operation_completed:
-                raise CollectorRestartError(
-                    "ledger operation completed; collector restart failed; "
-                    "run learning-status for a registered project"
-                ) from exc
+                raise CollectorRestartError(_COMPLETED_LEDGER_RESTART_ERROR) from exc
 
 
 def _close_ledger(ledger: LearningLedger | _RestartingLedger) -> None:
@@ -346,7 +380,7 @@ def _note_collector_failure(exc: BaseException) -> None:
     """
 
     global _COLLECTOR_UNREACHED
-    if isinstance(exc, OSError) or (
+    if isinstance(exc, (OSError, CollectorTransportError)) or (
         isinstance(exc, CollectorError)
         and exc.code is None
         and not isinstance(exc, CollectorVersionError)
@@ -373,6 +407,454 @@ def _with_codex_hint(command: str, report: dict) -> dict:
     ):
         return {**report, "hint": CODEX_SANDBOX_HINT}
     return report
+
+
+def _start_collector_quietly(args: argparse.Namespace) -> None:
+    """Best effort: a client that still finds no collector reports it unavailable.
+
+    A failed start never stops the command itself from reporting what it can see.
+    """
+    try:
+        ensure_collector(CollectorPaths(args.state_root), ORCHESTRATION_ROOT / "cli.py",
+                         project_root=args.project_root)
+    except StateError as error:
+        # State that still sits in the old macOS folder needs the owner's setup
+        # step; say so instead of reporting services that cannot exist yet.
+        if str(error) == UNMOVED_STATE:
+            raise
+    except Exception:
+        pass
+
+
+def _compatible_collector(state):
+    """The running collector when it serves exactly this runtime, else None (owner maintenance)."""
+    try:
+        client = CollectorClient(state.socket)
+        if client.health().get("runtime_digest") != COLLECTOR_RUNTIME_DIGEST:
+            return None
+    except Exception:
+        return None
+    return client
+
+
+_MIGRATION_MESSAGES = {
+    "migration_not_drained": "a child run is still active or unsettled; nothing was changed, try again when none is running",
+    "migration_project_service_running": "this project's service did not stop; nothing was changed, try again",
+    "migration_source_changed": "the ledger changed while it was being copied; nothing was changed, run it again",
+    "migration_reconciliation_required": "learning was recorded after the move; going back would drop it",
+    "migration_too_large": "the project's learning history is larger than a migration can copy",
+}
+
+
+class ProjectServiceOtherVersion(Exception):
+    """A live service of another version holds the project and could not be replaced."""
+
+
+def _replace_other_version_host(args):
+    """Withdraw a project service that another version started; whether none is left.
+
+    Done with the collector stopped (it stops only when no run is active or
+    unsettled, and no run can be claimed while it is down) and the ledger
+    checked drained, so the service holds no run and cannot be given one,
+    whatever version its clients are. The service is looked up only once this
+    command holds maintenance: another command may have replaced it meanwhile,
+    and the one serving now must not be the one withdrawn. The collector is
+    started again either way, and a failure to start it is reported.
+    """
+    try:
+        state = LearningState(args.state_root, create=False)
+        maintenance = CollectorMaintenance.acquire(state, ORCHESTRATION_ROOT / "cli.py", args.project_root)
+    except (CollectorError, StateError, OSError):
+        return False
+    replaced = False
+    try:
+        directory = other_version_host(args.state_root, args.project_root)
+        if directory is None:
+            replaced = True
+        else:
+            ledger = LearningLedger(state)
+            try:
+                drained = ledger.drained()
+            finally:
+                ledger.close()
+            replaced = drained and withdraw_project_host(args.state_root, args.project_root, directory)
+    except (LedgerError, StateError, OSError):
+        replaced = False
+    except BaseException:
+        with contextlib.suppress(CollectorError):
+            maintenance.resume()
+        raise
+    try:
+        maintenance.resume()
+    except CollectorError as error:
+        raise CollectorRestartError(_COLLECTOR_RESTART_ERROR) from error
+    return replaced
+
+
+def _start_project_host(args):
+    """Start this project's service unless one serves; first settle where its learning lives.
+
+    A service that another version started (the project was updated while it was
+    idle) is replaced, but only when no run is active anywhere; otherwise the
+    command says so instead of reporting a service that cannot answer it.
+
+    A project with no learning history in the shared ledger is simply marked as
+    living in its own store. One with history is migrated here, before its
+    service first holds the store, but only when no run is active anywhere;
+    otherwise it stays pending and the next start tries again. Any failure
+    leaves the project as it was: its service starts either way.
+    """
+    if other_version_host(args.state_root, args.project_root) is not None and not _replace_other_version_host(args):
+        raise ProjectServiceOtherVersion()
+    try:
+        if not project_host_serving(args.state_root, args.project_root):
+            _start_collector_quietly(args)
+            client = _compatible_collector(CollectorPaths(args.state_root))
+            if client is not None:
+                snapshot = client.learning_migration(args.project_root)
+                if not snapshot["moved"] and not snapshot["has_learning"]:
+                    client.learning_moved_if_empty(args.project_root)
+                elif (not snapshot["moved"] or snapshot["activation_pending"]) and snapshot["drained"]:
+                    # Not yet moved, or retired by a migration that stopped before
+                    # switching the copy on: run (or finish) it now.
+                    _migrate_learning(argparse.Namespace(
+                        state_root=args.state_root, project_root=args.project_root, status=False, rollback=False))
+    except Exception:
+        pass
+    return ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)
+
+
+_MOVED_LEARNING_COMMANDS = frozenset({
+    "learning-run-cycle", "learning-analyze", "learning-record-feedback", "learning-review-case",
+    "learning-mine-case",
+})
+
+
+def _project_moved(state_root, project_root):
+    """Whether the ledger is retired for this project's learning (even if a copy is still to be switched on)."""
+    try:
+        client = _compatible_collector(CollectorPaths(state_root))
+        return client is not None and client.learning_migration(project_root)["moved"]
+    except (CollectorError, StateError, OSError):
+        return False
+
+
+def _learning_moved(args):
+    """Whether this project's learning history lives in its own store, asked of the collector."""
+    _start_collector_quietly(args)
+    try:
+        client = _compatible_collector(CollectorPaths(args.state_root))
+        if client is None:
+            return False
+        snapshot = client.learning_migration(args.project_root)
+        return snapshot["moved"] and not snapshot["activation_pending"]
+    except (CollectorError, StateError, OSError):
+        return False
+
+
+def _moved_learning_command(args):
+    """An owner learning command for a project whose learning lives in its own store.
+
+    The project's service does the work; the shared ledger is not opened and
+    the collector is never paused.
+    """
+    if args.command == "learning-mine-case":
+        raise ContractError(
+            "cases are mined automatically for this project; run learning-run-cycle to mine now")
+    _start_project_host(args)
+
+    def cycle(seconds):
+        report = learning_cycle_client(
+            args.state_root, args.project_root, host_client=OWNER_CLIENT, full=True,
+            **({"max_age_ms": args.max_age_ms} if getattr(args, "max_age_ms", None) else {}), seconds=seconds)
+        return None if report.get("summary_state") == "unavailable" else report, report.get("reason_code")
+
+    def unavailable(reason):
+        return {"ready": False, "reason_code": reason, "error": "the project's learning service did not answer"}
+
+    try:
+        if args.command in {"learning-run-cycle", "learning-analyze"}:
+            if args.max_age_ms < 1:
+                raise ContractError("max age must be positive")
+            report, reason = cycle(120.0)
+            if report is None:
+                return unavailable(reason)
+            if args.command == "learning-analyze":
+                # The cycle's own analysis, as of now.
+                return {"ready": True, "analysis": report["analysis"]}
+            # Nothing is deleted from the project store: retention is applied when it is read.
+            return {"ready": True, **report, "expired_records": 0}
+        if args.command == "learning-record-feedback":
+            state = LearningState(args.state_root, create=False)
+            record = build_feedback(
+                digest_key=state.digest_key(), run_id=args.run_id, label=args.label,
+                reason_code=args.reason_code, observed_at_ms=args.observed_at_ms,
+                correction=args.correction_file.read_bytes() if args.correction_file is not None else None)
+            if args.signature is None:
+                project_id = CollectorClient(state.socket).project(args.project_root)
+                return {"ready": True, "requires_signature": True, "record": record,
+                        "signing_payload_b64": base64.b64encode(
+                            OwnerGrantAuthority.owner_record_payload(project_id, record)).decode("ascii")}
+            answer = owner_learning_client(args.state_root, args.project_root, "feedback",
+                                           record=record, signature=args.signature.read_bytes())
+        else:
+            answer = owner_learning_client(
+                args.state_root, args.project_root, "review_case", case_id=args.case_id,
+                review_digest=args.review_digest, similarity_group_digest=args.similarity_group_digest,
+                destination=args.destination, freeze=args.freeze)
+            record = answer["record"]
+    except HistoryError as error:
+        if error.reason_code == "history_not_authorized" and args.command == "learning-record-feedback":
+            return {"ready": False, "error": "owner record signature is invalid"}
+        return unavailable(error.reason_code)
+    if answer["refused"] is not None:
+        return {"ready": False, "reason_code": answer["refused"],
+                "error": answer["detail"] or _OWNER_REFUSALS[answer["refused"]]}
+    report = {"ready": True, "stored": answer["stored"], "record": record}
+    if args.command == "learning-review-case":
+        report["learning_cycle"] = cycle(20.0)[0] or unavailable_cycle("learning_pending")
+    return report
+
+
+_OWNER_REFUSALS = {
+    "feedback_run_unknown": "owner feedback run is not admitted",
+    "case_unknown": "evaluation case is unavailable",
+    "case_review_refused": "the review is not allowed for this case",
+    "owner_record_conflict": "a different record already has this identity",
+}
+
+
+def _migration_state(snapshot):
+    """complete, pending (still to copy, or copied but not yet switched on) or not_needed."""
+    if snapshot["moved"]:
+        return "pending" if snapshot["activation_pending"] else "complete"
+    return "pending" if snapshot["has_learning"] else "not_needed"
+
+
+def _migrate_learning(args):
+    """Move, report or roll back one project's learning history: offline owner work.
+
+    The collector is stopped only if no run is active anywhere, and is started
+    again whatever happens. The project's own service must not be running.
+    """
+    from codex_agents.learning_migration import (
+        MigrationError, migrate_project, migration_status, rollback_project,
+    )
+    from codex_agents.project_service import open_offline_history
+
+    state = LearningState(args.state_root, create=False)
+    if args.status:
+        client = _compatible_collector(state)
+        if client is not None:
+            # Read from the running services; nothing is stopped for a question.
+            with _collector_contact():
+                snapshot = client.learning_migration(args.project_root)
+            return {"ready": True, "can_start_now": snapshot["drained"], "state": _migration_state(snapshot)}
+
+    def refused(reason):
+        return {"ready": False, "reason_code": reason,
+                "error": _MIGRATION_MESSAGES.get(reason, "the learning history could not be moved")}
+
+    with _collector_contact():
+        try:
+            maintenance = CollectorMaintenance.acquire(state, ORCHESTRATION_ROOT / "cli.py", args.project_root)
+        except CollectorError as error:
+            if getattr(error, "code", None) == "collector_busy":
+                return refused("migration_not_drained")
+            raise
+    ledger = history = None
+    try:
+        ledger = LearningLedger(state, allow_schema_upgrade=True)
+        project_id = ledger.project_for_root(args.project_root)
+        try:
+            history = open_offline_history(state, project_id)
+        except HistoryError as error:
+            if error.reason_code != "history_writer_busy" or args.status:
+                raise
+            if not ledger.drained():
+                return refused("migration_not_drained")
+            # No run is active anywhere, so this project's idle service is asked to
+            # stop: it exits once its published hint is withdrawn, and the next
+            # command starts another. Its journals are durable.
+            runtime_hint_path(CollectorPaths(args.state_root), args.project_root).unlink(missing_ok=True)
+            deadline = time.monotonic() + 5
+            while history is None:
+                time.sleep(0.2)
+                try:
+                    history = open_offline_history(state, project_id)
+                except HistoryError as retry:
+                    if retry.reason_code != "history_writer_busy" or time.monotonic() >= deadline:
+                        raise
+        if args.status:
+            report = migration_status(ledger, history, project_id)
+        elif args.rollback:
+            report = rollback_project(ledger, history, project_id)
+        else:
+            report = migrate_project(ledger, history, project_id, now_ms=time.time_ns() // 1_000_000)
+        return {"ready": True, **report}
+    except MigrationError as error:
+        return refused(error.reason_code)
+    except HistoryError as error:
+        return refused("migration_project_service_running" if error.reason_code == "history_writer_busy"
+                       else "migration_unavailable")
+    finally:
+        try:
+            if history is not None:
+                history.close()
+            if ledger is not None:
+                ledger.close()
+        finally:
+            maintenance.resume()
+
+
+def _register_project(args, moved_aside, upgrade_required, progress):
+    """The owner's registration once any old macOS records are in place; its report, or an exit code."""
+    state = progress["state"] = LearningState(args.state_root)
+    behind = ledger_schema_behind(state)
+    if behind is not None and not args.upgrade_ledger:
+        return upgrade_required(behind, moved_aside)
+    running = (_compatible_collector(state)
+               if moved_aside is None and args.move_legacy_state is None else None)
+    if running is not None:
+        # Another project's children keep the collector: register through it.
+        project_id = running.register(args.project_root)
+        health = running.health()
+        return {
+            "ready": True,
+            "active": True,
+            "project_id": project_id,
+            "collector_schema_version": health["schema_version"],
+            "collector_runtime_version": health["runtime_version"],
+            "collector_runtime_digest": health["runtime_digest"],
+            "state_moved": None,
+            "ledger_upgraded_from": None,
+            "ledger_copy": None,
+        }
+    maintenance = CollectorMaintenance.acquire(
+        state,
+        ORCHESTRATION_ROOT / "cli.py",
+        args.project_root,
+        owner_registration=True,
+    )
+    try:
+        # Looked at again now that nothing else can write: only what is
+        # still an earlier version's ledger is copied and upgraded.
+        behind = progress["behind"] = ledger_schema_behind(state) if args.upgrade_ledger else None
+        if behind is not None:
+            progress["copy"] = copy_ledger_before_upgrade(state, behind)
+        ledger = LearningLedger(state, allow_schema_upgrade=behind is not None,
+                                backup_before_upgrade=behind is not None)
+        try:
+            project_id = ledger.register_project(args.project_root)
+        finally:
+            _close_ledger(ledger)
+        authorize_collector_runtime(
+            state, ORCHESTRATION_ROOT / "cli.py"
+        )
+        progress["registered"] = True
+    except BaseException:
+        try:
+            maintenance.resume()
+        except CollectorError:
+            pass
+        raise
+    try:
+        maintenance.resume()
+    except CollectorError as exc:
+        raise CollectorRestartError(
+            "project registration completed; collector restart failed; "
+            "run learning-status for the registered project"
+        ) from exc
+    health = ensure_collector(
+        state,
+        ORCHESTRATION_ROOT / "cli.py",
+        project_root=args.project_root,
+    )
+    return {
+        "ready": True,
+        "active": True,
+        "project_id": project_id,
+        "collector_schema_version": health["schema_version"],
+        "collector_runtime_version": health["runtime_version"],
+        "collector_runtime_digest": health["runtime_digest"],
+        "state_moved": str(moved_aside) if moved_aside is not None else None,
+        "ledger_upgraded_from": behind,
+        "ledger_copy": str(progress["copy"]) if progress["copy"] is not None else None,
+    }
+
+
+def _registration_failure(moved_aside, progress, failure):
+    """What a failed registration tells the owner once records were moved or an upgrade began; else None.
+
+    The schema change is one transaction, but the copy before it and the
+    registration, authorization and collector start after it are not part of
+    it: the ledger is read again to say which side the failure fell on, and a
+    registration that completed is never described as unfinished.
+    """
+    behind, copy = progress["behind"], progress["copy"]
+    if behind is None and moved_aside is None:
+        return None
+    kept = "; keep the copy of the records as they were" if copy is not None else ""
+    if progress["registered"]:
+        reason, error = "collector_not_started_after_registration", (
+            ("the records were upgraded and " if behind is not None else "") +
+            "this project is registered, but the collector did not start again; run setup again" + kept)
+    elif behind is None:
+        reason, error = "registration_incomplete_after_move", (
+            "your records were moved to the protected folder, but registering this project did not finish; "
+            "run setup again")
+    else:
+        try:
+            still_behind = ledger_schema_behind(progress["state"]) is not None
+        except Exception:
+            still_behind = None
+        if still_behind:
+            reason, error = "ledger_upgrade_failed", (
+                "the records could not be upgraded and are as the earlier version left them; "
+                "install that version again to keep using them" + kept)
+        elif still_behind is False:
+            reason, error = "registration_incomplete_after_upgrade", (
+                "the records were upgraded, but registering this project did not finish; run setup again" + kept)
+        else:
+            reason, error = "ledger_upgrade_unknown", (
+                "the upgrade stopped and the records cannot be read to see how far it got; "
+                "do not delete anything" + kept)
+    return {
+        "ready": False,
+        "reason_code": reason,
+        "error": error,
+        # What the collector said, when that is what failed: its messages are fixed text.
+        "cause": str(failure)[:200] if isinstance(failure, CollectorError) else None,
+        # Old macOS records moved by this same command stay moved.
+        "state_moved": str(moved_aside) if moved_aside is not None else None,
+        "ledger_schema_version": behind,
+        "ledger_copy": str(copy) if copy is not None else None,
+    }
+
+
+def _host_qa(args):
+    """Whether this project's host recorded the worker outcome QA names (else the legacy ledger did)."""
+    try:
+        _host_pair(args.state_root, args.project_root, args.host_outcome_digest, args.host_outcome_digest,
+                   host_client=_host_client())
+    except (HostOutcomeUnknown, HostClientUnknown):
+        return False
+    return True
+
+
+def _host_driven(route):
+    """A Codex route, or a bridged Claude child: the project host runs both."""
+    return isinstance(route, dict) and (route.get('provider') == 'codex' or (
+        route.get('provider') == 'claude' and route.get('dispatch') == 'bridge'))
+
+
+def _refuse_bridged_run(args: argparse.Namespace, run_handle: str, refusal: str) -> None:
+    """A run the project host drives is not changed through the legacy ledger."""
+    owner = bridged_run_owner(args.state_root, args.project_root, run_handle, host_client=_host_client())
+    if owner == 'other':
+        raise HostClientMismatch("host_client_mismatch")
+    if owner == 'owned':
+        raise LedgerError(refusal)
 
 
 def _resolved(path: Path) -> Path:
@@ -475,9 +957,28 @@ def _learning_ledger(args: argparse.Namespace) -> tuple[_RestartingLedger, str]:
         raise
 
 
-def _validated_assignment(args: argparse.Namespace) -> dict:
+def _validated_assignment_route(
+    args: argparse.Namespace, *, trusted_host: bool = False
+) -> tuple[dict, dict, dict]:
     task = _json_input(args.task)
     project_root = getattr(args, "project_root", None)
+    if trusted_host:
+        if project_root is None:
+            raise ContractError("trusted route preflight requires a registered project")
+        fast = _store_free_route(project_root, task, state_root=getattr(args, "state_root", None))
+        if fast is not None:
+            route = fast[0]
+        else:
+            ledger, project_id = _learning_ledger(args)
+            try:
+                route, _ = _trusted_host_route(ledger, project_id, project_root, task)
+            finally:
+                _close_ledger(ledger)
+        assigned = validate_assignment(
+            _json_input(args.assignment), task=task, route=route,
+            parent_grant=_json_input(args.parent_grant),
+        )
+        return assigned, route, task
     policy = (
         load_effective_policy(
             project_root,
@@ -493,11 +994,9 @@ def _validated_assignment(args: argparse.Namespace) -> dict:
     if isinstance(task, dict) and task.get("verification_for_outcome") is not None:
         if project_root is None:
             raise LedgerError("verification_for_outcome requires --project-root")
-        ledger, project_id = _learning_ledger(args)
-        try:
-            ledger.verification_worker_result(project_id, task, with_result=False)
-        finally:
-            _close_ledger(ledger)
+        # The worker outcome itself is checked by the route and bound by the verifier's open,
+        # through the project's service. Checking it here took the shared ledger for itself,
+        # which pauses the collector and is refused while any child runs anywhere.
     if fallback_receipt is not None:
         ledger, project_id = _learning_ledger(args)
         try:
@@ -528,12 +1027,17 @@ def _validated_assignment(args: argparse.Namespace) -> dict:
             _close_ledger(ledger)
     else:
         route = route_task(task, policy, primary_provider=_host_primary_provider())
-    return validate_assignment(
+    assigned = validate_assignment(
         _json_input(args.assignment),
         task=task,
         route=route,
         parent_grant=_json_input(args.parent_grant),
     )
+    return assigned, route, task
+
+
+def _validated_assignment(args: argparse.Namespace) -> dict:
+    return _validated_assignment_route(args)[0]
 
 
 # Bridged children run under their own ledger client, which declares the
@@ -631,6 +1135,61 @@ def _host_client_for(route: dict) -> str:
     return BRIDGE_CLIENT if route.get("dispatch") == "bridge" else _host_client()
 
 
+def _store_free_route(project_root: Path, task: dict, client_version: str | None = None,
+                      state_root: Path | None = None):
+    """The route when it needs nothing from the ledger, else None.
+
+    With an empty release registry there are no learning candidates to read, and
+    routing evidence the project's own service recorded is confirmed by that
+    service, so routing is policy: the CLI routes without opening the ledger or
+    pausing the shared collector, which serves other projects' running children.
+    Evidence the service does not hold is left to the ledger. A verifier's
+    worker outcome is bound by its open, not here.
+    """
+    trusted = frozenset()
+    if validate_task(task)["routing_evidence_refs"]:
+        trusted = None if state_root is None else routing_evidence_client(
+            state_root, project_root, validate_task(task), host_client=_host_client())
+        if trusted is None:
+            if state_root is not None and _project_moved(state_root, project_root):
+                # The project's own store is the authority on what its owner has
+                # rejected since; the ledger's frozen copy cannot vouch for a run.
+                raise ContractError("routing evidence is not held by this project's service")
+            return None
+    try:
+        if load_released_candidate_digests(RELEASES_PATH, verify_signature=None):
+            return None
+    except ContractError:
+        return None  # A registry that needs the owner's signature check: the ledger path.
+    policy = load_effective_policy(
+        project_root,
+        ORCHESTRATION_ROOT / "config" / "routing-policy.json",
+        ORCHESTRATION_ROOT / "config" / "discovery-policy.json",
+    )
+    route = route_task(task, policy, trusted_routing_evidence_refs=trusted,
+                       primary_provider=_host_primary_provider())
+    clients = load_client_capabilities(ORCHESTRATION_ROOT / "config" / "learning-clients.json")
+    capability = clients[client_version or _host_client_for(route)]
+    route["execution_configuration"] = installed_execution_configuration(
+        BUNDLE_ROOT, route, client_capability=capability
+    )
+    route["learning_candidate_digests"] = []
+    route["ready"] = True
+    return route, capability
+
+
+def _installed_route(args: argparse.Namespace, task: dict) -> dict:
+    """The route the installed policy gives this task, from the ledger only when it must be."""
+    fast = _store_free_route(args.project_root, task, state_root=args.state_root)
+    if fast is not None:
+        return fast[0]
+    ledger, project_id = _learning_ledger(args)
+    try:
+        return _trusted_host_route(ledger, project_id, args.project_root, task)[0]
+    finally:
+        _close_ledger(ledger)
+
+
 def _trusted_host_route(
     ledger: LearningLedger,
     project_id: str,
@@ -650,7 +1209,12 @@ def _trusted_host_route(
     # A verifier bound to a worker outcome is routed only when that outcome is
     # this project's, from the named provider and family, in an active boundary.
     # Open and dispatch read the result itself; recording needs only the binding.
-    ledger.verification_worker_result(project_id, task, with_result=False)
+    try:
+        ledger.verification_worker_result(project_id, task, with_result=False)
+    except LedgerError as error:
+        # A worker the project host recorded is bound by its verifier's open instead.
+        if str(error) != "verification_for_outcome is not a recorded host outcome":
+            raise
     primary_route = route_task(
         task,
         policy,
@@ -763,6 +1327,16 @@ def build_parser() -> argparse.ArgumentParser:
     result_preflight_parser.add_argument("--project-root", type=Path)
     _add_assignment_context(result_preflight_parser)
 
+    dispatch_preview = subparsers.add_parser(
+        "dispatch-preflight", help="preview committed bridge files and configured effective capabilities; does not admit or launch",
+    )
+    dispatch_preview.add_argument("--project-root", required=True, type=Path)
+    dispatch_preview.add_argument("--state-root", type=Path)
+    dispatch_preview.add_argument("--offset", type=int, default=0)
+    dispatch_preview.add_argument("--limit", type=int, default=50)
+    dispatch_preview.add_argument("--expected-export-commit")
+    _add_assignment_context(dispatch_preview)
+
     assignment_parser = subparsers.add_parser(
         "validate-assignment", help="validate one bounded subagent assignment"
     )
@@ -792,6 +1366,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--move-legacy-state",
         help="approve moving the pre-0.8.10 macOS state: the SHA-256 of its "
         "owner-allowed-signers file as reviewed, or 'none'",
+    )
+    learning_register.add_argument(
+        "--upgrade-ledger", action="store_true",
+        help="approve upgrading records an earlier version wrote; a checked copy is kept first",
     )
 
     learning_serve = subparsers.add_parser(
@@ -861,8 +1439,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_assignment_context(learning_host_result, allow_policy_override=False)
     learning_host_result.add_argument("--result", required=True)
     learning_host_result.add_argument("--observation", required=True)
+    learning_host_result.add_argument('--route', help='original Codex route used by open and dispatch')
     learning_host_result.add_argument("--evaluation-assignment-digest")
     learning_host_result.add_argument("--trial-id")
+    learning_host_result.add_argument(
+        "--full-report", action="store_true",
+        help="include the complete learning-cycle analysis and record identifiers",
+    )
 
     learning_open_host = subparsers.add_parser(
         "learning-open-host-run",
@@ -881,6 +1464,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_assignment_context(dispatch_parser, allow_policy_override=False)
     dispatch_parser.add_argument("--route", required=True)
     dispatch_parser.add_argument("--run-handle", required=True)
+    dispatch_parser.add_argument("--expected-export-commit", help="refuse before launch if HEAD differs from this preflight commit")
 
     provider_observe = subparsers.add_parser(
         "provider-observe",
@@ -895,6 +1479,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="for Claude, also run one minimal locked turn to record billing evidence",
     )
+    provider_observe.add_argument('--request-id', help='reuse the exact identity to recover an observation or billing-probe reply')
+    provider_observe.add_argument('--run-handle', help='original opened run for a before/after observation')
+    provider_observe.add_argument('--phase', choices=('before', 'after'))
 
     learning_billing_attestation = subparsers.add_parser(
         "learning-record-billing-attestation",
@@ -957,6 +1544,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     learning_close_orchestration.add_argument("--goal-tokens-used", type=int)
     learning_close_orchestration.add_argument("--goal-time-used-seconds", type=int)
+
+    for lifecycle in (learning_open_orchestration, learning_checkpoint_orchestration,
+                      learning_pause_orchestration, learning_resume_orchestration, learning_close_orchestration):
+        lifecycle.add_argument('--request-id', help='reuse the exact identity to reconcile a lost reply')
+    for lifecycle in (learning_checkpoint_orchestration, learning_pause_orchestration,
+                      learning_resume_orchestration, learning_close_orchestration):
+        lifecycle.add_argument('--expected-sequence', type=int,
+            help='original sequence for an explicit retry; otherwise read current state once')
+    learning_orchestration_status = subparsers.add_parser('learning-orchestration-status',
+        help='read current owned lifecycle metadata through the project API')
+    _add_learning_project(learning_orchestration_status)
+    learning_orchestration_status.add_argument('--orchestration-handle', required=True)
+    learning_orchestration_status.add_argument('--request-id')
+
+    run_status = subparsers.add_parser('learning-run-status',
+        help="read a running child's live status through its project host")
+    run_cancel = subparsers.add_parser('learning-cancel-run',
+        help='request cancellation of a running child; acceptance is not cleanup')
+    for run_control in (run_status, run_cancel):
+        _add_learning_project(run_control)
+        run_control.add_argument('--orchestration-handle', required=True)
+        run_control.add_argument('--run-handle', required=True)
+        run_control.add_argument('--attempt', type=int, default=1)
 
     learning_orchestration_report = subparsers.add_parser(
         "learning-orchestration-report",
@@ -1044,6 +1654,10 @@ def build_parser() -> argparse.ArgumentParser:
     learning_operational_qa.add_argument("--check-receipt", required=True)
     learning_operational_qa.add_argument("--verifier-assignment", required=True)
     learning_operational_qa.add_argument("--verifier-result", required=True)
+    learning_operational_qa.add_argument(
+        "--full-report", action="store_true",
+        help="include the complete learning-cycle analysis and record identifiers",
+    )
 
     learning_run_checks = subparsers.add_parser(
         "learning-run-operational-checks",
@@ -1060,6 +1674,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_learning_project(learning_expire)
     learning_expire.add_argument("--now-ms", type=int)
+
+    learning_migrate = subparsers.add_parser(
+        "learning-migrate-project",
+        help="move one project's learning history from the shared ledger to its own project store",
+    )
+    _add_learning_project(learning_migrate)
+    migrate_mode = learning_migrate.add_mutually_exclusive_group()
+    migrate_mode.add_argument("--status", action="store_true", help="report only; nothing is changed")
+    migrate_mode.add_argument(
+        "--rollback", action="store_true",
+        help="make the shared ledger the learning store again (refused once new learning was recorded)")
 
     learning_cycle = subparsers.add_parser(
         "learning-run-cycle",
@@ -1129,6 +1754,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--destination", required=True, choices=("promotion_holdout", "canary")
     )
     learning_review.add_argument("--freeze", action="store_true")
+    learning_review.add_argument(
+        "--full-report", action="store_true",
+        help="include the complete learning-cycle analysis and record identifiers",
+    )
 
     learning_analyze = subparsers.add_parser(
         "learning-analyze", help="analyze admitted project outcomes by configuration"
@@ -1305,6 +1934,8 @@ def main() -> int:
     try:
         _require_protected_runtime(args)
         _require_own_roots(args)
+        if args.command == "dispatch-preflight" and args.policy is not None:
+            raise OwnRootRefused("--policy is refused: dispatch preflight uses its installed policy")
         if getattr(args, "policy", False) is None:
             args.policy = ORCHESTRATION_ROOT / "config" / (
                 "discovery-policy.json" if args.command == "inventory" else "routing-policy.json"
@@ -1346,10 +1977,22 @@ def main() -> int:
                     "client version is not in the validated capability matrix"
                 )
             selection_slice = model_selection_slice(task)
+            fast = (_store_free_route(args.project_root, task, explicit_client, state_root=args.state_root)
+                    if args.fallback_from_run_handle is None else None)
+            if fast is not None:
+                report = fast[0]
+                _print_command_report(args, report)
+                return 0
             ledger, project_id = _learning_ledger(args)
             try:
                 trusted = ledger.trusted_routing_evidence_refs(project_id, task)
-                ledger.verification_worker_result(project_id, task)
+                try:
+                    ledger.verification_worker_result(project_id, task)
+                except LedgerError as error:
+                    # A worker the project host recorded lives in project history,
+                    # not this ledger; its verifier's open binds and checks it there.
+                    if str(error) != "verification_for_outcome is not a recorded host outcome":
+                        raise
                 base_route = route_task(
                     task,
                     policy,
@@ -1485,6 +2128,14 @@ def main() -> int:
             report = _validated_assignment(args)
         elif args.command == "result-preflight":
             report = {"ready": True, **result_preflight(_validated_assignment(args))}
+        elif args.command == "dispatch-preflight":
+            if args.fallback_receipt is not None:
+                raise ContractError("bridged preflight never uses a fallback receipt")
+            assignment, route, task = _validated_assignment_route(args, trusted_host=True)
+            report = dispatch_preflight(
+                args.project_root, task, route, assignment,
+                offset=args.offset, limit=args.limit, expected_commit=args.expected_export_commit,
+            )
         elif args.command == "validate-result":
             assignment = _validated_assignment(args)
             try:
@@ -1495,7 +2146,7 @@ def main() -> int:
                 if args.project_root is not None:
                     learning_ready = False
                     try:
-                        state = LearningState(args.state_root, create=False)
+                        state = CollectorPaths(args.state_root)
                         ensure_collector(
                             state,
                             ORCHESTRATION_ROOT / "cli.py",
@@ -1531,6 +2182,27 @@ def main() -> int:
             report = validate_learning_record(_bounded_json_input(args.record))
         elif args.command == "learning-register":
             validate_collector_runtime(ORCHESTRATION_ROOT / "cli.py")
+
+            def upgrade_required(schema, moved):
+                # Asked before anything is stopped, moved or changed: the earlier
+                # version's collector keeps running and its projects keep working.
+                _print_command_report(args, {
+                    "ready": False,
+                    "reason_code": "ledger_upgrade_required",
+                    "ledger_schema_version": schema,
+                    "error": "these records were written by an earlier version; setup upgrades them "
+                             "when you approve it (learning-register --upgrade-ledger)",
+                    "state_moved": str(moved) if moved is not None else None,
+                })
+                return 2
+
+            # Old macOS records the owner has approved as theirs would be moved and
+            # then need the upgrade too: both decisions are collected before either
+            # is acted on, so declining the second leaves the first undone.
+            if (args.state_root is None and args.move_legacy_state is not None and not args.upgrade_ledger):
+                legacy_behind = legacy_ledger_schema_behind()
+                if legacy_behind is not None:
+                    return upgrade_required(legacy_behind, None)
             # The owner's registration copies a pre-0.8.10 macOS state folder to the
             # default location first (once) and renames the old one aside; nothing
             # else does. `state_moved` names the old copy, which the owner may delete.
@@ -1543,113 +2215,34 @@ def main() -> int:
                 if args.state_root is None
                 else None
             )
-            state = LearningState(args.state_root)
-            maintenance = CollectorMaintenance.acquire(
-                state,
-                ORCHESTRATION_ROOT / "cli.py",
-                args.project_root,
-                owner_registration=True,
-            )
+            # From here on old records may have been moved, and an approved upgrade may
+            # be under way: whatever then fails, the owner is told how far it got and
+            # where the records and their copy are.
+            progress: dict[str, Any] = {"state": None, "behind": None, "copy": None, "registered": False}
             try:
-                ledger = LearningLedger(state)
-                try:
-                    project_id = ledger.register_project(args.project_root)
-                finally:
-                    _close_ledger(ledger)
-                authorize_collector_runtime(
-                    state, ORCHESTRATION_ROOT / "cli.py"
-                )
-            except Exception:
-                try:
-                    maintenance.resume()
-                except CollectorError:
-                    pass
-                raise
-            try:
-                maintenance.resume()
-            except CollectorError as exc:
-                raise CollectorRestartError(
-                    "project registration completed; collector restart failed; "
-                    "run learning-status for the registered project"
-                ) from exc
-            health = ensure_collector(
-                state,
-                ORCHESTRATION_ROOT / "cli.py",
-                project_root=args.project_root,
-            )
-            report = {
-                "ready": True,
-                "active": True,
-                "project_id": project_id,
-                "collector_schema_version": health["schema_version"],
-                "collector_runtime_version": health["runtime_version"],
-                "collector_runtime_digest": health["runtime_digest"],
-                "state_moved": str(moved_aside) if moved_aside is not None else None,
-            }
+                report = _register_project(args, moved_aside, upgrade_required, progress)
+            except Exception as failure:
+                report = _registration_failure(moved_aside, progress, failure)
+                if report is None:
+                    raise
+                _print_command_report(args, report)
+                return 2
+            if type(report) is int:
+                return report
         elif args.command == "learning-serve":
+            # The collector and the account services run from their own entry,
+            # so this client imports none of the account persistence owners.
             state = LearningState(args.state_root, create=False)
             require_authorized_collector_runtime(state)
-            ledger = LearningLedger(state)
-            server = CollectorServer(ledger)
-            try:
-                server.start()
-                while not server.wait(0.5):
-                    pass
-            except KeyboardInterrupt:
-                pass
-            finally:
-                server.stop()
-                _close_ledger(ledger)
-            report = {"ready": True, "stopped": True}
+            sys.stdout.flush()
+            os.execv(sys.executable, [sys.executable, *PYTHON_ISOLATION_FLAGS,
+                                      str(ORCHESTRATION_ROOT / "collector_host.py"), "--state-root", str(state.root)])
         elif args.command == "learning-status":
-            with _collector_contact():
-                state = LearningState(args.state_root, create=False)
-            try:
-                with _collector_contact():
-                    ensure_collector(
-                        state,
-                        ORCHESTRATION_ROOT / "cli.py",
-                        project_root=args.project_root,
-                    )
-                    # Status verifies owner signatures using admission's lookup. Give
-                    # that read more time than the short hook-delivery socket timeout.
-                    health = CollectorClient(state.socket, timeout=5.0).health(args.project_root)
-                client_failures = client_health_snapshot(state, args.project_root)
-                report = {
-                    "ready": True,
-                    "active": True,
-                    "collector_schema_version": health["schema_version"],
-                    "collector_runtime_version": health["runtime_version"],
-                    "collector_runtime_digest": health["runtime_digest"],
-                    "started_at_ms": health["started_at_ms"],
-                    "collector_health": health.get("collector_health", {}),
-                    "client_failures": client_failures,
-                    "ingestion": health["ingestion"],
-                    "provider_attestations": health["provider_attestations"],
-                    "owner_key": state.owner_key_report(),
-                }
-            except CollectorError as exc:
-                client_failures = client_health_snapshot(state, args.project_root)
-                ingestion = empty_ingestion_snapshot(
-                    registered=exc.code != "project_unregistered"
-                )
-                if exc.code != "project_unregistered":
-                    ingestion["ingestion_state"] = "unavailable"
-                    ingestion["freshness"] = {
-                        "state": "unavailable", "age_ms": None,
-                        "message": "Hook delivery is unknown while the collector is unavailable.",
-                    }
-                report = _with_codex_hint(args.command, {
-                    "ready": False,
-                    "active": False,
-                    "error": "collector or project registration is unavailable",
-                    "provider_attestations": {
-                        provider: {"state": "unavailable"} for provider in ("codex", "claude")
-                    },
-                    "client_failures": client_failures,
-                    "ingestion": ingestion,
-                    "owner_key": state.owner_key_report(),
-                })
+            _start_collector_quietly(args)
+            report = status_client(args.state_root, args.project_root)
+            if report.get('reason_code') == 'status_collector_transport_unavailable':
+                _COLLECTOR_UNREACHED = True
+                report = _with_codex_hint(args.command, report)
         elif args.command == "learning-backup-project":
             if args.expires_in_seconds < 60:
                 raise ContractError("backup expiry must be at least 60 seconds")
@@ -1700,7 +2293,7 @@ def main() -> int:
             finally:
                 _close_ledger(ledger)
         elif args.command == "learning-normalize-app":
-            state = LearningState(args.state_root, create=False)
+            state = CollectorPaths(args.state_root)
             clients = load_client_capabilities(
                 ORCHESTRATION_ROOT / "config" / "learning-clients.json"
             )
@@ -1714,7 +2307,7 @@ def main() -> int:
             )
             report = {"ready": normalized is not None, "record": normalized}
         elif args.command == "learning-ingest-app":
-            state = LearningState(args.state_root, create=False)
+            state = CollectorPaths(args.state_root)
             clients = load_client_capabilities(
                 ORCHESTRATION_ROOT / "config" / "learning-clients.json"
             )
@@ -1763,6 +2356,31 @@ def main() -> int:
         elif args.command == "learning-open-host-run":
             task = _json_input(args.task)
             supplied_route = _json_input(args.route)
+            assignment = _json_input(args.assignment)
+            parent_grant = _json_input(args.parent_grant)
+            # This only rejects malformed/unsupported requests. The supplied
+            # route remains untrusted until the ledger resolves and compares it.
+            validate_assignment(assignment, task=task, route=supplied_route,
+                                parent_grant=parent_grant)
+            if _host_driven(supplied_route):
+                # Model, effort, agent and sandbox come only from the installed route.
+                if args.fallback_receipt is None and supplied_route != _installed_route(args, task):
+                    raise ContractError("supplied route does not match the installed route")
+                _start_project_host(args)
+                host = _host_client()  # Consistency only; native identity is independently checked.
+                if host == CLAUDE_HOST_CLIENT:
+                    check_backend(os.environ, args.project_root.resolve())
+                if args.fallback_receipt is not None:
+                    raise ContractError('bridged open never uses a fallback receipt')
+                if api_keys_present(os.environ):
+                    # The same admission refusal the account owner would give, before any request.
+                    raise AdmissionDenied('provider_api_key_present')
+                report = open_codex_client(args.state_root, args.project_root, args.orchestration_handle,
+                    task, supplied_route, assignment, parent_grant, host_client=host)
+                if report['state'] == 'denied':
+                    raise AdmissionDenied(report['reason_code'])
+                _print_command_report(args, report)
+                return 0
             ledger, project_id = _learning_ledger(args)
             try:
                 host = _require_host_owner(
@@ -1778,10 +2396,10 @@ def main() -> int:
                 if supplied_route != route:
                     raise ContractError("supplied route does not match the installed route")
                 assignment = validate_assignment(
-                    _json_input(args.assignment),
+                    assignment,
                     task=task,
                     route=route,
-                    parent_grant=_json_input(args.parent_grant),
+                    parent_grant=parent_grant,
                 )
                 verification_input = ledger.verification_worker_result(
                     project_id, task, orchestration_handle=args.orchestration_handle
@@ -1836,77 +2454,96 @@ def main() -> int:
             route = _json_input(args.route)
             if not isinstance(route, dict):
                 raise ContractError("route must be an object")
+            assignment = _json_input(args.assignment)
+            parent_grant = _json_input(args.parent_grant)
+            validate_assignment(assignment, task=task, route=route, parent_grant=parent_grant)
+            if _host_driven(route):
+                _host_client()  # Existing consistency check; markers confer no authority.
+                report = {"ready": True, **dispatch_codex_client(
+                    args.state_root, args.project_root, args.run_handle, task, route, assignment, parent_grant,
+                    expected_export_commit=args.expected_export_commit)}
+                _print_command_report(args, report)
+                return 0
             ledger, project_id = _learning_ledger(args)
+            completed_dispatch = None
             try:
-                _require_host_owner(
-                    ledger, project_id, run_handle=args.run_handle
-                )
-                # A termination signal kills the child's process group before
-                # this process exits, and the export is still removed.
-                with bridge_signal_guard():
-                    report = {
-                        "ready": True,
-                        **dispatch_bridge(
-                            ledger,
-                            project_id,
-                            project_root=args.project_root.resolve(),
-                            bundle_root=BUNDLE_ROOT,
-                            task=task,
-                            route=route,
-                            assignment=_json_input(args.assignment),
-                            parent_grant=_json_input(args.parent_grant),
-                            run_handle=args.run_handle,
-                            result_schema=(
-                                ORCHESTRATION_ROOT / "schemas" / "result.schema.json"
-                            ).read_bytes(),
-                        ),
-                    }
-            finally:
-                _close_ledger(ledger)
-        elif args.command == "provider-observe":
-            ledger, project_id = _learning_ledger(args)
-            try:
-                if args.billing_probe and args.provider != "claude":
-                    raise ContractError("the billing probe is for Claude only")
-                probe = None
-                if args.billing_probe:
-                    observed = ledger.observe_claude_billing(
-                        project_id, project_root=args.project_root.resolve()
+                try:
+                    _require_host_owner(
+                        ledger, project_id, run_handle=args.run_handle
                     )
-                    probe, records = observed["probe"], observed["records"]
-                else:
-                    records = ledger.observe_provider(
-                        project_id,
-                        args.provider,
-                        project_root=args.project_root.resolve(),
-                    )
-                # The local client path stays in the ledger and is never printed.
-                report = {
-                    "ready": True,
-                    "records": [
-                        {
-                            **{
-                                key: value for key, value in record.items()
-                                if key != "client_path"
-                            },
-                            # Display only: admission makes its own decision,
-                            # by the same rule, from the ledger.
-                            **(
-                                {"paid_usage_waived_by_attestation": (
-                                    ledger.billing_waived_by_attestation(
-                                        project_id, record
-                                    )
-                                )}
-                                if record.get("record_type") == "provider_billing"
-                                else {}
+                    # A termination signal kills the child's process group before
+                    # this process exits, and the export is still removed.
+                    with bridge_signal_guard():
+                        completed_dispatch = {
+                            "ready": True,
+                            **dispatch_bridge(
+                                ledger,
+                                project_id,
+                                project_root=args.project_root.resolve(),
+                                bundle_root=BUNDLE_ROOT,
+                                task=task,
+                                route=route,
+                                assignment=assignment,
+                                parent_grant=parent_grant,
+                                run_handle=args.run_handle,
+                                expected_export_commit=args.expected_export_commit,
+                                result_schema=(
+                                    ORCHESTRATION_ROOT / "schemas" / "result.schema.json"
+                                ).read_bytes(),
                             ),
                         }
-                        for record in records
-                    ],
-                    **({"probe": probe} if probe is not None else {}),
-                }
-            finally:
-                _close_ledger(ledger)
+                finally:
+                    _close_ledger(ledger)
+            except CollectorRestartError:
+                if completed_dispatch is None:
+                    raise
+                # The bridge already bound this exact validated/fenced result.
+                # Preserve it while reporting the distinct recovery failure;
+                # never normalize its contents, drop a fence or launch again.
+                _print_command_report(args, {
+                    **completed_dispatch,
+                    "ready": False,
+                    "error": _COMPLETED_LEDGER_RESTART_ERROR,
+                    "dispatch_completed": True,
+                    "post_operation_error": {
+                        "reason_code": "collector_restart_failed",
+                        "recovery_required": True,
+                    },
+                })
+                return 2
+            report = completed_dispatch
+        elif args.command == "provider-observe":
+            if api_keys_present(os.environ) and not args.billing_probe:
+                # The account service observes with a clean environment; a session that
+                # carries an API key is still told so here, as every earlier version did.
+                # (A billing probe is denied by its own admission, with its reason code.)
+                raise ContractError("provider API key environment variables must not be set")
+            _start_collector_quietly(args)
+            if not args.billing_probe:
+                report = observe_provider_client(args.state_root, args.project_root, args.provider,
+                    request_id=args.request_id, run_handle=args.run_handle, phase=args.phase)
+            else:
+                if args.run_handle is not None or args.phase is not None:
+                    raise RuntimeBillingProbeError('probe_invalid_request')
+                if args.provider != 'claude':
+                    raise ContractError("the billing probe is for Claude only")
+                report = billing_probe_client(args.state_root, args.project_root, request_id=args.request_id)
+            _print_command_report(args, report)
+            return 0
+        elif args.command == "learning-record-billing-attestation" and _compatible_collector(
+                LearningState(args.state_root, create=False)) is not None:
+            # The owner's signed attestation through the running collector; nothing pauses it.
+            running = _compatible_collector(LearningState(args.state_root, create=False))
+            record = billing_attestation_record(_json_input(args.grant))
+            if record["provider"] != args.provider:
+                raise ContractError("billing grant provider does not match")
+            if args.signature is None:
+                report = {"ready": True, "requires_signature": True, "record": record,
+                          "signing_payload_b64": base64.b64encode(
+                              running.owner_record_payload(args.project_root, record)).decode("ascii")}
+            else:
+                report = {"ready": True, **running.commit_owner_record(
+                    args.project_root, record, args.signature.read_bytes()), "record": record}
         elif args.command == "learning-record-billing-attestation":
             ledger, project_id = _learning_ledger(args)
             try:
@@ -1934,82 +2571,52 @@ def main() -> int:
                     }
             finally:
                 _close_ledger(ledger)
-        elif args.command == "learning-open-orchestration":
-            ledger, project_id = _learning_ledger(args)
-            try:
-                report = {
-                    "ready": True,
-                    **ledger.open_orchestration(
-                        project_id, client_version=_host_client()
-                    ),
-                }
-            finally:
-                _close_ledger(ledger)
-        elif args.command == "learning-checkpoint-orchestration":
-            ledger, project_id = _learning_ledger(args)
-            try:
-                _require_host_owner(
-                    ledger, project_id, orchestration_handle=args.orchestration_handle
-                )
-                report = {
-                    "ready": True,
-                    **ledger.checkpoint_orchestration(
-                        project_id,
-                        orchestration_handle=args.orchestration_handle,
-                        goal_tokens_used=args.goal_tokens_used,
-                        goal_time_used_seconds=args.goal_time_used_seconds,
-                    ),
-                }
-            finally:
-                _close_ledger(ledger)
         elif args.command in {
-            "learning-pause-orchestration", "learning-resume-orchestration"
+            'learning-open-orchestration', 'learning-checkpoint-orchestration', 'learning-pause-orchestration',
+            'learning-resume-orchestration', 'learning-close-orchestration', 'learning-orchestration-status',
         }:
-            ledger, project_id = _learning_ledger(args)
-            try:
-                _require_host_owner(
-                    ledger, project_id, orchestration_handle=args.orchestration_handle
-                )
-                report = {
-                    "ready": True,
-                    **ledger.set_orchestration_paused(
-                        project_id,
-                        orchestration_handle=args.orchestration_handle,
-                        paused=args.command == "learning-pause-orchestration",
-                    ),
-                }
-            finally:
-                _close_ledger(ledger)
-        elif args.command == "learning-close-orchestration":
-            ledger, project_id = _learning_ledger(args)
-            try:
-                _require_host_owner(
-                    ledger, project_id, orchestration_handle=args.orchestration_handle
-                )
-                report = {
-                    "ready": True,
-                    **ledger.close_orchestration(
-                        project_id,
-                        orchestration_handle=args.orchestration_handle,
-                        status=args.status,
-                        goal_tokens_used=args.goal_tokens_used,
-                        goal_time_used_seconds=args.goal_time_used_seconds,
-                    ),
-                }
-            finally:
-                _close_ledger(ledger)
+            operation = ('status' if args.command == 'learning-orchestration-status'
+                         else args.command.removeprefix('learning-').removesuffix('-orchestration'))
+            # Best effort: a client that still finds no service reports it unavailable.
+            _start_project_host(args)
+            report = orchestration_client(args.state_root, args.project_root, 'orchestration.'+operation,
+                host_client=_host_client(), orchestration_handle=getattr(args, 'orchestration_handle', None),
+                request_id=args.request_id, expected_sequence=getattr(args, 'expected_sequence', None),
+                goal_tokens_used=getattr(args, 'goal_tokens_used', None),
+                goal_time_used_seconds=getattr(args, 'goal_time_used_seconds', None), status=getattr(args, 'status', None))
+            _print_command_report(args, report)
+            return 0
+        elif args.command in {'learning-run-status', 'learning-cancel-run'}:
+            report = run_control_client(args.state_root, args.project_root,
+                'project.status' if args.command == 'learning-run-status' else 'project.cancel',
+                args.orchestration_handle, args.run_handle, args.attempt, host_client=_host_client())
+            _print_command_report(args, report)
+            return 0 if report['ready'] else 2
         elif args.command == "learning-orchestration-report":
-            ledger, project_id = _learning_ledger(args)
+            # The project's own service reports the orchestrations it ran; the
+            # ledger still answers for those an earlier version kept there.
+            _start_project_host(args)
             try:
-                report = {
-                    "ready": True,
-                    **ledger.orchestration_report(
-                        project_id, args.orchestration_id
-                    ),
-                }
-            finally:
-                _close_ledger(ledger)
+                label = _host_client()
+            except HostClientUnknown:
+                label = OWNER_CLIENT
+            held = orchestration_report_client(
+                args.state_root, args.project_root, args.orchestration_id, host_client=label)
+            if held is not None:
+                report = {"ready": True, **held}
+            else:
+                ledger, project_id = _learning_ledger(args)
+                try:
+                    report = {
+                        "ready": True,
+                        **ledger.orchestration_report(
+                            project_id, args.orchestration_id
+                        ),
+                    }
+                finally:
+                    _close_ledger(ledger)
         elif args.command == "learning-bind-host-agent":
+            _refuse_bridged_run(args, args.run_handle, "a bridged run binds only its dispatched child")
             ledger, project_id = _learning_ledger(args)
             try:
                 _require_host_owner(
@@ -2026,6 +2633,7 @@ def main() -> int:
             finally:
                 _close_ledger(ledger)
         elif args.command == "learning-observe-host-run":
+            _refuse_bridged_run(args, args.run_handle, "a bridged run is observed by its project host")
             ledger, project_id = _learning_ledger(args)
             try:
                 _require_host_owner(
@@ -2042,6 +2650,14 @@ def main() -> int:
             finally:
                 _close_ledger(ledger)
         elif args.command == "learning-classify-host-run-abandoned":
+            owner = bridged_run_owner(args.state_root, args.project_root, args.run_handle, host_client=_host_client())
+            if owner == 'other':
+                raise HostClientMismatch("host_client_mismatch")
+            if owner == 'owned':
+                report = abandon_bridged_run(args.state_root, args.project_root, args.run_handle, args.reason,
+                                             host_client=_host_client())
+                _print_command_report(args, report)
+                return 0 if report['ready'] else 2
             ledger, project_id = _learning_ledger(args)
             try:
                 _require_host_owner(
@@ -2114,6 +2730,43 @@ def main() -> int:
                 raise ContractError(
                     "evaluation assignment digest and trial id must appear together"
                 )
+            assignment = _json_input(args.assignment)
+            supplied_route = None if args.route is None else _json_input(args.route)
+            derived_route = False
+            if (trusted_host and supplied_route is None and args.fallback_receipt is None
+                    and args.evaluation_assignment_digest is None):
+                owner = bridged_run_owner(args.state_root, args.project_root, observation.get('run_handle'),
+                                          host_client=host)
+                if owner == 'other':
+                    raise HostClientMismatch("host_client_mismatch")
+                if owner == 'owned':
+                    # A run the project host drives: the command derives its route itself.
+                    supplied_route, derived_route = _installed_route(args, task), True
+            if trusted_host and (provider_for_model(assignment.get('model')) == 'codex' or _host_driven(supplied_route)):
+                if supplied_route is None:
+                    _refuse_bridged_run(args, observation['run_handle'], "a bridged run must be dispatched before its result")
+                    raise RuntimeResultError('history_invalid_input')
+                if args.evaluation_assignment_digest is not None or args.fallback_receipt is not None:
+                    raise RuntimeResultError('history_invalid_input')
+                route = supplied_route
+                parent_grant = _json_input(args.parent_grant)
+                assignment = validate_assignment(assignment, task=task, route=route, parent_grant=parent_grant)
+                try:
+                    report = record_codex_result_client(args.state_root, args.project_root, task, route, assignment,
+                        parent_grant, result, observation, host_client=host)
+                    # The result is committed; the project's learning cycle follows and never fails it.
+                    report["learning_cycle"] = learning_cycle_client(
+                        args.state_root, args.project_root, host_client=host, full=args.full_report)
+                except RuntimeResultError as error:
+                    # The run is this host's (checked above), so no published dispatch means it never ran.
+                    if derived_route and error.reason_code in {
+                            'history_result_not_ready', 'dispatch_not_found', 'dispatch_not_authorized'}:
+                        raise LedgerError("a bridged run must be dispatched before its result") from None
+                    raise
+                _print_command_report(args, report)
+                return 0
+            if args.route is not None:
+                raise RuntimeResultError('history_invalid_input')
             ledger, project_id = _learning_ledger(args)
             try:
                 if trusted_host:
@@ -2157,7 +2810,7 @@ def main() -> int:
                     report["learning_cycle"] = ledger.run_learning_cycle(
                         project_id, as_of_ms=trusted_now_ms
                     )
-                    _print(report)
+                    _print_command_report(args, report)
                     return 0
                 policy = load_policy(
                     ORCHESTRATION_ROOT / "config" / "routing-policy.json"
@@ -2291,6 +2944,31 @@ def main() -> int:
                 )
             finally:
                 _close_ledger(ledger)
+        elif args.command in {"learning-run-operational-checks", "learning-record-operational-qa"} and _host_qa(args):
+            # A worker and verifier this project's host recorded: QA through the project API.
+            try:
+                if args.command == "learning-run-operational-checks":
+                    report = operational_checks_client(
+                        args.state_root, args.project_root, args.host_outcome_digest,
+                        args.verifier_host_outcome_digest,
+                        lambda diagnostics: run_operational_check_suite(
+                            args.project_root, scratch_root=CollectorPaths(args.state_root).root,
+                            diagnostics=diagnostics),
+                        host_client=_host_client())
+                else:
+                    report = record_operational_qa_client(
+                        args.state_root, args.project_root, args.host_outcome_digest,
+                        args.verifier_host_outcome_digest, args.check_receipt,
+                        _json_input(args.evaluator_assignment), _json_input(args.evaluator_result),
+                        _json_input(args.verifier_assignment), _json_input(args.verifier_result),
+                        host_client=_host_client())
+                    report["learning_cycle"] = learning_cycle_client(
+                        args.state_root, args.project_root, host_client=_host_client(), full=args.full_report)
+            except (HostOutcomeUnknown, HistoryError, DispatchError) as error:
+                # The project refused the pair, the files or the receipt; nothing was committed.
+                _print({"ready": False, "error": "operational QA admission rejected",
+                        "reason_code": getattr(error, "reason_code", "history_not_authorized")})
+                return 2
         elif args.command == "learning-run-operational-checks":
             ledger, project_id = _learning_ledger(args)
             try:
@@ -2375,6 +3053,11 @@ def main() -> int:
                     }
             finally:
                 _close_ledger(ledger)
+        elif args.command in _MOVED_LEARNING_COMMANDS and _learning_moved(args):
+            report = _moved_learning_command(args)
+            if not report["ready"]:
+                _print(report)
+                return 2
         elif args.command == "learning-expire":
             ledger, project_id = _learning_ledger(args)
             try:
@@ -2390,6 +3073,11 @@ def main() -> int:
                 }
             finally:
                 _close_ledger(ledger)
+        elif args.command == "learning-migrate-project":
+            report = _migrate_learning(args)
+            if not report["ready"]:
+                _print(report)
+                return 2
         elif args.command == "learning-run-cycle":
             if args.max_age_ms < 1:
                 raise ContractError("max age must be positive")
@@ -3098,6 +3786,14 @@ def main() -> int:
             args.command, {"ready": False, "error": "filesystem operation failed"}
         ))
         return 2
+    except ProjectServiceOtherVersion:
+        _print({
+            "ready": False,
+            "error": "this project's service was started by another version and a child run is still active "
+                     "or unsettled; try again when none is running",
+            "reason_code": "project_service_other_version",
+        })
+        return 2
     except HostClientMismatch:
         _print({
             "ready": False,
@@ -3118,6 +3814,29 @@ def main() -> int:
             "error": "host client is unknown",
             "reason_code": "host_client_unknown",
         })
+        return 2
+    except DispatchError as exc:
+        _print({"ready": False, "error": "dispatch unavailable", "reason_code": exc.reason_code})
+        return 2
+    except RuntimeOpenError as exc:
+        _print({'ready': False, 'error': 'host open unavailable', 'reason_code': exc.reason_code})
+        return 2
+    except RuntimeOrchestrationError as exc:
+        _print({'ready': False, 'error': 'orchestration operation unavailable', 'reason_code': exc.reason_code,
+                **({'request_id': exc.request_id} if exc.request_id is not None else {}),
+                **({'expected_sequence': exc.expected_sequence} if exc.expected_sequence is not None else {})})
+        return 2
+    except RuntimeResultError as exc:
+        _print({'ready': False, 'error': 'result recording unavailable', 'reason_code': exc.reason_code})
+        return 2
+    except RuntimeBillingProbeError as exc:
+        _print({'ready': False, 'error': 'billing probe unavailable', 'reason_code': exc.reason_code,
+                **({'request_id': exc.request_id} if exc.request_id is not None else {}),
+                **({'hint': BILLING_ATTESTATION_HINT} if exc.reason_code == 'billing_attestation_missing' else {})})
+        return 2
+    except RuntimeObservationError as exc:
+        _print({'ready': False, 'error': 'provider observation unavailable', 'reason_code': exc.reason_code,
+                **({'request_id': exc.request_id} if exc.request_id is not None else {})})
         return 2
     except BridgeRefused as exc:
         # Refusal messages are fixed strings; they never carry prompts or paths.
@@ -3154,7 +3873,7 @@ def main() -> int:
     ) as exc:
         _print(_with_codex_hint(args.command, {"ready": False, "error": str(exc)}))
         return 2
-    _print(report)
+    _print_command_report(args, report)
     successful = report.get("ready", True)
     if args.command == "validate" and args.package_only:
         successful = report.get("package_ready", False)

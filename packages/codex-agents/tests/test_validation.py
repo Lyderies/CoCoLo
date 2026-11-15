@@ -18,6 +18,38 @@ from codex_agents.validation import validate_package
 
 
 class PackageValidationTests(unittest.TestCase):
+    def test_package_validation_does_not_load_persistence_owners(self) -> None:
+        program = '''
+import importlib.abc
+from pathlib import Path
+import sys
+
+class RefusePersistence(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in {"sqlite3", "codex_agents.learning_store"}:
+            raise AssertionError("package validation loaded persistence: " + fullname)
+
+sys.meta_path.insert(0, RefusePersistence())
+from codex_agents.validation import validate_package
+report = validate_package(Path(sys.argv[2]))
+assert report["package_ready"], report
+assert "sqlite3" not in sys.modules
+assert "codex_agents.learning_store" not in sys.modules
+'''
+        completed = subprocess.run(
+            [sys.executable, "-I", "-B", "-c",
+             "import sys; sys.path.insert(0, sys.argv[1]); exec(sys.argv[3])",
+             str(ORCHESTRATION_ROOT), str(BUNDLE_ROOT), program],
+            text=True, capture_output=True, timeout=30,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
+
+    def test_owner_reexports_the_same_closed_producer_authority_contract(self) -> None:
+        from codex_agents import learning_contracts, learning_store
+
+        self.assertIs(learning_contracts.PRODUCER_AUTHORITY, learning_store.PRODUCER_AUTHORITY)
+        self.assertIs(learning_contracts.PROVIDER_OBSERVATION_TYPES, learning_store.PROVIDER_OBSERVATION_TYPES)
+
     def test_native_package_is_ready(self) -> None:
         report = validate_package(BUNDLE_ROOT)
         self.assertTrue(report["package_ready"], report)

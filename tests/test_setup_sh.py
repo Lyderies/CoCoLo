@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = ROOT / "setup.sh"
@@ -906,6 +907,12 @@ class SetupScriptTests(unittest.TestCase):
         self.assertIn("Keep this setup folder outside every folder you open in Codex", text)
         self.assertIn("including the Codex commands rule", text)
 
+    def test_header_and_welcome_name_the_product(self) -> None:
+        text = SETUP.read_text(encoding="utf-8")
+        self.assertIn("printf '%s%s COCOLO setup %s'", text)
+        self.assertNotIn("Agent orchestration setup %s", text)
+        self.assertIn('body "Welcome to COCOLO\nClaude Orchestrator, Codex Orchestrator, Local Orchestrator"', text)
+
     def test_wizard_messages_for_the_polished_screens(self) -> None:
         text = SETUP.read_text(encoding="utf-8")
         self.assertIn("Nothing to commit: the project already has these files committed", text)
@@ -1069,6 +1076,16 @@ class WizardTerminalTests(unittest.TestCase):
             f' exec "{TRUSTED_PY}" -I -B -S "{self.fakes / "fake_client_tool.py"}" "$@";; esac; fi\n'
             'if [ -n "$FAKE_SCAN" ]; then case "$*" in *"cli.py codex-session-scan "*)'
             ' echo "$FAKE_SCAN"; exit 0;; esac; fi\n'
+            # An earlier version's records: refused until approved, then upgraded.
+            'if [ -n "$FAKE_UPGRADE" ]; then case "$*" in *"cli.py learning-register "*"--upgrade-ledger"*)'
+            f' printf "%s\\n" "$*" >> "{self.base / "register.log"}"; echo "$FAKE_UPGRADE";'
+            ' case "$FAKE_UPGRADE" in *\'"ready": false\'*) exit 2;; esac; exit 0;;'
+            ' *"cli.py learning-register "*)'
+            f' printf "%s\\n" "$*" >> "{self.base / "register.log"}";'
+            ' echo \'{"ready": false, "reason_code": "ledger_upgrade_required", "ledger_schema_version": 6,'
+            ' "state_moved": null}\'; exit 2;;'
+            ' *"cli.py learning-status "*)'
+            ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;; esac; fi\n'
             'if [ -n "$FAKE_REGISTER" ]; then case "$*" in *"cli.py learning-register "*)'
             f' printf "%s\\n" "$*" >> "{self.base / "register.log"}"; echo "$FAKE_REGISTER"; exit 0;;'
             ' *"cli.py learning-status "*)'
@@ -1172,8 +1189,8 @@ class WizardTerminalTests(unittest.TestCase):
             os.kill(self.pid, 9)
         except OSError:
             pass
-        end = time.time() + 5
-        while time.time() < end:
+        end = time.monotonic() + 5
+        while time.monotonic() < end:
             try:
                 done, _ = os.waitpid(self.pid, os.WNOHANG)
             except OSError:
@@ -1185,8 +1202,8 @@ class WizardTerminalTests(unittest.TestCase):
     def expect(self, text: str, timeout: float = 25.0) -> None:
         import select
 
-        end = time.time() + timeout
-        while time.time() < end:
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
             if text in self.screen:
                 return
             ready, _, _ = select.select([self.fd], [], [], 0.2)
@@ -1201,11 +1218,20 @@ class WizardTerminalTests(unittest.TestCase):
                 self.transcript += chunk.decode(errors="replace")
         self.fail(f"never saw {text!r}; last screen: {re.sub(chr(27) + r'.*?[A-Za-z]', '', self.screen[-1500:])!r}")
 
+    def choose_project(self) -> None:
+        """Accept the project offered: the path prompt's default or, once a project is set up,
+        the first entry of the list (the project set up last)."""
+        end = time.monotonic() + 25
+        while "Project path" not in self.screen and "Another folder..." not in self.screen:
+            self.assertLess(time.monotonic(), end, "never saw the project question")
+            self.settle(0.2)
+        self.send("\r")
+
     def settle(self, seconds: float = 0.6) -> None:
         import select
 
-        end = time.time() + seconds
-        while time.time() < end:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
             ready, _, _ = select.select([self.fd], [], [], 0.1)
             if ready:
                 chunk = os.read(self.fd, 65536).decode(errors="replace")
@@ -1217,10 +1243,10 @@ class WizardTerminalTests(unittest.TestCase):
         os.write(self.fd, data.encode())
 
     def finish(self, timeout: float = 10.0) -> int:
-        end = time.time() + timeout
+        end = time.monotonic() + timeout
         import select
 
-        while time.time() < end:
+        while time.monotonic() < end:
             done, status = os.waitpid(self.pid, os.WNOHANG)
             if done:
                 self.pid = 0
@@ -1310,12 +1336,15 @@ class WizardTerminalTests(unittest.TestCase):
             "".join(json.dumps(line) + "\n" for line in lines))
 
     def test_a_codex_session_able_to_write_this_clone_is_warned_about(self) -> None:
-        self.write_codex_session(ROOT.parent, "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b")
+        # A temporary checkout's parent may also hold this test's HOME, which
+        # correctly takes precedence as a different warning. Isolate clone risk.
+        self.assertFalse(self.home.is_relative_to(ROOT))
+        self.write_codex_session(ROOT, "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b")
         self.start(self.base)
         self.expect("Read the warning above")
         self.expect("Up/Down move")
         plain = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", self.screen))
-        self.assertIn(f"A Codex session on 2026-11-01 could write to {ROOT.parent}. Codex was opened on "
+        self.assertIn(f"A Codex session on 2026-11-01 could write to {ROOT}. Codex was opened on "
                       "a folder that holds this setup folder; open Codex on a project folder only.", plain)
         self.assertIn("Open Codex on the project itself: never on a folder that contains a set-up project, "
                       "this setup folder, your home folder, a folder above it or /.", plain)
@@ -1464,6 +1493,106 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("The old records were not moved")
         self.assertFalse((self.base / "register.log").exists())
 
+    def drive_to_upgrade_question(self, upgraded: str) -> None:
+        project, checks = self.make_project()
+        self.drive_to_commit_menu(project, checks, {"FAKE_UPGRADE": upgraded})
+        self.send("\r")
+        self.expect("Continue")
+        self.send("\r")
+        self.expect("Register now")
+        self.send("\r")
+        self.expect("Upgrade the records now?")
+        self.expect("No, leave them as they are")
+        self.settle()
+
+    def test_an_earlier_versions_records_are_upgraded_only_when_approved(self) -> None:
+        self.drive_to_upgrade_question(
+            '{"ready": true, "state_moved": null, "ledger_upgraded_from": 6, "ledger_copy": "/kept/old ledger"}')
+        last = self.screen.split("\x1b[2J")[-1]
+        plain = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", last))
+        self.assertIn("written by an earlier version of the orchestrator", plain)
+        self.assertIn("keeps a checked copy of everything as it is", plain)
+        self.assertIn("until you run this setup for each of them", plain)
+        asked = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(1, len(asked))
+        self.assertNotIn("--upgrade-ledger", asked[0])
+        self.send("\r")  # Yes, upgrade them
+        self.expect("Upgraded your orchestrator records. A copy of them as they were is at /kept/old ledger")
+        self.expect("Collector status: ready")
+        asked = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(2, len(asked))
+        self.assertIn("--upgrade-ledger", asked[1])
+
+    def failed_upgrade(self, reason: str, said: str, never: str) -> None:
+        self.drive_to_upgrade_question(
+            '{"ready": false, "reason_code": "%s", "ledger_copy": "/kept/old ledger",'
+            ' "state_moved": "/somewhere/old copy"}' % reason)
+        self.send("\r")  # Yes, upgrade them
+        self.expect("Collector registration failed")
+        self.expect(said)
+        self.expect("A copy of the records as they were before the upgrade is at /kept/old ledger")
+        self.expect("stay there; the old copy is at /somewhere/old copy")
+        self.settle()
+        last = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", self.screen.split("\x1b[2J")[-1]))
+        self.assertNotIn(never, last)
+
+    def test_an_upgrade_that_failed_before_changing_anything_says_so(self) -> None:
+        self.failed_upgrade("ledger_upgrade_failed",
+                            "Your records were not upgraded: they are as the earlier version left them.",
+                            "were upgraded, but")
+
+    def test_a_failure_after_the_upgrade_is_never_described_as_records_left_unchanged(self) -> None:
+        self.failed_upgrade("registration_incomplete_after_upgrade",
+                            "Your records were upgraded, but registering this project did not",
+                            "as the earlier version left them")
+
+    def test_a_collector_that_did_not_start_after_registration_is_not_called_an_unfinished_registration(self) -> None:
+        self.failed_upgrade("collector_not_started_after_registration",
+                            "This project is registered, but the collector",
+                            "did not finish")
+
+    def test_an_upgrade_whose_outcome_cannot_be_read_tells_the_owner_to_keep_everything(self) -> None:
+        self.failed_upgrade("ledger_upgrade_unknown", "could not be read afterwards. Delete nothing",
+                            "as the earlier version left them")
+
+    def test_declining_the_upgrade_changes_nothing(self) -> None:
+        self.drive_to_upgrade_question('{"ready": true}')
+        self.send("\x1b[B\r")  # No
+        self.expect("The records were not upgraded")
+        self.expect("install the earlier version here again")
+        asked = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(1, len(asked))
+        self.assertNotIn("--upgrade-ledger", asked[0])
+
+    @unittest.skipUnless(sys.platform == "darwin", "the old records folder was macOS's")
+    def test_old_records_that_also_need_the_upgrade_get_both_questions_before_anything_moves(self) -> None:
+        digest = self.plant_legacy_records()
+        project, checks = self.make_project()
+        upgraded = ('{"ready": true, "state_moved": "/somewhere/old copy", "ledger_upgraded_from": 6,'
+                    ' "ledger_copy": "/kept/old ledger"}')
+        self.drive_to_commit_menu(project, checks, {"FAKE_UPGRADE": upgraded})
+        self.send("\r")
+        self.expect("Continue")
+        self.send("\r")
+        self.expect("Register now")
+        self.send("\r")
+        self.expect("Move these records to the protected folder?")
+        self.settle()
+        self.send("\r")  # Yes, move them
+        self.expect("Upgrade the records now?")
+        self.settle()
+        asked = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(1, len(asked))  # Refused before moving: the second answer is still to come.
+        self.assertNotIn("--upgrade-ledger", asked[0])
+        self.send("\r")  # Yes, upgrade them
+        self.expect("Upgraded your orchestrator records. A copy of them as they were is at /kept/old ledger")
+        self.expect("Moved your orchestrator records once to a protected folder")
+        self.expect("Collector status: ready")
+        asked = (self.base / "register.log").read_text().splitlines()
+        self.assertEqual(2, len(asked))
+        self.assertIn("--upgrade-ledger", asked[1])
+        self.assertIn(f"--move-legacy-state {digest}", asked[1])
+
     def test_no_move_no_records_sentence(self) -> None:
         project, checks = self.make_project()
         self.drive_to_commit_menu(project, checks, {"FAKE_REGISTER": '{"ready": true, "state_moved": null}'})
@@ -1478,6 +1607,8 @@ class WizardTerminalTests(unittest.TestCase):
     def test_quit_on_the_first_screen_changes_nothing(self) -> None:
         self.start(self.base)
         self.expect("Step 1 of 9")
+        self.expect("Claude Orchestrator, Codex Orchestrator, Local Orchestrator")
+        self.assertIn("COCOLO setup", self.screen)
         self.expect("signed in (plan: max, login: x)")
         self.send("q")
         self.expect("Quit setup?")
@@ -1491,8 +1622,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project, {"FAKE_SLOW": "1"})
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         deadline = time.time() + 20
@@ -1596,8 +1726,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project, {"FAKE_FAIL": "1"})
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
@@ -1647,8 +1776,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project)
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Update the install")
         self.send("\r")
         for wait in ("install can be updated", "Keep the existing configuration", "Install now"):
@@ -1678,7 +1806,16 @@ class WizardTerminalTests(unittest.TestCase):
         self.assertIn("could not check whether installed files are ignored", self.screen)
         self.assertNotIn("Nothing to commit", self.screen)
         self.send("\r")  # Commit now
-        self.expect("Not committed")
+        # The status and detail arrive in separate terminal writes. Exercise
+        # partial reads and wait for the detail rather than asserting mid-frame.
+        original_read = os.read
+
+        def read_part(fd: int, size: int) -> bytes:
+            return original_read(fd, min(size, 16) if fd == self.fd else size)
+
+        with mock.patch.object(os, "read", side_effect=read_part):
+            self.expect("Not committed")
+            self.expect("filter.planted.clean")
         plain = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", self.screen)
         self.assertIn("filter.planted.clean", plain)
         final = self.finish_after_install()
@@ -1714,8 +1851,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project)
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Update the install")
         self.send("\r")
         for wait in ("install can be updated", "Codex children", "Looks right", "Install now"):
@@ -1739,8 +1875,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project, {"FAKE_FAIL": "1"})
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
@@ -1826,8 +1961,7 @@ class WizardTerminalTests(unittest.TestCase):
     def test_back_to_the_main_menu_after_a_failure_then_another_option_works(self) -> None:
         self.to_failed_billing(1)
         self.send("\x1b[B\x1b[B\r")  # Back to the main menu
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Update the install")  # the existing-install menu, not the summary
         self.assertNotIn("Exit", self.screen)
         self.send("\x1b[B\x1b[B\r")  # Re-run the billing attestation only
@@ -1845,8 +1979,7 @@ class WizardTerminalTests(unittest.TestCase):
     def test_the_wizard_only_ends_on_quit_after_failures(self) -> None:
         self.to_failed_billing(2)
         self.send("\x1b[B\x1b[B\r")  # Back to the main menu
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Update the install")
         self.send("\x1b[B\x1b[B\r")  # Re-run the billing attestation only
         self.expect("Start the attestation")
@@ -1858,8 +1991,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.settle()
         self.assertNotIn("Skip for now", self.screen)  # attestation-only has nothing to skip to
         self.send("\x1b[B\r")  # Back to the main menu
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Update the install")
         self.settle()
         self.assertGreater(self.pid, 0)  # still running: a failure never ended the wizard
@@ -1872,8 +2004,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project, {"FAKE_FAIL": "1"})
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
@@ -1881,8 +2012,7 @@ class WizardTerminalTests(unittest.TestCase):
             self.send("\r")
         self.expect("Back to the main menu")
         self.send("\r")  # the default: back, not the summary
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
@@ -1914,15 +2044,13 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project, {"FAKE_RULE": "missing"})
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Replace a lost owner key")
         self.send("\x1b[B\x1b[B\x1b[B\x1b[B\r")
         self.expect("Use this only if you can no longer unlock your owner key")
         self.expect("Replace the owner key")
         self.send("\x1b[B\r")  # Back to the main menu
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Update the install")
         self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
         self.expect("Stopped.")
@@ -1942,15 +2070,14 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project, {"FAKE_RULE": "missing"})
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Verify the install only")
         self.send("\x1b[B\r")
         self.expect("Try again")
         self.send("\r")  # Try again: still failing, so the menu comes back
         self.expect("Try again")
         self.send("\x1b[B\r")  # Back to the main menu
-        self.expect("Project path")
+        self.expect("Another folder...")  # the project is in the list now
         subprocess.run(["git", "-C", str(project), "add", "-A"], check=True, env=self.env)
         subprocess.run(["git", "-C", str(project), "commit", "-qm", "install"], check=True, env=self.env)
         self.send("\r")
@@ -1963,8 +2090,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.settle()
         self.assertNotIn("Save a summary of what failed", self.screen)  # the old failures are gone
         self.send("\x1b[B\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Update the install")
         self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
         self.expect("Stopped.")
@@ -1975,8 +2101,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project, {"FAKE_ATTEST": str(self.base / "attest.count"), "FAKE_ATTEST_FAILS": "1"})
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         self.expect("fresh install is possible")
@@ -2000,8 +2125,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\r")
         self.expect("Try again")
         self.send("\x1b[B\x1b[B\r")  # Back to the main menu
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Update the install")
         self.send("\x1b[B\x1b[B\r")  # a different mode: attestation only
         self.expect("Start the attestation")
@@ -2050,6 +2174,80 @@ class WizardTerminalTests(unittest.TestCase):
                 self._reap()
                 self.pid = 0
 
+    def remembered(self, *projects: Path) -> Path:
+        """Projects setup already set up, as it lists them in the records' installer folder."""
+        installer = self.home / ".local" / "state" / "codex-agents" / "installer"
+        installer.mkdir(parents=True, mode=0o700, exist_ok=True)
+        for folder in (installer.parent, installer):
+            folder.chmod(0o700)
+        for project in projects:
+            manifest = project / ".codex" / "orchestration" / "install-manifest.json"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text("{}\n")
+        listed = installer / "setup-projects"
+        listed.write_text("".join(f"{project}\n" for project in projects) + "relative/is-skipped\n")
+        return listed
+
+    def test_projects_set_up_before_are_offered_in_a_list(self) -> None:
+        first, _ = self.make_project("first")
+        second, _ = self.make_project("second")
+        gone = self.base / "gone"
+        self.remembered(first, second)
+        listed = self.home / ".local" / "state" / "codex-agents" / "installer" / "setup-projects"
+        listed.write_text(listed.read_text() + f"{gone}\n")  # removed since: not offered
+        self.start(second)
+        self.expect("Everything looks good")
+        self.send("\r")
+        self.expect("Another folder...")
+        plain = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", self.screen)
+        self.assertIn(str(first), plain)
+        self.assertIn(str(second), plain)
+        self.assertNotIn("(this folder)", plain)  # already in the list
+        self.assertNotIn(str(gone), plain)
+        self.assertNotIn("is-skipped", plain)
+        self.assertNotIn("Project path", plain)
+        self.send("\x1b[B\r")  # the second project
+        self.expect("An existing install was found")
+        self.expect(f"Project: {second}")
+        self.assertEqual([str(second), str(first)], listed.read_text().splitlines()[:2])  # chosen first now
+
+    def test_another_folder_asks_for_a_path(self) -> None:
+        first, _ = self.make_project("first")
+        self.remembered(first)
+        other, _ = self.make_project("other")
+        self.start(other)
+        self.expect("Everything looks good")
+        self.send("\r")
+        self.expect("Another folder...")
+        self.assertIn(f"{other} (this folder)", re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", self.screen))
+        self.send("\x1b[B\x1b[B\r")  # past the remembered project and this folder
+        self.expect("Project path")
+
+    def test_started_from_the_orchestrator_it_suggests_no_project_and_refuses_itself(self) -> None:
+        # The first real install: Enter at the project question installed into this repository.
+        self.start(ROOT)
+        self.expect("Everything looks good")
+        self.send("\r")
+        self.expect("(type or paste the full path)")
+        self.send("\r")  # nothing typed: asked again, nothing previewed
+        self.expect("(type or paste the full path)")
+        self.send(f"{ROOT}\r")
+        self.expect("this orchestrator's own folder")
+        self.assertFalse(any("install.py" in line for line in self.py_full.read_text().splitlines()))
+
+    def test_question_mark_shows_what_ran_in_the_step(self) -> None:
+        project, _ = self.make_project("first")
+        self.remembered(project)
+        self.start(project)
+        self.expect("Everything looks good")
+        self.send("?")
+        self.expect("What ran in this step, in order:")
+        self.expect("Command output is kept private")
+        self.send("\r")
+        self.expect("Everything looks good")
+        self.assertNotIn("? what ran", re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", self.screen).split(
+            "Everything looks good")[0])
+
     def test_a_lost_tilde_is_reported_exactly_and_offered_back(self) -> None:
         project, checks = self.project_under_home()
         self.to_project_prompt(project)
@@ -2081,8 +2279,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project, extra_env)
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
@@ -2134,8 +2331,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project)
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         for wait in ("fresh install is possible", "Codex children", "Looks right"):
@@ -2162,8 +2358,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project)
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         self.expect("holds files the orchestrator does not install")
@@ -2177,8 +2372,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project, {"FAKE_PJ_FAIL": "1"})
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
@@ -2217,8 +2411,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project)
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Update the install")
         self.send("\r")
         for wait in ("install can be updated", "Codex children", "Looks right", "Install now"):
@@ -2280,8 +2473,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project, {"FAKE_ATTEST": str(self.base / "attest.count")})
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Update the install")
         self.send("\x1b[B\x1b[B\r")  # Re-run the billing attestation only
         self.expect("Start the attestation")
@@ -2361,8 +2553,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project, {"FAKE_RULE": "missing"})
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Verify the install only")
         self.send("\x1b[B\r")
         self.expect("Codex commands rule: missing")
@@ -2396,8 +2587,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.start(project)
         self.expect("Everything looks good")
         self.send("\r")
-        self.expect("Project path")
-        self.send("\r")
+        self.choose_project()
         self.expect("Verify the install only")
         self.send("\x1b[B\r")
         self.expect("cannot be used with this Codex setup")

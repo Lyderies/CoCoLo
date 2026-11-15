@@ -5,9 +5,11 @@ import io
 import json
 import base64
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -15,6 +17,7 @@ from unittest import mock
 
 from tests.support import ORCHESTRATION_ROOT, TEMP_ROOT
 
+from codex_agents import learning_store
 from codex_agents.contracts import ContractError
 from codex_agents.learning_contracts import (
     candidate_base_digest,
@@ -140,6 +143,33 @@ class LearningCliTests(unittest.TestCase):
         )
         ledger.close()
         self.verifier = verifier
+
+    def _legacy_run(self, task: dict, assigned: dict, route: dict) -> tuple[dict, dict]:
+        """An orchestration and run as an earlier version opened them, in the ledger.
+
+        Every run is now opened by the project's own service; the ledger commands
+        tested with this still serve what an earlier version left behind.
+        """
+        self._stop_collector()
+        ledger = LearningLedger(
+            LearningState(self.state_root, create=False),
+            client_capabilities=load_client_capabilities(
+                ORCHESTRATION_ROOT / "config" / "learning-clients.json"
+            ),
+        )
+        try:
+            orchestration = ledger.open_orchestration(
+                self.project_id, client_version="codex-host-v1"
+            )
+            opened = ledger.open_host_run(
+                self.project_id, assignment=assigned, task=task, route=route,
+                execution_configuration=route["execution_configuration"],
+                client_version="codex-host-v1",
+                orchestration_handle=orchestration["orchestration_handle"],
+            )
+        finally:
+            ledger.close()
+        return orchestration, opened
 
     def _admit_fixture_outcome(
         self,
@@ -430,12 +460,13 @@ class LearningCliTests(unittest.TestCase):
             (BridgeRefused("launch denied: billing_attestation_missing"),
              "reason", "launch denied: billing_attestation_missing"),
         ):
-            with self.subTest(field=field), mock.patch.object(
-                LearningLedger, "observe_provider", side_effect=failure
+            # The refusal comes back from the account service; the hint is the CLI's.
+            with self.subTest(field=field), mock.patch(
+                "cli.observe_provider_client", side_effect=failure
             ):
                 report = self._observe("claude", expected=2)
-            self.assertEqual(reason, report[field])
-            self.assertIn('"Re-run the billing attestation only"', report["hint"])
+                self.assertEqual(reason, report[field])
+                self.assertIn('"Re-run the billing attestation only"', report["hint"])
 
     def test_status_allows_time_for_owner_signature_verification(self) -> None:
         ledger = LearningLedger(LearningState(self.state_root, create=False))
@@ -449,7 +480,10 @@ class LearningCliTests(unittest.TestCase):
         server.start()
         try:
             with mock.patch.object(ledger, "provider_attestation_status", side_effect=slow_report):
-                report = self._run("learning-status")
+                # This bare collector serves no account API, so the owner-key part
+                # (and with it the exit status) is unavailable; the slow part is not.
+                report = self._run("learning-status", expected=1)
+            self.assertEqual("status_account_unavailable", report["reason_code"])
             self.assertEqual("present", report["provider_attestations"]["codex"]["state"])
         finally:
             server.stop()
@@ -552,6 +586,181 @@ class LearningCliTests(unittest.TestCase):
         encoded = json.dumps(report["ingestion"])
         self.assertNotIn(str(unregistered), encoded)
         self.assertNotIn("project_id", encoded)
+
+    def test_registration_upgrades_an_earlier_versions_ledger_only_when_approved(self) -> None:
+        from tests.test_account_launch_claims import downgrade_ledger_to_six
+
+        ledger = LearningLedger(LearningState(self.state_root, create=False))
+        records = ledger._connection.execute("SELECT count(*) FROM records").fetchone()[0]
+        downgrade_ledger_to_six(ledger)
+        ledger.close()
+        try:
+            # Asked first: nothing is stopped, copied or changed until the owner approves.
+            refused = self._run("learning-register", expected=2)
+            self.assertEqual(("ledger_upgrade_required", 6, False), (
+                refused["reason_code"], refused["ledger_schema_version"], refused["ready"]))
+            self.assertIn("--upgrade-ledger", refused["error"])
+            self.assertFalse((self.state_root / "ledger-before-upgrade").exists())
+            self.assertEqual(6, learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
+            upgraded = self._run("learning-register", "--upgrade-ledger")
+            self.assertEqual((True, 6, learning_store.LEDGER_SCHEMA_VERSION, self.project_id), (
+                upgraded["ready"], upgraded["ledger_upgraded_from"], upgraded["collector_schema_version"],
+                upgraded["project_id"]))
+            copy = Path(upgraded["ledger_copy"])
+            self.assertEqual(self.state_root.resolve() / "ledger-before-upgrade", copy.parent)
+            kept = sqlite3.connect(copy)
+            try:
+                self.assertEqual((6, records), (kept.execute("PRAGMA user_version").fetchone()[0],
+                                                kept.execute("SELECT count(*) FROM records").fetchone()[0]))
+            finally:
+                kept.close()
+            self.assertEqual(1, len(list((self.state_root / "backups" / self.project_id).glob("upgrade_schema6_*.json"))))
+            # Approving again when there is nothing left to upgrade changes nothing.
+            again = self._run("learning-register", "--upgrade-ledger")
+            self.assertEqual((True, None, None), (again["ready"], again["ledger_upgraded_from"], again["ledger_copy"]))
+            self.assertEqual([copy], list(copy.parent.iterdir()))
+            self.assertTrue(self._run("learning-status")["active"])
+        finally:
+            self._stop_collector()
+
+    def test_a_failure_after_the_upgrade_is_not_reported_as_records_left_unchanged(self) -> None:
+        import cli
+        from tests.test_account_launch_claims import downgrade_ledger_to_six
+
+        def register(patched, effect):
+            ledger = LearningLedger(LearningState(self.state_root, create=False), allow_schema_upgrade=True)
+            downgrade_ledger_to_six(ledger)
+            ledger.close()
+            stdout = io.StringIO()
+            arguments = ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                         "--project-root", str(self.project), "--upgrade-ledger"]
+            with mock.patch.object(sys, "argv", arguments), contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(cli, patched, side_effect=effect):
+                code = cli_main()
+            self.assertEqual(2, code, stdout.getvalue())
+            return json.loads(stdout.getvalue())
+
+        try:
+            # The schema change is committed, then authorising the runtime fails.
+            after = register("authorize_collector_runtime", OSError("disk"))
+            self.assertEqual(("registration_incomplete_after_upgrade", 6), (
+                after["reason_code"], after["ledger_schema_version"]))
+            self.assertIn("were upgraded", after["error"])
+            self.assertNotIn("as the earlier version left them", after["error"])
+            self.assertTrue(Path(after["ledger_copy"]).is_file())
+            self.assertIsNone(learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
+            # The copy itself cannot be made: nothing was upgraded, and the report says so plainly.
+            stdout = io.StringIO()
+            ledger = LearningLedger(LearningState(self.state_root, create=False), allow_schema_upgrade=True)
+            downgrade_ledger_to_six(ledger)
+            ledger.close()
+            with mock.patch.object(sys, "argv", ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                                                 "--project-root", str(self.project), "--upgrade-ledger"]), \
+                    contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(cli, "copy_ledger_before_upgrade",
+                                      side_effect=learning_store.LedgerError("the ledger could not be copied before its upgrade")):
+                self.assertEqual(2, cli_main())
+            uncopied = json.loads(stdout.getvalue())
+            self.assertEqual(("ledger_upgrade_failed", None, None), (
+                uncopied["reason_code"], uncopied["ledger_copy"], uncopied["state_moved"]))
+            self.assertNotIn("copy", uncopied["error"])  # There is none to keep.
+            # The upgrade and the registration went through and the collector then did not start:
+            # still one report, with the copy, never a bare error.
+            stdout = io.StringIO()
+            with mock.patch.object(sys, "argv", ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                                                 "--project-root", str(self.project), "--upgrade-ledger"]), \
+                    contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(cli, "ensure_collector", side_effect=cli.CollectorError("did not become healthy")):
+                self.assertEqual(2, cli_main())
+            unstarted = json.loads(stdout.getvalue())
+            # Registration completed: it is not described as unfinished, and the cause is kept.
+            self.assertEqual(("collector_not_started_after_registration", "did not become healthy"), (
+                unstarted["reason_code"], unstarted["cause"]))
+            self.assertIn("were upgraded and this project is registered", unstarted["error"])
+            self.assertTrue(Path(unstarted["ledger_copy"]).is_file())
+            # SQLite itself failing inside the migration is reported the same way as any other failure there.
+            ledger = LearningLedger(LearningState(self.state_root, create=False))
+            downgrade_ledger_to_six(ledger)
+            ledger.close()
+            stdout = io.StringIO()
+            with mock.patch.object(sys, "argv", ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                                                 "--project-root", str(self.project), "--upgrade-ledger"]), \
+                    contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(LearningLedger, "_initialize_launch_claims_locked", autospec=True,
+                                      side_effect=sqlite3.OperationalError("disk I/O error")):
+                self.assertEqual(2, cli_main())
+            self.assertEqual("ledger_upgrade_failed", json.loads(stdout.getvalue())["reason_code"])
+            self.assertEqual(6, learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
+            self.assertEqual(6, learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
+            # The upgrade went through, registration failed, and the ledger cannot then be read.
+            readings = iter([6, 6])
+            stdout = io.StringIO()
+            with mock.patch.object(sys, "argv", ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                                                 "--project-root", str(self.project), "--upgrade-ledger"]), \
+                    contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(cli, "authorize_collector_runtime", side_effect=OSError("disk")), \
+                    mock.patch.object(cli, "ledger_schema_behind", side_effect=lambda state: next(
+                        readings, None) or (_ for _ in ()).throw(learning_store.LedgerError("unreadable"))):
+                self.assertEqual(2, cli_main())
+            unknown = json.loads(stdout.getvalue())
+            self.assertEqual("ledger_upgrade_unknown", unknown["reason_code"])
+            self.assertIn("do not delete anything; keep the copy", unknown["error"])
+            self.assertTrue(Path(unknown["ledger_copy"]).is_file())
+            ledger = LearningLedger(LearningState(self.state_root, create=False))
+            downgrade_ledger_to_six(ledger)
+            ledger.close()
+            # The migration fails inside its transaction: the earlier records are as they were.
+            initialize = LearningLedger._initialize_launch_claims_locked
+
+            def fail(ledger, **arguments):
+                initialize(ledger, **arguments)
+                raise learning_store.LedgerError("fixture migration failure")
+
+            stdout = io.StringIO()
+            with mock.patch.object(sys, "argv", ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                                                 "--project-root", str(self.project), "--upgrade-ledger"]), \
+                    contextlib.redirect_stdout(stdout), \
+                    mock.patch.object(LearningLedger, "_initialize_launch_claims_locked", autospec=True, side_effect=fail):
+                self.assertEqual(2, cli_main())
+            before = json.loads(stdout.getvalue())
+            self.assertEqual("ledger_upgrade_failed", before["reason_code"])
+            self.assertIn("as the earlier version left them", before["error"])
+            self.assertEqual(6, learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
+        finally:
+            self._stop_collector()
+
+    def test_a_ledger_is_found_and_copied_by_its_own_path_whatever_characters_that_holds(self) -> None:
+        base = Path(self.temporary.name)
+        for folder, decoy in (("st%41te", "stAte"), ("st?mode=rwc", "st"), ("st#x", "st")):
+            root = base / folder
+            state = LearningState(root)
+            LearningLedger(state).close()
+            connection = sqlite3.connect(state.database)
+            connection.execute("PRAGMA user_version=6")
+            connection.close()
+            # What the path would name if it were read as a URI by hand: a current ledger.
+            (base / decoy).mkdir(mode=0o700, exist_ok=True)
+            other = sqlite3.connect(base / decoy / "learning.sqlite3")
+            other.execute(f"PRAGMA user_version={learning_store.LEDGER_SCHEMA_VERSION}")
+            other.execute("CREATE TABLE IF NOT EXISTS decoy(x)")
+            other.commit()
+            other.close()
+            with self.subTest(folder=folder):
+                self.assertEqual(6, learning_store.ledger_schema_behind(state))
+                copy = learning_store.copy_ledger_before_upgrade(state, 6)
+                self.assertEqual(root.resolve() / "ledger-before-upgrade", copy.parent)
+                kept = sqlite3.connect(copy)
+                try:
+                    self.assertEqual(6, kept.execute("PRAGMA user_version").fetchone()[0])
+                    self.assertIsNone(kept.execute("SELECT 1 FROM sqlite_master WHERE name='decoy'").fetchone())
+                finally:
+                    kept.close()
+        # A ledger that is there but cannot be read is an error, never taken for a current one.
+        broken = LearningState(base / "broken")
+        LearningLedger(broken).close()
+        broken.database.write_bytes(b"not a database, and long enough to be read as one" * 100)
+        with self.assertRaisesRegex(learning_store.LedgerError, "cannot be read"):
+            learning_store.ledger_schema_behind(broken)
 
     def test_concurrent_direct_commands_serialize_and_leave_collector_active(self) -> None:
         try:
@@ -735,6 +944,9 @@ class LearningCliTests(unittest.TestCase):
         self.assertTrue(calibrated["record"]["ready"])
         self.assertEqual(content_digest(labels), calibrated["record"]["labels_digest"])
 
+        # The owner commands that ask where the project's learning lives leave the
+        # shared collector running; it owns the ledger until it is stopped.
+        self._stop_collector()
         ledger = LearningLedger(LearningState(self.state_root, create=False))
         try:
             with ledger.repository(self.project_id) as repository:
@@ -854,6 +1066,8 @@ class LearningCliTests(unittest.TestCase):
             "--observation", str(observation_path),
         )
         self.assertEqual(run_id, report["outcome"]["run_id"])
+        self.assertEqual("compact-learning-cycle-v1", report["learning_cycle"]["format"])
+        self.assertEqual("available", report["learning_cycle"]["summary_state"])
         self.assertEqual("unverified", report["outcome"]["status"])
         self.assertFalse(report["outcome"]["accepted"])
         self.assertFalse(report["outcome"]["deterministic_pass"])
@@ -958,10 +1172,12 @@ class LearningCliTests(unittest.TestCase):
         )
         try:
             with ledger.repository(self.project_id) as repository:
+                persisted_cases = repository.records("evaluation_case")
                 mined_sources = {
-                    repository.record(record_id, "evaluation_case")["source_outcome_id"]
-                    for record_id in report["learning_cycle"]["mined_case_ids"]
+                    record["source_outcome_id"]
+                    for record in persisted_cases
                 }
+            self.assertEqual(len(persisted_cases), report["learning_cycle"]["mined_case_count"])
             self.assertNotIn(report["outcome"]["record_id"], mined_sources)
         finally:
             ledger.close()
@@ -1007,6 +1223,7 @@ class LearningCliTests(unittest.TestCase):
         }
         failed = self._run(
             "learning-record-host-result",
+            "--full-report",
             "--task", str(self._write("failed-task.json", task)),
             "--assignment", str(self._write("failed-assignment.json", assigned)),
             "--parent-grant", str(self._write("failed-parent.json", parent_grant)),
@@ -1016,6 +1233,8 @@ class LearningCliTests(unittest.TestCase):
         self.assertEqual("failed", failed["outcome"]["status"])
         self.assertEqual("turn_failed", failed["event"]["event_code"])
         self.assertTrue(failed["outcome"]["terminal_failure"])
+        self.assertIn("slices", failed["learning_cycle"]["analysis"])
+        self.assertIn("mined_case_ids", failed["learning_cycle"])
 
     def test_generate_candidate_requires_qa_and_selects_exact_paired_cohorts(self) -> None:
         spec, qa_rows = self._seed_candidate_cli_cohort()
@@ -1055,9 +1274,68 @@ class LearningCliTests(unittest.TestCase):
             generated["record"]["champion_configuration"],
         )
 
+    @contextlib.contextmanager
+    def _account_services(self):
+        """The collector and account services as threads of this process, as `collector_host.py` runs them.
+
+        The account services run the observation, so they must see the fake clients as the
+        trusted ones; a detached collector would resolve whatever client this machine has.
+        """
+        from codex_agents.account_host import AccountServiceHost
+        from codex_agents.collector_paths import CollectorPaths
+        from codex_agents.service_enrollment import capability_path
+
+        stop, failures, ready = threading.Event(), [], threading.Event()
+
+        def serve():
+            ledger = LearningLedger(
+                LearningState(self.state_root, create=False),
+                client_capabilities=load_client_capabilities(
+                    ORCHESTRATION_ROOT / "config" / "learning-clients.json"),
+            )
+            server, account = CollectorServer(ledger), None
+            try:
+                server.start()
+                account = AccountServiceHost(ledger, CollectorPaths(self.state_root))
+                ready.set()
+                while not stop.is_set() and not server.wait(0.002):
+                    account.serve_once()
+            except BaseException as error:
+                failures.append(repr(error))
+            finally:
+                ready.set()
+                try:
+                    if account is not None:
+                        account.close()
+                        end = time.monotonic() + 10
+                        while not account.drained() and time.monotonic() < end:
+                            time.sleep(0.01)
+                finally:
+                    server.stop()
+                    ledger.close()
+
+        with trusted_tools(self.tools):
+            thread = threading.Thread(target=serve, name="test-collector")
+            thread.start()
+            try:
+                self.assertTrue(ready.wait(30), "account services did not start")
+                self.assertEqual([], failures)
+                self.assertTrue(capability_path(CollectorPaths(self.state_root), None, "account").exists())
+                yield
+            finally:
+                stop.set()
+                thread.join(30)
+            self.assertFalse(thread.is_alive(), "collector thread did not stop")
+            self.assertEqual([], failures)
+
     def test_provider_observation_and_billing_attestation_commands(self) -> None:
         # The fake clients answer from recorded fixtures; nothing is spent. The
-        # command runs in-process so the trusted search path can name them.
+        # command and the account services run in-process so the trusted search
+        # path can name them.
+        with self._account_services():
+            self._provider_observation_and_billing_attestation_commands()
+
+    def _provider_observation_and_billing_attestation_commands(self) -> None:
         tools = self.tools
         observed = self._observe("claude")
         identity = observed["records"][0]
@@ -1065,20 +1343,14 @@ class LearningCliTests(unittest.TestCase):
         self.assertNotIn("example.invalid", json.dumps(observed))
         self.assertNotIn("client_path", identity)
         self.assertNotIn(str(tools), json.dumps(observed))
-        # Identifiers placed in label fields never reach records or output.
+        # The account service observes, and reuses its recent observation; raw
+        # provider identifiers never reach its records or this output. (That an
+        # identifier placed in a label field is dropped is tested on the observer
+        # itself, in test_providers.)
         status = json.loads((tools / "claude-status.json").read_text())
-        (tools / "claude-status.json").write_text(
-            json.dumps({**status, "subscriptionType": status["orgId"]})
-        )
         codex = json.loads((tools / "codex-result.json").read_text())
-        codex["rateLimits"]["planType"] = codex["accountId"]
-        (tools / "codex-result.json").write_text(json.dumps(codex))
         for provider, raw in (("claude", status["orgId"]), ("codex", codex["accountId"])):
-            output = self._observe(provider, raw_output=True)
-            self.assertNotIn(raw, output)
-            self.assertIsNone(json.loads(output)["records"][0][
-                "subscription_type" if provider == "claude" else "plan_type"
-            ])
+            self.assertNotIn(raw, self._observe(provider, raw_output=True))
         refused = self._observe(
             "claude", expected=2, env={"ANTHROPIC_API_KEY": "test-only"}
         )
@@ -1218,14 +1490,8 @@ class LearningCliTests(unittest.TestCase):
         assigned_path = self._write("upgrade-assignment.json", assigned)
         parent_path = self._write("upgrade-parent.json", parent)
         route = self._run("learning-route", "--task", str(task_path))
-        route_path = self._write("upgrade-route.json", route)
-        orchestration = self._run("learning-open-orchestration")
-        opened = self._run(
-            "learning-open-host-run", "--task", str(task_path),
-            "--route", str(route_path), "--assignment", str(assigned_path),
-            "--parent-grant", str(parent_path),
-            "--orchestration-handle", orchestration["orchestration_handle"],
-        )
+        self.assertTrue(assigned_path.exists() and parent_path.exists())
+        orchestration, opened = self._legacy_run(task, assigned, route)
         prepared = self._run(
             "learning-prepare-upgrade-reconciliation",
             "--orchestration-id", orchestration["orchestration_id"],
@@ -1276,26 +1542,21 @@ class LearningCliTests(unittest.TestCase):
         )
         parent_path = self._write("fallback-parent.json", parent)
         primary_route = self._run("learning-route", "--task", str(task_path))
-        primary_route_path = self._write("fallback-primary-route.json", primary_route)
-        orchestration = self._run("learning-open-orchestration")
-        primary_run = self._run(
-            "learning-open-host-run",
-            "--task", str(task_path),
-            "--route", str(primary_route_path),
-            "--assignment", str(primary_assignment_path),
-            "--parent-grant", str(parent_path),
-            "--orchestration-handle", orchestration["orchestration_handle"],
-        )
+        self.assertTrue(primary_assignment_path.exists() and parent_path.exists())
+        orchestration, primary_run = self._legacy_run(task, primary_assignment, primary_route)
         self.assertEqual("bridge", primary_route["dispatch"])
-        self._run(
-            "learning-pause-orchestration",
-            "--orchestration-handle", orchestration["orchestration_handle"],
-        )
-        self._run(
-            "learning-classify-host-run-abandoned",
-            "--run-handle", primary_run["run_handle"],
-            "--reason", "recovery_unavailable",
-        )
+        ledger = LearningLedger(LearningState(self.state_root, create=False))
+        try:
+            ledger.set_orchestration_paused(
+                self.project_id, orchestration_handle=orchestration["orchestration_handle"],
+                paused=True,
+            )
+            ledger.classify_host_run_abandoned(
+                self.project_id, run_handle=primary_run["run_handle"],
+                reason="recovery_unavailable",
+            )
+        finally:
+            ledger.close()
         refused = self._run(
             "learning-route",
             "--task", str(task_path),

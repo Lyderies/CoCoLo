@@ -16,11 +16,43 @@ import binascii
 from pathlib import Path
 from typing import Any, Callable
 
-from .contracts import ContractError, RESULT_VALIDATION_REASON_CODES
+from .contracts import ContractError, RESULT_DIAGNOSTIC_REASON_CODES, RESULT_VALIDATION_REASON_CODES
 
+
+PRODUCER_AUTHORITY = {
+    "hook": {"event"},
+    "app_server": {"event"},
+    "host": {"event", "learning_export"},
+    "evaluator": {
+        "outcome", "evaluation_case", "evaluation_assignment", "evaluation_trial", "candidate",
+        "comparison", "canary_report",
+    },
+    "verifier": {"outcome", "qa_evidence", "evidence_review"},
+    "owner": {
+        "feedback", "owner_grant", "grader_calibration", "billing_attestation",
+    },
+    "lifecycle": {"promotion"},
+}
+# Only ledger methods that run the observation themselves may write these.
+PROVIDER_OBSERVATION_TYPES = {
+    "provider_identity", "provider_headroom", "provider_billing",
+    "observation_unavailable", "provider_usage",
+}
 
 SCHEMA_VERSION = 1
 MAX_RECORD_BYTES = 65_536
+MAX_OUTCOME_EVIDENCE_DIGESTS = 64
+CLIENT_ERROR_CODES = frozenset({
+    "authentication_failed", "oauth_org_not_allowed", "account_on_hold", "billing_error",
+    "rate_limit", "overloaded", "invalid_request", "model_not_found", "server_error",
+    "max_output_tokens", "cloud_credential_error", "unknown", "unrecognized_error",
+})
+CLIENT_RESULT_SUBTYPES = frozenset({
+    "success", "error_max_turns", "error_during_execution", "error_max_budget_usd",
+    "error_max_structured_output_retries", "unrecognized_result",
+})
+CLIENT_EXIT_CODE_MIN = -(1 << 31)
+CLIENT_EXIT_CODE_MAX = (1 << 32) - 1
 MAX_ID_LENGTH = 160
 ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -48,6 +80,10 @@ RECORD_TYPES = {
     "admission_decision",
     "dispatch_intent",
     "dispatch_result",
+    "claim_denial_settlement",
+    "host_result_admission",
+    "execution_provenance",
+    "host_open_provenance",
     "host_run_profile",
     "probe_admission",
     "observation_unavailable",
@@ -416,8 +452,8 @@ def _number(
     if (
         not isinstance(value, (int, float))
         or isinstance(value, bool)
-        or not math.isfinite(value)
         or not minimum <= value <= maximum
+        or not math.isfinite(value)
     ):
         raise ContractError(f"{field} must be a number from {minimum} to {maximum}")
 
@@ -438,8 +474,10 @@ def _digest_list(
         _digest(item, field)
 
 
-def _base(data: dict[str, Any], record_type: str) -> None:
-    if data["schema_version"] != SCHEMA_VERSION:
+def _base(
+    data: dict[str, Any], record_type: str, *, schema_version: int = SCHEMA_VERSION
+) -> None:
+    if data["schema_version"] != schema_version:
         raise ContractError("unsupported learning schema version")
     if data["record_type"] != record_type:
         raise ContractError(f"record_type must be {record_type}")
@@ -788,7 +826,9 @@ def validate_outcome(data: Any) -> dict[str, Any]:
         data["evaluation_case_digest"] is None
     ):
         raise ContractError("evaluation candidate and case bindings must appear together")
-    _digest_list(data["evidence_digests"], "evidence_digests", minimum=1)
+    _digest_list(
+        data["evidence_digests"], "evidence_digests", minimum=1, maximum=MAX_OUTCOME_EVIDENCE_DIGESTS
+    )
     _usage(data["usage"])
     if "usage_sources" in data:
         sources = data["usage_sources"]
@@ -1947,6 +1987,25 @@ DISPATCH_RESULT_FIELDS = {
     "schema_version", "record_type", "record_id", "run_id", "bridge_run_id",
     "result_digest", "fenced", "reviewed", "terminal_state", "observed_at_ms",
 }
+DISPATCH_RESULT_SCHEMA_VERSION = 3
+DISPATCH_RESULT_V2_FIELDS = DISPATCH_RESULT_FIELDS | {"result_validation_reason_code"}
+DISPATCH_RESULT_V3_FIELDS = DISPATCH_RESULT_V2_FIELDS | {"client_diagnostics"}
+
+
+def validate_client_diagnostics(data: Any) -> dict[str, Any]:
+    """Closed client observations, separate from validator reasons or authority."""
+
+    data = _closed(data, {"exit_code", "result_frame_seen", "result_subtype", "error_code"},
+                   "client_diagnostics")
+    code = data["exit_code"]
+    if code is not None and (type(code) is not int or not CLIENT_EXIT_CODE_MIN <= code <= CLIENT_EXIT_CODE_MAX):
+        raise ContractError("client exit code is invalid")
+    _boolean(data["result_frame_seen"], "result_frame_seen")
+    _enum(data["result_subtype"], CLIENT_RESULT_SUBTYPES, "result_subtype", nullable=True)
+    _enum(data["error_code"], CLIENT_ERROR_CODES, "error_code", nullable=True)
+    if data["result_frame_seen"] != (data["result_subtype"] is not None):
+        raise ContractError("client result subtype requires an observed result frame")
+    return data
 
 
 def validate_dispatch_result(data: Any) -> dict[str, Any]:
@@ -1956,8 +2015,19 @@ def validate_dispatch_result(data: Any) -> dict[str, Any]:
     the run must match it, so a made-up result or a dropped fence is refused.
     """
 
-    data = _closed(data, DISPATCH_RESULT_FIELDS, "dispatch_result")
-    _base(data, "dispatch_result")
+    # Version 1/2 bytes stay unchanged: missing observations remain unknown.
+    # Only this record evolves; existing outcome/result digest formats do not.
+    version = data.get("schema_version") if isinstance(data, dict) else None
+    fields = DISPATCH_RESULT_FIELDS
+    record_version = 1
+    if version in (2, 3) and type(version) is not int:
+        raise ContractError("unsupported learning schema version")
+    if version == 2:
+        fields, record_version = DISPATCH_RESULT_V2_FIELDS, 2
+    elif version == 3:
+        fields, record_version = DISPATCH_RESULT_V3_FIELDS, 3
+    data = _closed(data, fields, "dispatch_result")
+    _base(data, "dispatch_result", schema_version=record_version)
     _identifier(data["run_id"], "run_id")
     if not isinstance(data["bridge_run_id"], str) or re.fullmatch(
         r"brg_[0-9a-f]{32}", data["bridge_run_id"]
@@ -1969,6 +2039,13 @@ def validate_dispatch_result(data: Any) -> dict[str, Any]:
     _enum(data["terminal_state"], EXECUTION_STATES, "terminal_state", nullable=True)
     if data["fenced"] != (data["terminal_state"] is not None):
         raise ContractError("dispatch_result terminal state belongs only to a fenced outcome")
+    if version in (2, 3):
+        reason = data["result_validation_reason_code"]
+        _enum(reason, RESULT_DIAGNOSTIC_REASON_CODES, "result_validation_reason_code", nullable=True)
+        if reason is not None and (not data["fenced"] or data["terminal_state"] != "failed"):
+            raise ContractError("result validation diagnostic requires a failed fenced outcome")
+    if version == 3 and data["client_diagnostics"] is not None:
+        validate_client_diagnostics(data["client_diagnostics"])
     _integer(data["observed_at_ms"], "observed_at_ms")
     return data
 
@@ -2113,7 +2190,121 @@ def validate_verification_binding(data: Any) -> dict[str, Any]:
     return data
 
 
+def validate_host_result_admission(data: Any) -> dict[str, Any]:
+    """Safe immutable project-local links, not QA or execution authority."""
+    version = data.get("schema_version") if type(data) is dict else None
+    fields = {
+        "schema_version", "record_type", "record_id", "run_id", "binding_digest",
+        "registration_digest", "dispatch_result", "terminal_content_digest",
+        "event_record_id", "event_content_digest", "outcome_record_id",
+        "host_outcome_digest", "observed_at_ms",
+    }
+    if version == 2:
+        fields |= {"usage_record_id", "usage_content_digest"}
+    data = _closed(data, fields, "host_result_admission")
+    _base(data, "host_result_admission", schema_version=2 if version == 2 else 1)
+    if type(data["schema_version"]) is not int:
+        raise ContractError("unsupported learning schema version")
+    if version == 2:
+        _identifier(data["usage_record_id"], "usage_record_id")
+        _digest(data["usage_content_digest"], "usage_content_digest")
+    for name in ("run_id", "event_record_id", "outcome_record_id"):
+        _identifier(data[name], name)
+    for name in ("binding_digest", "registration_digest", "terminal_content_digest",
+                 "event_content_digest", "host_outcome_digest"):
+        _digest(data[name], name)
+    terminal = validate_dispatch_result(data["dispatch_result"])
+    if (type(terminal["schema_version"]) is not int
+            or terminal["schema_version"] != DISPATCH_RESULT_SCHEMA_VERSION
+            or terminal["run_id"] != data["run_id"]
+            or content_digest(terminal) != data["terminal_content_digest"]
+            or type(data["observed_at_ms"]) is not int
+            or data["observed_at_ms"] != terminal["observed_at_ms"]):
+        raise ContractError("host result admission links are invalid")
+    return data
+
+
+def validate_claim_denial_settlement(data: Any) -> dict[str, Any]:
+    from .account_claim_contracts import checked_claim_receipt
+
+    fields = {'schema_version', 'record_type', 'record_id', 'run_id', 'handle_digest', 'scope_digest',
+              'request_digest', 'parameters_digest', 'binding_digest', 'lease_digest', 'assignment_digest',
+              'denial', 'observed_at_ms'}
+    data = _closed(data, fields, 'claim_denial_settlement')
+    _base(data, 'claim_denial_settlement')
+    if type(data['schema_version']) is not int:
+        raise ContractError('unsupported learning schema version')
+    _identifier(data['run_id'], 'run_id')
+    for name in ('handle_digest', 'scope_digest', 'request_digest', 'parameters_digest', 'binding_digest',
+                 'lease_digest', 'assignment_digest'):
+        _digest(data[name], name)
+    invalid = False
+    try:
+        denial = checked_claim_receipt(data['denial'])
+        invalid = denial['state'] != 'denied' or denial['known'] is not True or denial['run_id'] != data['run_id']
+    except Exception:
+        invalid = True
+    if invalid:
+        raise ContractError('denial settlement is invalid')
+    _integer(data['observed_at_ms'], 'observed_at_ms', minimum=denial['recorded_at_ms'])
+    return data
+
+
+def validate_execution_provenance(data: Any) -> dict[str, Any]:
+    """Closed protected metadata; shape is not native/account authentication."""
+    from .run_provenance import decode_run_provenance_input, checked_run_provenance
+    data = _closed(data, {'schema_version', 'record_type', 'record_id', 'run_id',
+                          'registration_digest', 'provenance', 'observed_at_ms'}, 'execution_provenance')
+    _base(data, 'execution_provenance')
+    if type(data['schema_version']) is not int:
+        raise ContractError('unsupported learning schema version')
+    _identifier(data['run_id'], 'run_id')
+    _digest(data['registration_digest'], 'registration_digest')
+    _integer(data['observed_at_ms'], 'observed_at_ms')
+    invalid = False
+    try:
+        facts = data['provenance']['provenance']
+        request = decode_run_provenance_input({name: facts[name] for name in ('registration', 'registration_digest', 'assignment_id')})
+        checked_run_provenance(data['provenance'], request, facts['binding']['project_id'], facts['binding']['runtime_digest'])
+        invalid = data['run_id'] != facts['binding']['run_id'] or data['registration_digest'] != facts['registration_digest']
+    except Exception:
+        invalid = True
+    if invalid:
+        raise ContractError('invalid execution provenance')
+    return data
+
+
+def validate_host_open_provenance(data: Any) -> dict[str, Any]:
+    """Protected original metadata; never current/native or launch authority."""
+    from .host_open_contracts import checked_open_provenance, decode_open_provenance_input
+    data = _closed(data, {'schema_version', 'record_type', 'record_id', 'run_id',
+                          'provenance', 'observed_at_ms'}, 'host_open_provenance')
+    _base(data, 'host_open_provenance')
+    _identifier(data['run_id'], 'run_id')
+    _integer(data['observed_at_ms'], 'observed_at_ms')
+    invalid = False
+    try:
+        if type(data['schema_version']) is not int:
+            raise ValueError()
+        facts = data['provenance']['provenance']
+        binding = facts['binding']
+        request = decode_open_provenance_input({'run_handle': binding['run_handle'],
+            'assignment_id': facts['assignment_id'], 'worker_outcome_digest': facts['worker_outcome_digest']})
+        checked_open_provenance(data['provenance'], request, binding['project_id'], binding['runtime_digest'])
+        invalid = (data['run_id'] != binding['run_id'] or type(data['observed_at_ms']) is not int
+                   or data['observed_at_ms'] != facts['opened_at_ms'])
+    except Exception:
+        invalid = True
+    if invalid:
+        raise ContractError('invalid host-open provenance')
+    return data
+
+
 VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
+    "host_open_provenance": validate_host_open_provenance,
+    "execution_provenance": validate_execution_provenance,
+    "host_result_admission": validate_host_result_admission,
+    "claim_denial_settlement": validate_claim_denial_settlement,
     "event": validate_event,
     "outcome": validate_outcome,
     "feedback": validate_feedback,

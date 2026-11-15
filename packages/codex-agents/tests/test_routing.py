@@ -875,13 +875,13 @@ class ProviderRoutingTests(unittest.TestCase):
             ("gpt-6.1-sol", "high"), (exploratory["model"], exploratory["effort"])
         )
 
-    def test_claude_primary_picks_native_claude_and_bridged_codex(self) -> None:
+    def test_claude_primary_bridges_both_claude_and_codex_children(self) -> None:
         policy = self.provider_policy()
         exploratory = route_task(
             self.exploratory(), policy, primary_provider="claude"
         )
         self.assertEqual(
-            ("claude", "native", "claude-opus-5-5", "medium"),
+            ("claude", "bridge", "claude-opus-5-5", "medium"),
             (
                 exploratory["provider"], exploratory["dispatch"],
                 exploratory["model"], exploratory["effort"],
@@ -1056,7 +1056,7 @@ class ProviderRoutingTests(unittest.TestCase):
         )
         codex_work = route_task(self.task(), policy, primary_provider="claude")
         self.assertEqual(
-            ("claude", "native", "claude-opus-5-5", "high"),
+            ("claude", "bridge", "claude-opus-5-5", "high"),
             tuple(
                 codex_work["verifier"][field]
                 for field in ("provider", "dispatch", "model", "effort")
@@ -1147,7 +1147,7 @@ class ProviderRoutingTests(unittest.TestCase):
             "must contain exactly minimum": lambda policy: policy["providers"]["claude"][
                 "client_versions"
             ].pop("maximum_exclusive"),
-            "ascending semantic version range": versions(minimum="0.165.0"),
+            "ascending semantic version range": versions(minimum="0.170.0"),
             "ascending semantic version range ": versions(maximum_exclusive="0.164"),
             " ascending semantic version range": versions(minimum="v0.164.0"),
             "ascending semantic version range  ": versions(minimum="0.164.0-alpha.1"),
@@ -1182,7 +1182,7 @@ class ProviderRoutingTests(unittest.TestCase):
             loaded = load_policy(self.write_policy(directory, uncapped))
         self.assertEqual(
             {
-                "client_versions": {"minimum": "0.164.0", "maximum_exclusive": "0.164.1"},
+                "client_versions": {"minimum": "0.164.0", "maximum_exclusive": "0.170.0"},
                 "max_admissions_per_window": None,
             },
             admission_settings(loaded, "codex"),

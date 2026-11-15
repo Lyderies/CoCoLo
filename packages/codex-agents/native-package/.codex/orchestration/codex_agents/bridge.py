@@ -23,11 +23,22 @@ import unicodedata
 from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
+from .owned_execution import ExecutionCustodyError, ExecutionTicket
 
 from .catalog import CatalogError, parse_claude_agent
+from .claude_activity import ClaudeActivity, ClaudeActivityError
+from .codex_activity import CodexActivity, CodexActivityError
+from . import event_shapes
 from .contracts import (
     ONE_EVIDENCE_ENTRY_RULE,
+    effective_dispatch_bounds,
+    effective_dispatch_limits,
+    RESULT_VALIDATION_REASON_CODES,
     ContractError,
+    LedgerError,
+    ResultContractError,
+    legacy_result_status,
+    result_axes,
     result_preflight,
     validate_assignment,
     validate_result,
@@ -44,29 +55,42 @@ from .host_paths import (
     remove_private_directory,
     temp_roots,
 )
-from .learning_contracts import SUPPORTED_MODELS
+from .learning_contracts import (
+    CLIENT_ERROR_CODES,
+    CLIENT_EXIT_CODE_MAX,
+    CLIENT_EXIT_CODE_MIN,
+    CLIENT_RESULT_SUBTYPES,
+    SUPPORTED_MODELS,
+)
 from .process_tree import (
     TRACK_INTERVAL_SECONDS,
     WATCHDOG_READY_SECONDS,
+    RUN_TAG_VARIABLE,
     ProcessTree,
     Table,
     await_ready,
+    new_run_tag,
     process_table,
     tracking_available,
 )
 from .providers import (
     api_keys_present,
+    claude_rate_limit_records,
     client_environment,
     codex_exec_options,
     observation_failure_reason,
     resolve_client,
 )
+from .result_contracts import MAX_RESULT_BODY_BYTES
+
+_OWNED_POPEN = subprocess.Popen
 
 MAX_EXPORT_BYTES = 16 * 1024 * 1024
 MAX_EXPORT_FILES = 2_000
+MAX_EXPORT_SECONDS = 60
 MAX_STREAM_BYTES = 8 * 1024 * 1024
 MAX_LINE_BYTES = 1024 * 1024
-MAX_RESULT_BYTES = 1024 * 1024
+MAX_RESULT_BYTES = MAX_RESULT_BODY_BYTES
 CLAUDE_TOOLS = ("Read", "Glob", "Grep")
 # Known built-in plugins are switched off; the init-frame check still fails
 # closed if any plugin loads, so this list is a convenience, not the control.
@@ -79,11 +103,21 @@ CLAUDE_DISABLED_PLUGINS = (
 CODEX_REROUTE_EVENTS = {"model/rerouted", "model_rerouted", "model.rerouted"}
 # Codex features switched off for every child. `code_mode_host` must stay enabled:
 # disabling it breaks Codex's own tool invocation.
-# These disables plus `--ephemeral` are the pre-dispatch denial, and they are only
-# demonstrated on codex-cli 0.164.0: under `--ephemeral`, `spawn_agent` fails before
-# any sub-agent run because no rollout exists, and no item event is emitted for the
-# attempt. The reviewed Codex range in config/routing-policy.json is therefore
-# pinned to that build; widening it requires a live containment check on the new build.
+# These disables plus `--ephemeral` are the pre-dispatch denial. It was demonstrated
+# live on codex-cli 0.164.0: under `--ephemeral`, `spawn_agent` fails before any
+# sub-agent run because no rollout exists, and no item event is emitted for the
+# attempt. The Codex range admitted by config/routing-policy.json runs from that
+# build up to, but not including, 0.170.0, and what stands behind it differs by build:
+# 0.164.0 was checked live; on 0.169.0 the surface this launch relies on was compared
+# without a model call and is unchanged (every feature named below still exists, no
+# new feature is on by default that adds a tool, `codex exec` still has the required
+# options, the event and item names are the same, and the role's instructions are
+# still rendered as a developer message); the builds in between, and later 0.169
+# builds, were neither compared nor checked. A comparison cannot show that the denial
+# itself still holds: the live containment check on 0.169.0 is a step of the release's
+# real-install trial, and the release is not to be published with this range unless
+# that check has passed (otherwise the upper bound goes back to 0.164.1). Widening the
+# range further requires the same comparison and a live containment check first.
 # `skill_mcp_dependency_install` lets a skill the prompt mentions install and start
 # its declared MCP server, which would run outside the sandbox; skills from the user's
 # directories and from the export itself are listed to every child.
@@ -92,6 +126,17 @@ CODEX_DISABLED_FEATURES = (
     "image_generation", "goals", "browser_use", "browser_use_external",
     "computer_use", "in_app_browser", "hooks", "skill_mcp_dependency_install",
 )
+# Every model in the Codex catalog turns on its sub-agent tools (spawn_agent and five
+# more, offered as a separate `collaboration` tool namespace) by itself, whatever
+# `--disable multi_agent_v2` says: the catalog names the model's multi-agent version.
+# This table setting removes that namespace. Checked on codex-cli 0.164.0 and 0.169.0
+# with `codex debug prompt-input`, which makes no model call: without it the child is
+# offered `functions`, `clock` and `collaboration`; with it only `functions` and
+# `clock`, in either order with the `--disable` above. The built-in MCP resource
+# tools (`list_mcp_resources`, `list_mcp_resource_templates`, `read_mcp_resource`,
+# reported as `mcp_tool_call` from server "codex") have no such setting on either
+# build; a call to one is fenced below, and the child is told so.
+CODEX_SUBAGENT_TOOLS_SETTING = "features.multi_agent_v2={enabled=false,disable_native_tools=true}"
 CODEX_WEB_SEARCH_SETTING = 'web_search="disabled"'
 # `codex exec` already defaults to never asking; pinning it means no escalation request
 # can ever be granted, whatever a later client or configuration layer defaults to.
@@ -103,11 +148,10 @@ CODEX_APPROVAL_SETTING = 'approval_policy="never"'
 # `codex_exec_options_unavailable`.
 CODEX_REQUIRED_EXEC_OPTIONS = ("--ignore-user-config", "--ignore-rules")
 # The routed Codex role's developer instructions reach a bridged child as this
-# configuration key, which codex-cli 0.164.0 renders as a developer message
+# configuration key, which codex-cli 0.164.0 and 0.169.0 render as a developer message
 # (checked with `codex debug prompt-input`, which makes no model call).
 CODEX_DEVELOPER_INSTRUCTIONS_KEY = "developer_instructions"
-# Collaboration tools cannot be switched off by configuration. This allowlist only
-# detects emitted, typed events: anything outside it stops the child, but it does not
+# This allowlist backs up the switches above. It only detects emitted, typed events: anything outside it stops the child, but it does not
 # prevent a call and cannot see one that emits no event.
 CODEX_ALLOWED_EVENTS = frozenset({
     "thread.started", "turn.started", "turn.completed", "turn.failed", "error",
@@ -118,6 +162,9 @@ CODEX_ALLOWED_ITEMS = frozenset({
     "agent_message", "reasoning", "command_execution", "file_change", "todo_list",
     "error",
 })
+# Only fixed known denied item names may enter a fence. Unknown child-authored
+# labels can contain content, even when their length and characters are bounded.
+CODEX_DENIED_ITEM_LABELS = frozenset({"mcp_tool_call", "web_search", "collab_tool_call"})
 # Claude Code bills a small helper model for housekeeping (seen live in modelUsage
 # while every assistant frame came from the requested model). Helper usage is
 # reported, but only the assistant frames decide whether the work was rerouted.
@@ -180,6 +227,7 @@ WORKSPACE_PARENT: str | None = None
 # `dispatch`.
 SCRATCH_CONTAINER = BRIDGE_SCRATCH_CONTAINER
 WATCHDOG_GRACE_SECONDS = 2
+WATCHDOG_REAP_SECONDS = 5
 # The verifier of a write result gets the bridge-owned envelope here, at the top
 # of its read-only export. The name is not a repository path: no assignment may
 # name it, a write child may never create it, and the bridge creates it after
@@ -230,7 +278,7 @@ def assignment_read_paths(
         if value.startswith(":") or set(value) & PATHSPEC_SPECIAL:
             raise BridgeRefused("assignment read path must be a plain literal path")
         path = PurePosixPath(value)
-        if path.is_absolute() or any(part in {"", ".", "..", ".git"} for part in path.parts):
+        if path.is_absolute() or any(part in {"", ".", ".."} or _fold_name(part) == ".git" for part in path.parts):
             raise BridgeRefused("assignment read path must stay inside the repository")
         if _claude_context_path(path.as_posix()):
             raise BridgeRefused("assignment read path names Claude context files")
@@ -286,17 +334,149 @@ def names_reserved_input(relative: str) -> bool:
 
 
 def _claude_context_path(relative: str) -> bool:
-    return any(part.lower() in CLAUDE_CONTEXT_NAMES for part in PurePosixPath(relative).parts)
+    return any(_fold_name(part) in CLAUDE_CONTEXT_NAMES for part in PurePosixPath(relative).parts)
 
 
-def _git(root: Path, *arguments: str, text: bool = False) -> subprocess.CompletedProcess:
+def _git(root: Path, *arguments: str, text: bool = False, deadline: float | None = None) -> subprocess.CompletedProcess:
     executable = find_git(untrusted=[root])
     if executable is None:
         raise BridgeRefused("git is unavailable")
     try:
-        return run_git(executable, root, *arguments, text=text, timeout=60)
-    except (OSError, subprocess.SubprocessError) as exc:
+        return run_git(executable, root, *arguments, text=text, timeout=60,
+                       max_output_bytes=32 * 1_048_576, deadline=deadline)
+    except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
         raise BridgeRefused("git export failed") from exc
+
+
+def _export_git(root: Path, *arguments: str, deadline: float, text: bool = False) -> subprocess.CompletedProcess:
+    if time.monotonic() >= deadline:
+        raise BridgeRefused("assignment export deadline exceeded")
+    completed = _git(root, *arguments, text=text, deadline=deadline)
+    if time.monotonic() >= deadline:
+        raise BridgeRefused("assignment export deadline exceeded")
+    return completed
+
+
+def committed_export_manifest(
+    repository_root: Path,
+    paths: list[str],
+    *,
+    max_bytes: int = MAX_EXPORT_BYTES,
+    max_files: int = MAX_EXPORT_FILES,
+    expected_commit: str | None = None,
+    _deadline: float | None = None,
+) -> dict[str, Any]:
+    """Inspect the same committed blobs that export copies, without their content.
+
+    Resolve HEAD once. Every tree lookup uses that immutable commit, so a ref
+    change between requested paths cannot mix snapshots. This is not admission.
+    """
+
+    if (
+        type(max_bytes) is not int or not 0 <= max_bytes <= MAX_EXPORT_BYTES
+        or type(max_files) is not int or not 0 <= max_files <= MAX_EXPORT_FILES
+    ):
+        raise BridgeRefused("assignment export limits are invalid")
+    deadline = time.monotonic() + MAX_EXPORT_SECONDS if _deadline is None else _deadline
+    root = repository_root.resolve()
+    executable = find_git(untrusted=[root])
+    if executable is None or repository_layout_problem(executable, root, deadline=deadline) is not None:
+        raise BridgeRefused("project repository cannot be trusted for export")
+    top = _export_git(root, "rev-parse", "--show-toplevel", text=True, deadline=deadline)
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root:
+        raise BridgeRefused("project root is not the top of a git repository")
+    head = _export_git(root, "rev-parse", "--verify", "HEAD^{commit}", text=True, deadline=deadline)
+    commit = head.stdout.strip()
+    if head.returncode != 0 or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit) is None:
+        raise BridgeRefused("assignment read path is not committed")
+    if expected_commit is not None and (type(expected_commit) is not str or expected_commit != commit):
+        raise BridgeRefused("export commit changed; repeat dispatch preflight")
+    entries: dict[str, dict[str, Any]] = {}
+    total = 0
+    for requested in paths:
+        if not isinstance(requested, str) or not requested or "\x00" in requested:
+            raise BridgeRefused("assignment read path is invalid")
+        requested_path = PurePosixPath(requested)
+        if (requested_path.is_absolute() or ".." in requested_path.parts
+                or any(_fold_name(part) == ".git" for part in requested_path.parts)):
+            raise BridgeRefused("assignment read path must stay inside the repository")
+        listing = _export_git(root, "ls-tree", "-r", "-l", "-z", "--full-tree", commit, "--", requested,
+                              deadline=deadline)
+        if listing.returncode != 0:
+            raise BridgeRefused("assignment read path is not committed")
+        found = [item for item in listing.stdout.split(b"\x00") if item]
+        if not found:
+            raise BridgeRefused("assignment read path is not committed")
+        for item in found:
+            header, separator, name = item.partition(b"\t")
+            try:
+                mode, kind, oid, size_text = header.decode("ascii").split()
+                relative = name.decode("utf-8", "strict")
+            except ValueError:
+                raise BridgeRefused("assignment read path is not exportable") from None
+            if not separator or relative != requested and not relative.startswith(requested + "/"):
+                raise BridgeRefused("git listed a path outside the requested paths")
+            if _claude_context_path(relative):
+                continue
+            if mode == "120000":
+                raise BridgeRefused("assignment read paths must not contain symlinks")
+            if kind != "blob" or mode not in {"100644", "100755"}:
+                raise BridgeRefused("assignment read paths must be regular files")
+            if (
+                re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", oid) is None
+                or re.fullmatch(r"[0-9]{1,20}", size_text) is None
+            ):
+                raise BridgeRefused("assignment read path is not exportable")
+            parts = PurePosixPath(relative).parts
+            if (PurePosixPath(relative).is_absolute()
+                    or any(part in {"", ".", ".."} or _fold_name(part) == ".git" for part in parts)
+                    or len(name) > 4096):
+                raise BridgeRefused("assignment read path must stay inside the repository")
+            entry = {"path": relative, "object_id": oid, "mode": mode, "size_bytes": int(size_text)}
+            if relative in entries:
+                if entries[relative] != entry:
+                    raise BridgeRefused("assignment export metadata conflicts")
+                continue
+            entries[relative] = entry
+            total += entry["size_bytes"]
+            if len(entries) > max_files:
+                raise BridgeRefused("assignment export has too many files")
+            if total > max_bytes:
+                raise BridgeRefused("assignment export is too large")
+    manifest = {"commit": commit, "files": [entries[path] for path in sorted(entries)]}
+    digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"),
+                                       ensure_ascii=True).encode("ascii")).hexdigest()
+    if time.monotonic() >= deadline:
+        raise BridgeRefused("assignment export deadline exceeded")
+    return {**manifest, "manifest_digest": digest, "file_count": len(entries), "total_bytes": total}
+
+
+def export_committed_snapshot(
+    repository_root: Path,
+    paths: list[str],
+    destination: Path,
+    *,
+    max_bytes: int = MAX_EXPORT_BYTES,
+    max_files: int = MAX_EXPORT_FILES,
+    expected_commit: str | None = None,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + MAX_EXPORT_SECONDS
+    manifest = committed_export_manifest(
+        repository_root, paths, max_bytes=max_bytes, max_files=max_files, expected_commit=expected_commit,
+        _deadline=deadline,
+    )
+    for entry in manifest["files"]:
+        blob = _export_git(repository_root.resolve(), "cat-file", "blob", entry["object_id"], deadline=deadline)
+        if blob.returncode != 0 or len(blob.stdout) != entry["size_bytes"]:
+            raise BridgeRefused("assignment read path is unavailable")
+        target = destination.joinpath(*PurePosixPath(entry["path"]).parts)
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(blob.stdout)
+    if time.monotonic() >= deadline:
+        raise BridgeRefused("assignment export deadline exceeded")
+    return {key: manifest[key] for key in ("commit", "manifest_digest", "file_count", "total_bytes")}
 
 
 def export_committed_paths(
@@ -307,70 +487,84 @@ def export_committed_paths(
     max_bytes: int = MAX_EXPORT_BYTES,
     max_files: int = MAX_EXPORT_FILES,
 ) -> int:
-    """Copy the committed bytes of each path from HEAD; return the file count.
+    """Copy committed regular blobs under the same validated manifest as preflight."""
 
-    Only regular blobs are exported, and Claude context files are dropped. A
-    symlink, submodule, missing path, a listing outside the request, or an
-    export over the caps refuses the whole dispatch.
+    return export_committed_snapshot(
+        repository_root, paths, destination, max_bytes=max_bytes, max_files=max_files,
+    )["file_count"]
+
+
+
+def dispatch_preflight(
+    repository_root: Path,
+    task: dict[str, Any],
+    route: dict[str, Any],
+    assignment: dict[str, Any],
+    *,
+    offset: int = 0,
+    limit: int = 50,
+    expected_commit: str | None = None,
+) -> dict[str, Any]:
+    """Preview validated bridge inputs; no workspace, admission or model call.
+
+    Pages are at most 16 KiB. Later pages require the first page's commit, so
+    a ref change refuses instead of silently mixing previews. File contents
+    and reserved worker-result bodies are never returned.
     """
 
-    root = repository_root.resolve()
-    executable = find_git(untrusted=[root])
-    if executable is None or repository_layout_problem(executable, root) is not None:
-        raise BridgeRefused("project repository cannot be trusted for export")
-    top = _git(root, "rev-parse", "--show-toplevel", text=True)
-    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root:
-        raise BridgeRefused("project root is not the top of a git repository")
-    entries: dict[str, tuple[str, str]] = {}
-    for requested in paths:
-        listing = _git(root, "ls-tree", "-r", "-z", "--full-tree", "HEAD", "--", requested)
-        if listing.returncode != 0:
-            raise BridgeRefused("assignment read path is not committed")
-        found = [item for item in listing.stdout.split(b"\x00") if item]
-        if not found:
-            raise BridgeRefused("assignment read path is not committed")
-        for item in found:
-            header, _, name = item.partition(b"\t")
-            try:
-                mode, kind, sha = header.decode("ascii").split(" ")
-                relative = name.decode("utf-8", "strict")
-            except ValueError as exc:
-                raise BridgeRefused("assignment read path is not exportable") from exc
-            # Every listed file must be the requested file or sit beneath it.
-            if relative != requested and not relative.startswith(requested + "/"):
-                raise BridgeRefused("git listed a path outside the requested paths")
-            if _claude_context_path(relative):
-                continue
-            if mode == "120000":
-                raise BridgeRefused("assignment read paths must not contain symlinks")
-            if kind != "blob" or mode not in {"100644", "100755"}:
-                raise BridgeRefused("assignment read paths must be regular files")
-            entries[relative] = (sha, mode)
-    if len(entries) > max_files:
-        raise BridgeRefused("assignment export has too many files")
-    total = 0
-    for relative, (sha, _) in sorted(entries.items()):
-        parts = PurePosixPath(relative).parts
-        if any(part in {"", ".", ".."} for part in parts):
-            raise BridgeRefused("assignment read path must stay inside the repository")
-        blob = _git(root, "cat-file", "blob", sha)
-        if blob.returncode != 0:
-            raise BridgeRefused("assignment read path is unavailable")
-        total += len(blob.stdout)
-        if total > max_bytes:
-            raise BridgeRefused("assignment export is too large")
-        target = destination.joinpath(*parts)
-        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        descriptor = os.open(
-            target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
-        )
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(blob.stdout)
-    return len(entries)
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
+        raise BridgeRefused("export preview page is invalid")
+    if offset and expected_commit is None:
+        raise BridgeRefused("later export pages require the expected export commit")
+    provider = route.get("provider")
+    if route.get("dispatch") != "bridge" or provider not in {"codex", "claude"}:
+        raise BridgeRefused("dispatch preflight requires a supported bridge route")
+    permissions = assignment["permissions"]
+    if (route.get("sandbox_mode") != "read-only" or permissions["network"] is not False
+            or any(not item.endswith(":read") for item in permissions["filesystem"])):
+        raise BridgeRefused("bridged children are read-only")
+    bound_report = effective_dispatch_bounds(route, assignment)
+    worker_outcome = task.get("verification_for_outcome")
+    paths = assignment_read_paths(assignment, worker_outcome_digest=worker_outcome)
+    manifest = committed_export_manifest(repository_root, paths, expected_commit=expected_commit)
+    if offset > manifest["file_count"]:
+        raise BridgeRefused("export preview offset is outside the manifest")
+    report = {
+        "ready": True, "preflight_only": True, "admission_created": False,
+        "export_commit": manifest["commit"], "export_manifest_digest": manifest["manifest_digest"],
+        "repository_file_count": manifest["file_count"], "repository_bytes": manifest["total_bytes"],
+        "files": [], "offset": offset, "next_offset": None,
+        "reserved_worker_result": worker_outcome is not None,
+        "additional_context": ["installed routed role and skills", "assignment-bound result template and guidance"],
+        "working_tree_content": "excluded; committed snapshot only",
+        "capabilities": {
+            "provider": provider, "dispatch": "bridge", "sandbox": "read-only",
+            "role": route["role"], "model": route["model"], "effort": route["effort"],
+            "assignment_tools": permissions["tools"],
+            "client_tool_allowlist": list(CLAUDE_TOOLS) if provider == "claude" else None,
+            "observed_item_allowlist": sorted(CODEX_ALLOWED_ITEMS) if provider == "codex" else None,
+            "per_path_read_isolation": False, "network": False, "mcps": False,
+            **bound_report,
+            "basis": "runtime configuration; not client readiness or admission",
+        },
+    }
+    for entry in manifest["files"][offset:offset + limit]:
+        report["files"].append(entry)
+        report["next_offset"] = offset + len(report["files"])
+        if len(json.dumps(report, indent=2, sort_keys=True).encode("ascii")) + 1 > 16_384:
+            report["files"].pop()
+            break
+    following = offset + len(report["files"])
+    report["next_offset"] = following if following < manifest["file_count"] else None
+    if following == offset and following < manifest["file_count"]:
+        raise BridgeRefused("export preview entry is too large")
+    if len(json.dumps(report, indent=2, sort_keys=True).encode("ascii")) + 1 > 16_384:
+        raise BridgeRefused("export preview metadata is too large")
+    return report
 
 
 # Each running child's process and its tracked tree, for the signal guard.
-_ACTIVE_CHILDREN: dict[int, tuple[Any, ProcessTree]] = {}
+_ACTIVE_CHILDREN: dict[int, tuple[Any, ProcessTree, ExecutionTicket | None]] = {}
 # A detached watchdog enforces the deadline even if the bridge is SIGKILLed: it
 # verifies the child's identity, tracks its tree itself, and kills the tree at the
 # deadline or once the child has exited. It runs the standard-library process_tree
@@ -378,40 +572,62 @@ _ACTIVE_CHILDREN: dict[int, tuple[Any, ProcessTree]] = {}
 WATCHDOG_SCRIPT = Path(__file__).resolve().with_name("process_tree.py")
 
 
-def _start_watchdog(root: int, birth: str, deadline_epoch: float) -> None:
-    """Start the watchdog and wait until it has verified the child.
+class _WatchdogOwner:
+    """Retain the exact detached helper through startup and child cleanup.
 
-    The child stays unreaped meanwhile, so its pid cannot pass to another
-    process. Without the acknowledgement the run is aborted: no child runs on
-    without a verified watchdog.
+    Allocate before launch, so interrupted acknowledgement still leaves the
+    helper available for a bounded reap after the child's cleanup. Finalization
+    never signals the helper or disables its independent deadline backstop.
     """
 
-    try:
-        watchdog = subprocess.Popen(
-            [
-                sys.executable, *PYTHON_ISOLATION_FLAGS, str(WATCHDOG_SCRIPT),
-                str(root), birth, repr(deadline_epoch),
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-            env={"PATH": os.defpath},
-        )
-    except OSError as exc:
-        raise _Abort("watchdog_unavailable") from exc
-    try:
-        ready = await_ready(watchdog.stdout, WATCHDOG_READY_SECONDS)
-    finally:
-        watchdog.stdout.close()
-    if not ready:
-        # Still unreaped, so this pid is the watchdog's.
-        with contextlib.suppress(OSError):
-            watchdog.kill()
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            watchdog.wait(timeout=5)
-        raise _Abort("watchdog_unavailable")
+    __slots__ = ("_process",)
+
+    def __init__(self) -> None:
+        self._process: subprocess.Popen | None = None
+
+    def start(self, root: int, birth: str, deadline_monotonic: float, marker: tuple[str, str, str] | None = None) -> None:
+        # The child remains unreaped through the acknowledgement, so its pid
+        # cannot pass to another process. Output processing waits for verification.
+        try:
+            self._process = subprocess.Popen(
+                [
+                    sys.executable, *PYTHON_ISOLATION_FLAGS, str(WATCHDOG_SCRIPT),
+                    str(root), birth, repr(deadline_monotonic), *(marker or ()),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+                env={"PATH": os.defpath},
+            )
+        except OSError as exc:
+            raise _Abort("watchdog_unavailable") from exc
+        watchdog = self._process
+        try:
+            ready = await_ready(watchdog.stdout, WATCHDOG_READY_SECONDS)
+        finally:
+            watchdog.stdout.close()
+        if not ready:
+            # Still unreaped, so this pid is the watchdog's. The enclosing
+            # child cleanup reaps this handle after stopping the child tree.
+            with contextlib.suppress(OSError):
+                watchdog.kill()
+            raise _Abort("watchdog_unavailable")
+
+    def pid(self) -> int | None:
+        return None if self._process is None else self._process.pid
+
+    def reap(self) -> bool:
+        """Wait once after child cleanup; leave a stuck backstop running."""
+        if self._process is None:
+            return True
+        try:
+            return self._process.wait(timeout=WATCHDOG_REAP_SECONDS) == 0
+        except Exception:
+            # Never replace an earlier abort with a raw cleanup failure or
+            # silence it by killing a helper that may still protect the tree.
+            return False
 
 
 class BridgeInterrupted(SystemExit):
@@ -426,8 +642,14 @@ def signal_guard():
     """
 
     def handler(signum: int, _frame: Any) -> None:
-        for process, tree in list(_ACTIVE_CHILDREN.values()):
-            _kill_child(process, tree)
+        for process, tree, execution in list(_ACTIVE_CHILDREN.values()):
+            try:
+                if execution is None:
+                    _kill_child(process, tree)
+                else:
+                    execution._signal_stop(process)
+            except BaseException:
+                pass  # Attempt other children; preserve the actual termination signal.
         raise BridgeInterrupted(128 + signum)
 
     signals = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
@@ -439,27 +661,36 @@ def signal_guard():
             signal.signal(signum, value)
 
 
-def _kill_child(process: Any, tree: ProcessTree) -> None:
+def _kill_child(process: Any, tree: ProcessTree | None) -> None:
     """Kill the child's tracked tree, then its own process group.
 
     The child is reaped only after this, so its pid, and with it its group's
     id, still cannot belong to anything else when the group is signalled.
     """
 
-    tree.terminate()
-    if process.returncode is None:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
-
-
-def _stop_child(process: Any, tree: ProcessTree) -> None:
-    _kill_child(process, tree)
     try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        pass
+        if tree is not None:
+            tree.terminate()
+    except BaseException:
+        if tree is not None:
+            tree._cleanup_incomplete = True
+        raise
+    finally:
+        if process.returncode is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+def _stop_child(process: Any, tree: ProcessTree | None) -> None:
+    try:
+        _kill_child(process, tree)
+    finally:
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 def run_child(
@@ -470,6 +701,7 @@ def run_child(
     deadline_seconds: float,
     on_frame: Callable[[dict[str, Any]], None],
     popen: Callable[..., Any] = subprocess.Popen,
+    _execution: ExecutionTicket | None = None,
 ) -> dict[str, Any]:
     """Run one child in its own session, feeding each JSON line to `on_frame`.
 
@@ -477,39 +709,107 @@ def run_child(
     killed on timeout, overflow, an unparseable line or an aborting frame, and
     always once the child has exited. The child is reaped only after that, and
     it is never launched when its tree or its watchdog cannot be tracked.
+    Its environment carries a fresh per-run marker (`RUN_TAG_VARIABLE`) that its
+    cleanup confirmation looks for in every process of this user.
     """
 
     outcome: dict[str, Any] = {"returncode": None, "abort": None}
     if not tracking_available():
         return {"returncode": None, "abort": "process_tracking_unavailable"}
-    try:
-        process = popen(
-            arguments,
-            cwd=cwd,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except OSError:
-        return {"returncode": None, "abort": "launch_failed"}
-    tree = ProcessTree(process.pid)
-    _ACTIVE_CHILDREN[process.pid] = (process, tree)
+    if _execution is not None:
+        if type(_execution) is not ExecutionTicket or popen is not _OWNED_POPEN:
+            return {"returncode": None, "abort": "launch_failed"}
     deadline = time.monotonic() + deadline_seconds
+    if _execution is not None:
+        try:
+            deadline = min(deadline, _execution.deadline_ns() / 1_000_000_000)
+        except ExecutionCustodyError:
+            return {"returncode": None, "abort": "launch_failed"}
+    watchdog = _WatchdogOwner()
+    process = None
+    tree = None
     buffer = b""
     received = 0
+    execution_bound = False
+    cleanup_entered = False
+    run_tag = new_run_tag()
+    environment = {**environment, RUN_TAG_VARIABLE: run_tag}
+
+    def requested_abort():
+        if _execution is None:
+            return None
+        return {"cancel_requested": "cancelled", "absolute_deadline": "timed_out",
+                "startup_silence": "startup_silence", "work_silence": "work_silence",
+                "monitor_unavailable": "monitor_unavailable"}.get(_execution.stop_reason())
+
+    def check_stop():
+        requested = requested_abort()
+        if requested is not None:
+            raise _Abort(requested)
+
+    def check_running():
+        check_stop()
+        if time.monotonic() >= deadline:
+            raise _Abort("timed_out")
+
     try:
-        if not tree.identify(process_table()):
+        try:
+            factory = popen if _execution is None else _execution.spawn
+            process = factory(
+                arguments,
+                cwd=cwd,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except (OSError, ExecutionCustodyError) as error:
+            expired = isinstance(error, ExecutionCustodyError) and error.reason_code == "execution_deadline_expired"
+            cancelled = isinstance(error, ExecutionCustodyError) and error.reason_code == "execution_cancel_requested"
+            outcome["abort"] = (requested_abort() if cancelled else None) or (
+                "timed_out" if expired else "cancelled" if cancelled else "launch_failed")
+            return outcome
+        tree = ProcessTree(process.pid, run_tag) if _execution is None else _execution.tree(process)
+        _ACTIVE_CHILDREN[process.pid] = (process, tree, _execution)
+        if _execution is not None and tree.run_tag != run_tag:
+            # The registry keeps the marker it saw in the child's environment.
             raise _Abort("process_tracking_unavailable")
-        _start_watchdog(
+        check_stop()
+        identified = tree.identify(process_table())
+        check_stop()
+        if not identified:
+            raise _Abort("process_tracking_unavailable")
+        if _execution is not None:
+            try:
+                _execution.bind(process, tree)
+                execution_bound = True
+            except ExecutionCustodyError:
+                raise _Abort("process_tracking_unavailable") from None
+        marker = None
+        if _execution is not None:
+            # Where the watchdog confirms, before it exits, that the tree it tracked is empty.
+            try:
+                marker = _execution.watchdog_marker()
+            except ExecutionCustodyError:
+                raise _Abort("watchdog_unavailable") from None
+        watchdog.start(
             process.pid, tree.root_birth,
-            time.time() + deadline_seconds + WATCHDOG_GRACE_SECONDS,
+            deadline + WATCHDOG_GRACE_SECONDS,
+            *(() if marker is None else ((*marker, run_tag),)),
         )
+        if _execution is not None:
+            # The project service records the acknowledged watchdog durably, so a
+            # later service can tell when this whole run is gone.
+            try:
+                _execution.watched(watchdog.pid())
+            except ExecutionCustodyError:
+                raise _Abort("watchdog_unavailable") from None
         next_track = time.monotonic() + TRACK_INTERVAL_SECONDS
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
             while True:
+                check_running()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise _Abort("timed_out")
@@ -527,6 +827,7 @@ def run_child(
                     raise _Abort("stream_too_large")
                 buffer += chunk
                 while b"\n" in buffer:
+                    check_running()
                     line, buffer = buffer.split(b"\n", 1)
                     if len(line) > MAX_LINE_BYTES:
                         raise _Abort("stream_too_large")
@@ -538,22 +839,56 @@ def run_child(
             if len(buffer) > MAX_LINE_BYTES:
                 raise _Abort("stream_too_large")
             if buffer.strip():
+                check_running()
                 _deliver(buffer, on_frame)
         # The output is closed. Wait for the child to exit without reaping it; an
         # exit first seen after the deadline (a snapshot can block) is a timeout.
         while True:
+            check_running()
             _track(tree)
-            if time.monotonic() >= deadline:
-                raise _Abort("timed_out")
+            check_running()
             if tree.root_exited():
                 break
             time.sleep(min(TRACK_INTERVAL_SECONDS, max(deadline - time.monotonic(), 0.0)))
     except _Abort as abort:
         outcome["abort"] = abort.reason
     finally:
-        _stop_child(process, tree)
-        _ACTIVE_CHILDREN.pop(process.pid, None)
-        process.stdout.close()
+        original_error = sys.exc_info()[1]
+        cleanup_error = None
+
+        def cleanup_step(operation, *, ignored=()):
+            nonlocal cleanup_error
+            try:
+                return True, operation()
+            except BaseException as error:
+                if not isinstance(error, ignored):
+                    if cleanup_error is None or (isinstance(cleanup_error, Exception)
+                                                 and not isinstance(error, Exception)):
+                        cleanup_error = error
+                return False, None
+
+        # Every stage runs even if an earlier cleanup stage failed. Preserve
+        # the first nonlocal exit, and never infer custody from a failed step.
+        if process is not None:
+            if _execution is not None:
+                cleanup_entered, _ = cleanup_step(_execution.begin_cleanup)
+            cleanup_step(lambda: _stop_child(process, tree))
+        elif _execution is not None:
+            cleanup_step(_execution.abort_handoff, ignored=(ExecutionCustodyError,))
+        if process is not None:
+            _ACTIVE_CHILDREN.pop(process.pid, None)
+            cleanup_step(process.stdout.close)
+        _, watchdog_reaped = cleanup_step(watchdog.reap)
+        if not watchdog_reaped and outcome["abort"] is None:
+            outcome["abort"] = "watchdog_unavailable"
+        if watchdog_reaped and execution_bound and cleanup_entered:
+            cleanup_step(lambda: _execution.finish(process, tree), ignored=(ExecutionCustodyError,))
+        if cleanup_error is not None:
+            if original_error is not None and not isinstance(original_error, Exception):
+                raise original_error
+            raise cleanup_error
+    if outcome["abort"] is None:
+        outcome["abort"] = requested_abort()
     if outcome["abort"] is None:
         outcome["returncode"] = process.returncode
     return outcome
@@ -565,13 +900,15 @@ def _track(tree: ProcessTree) -> Table | None:
     table = process_table()
     if table is not None:
         tree.update(table)
+    else:
+        tree._cleanup_incomplete = True
     return table
 
 
 def _deliver(line: bytes, on_frame: Callable[[dict[str, Any]], None]) -> None:
     try:
         frame = json.loads(line)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise _Abort("unparseable_stream") from exc
     if not isinstance(frame, dict):
         raise _Abort("unparseable_stream")
@@ -581,15 +918,25 @@ def _deliver(line: bytes, on_frame: Callable[[dict[str, Any]], None]) -> None:
 def _result_object(text: Any) -> dict[str, Any] | None:
     """Parse the child's final message as one JSON object, tolerating a fence."""
 
-    if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_RESULT_BYTES:
+    if not isinstance(text, str):
+        return None
+    try:
+        encoded_size = len(text.encode("utf-8"))
+    except UnicodeEncodeError:
+        return None
+    if encoded_size > MAX_RESULT_BYTES:
         return None
     stripped = text.strip()
-    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, re.DOTALL)
-    if fenced:
-        stripped = fenced.group(1)
+    # Avoid regex backtracking on an incomplete fence with long whitespace.
+    # Keep the existing optional, immediately adjacent lowercase json header.
+    if stripped.startswith("```") and stripped.endswith("```") and len(stripped) >= 6:
+        stripped = stripped[3:-3]
+        if stripped.startswith("json"):
+            stripped = stripped[4:]
+        stripped = stripped.strip()
     try:
         value = json.loads(stripped)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     return value if isinstance(value, dict) else None
 
@@ -598,7 +945,7 @@ def _fenced_result(assignment: dict[str, Any], state: str, reason: str) -> dict[
     # An outcome the bridge cannot prove is recorded as a failure, never success.
     return {
         "assignment_id": assignment["assignment_id"],
-        "status": "failed",
+        "status": legacy_result_status(state, "not-applicable"),
         "execution_state": state,
         "semantic_verdict": "not-applicable",
         "admission_state": "unverified",
@@ -693,6 +1040,10 @@ def place_worker_result(export: Path, worker_result: dict[str, Any]) -> str:
     relative to the export.
     """
 
+    from .learning_contracts import canonical_json
+    encoded = canonical_json(worker_result)
+    if len(encoded) > MAX_RESULT_BODY_BYTES:
+        raise BridgeRefused("verifier input exceeds its byte limit")
     directory = export / RESERVED_INPUT_DIRECTORY
     try:
         os.mkdir(directory, 0o700)
@@ -703,13 +1054,25 @@ def place_worker_result(export: Path, worker_result: dict[str, Any]) -> str:
     except OSError as exc:
         raise BridgeRefused("verifier input could not be placed") from exc
     with os.fdopen(descriptor, "wb") as handle:
-        handle.write(json.dumps(worker_result, indent=2, sort_keys=True).encode("utf-8"))
+        handle.write(encoded)
         os.fchmod(handle.fileno(), 0o400)
     return VERIFIER_WORKER_RESULT_PATH
 
 
 def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None = None) -> str:
-    template = result_preflight(assignment)["template"]
+    preflight = result_preflight(assignment)
+    template = preflight["template"]
+    guidance = {
+        name: preflight[name] for name in (
+            "execution_states", "semantic_verdicts", "admission_states",
+            "evidence_types", "evidence_outcomes", "consistency_rules",
+        )
+    }
+    guidance["completed_status_by_verdict"] = {
+        verdict: legacy_result_status("completed", verdict)
+        for verdict in preflight["semantic_verdicts"]
+    }
+    guidance["string_array_fields"] = ["artifacts", "unverified_claims", "remaining_risks"]
     review = (
         f"The result under review is the worker's recorded result, in "
         f"{worker_result_path} (read-only). Review it against the task above and the "
@@ -727,7 +1090,22 @@ def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None =
         "Required evidence, one entry per criterion id:\n"
         f"{criteria}\n"
         f"{review}"
-        "Work only with the files in the current directory. When you finish, reply "
+        "Contract guidance (not result fields):\n"
+        f"{json.dumps(guidance, indent=2)}\n"
+        "End contract guidance.\n"
+        "These enums describe the result contract, not authority. This child's "
+        "admission_state must remain unverified; do not invent host timeout facts. "
+        "A completed review may reach a negative verdict. The template's sample "
+        "pass is not a requested conclusion; report your actual findings and risks. "
+        "Keep the exact template keys. The named string arrays contain strings, "
+        "not finding objects. Put severity, impact and corrections in evidence "
+        "details strings, with no extra evidence keys. Keep this assignment_id "
+        "and retry block when reviewing another worker. Leave usage null unless "
+        "you have measured values in the required shape; never invent usage.\n\n"
+        "Work only with the files in the current directory. Do not start sub-agents "
+        "and do not call the MCP resource tools (list_mcp_resources, "
+        "list_mcp_resource_templates, read_mcp_resource): no MCP server is available, "
+        "and any such call stops this run with no result. When you finish, reply "
         "with exactly one JSON object and no other text, filling in this template:\n"
         f"{json.dumps(template, indent=2)}\n"
         f"In the evidence list, {ONE_EVIDENCE_ENTRY_RULE}.\n"
@@ -799,9 +1177,25 @@ def _check_claude_init(frame: dict[str, Any], model: str) -> str | None:
     if frame.get("mcp_servers") != []:
         return "mcp_server_loaded"
     tools = frame.get("tools")
-    if not isinstance(tools, list) or not set(tools) <= set(CLAUDE_TOOLS):
+    if not isinstance(tools, list) or any(
+        not isinstance(tool, str) or tool not in CLAUDE_TOOLS for tool in tools
+    ):
         return "tool_not_allowed"
     return None
+
+
+def _client_observation_code(value: Any, allowed: frozenset[str], fallback: str) -> str:
+    return value if isinstance(value, str) and value in allowed else fallback
+
+
+def _client_diagnostics(outcome: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    code = outcome.get("returncode")
+    return {
+        "exit_code": code if type(code) is int and CLIENT_EXIT_CODE_MIN <= code <= CLIENT_EXIT_CODE_MAX else None,
+        "result_frame_seen": state["result_frame_seen"],
+        "result_subtype": state["result_subtype"],
+        "error_code": state["client_error_code"],
+    }
 
 
 def run_claude(
@@ -819,9 +1213,8 @@ def run_claude(
     max_turns: int,
     executable: str,
     worker_result_path: str | None = None,
+    _execution: ExecutionTicket | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    from .learning_store import LedgerError
-
     model = route["model"]
     settings = _private_file(
         control / "settings.json", json.dumps(claude_settings(model)).encode()
@@ -839,6 +1232,8 @@ def run_claude(
         "--no-session-persistence",
         "--output-format", "stream-json",
         "--verbose",
+        # Partial messages give a long message liveness; fences below apply to them too.
+        "--include-partial-messages",
         "--max-turns", str(max_turns),
         "--append-system-prompt-file", str(system_prompt),
         # The prompt starts with the assignment's objective; after `--` neither
@@ -848,14 +1243,35 @@ def run_claude(
     ]
     state: dict[str, Any] = {
         "init": None, "result": None, "rate_limit_events": 0, "rate_limit_kept": 0,
+        "result_frame_seen": False, "result_subtype": None, "client_error_code": None,
         "rate_limit_failed": False, "frames": 0,
         "models": set(),
         "helper_models": set(),
     }
+    activity = (ClaudeActivity(model, CLAUDE_TOOLS) if type(_execution) is ExecutionTicket
+                and _execution.activity_enabled() else None)
+
+    def publish(category: str | None) -> None:
+        if category is not None:
+            try:
+                _execution.publish_activity(category)
+            except ExecutionCustodyError:
+                raise _Abort("monitor_unavailable") from None
 
     def on_frame(frame: dict[str, Any]) -> None:
         state["frames"] += 1
         kind = frame.get("type")
+        # These are observed protocol facts, not failure causes or admission
+        # evidence. Observe them even if the first frame fails the init check.
+        if kind == "assistant" and frame.get("error") is not None:
+            state["client_error_code"] = _client_observation_code(
+                frame["error"], CLIENT_ERROR_CODES, "unrecognized_error"
+            )
+        if kind == "result":
+            state["result_frame_seen"] = True
+            state["result_subtype"] = _client_observation_code(
+                frame.get("subtype"), CLIENT_RESULT_SUBTYPES, "unrecognized_result"
+            )
         if state["init"] is None:
             if kind != "system" or frame.get("subtype") != "init":
                 raise _Abort("missing_init_frame")
@@ -863,6 +1279,8 @@ def run_claude(
             if violation is not None:
                 raise _Abort(f"init_{violation}")
             state["init"] = frame
+            if activity is not None:
+                publish(activity.startup())
             return
         if kind == "rate_limit_event":
             # Every event goes to the ledger, which keeps each one that is more
@@ -908,20 +1326,56 @@ def run_claude(
                         state["helper_models"].add(name)
                     else:
                         state["models"].add(name)
+        if kind == "stream_event":
+            event = frame.get("event")
+            event = event if isinstance(event, dict) else {}
+            started = event.get("message") if event.get("type") == "message_start" else None
+            if isinstance(started, dict) and started.get("model") is not None:
+                state["models"].add(str(started["model"]))
+            block = event.get("content_block") if event.get("type") == "content_block_start" else None
+            # A prohibited tool stops the child as soon as its call starts streaming.
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") not in CLAUDE_TOOLS:
+                raise _Abort("claude_tool_not_allowed")
         if kind == "assistant":
             message = frame.get("message")
             served = message.get("model") if isinstance(message, dict) else None
             if served is not None:
                 state["models"].add(str(served))
+            content = message.get("content") if isinstance(message, dict) else None
+            # The init check proved the advertised tools; a later call outside
+            # them stops the child at once, like a prohibited Codex item.
+            if isinstance(content, list) and any(
+                isinstance(block, dict) and block.get("type") == "tool_use"
+                and block.get("name") not in CLAUDE_TOOLS
+                for block in content
+            ):
+                raise _Abort("claude_tool_not_allowed")
+        # Work from another model is not this run's activity (the run is
+        # marked rerouted); classify only after every fence above has passed.
+        if activity is not None and not (state["models"] - {model}):
+            try:
+                category = activity.observe(frame)
+            except ClaudeActivityError as error:
+                _execution.fail_activity()
+                raise _Abort(error.reason_code) from None
+            publish(category)
 
+    # Off unless the owner asked for frame shapes; then every frame is noted before any fence.
+    shapes = event_shapes.recorder("claude", requested=model, effort=route["effort"], tools=CLAUDE_TOOLS)
     started = time.monotonic()
-    outcome = run_child(
-        arguments,
-        environment=client_environment(environ, control.parent / "tmp"),
-        cwd=export,
-        deadline_seconds=deadline_seconds,
-        on_frame=on_frame,
-    )
+    try:
+        outcome = run_child(
+            arguments,
+            environment=client_environment(environ, control.parent / "tmp"),
+            cwd=export,
+            deadline_seconds=deadline_seconds,
+            on_frame=event_shapes.recorded(shapes, on_frame),
+            **({"_execution": _execution} if _execution is not None else {}),
+        )
+    except BaseException:
+        event_shapes.finished(shapes)
+        raise
+    event_shapes.finished(shapes, outcome)
     report: dict[str, Any] = {
         "provider": "claude",
         "requested_model": model,
@@ -939,6 +1393,7 @@ def run_claude(
         "rate_limit_record_failed": state["rate_limit_failed"],
         "usage": None,
         "permission_denials": None,
+        "client_diagnostics": _client_diagnostics(outcome, state),
     }
     result_frame = state["result"]
     if isinstance(result_frame, dict):
@@ -974,11 +1429,20 @@ def run_claude(
 
 
 def _event_label(value: Any) -> str:
-    """A bounded, printable event or item type for an abort reason."""
+    """A fixed protocol label, never arbitrary child-authored event text."""
 
-    if not isinstance(value, str) or not value:
+    if type(value) is not str or len(value) > 64:
         return "unknown"
-    return re.sub(r"[^A-Za-z0-9_./-]", "?", value[:64])
+    return value if value in CODEX_DENIED_ITEM_LABELS else "unknown"
+
+
+def codex_schemas(schema: bytes) -> tuple[dict[str, Any], bytes]:
+    """Use the same schema parse/conversion before readiness and execution."""
+    try:
+        original_schema = json.loads(schema)
+    except ValueError as exc:
+        raise BridgeRefused("result schema is invalid") from exc
+    return original_schema, json.dumps(strict_output_schema(original_schema), sort_keys=True).encode()
 
 
 def run_codex(
@@ -995,15 +1459,13 @@ def run_codex(
     executable: str,
     worker_result_path: str | None = None,
     role_prompt: str,
+    _execution: ExecutionTicket | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     model = route["model"]
-    try:
-        original_schema = json.loads(schema)
-    except ValueError as exc:
-        raise BridgeRefused("result schema is invalid") from exc
+    original_schema, strict_schema = codex_schemas(schema)
     schema_path = _private_file(
         control / "result.schema.json",
-        json.dumps(strict_output_schema(original_schema), sort_keys=True).encode(),
+        strict_schema,
     )
     last_message = control / "last-message.json"
     arguments = [
@@ -1019,6 +1481,7 @@ def run_codex(
             for feature in CODEX_DISABLED_FEATURES
             for part in ("--disable", feature)
         ),
+        "-c", CODEX_SUBAGENT_TOOLS_SETTING,
         "-c", CODEX_WEB_SEARCH_SETTING,
         "-c", CODEX_APPROVAL_SETTING,
         # The verified instructions of the routed role, as a native child would get.
@@ -1034,6 +1497,8 @@ def run_codex(
     state: dict[str, Any] = {
         "usage": None, "rerouted": False, "observed_model": None, "failed": False,
     }
+    activity = (CodexActivity() if type(_execution) is ExecutionTicket
+                and _execution.activity_enabled() else None)
 
     def on_frame(frame: dict[str, Any]) -> None:
         kind = frame.get("type")
@@ -1065,15 +1530,33 @@ def run_codex(
             }
         if kind in {"turn.failed", "error"}:
             state["failed"] = True
+        if activity is not None and not state["rerouted"] and not state["failed"]:
+            try:
+                category = activity.observe(frame)
+            except CodexActivityError as error:
+                _execution.fail_activity()
+                raise _Abort(error.reason_code) from None
+            if category is not None:
+                try:
+                    _execution.publish_activity(category)
+                except ExecutionCustodyError:
+                    raise _Abort("monitor_unavailable") from None
 
+    shapes = event_shapes.recorder("codex", requested=route["model"], effort=route["effort"])
     started = time.monotonic()
-    outcome = run_child(
-        arguments,
-        environment=client_environment(environ, control.parent / "tmp"),
-        cwd=export,
-        deadline_seconds=deadline_seconds,
-        on_frame=on_frame,
-    )
+    try:
+        outcome = run_child(
+            arguments,
+            environment=client_environment(environ, control.parent / "tmp"),
+            cwd=export,
+            deadline_seconds=deadline_seconds,
+            on_frame=event_shapes.recorded(shapes, on_frame),
+            **({"_execution": _execution} if _execution is not None else {}),
+        )
+    except BaseException:
+        event_shapes.finished(shapes)
+        raise
+    event_shapes.finished(shapes, outcome)
     report = {
         "provider": "codex",
         "requested_model": model,
@@ -1103,7 +1586,13 @@ def run_codex(
         return None, {**report, "outcome": "unparseable_result"}
     # The strict schema makes Codex fill optional keys with null; remove those
     # so the result goes through the ordinary validation unchanged.
-    return remove_optional_nulls(result, original_schema), {**report, "outcome": "result"}
+    try:
+        normalized = remove_optional_nulls(result, original_schema)
+    except RecursionError:
+        # Some supported JSON parsers accept deeper values than this schema
+        # projection can traverse. Preserve the ordinary failed-result fence.
+        return None, {**report, "outcome": "unparseable_result"}
+    return normalized, {**report, "outcome": "result"}
 
 
 def _toml_string(value: str) -> str:
@@ -1225,6 +1714,69 @@ PROBE_DEADLINE_SECONDS = 120
 MAX_PROBE_EVENTS = 64
 
 
+def _run_claude_billing_probe(arguments, *, environment, cwd, deadline_seconds, execution=None):
+    """Fixed probe protocol; retain partial restrictions without claiming success."""
+    state: dict[str, Any] = {"init": False, "infos": [], "result": False}
+
+    def on_frame(frame: dict[str, Any]) -> None:
+        if not state["init"]:
+            if frame.get("type") != "system" or frame.get("subtype") != "init":
+                raise _Abort("missing_init_frame")
+            violation = _check_claude_init(frame, PROBE_MODEL)
+            if violation is not None or frame.get("tools") != []:
+                raise _Abort(f"init_{violation or 'tool_not_allowed'}")
+            state["init"] = True
+        elif frame.get("type") == "system" and frame.get("subtype") == "init":
+            raise _Abort("probe_init_duplicate")
+        elif frame.get("type") in {"tool_use", "tool_result", "server_tool_use", "tool_progress"}:
+            raise _Abort("probe_tool_not_allowed")
+        elif frame.get("type") == "rate_limit_event":
+            state["infos"].append(frame.get("rate_limit_info"))
+            if len(state["infos"]) >= MAX_PROBE_EVENTS:
+                raise _Abort("too_many_rate_limit_events")
+            if state["result"]:
+                raise _Abort("probe_event_after_result")
+            # Classify only; the worker later normalizes with the original
+            # account/time and retains the event even when stopping here.
+            try:
+                headroom, billing = claude_rate_limit_records(frame.get("rate_limit_info"),
+                    account_fingerprint="0"*64, observed_at_ms=0)
+            except ContractError:
+                pass  # Preserve malformed metadata for incomplete normalization.
+            else:
+                if billing["paid_usage_usable"] is True or billing["is_using_overage"] is True:
+                    raise _Abort("paid_usage_observed")
+                if headroom["status"] == "rejected":
+                    raise _Abort("provider_rejected")
+        elif frame.get("type") == "result":
+            if state["result"]:
+                raise _Abort("probe_result_duplicate")
+            state["result"] = True
+            if frame.get("is_error") is not False or frame.get("subtype") != "success":
+                raise _Abort("probe_result_invalid")
+        elif frame.get("type") in {"assistant", "user"}:
+            message = frame.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, list) and any(isinstance(item, dict) and item.get("type") in {
+                    "tool_use", "tool_result", "server_tool_use"} for item in content):
+                raise _Abort("probe_tool_not_allowed")
+
+    try:
+        outcome = run_child(arguments, environment=environment, cwd=cwd,
+            deadline_seconds=deadline_seconds, on_frame=on_frame, _execution=execution)
+    except BaseException:
+        # run_child still owns actual cleanup. Retaining an observed restriction
+        # grants neither a successful probe nor confirmed execution release.
+        return state["infos"], "probe_process_failed"
+    reason = outcome["abort"]
+    if reason is None:
+        if outcome["returncode"] != 0:
+            reason = "probe_process_failed"
+        elif not state["result"]:
+            reason = "probe_result_missing"
+    return state["infos"], reason
+
+
 def claude_billing_probe(
     environ: Mapping[str, str],
     *,
@@ -1273,33 +1825,14 @@ def claude_billing_probe(
             "--",
             PROBE_PROMPT,
         ]
-        state: dict[str, Any] = {"init": False, "infos": []}
-
-        def on_frame(frame: dict[str, Any]) -> None:
-            if not state["init"]:
-                if frame.get("type") != "system" or frame.get("subtype") != "init":
-                    raise _Abort("missing_init_frame")
-                violation = _check_claude_init(frame, PROBE_MODEL)
-                if violation is not None or frame.get("tools") != []:
-                    raise _Abort(f"init_{violation or 'tool_not_allowed'}")
-                state["init"] = True
-            elif frame.get("type") == "rate_limit_event":
-                # Every event is kept; the ledger merges them conservatively.
-                # The event that reaches the cap is kept before the probe stops.
-                state["infos"].append(frame.get("rate_limit_info"))
-                if len(state["infos"]) >= MAX_PROBE_EVENTS:
-                    raise _Abort("too_many_rate_limit_events")
-
-        outcome = run_child(
+        return _run_claude_billing_probe(
             arguments,
             environment=client_environment(environ, workspace / "tmp"),
             cwd=empty,
             deadline_seconds=PROBE_DEADLINE_SECONDS,
-            on_frame=on_frame,
         )
     finally:
         remove_private_directory(workspace)
-    return state["infos"], outcome["abort"]
 
 
 def dispatch(
@@ -1315,6 +1848,7 @@ def dispatch(
     run_handle: str,
     result_schema: bytes,
     environ: Mapping[str, str] | None = None,
+    expected_export_commit: str | None = None,
 ) -> dict[str, Any]:
     """Run one bridged child for an opened, admitted host run.
 
@@ -1360,13 +1894,7 @@ def dispatch(
         else _codex_role_prompt(bundle_root, route)
     )
     # The tighter of the route's and the assignment's bounds applies.
-    route_bounds, assigned_bounds = route["bounds"], assignment["bounds"]
-    deadline_seconds = max(1, min(
-        int(route_bounds["timeout_seconds"]), int(assigned_bounds["timeout_seconds"])
-    ))
-    max_turns = max(1, min(
-        int(route_bounds["max_tool_calls"]), int(assigned_bounds["max_tool_calls"])
-    ))
+    deadline_seconds, max_turns = effective_dispatch_limits(route, assignment)
     if provider == "claude":
         if managed_configuration_present():
             raise BridgeRefused("managed_settings_present")
@@ -1378,7 +1906,10 @@ def dispatch(
     try:
         export = workspace / "export"
         control = workspace / "control"
-        file_count = export_committed_paths(project_root, paths, export)
+        export_info = export_committed_snapshot(
+            project_root, paths, export, expected_commit=expected_export_commit,
+        )
+        file_count = export_info["file_count"]
         worker_result_path = None
         if verification_input is not None:
             worker_result_path = place_worker_result(
@@ -1432,6 +1963,7 @@ def dispatch(
         ledger.bind_host_agent(
             project_id, run_handle=run_handle, agent_id=intent["bridge_run_id"]
         )
+        execution = ledger._new_owned_execution(project_id, run_handle, intent["bridge_run_id"])
         if provider == "claude":
             result, report = run_claude(
                 ledger=ledger, project_id=project_id, run_handle=run_handle,
@@ -1439,6 +1971,7 @@ def dispatch(
                 export=export, control=control, environ=environ,
                 deadline_seconds=deadline_seconds, max_turns=max_turns,
                 executable=executable, worker_result_path=worker_result_path,
+                _execution=execution,
             )
             if report["rate_limit_record_failed"]:
                 report.setdefault("observations_unavailable", []).append(
@@ -1457,6 +1990,7 @@ def dispatch(
                 schema=result_schema, environ=environ,
                 deadline_seconds=deadline_seconds, executable=executable,
                 worker_result_path=worker_result_path, role_prompt=role_prompt,
+                _execution=execution,
             )
             try:
                 ledger.observe_provider(
@@ -1473,62 +2007,106 @@ def dispatch(
         _record_usage(ledger, project_id, run_handle, provider, route["model"], report)
     finally:
         remove_private_directory(workspace)
-    reviewed = True
-    if result is not None and report.get("rerouted"):
-        # A reroute means the work was not done by the routed model: its verdict
-        # is unknown, and the result stays unreviewed.
-        reviewed = False
-        result = {
-            **result,
-            "semantic_verdict": "not-applicable",
-            "unverified_claims": [
-                *result.get("unverified_claims", []),
-                "the provider rerouted this run to another model; verdict unknown",
-            ],
-        }
-    if result is not None:
-        # The primary records exactly this result, so one it could not record
-        # (invalid, or too large to keep for its verifier) is fenced here.
-        problem = _unrecordable(result, assignment)
-        if problem is not None:
-            result = None
-            report["outcome"] = problem
-    if result is None:
-        state = "timed_out" if report["outcome"] == "timed_out" else "failed"
-        result = _fenced_result(assignment, state, report["outcome"])
-    fenced = report["outcome"] != "result"
-    terminal_state = result["execution_state"] if fenced else None
+    result, report, fenced, reviewed, terminal_state, result_validation_reason_code = prepare_dispatch_result(
+        assignment, result, report,
+    )
     # The ledger binds a keyed digest of this result and these flags to the run;
     # recording the run later requires the same result and terminal state.
     ledger.record_dispatch_result(
         project_id, run_handle=run_handle, bridge_run_id=intent["bridge_run_id"],
         result=result, fenced=fenced, reviewed=reviewed, terminal_state=terminal_state,
+        result_validation_reason_code=result_validation_reason_code,
+        client_diagnostics=report.get("client_diagnostics"),
     )
+    report["capacity_state"] = ledger._finish_owned_execution(execution)["state"]
     report.update(
+        effective_bounds=effective_dispatch_bounds(route, assignment),
         bridge_run_id=intent["bridge_run_id"],
         export_file_count=file_count,
+        export_commit=export_info["commit"],
+        export_manifest_digest=export_info["manifest_digest"],
         verification_input=worker_result_path,
         reviewed=reviewed,
-        # A fenced terminal state is an authoritative host fact for the
-        # observation; a child's own result carries its state in the result.
         terminal_state=terminal_state,
     )
     return {"result": result, "bridge_report": report}
 
 
-def _unrecordable(result: dict[str, Any], assignment: dict[str, Any]) -> str | None:
-    """Why the primary could not record this child result as returned, or None."""
+def prepare_dispatch_result(assignment, result, report):
+    """Pure existing validation/fencing, shared by legacy and fixed workers.
 
-    from .learning_contracts import canonical_json
-    from .learning_store import MAX_WORKER_RESULT_BYTES
+    This prepares bytes for a later owner decision; it grants no commit, native
+    caller, process-cleanup or account-release authority.
+    """
+    reviewed = True
+    result_validation_reason_code = None
+    if result is not None and report.get("rerouted"):
+        # A reroute means the work was not done by the routed model: its verdict
+        # is unknown, and the result stays unreviewed. Validate before annotating:
+        # annotation must not repair a malformed claim list or overwrite bad axes.
+        reviewed = False
+        problem, result_validation_reason_code = _unrecordable(result, assignment)
+        if problem is not None:
+            result = None
+            report["outcome"] = problem
+        else:
+            axes = result_axes(result, attempt=assignment.get("attempt", 1))
+            result = {
+                **result,
+                "status": legacy_result_status(axes["execution_state"], "not-applicable"),
+                "semantic_verdict": "not-applicable",
+                "unverified_claims": [
+                    *result["unverified_claims"],
+                    "the provider rerouted this run to another model; verdict unknown",
+                ],
+            }
+    if result is not None:
+        # The primary records exactly this result, so one it could not record
+        # (invalid, or too large to keep for its verifier) is fenced here.
+        problem, result_validation_reason_code = _unrecordable(result, assignment)
+        if problem is not None:
+            result = None
+            report["outcome"] = problem
+    if result_validation_reason_code is not None:
+        report["result_validation_reason_code"] = result_validation_reason_code
+    if result is None:
+        state = {"timed_out": "timed_out", "startup_silence": "timed_out",
+                 "work_silence": "timed_out", "cancelled": "cancelled"}.get(report["outcome"], "failed")
+        result = _fenced_result(assignment, state, report["outcome"])
+    fenced = report["outcome"] != "result"
+    terminal_state = result["execution_state"] if fenced else None
+    return result, report, fenced, reviewed, terminal_state, result_validation_reason_code
+
+
+def _unrecordable(
+    result: dict[str, Any], assignment: dict[str, Any]
+) -> tuple[str | None, str | None]:
+    """Return the fence outcome and a content-free validator reason, if any."""
+
+    from .learning_contracts import MAX_OUTCOME_EVIDENCE_DIGESTS, canonical_json
 
     try:
         validate_result(result, assignment=assignment)
-    except ContractError:
-        return "invalid_result"
-    if len(canonical_json(result)) > MAX_WORKER_RESULT_BYTES:
-        return "result_too_large"
-    return None
+    except ContractError as exc:
+        reason = "contract_validation_failed"
+        if isinstance(exc, ResultContractError):
+            code = getattr(exc, "reason_code", None)
+            if isinstance(code, str) and code in RESULT_VALIDATION_REASON_CODES:
+                reason = code
+        return "invalid_result", reason
+    axes = result_axes(result, attempt=assignment.get("attempt", 1))
+    # Raw child results cannot grant their own admission or attest a timeout.
+    # Match host commitment before binding an immutable child-result digest;
+    # real bridge timeouts get their authoritative fence later in dispatch.
+    if axes["admission_state"] != "unverified" or axes["execution_state"] == "timed_out":
+        return "invalid_result", "inconsistent_axes"
+    # Host outcomes keep one digest per criterion plus the assignment/result
+    # bindings. Fence before binding if that existing durable limit cannot fit.
+    if len(result["evidence"]) + 2 > MAX_OUTCOME_EVIDENCE_DIGESTS:
+        return "result_too_large", None
+    if len(canonical_json(result)) > MAX_RESULT_BODY_BYTES:
+        return "result_too_large", None
+    return None, None
 
 
 def _record_unavailable(
@@ -1540,8 +2118,6 @@ def _record_unavailable(
     reason_code: str,
     report: dict[str, Any],
 ) -> None:
-    from .learning_store import LedgerError
-
     try:
         ledger.record_observation_unavailable(
             project_id, run_handle=run_handle, provider=provider, phase=phase,
@@ -1563,8 +2139,6 @@ def _record_usage(
     report: dict[str, Any],
 ) -> None:
     """Persist the run's client-observed usage, or that it was unavailable."""
-
-    from .learning_store import LedgerError
 
     usage = report.get("usage")
     if not isinstance(usage, dict):
@@ -1643,7 +2217,7 @@ def _codex_role_prompt(bundle_root: Path, route: dict[str, Any]) -> str:
     ):
         raise BridgeRefused("route agent is invalid")
     try:
-        agent_bytes = _read_managed_bytes(bundle_root, relative)
+        agent_bytes = _read_managed_bytes(bundle_root, relative, max_bytes=1_048_576)
         agent = tomllib.loads(agent_bytes.decode("utf-8"))
     except (ContractError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise BridgeRefused("installed Codex agent is unavailable") from exc

@@ -309,6 +309,31 @@ class LegacyStateMoveTests(unittest.TestCase):
         # An explicitly named state root is not the default and is not checked.
         LearningState(self.legacy, create=False)
 
+    def test_old_records_of_an_earlier_version_move_only_once_the_upgrade_is_approved_too(self) -> None:
+        from tests.test_account_launch_claims import downgrade_ledger_to_six
+
+        state = self.old_state()
+        ledger = LearningLedger(state)
+        downgrade_ledger_to_six(ledger)
+        ledger.close()
+        before = (self.legacy / "learning.sqlite3").read_bytes()
+        # The owner approved the old folder as theirs; the records in it also need the
+        # upgrade. Both answers are wanted before either is acted on: nothing moves yet.
+        refused = self.run_cli("learning-register", "--project-root", str(self.project),
+                               "--move-legacy-state", self.approval(), expected=2)
+        self.assertEqual(("ledger_upgrade_required", 6, None, False), (
+            refused["reason_code"], refused["ledger_schema_version"], refused["state_moved"], refused["ready"]))
+        self.assertEqual(before, (self.legacy / "learning.sqlite3").read_bytes())
+        self.assertEqual([], self.moved_aside())
+        self.assert_nothing_staged()
+        # With both, the records are moved, copied as they were, and upgraded.
+        report = self.run_cli("learning-register", "--project-root", str(self.project),
+                              "--move-legacy-state", self.approval(), "--upgrade-ledger")
+        self.assertEqual((True, 6), (report["ready"], report["ledger_upgraded_from"]))
+        self.assertEqual(str(self.moved_aside()[0]), report["state_moved"])
+        self.assertEqual(self.target.resolve() / "ledger-before-upgrade", Path(report["ledger_copy"]).parent)
+        self.assertFalse(os.path.lexists(self.legacy))
+
     def test_registration_stops_the_collector_copies_and_sets_the_old_folder_aside(self) -> None:
         state = self.old_state()
         ensure_collector(state, CLI, project_root=self.project)

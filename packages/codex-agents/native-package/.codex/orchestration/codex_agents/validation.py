@@ -28,6 +28,8 @@ from .hook_config import (
 )
 from .learning_adapters import load_client_capabilities
 from .learning_contracts import (
+    PRODUCER_AUTHORITY,
+    PROVIDER_OBSERVATION_TYPES,
     CANARY_REPORT_FIELDS,
     CANDIDATE_FIELDS,
     CASE_FIELDS,
@@ -50,7 +52,6 @@ from .learning_engine import (
     load_operational_check_configuration,
     operational_sandbox_preflight,
 )
-from .learning_store import PRODUCER_AUTHORITY, PROVIDER_OBSERVATION_TYPES
 from .routing import PolicyError, load_effective_policy, load_policy, route_task
 
 EXPECTED_ROLE_MAP = {

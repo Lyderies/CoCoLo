@@ -103,9 +103,23 @@ says `dispatch: native`, stop and report it.
    result template and its rules) and binds its own child to the run, so there is
    nothing to bind. A refusal before launch (`launch denied: <reason_code>`) writes no
    dispatch; for a Claude route refused `billing_unverified` (billing over 30 minutes
-   old), run the billing probe and dispatch the same handle again. A `dispatch` that
-   fails after launch leaves no result to record: pause the orchestration, classify that
-   run abandoned (`host_confirmed_gone`), and resume. Put everything the
+   old), run the billing probe and dispatch the same handle again. If a nonzero
+   `dispatch` response contains `dispatch_completed: true`,
+   `post_operation_error.reason_code: collector_restart_failed`, and the complete
+   `result` and `bridge_report`, save those unchanged. Run `learning-status` for
+   the exact project root and require readiness before recording that exact result
+   and only its actual nonnull forced-terminal fact. Never redispatch or repair it.
+   A failure after launch without a usable report leaves no result to record:
+   pause the orchestration, confirm the child is gone, classify that run abandoned
+   (`host_confirmed_gone`), and resume. Never reconstruct a missing result.
+   While `dispatch` waits, a second protected command can run `cli.py
+   learning-run-status --orchestration-handle <orc> --run-handle <handle>` for the
+   child's health (`starting`, `active`, `quiet`, `stale`, then `stopping` or
+   `terminal`), or `cli.py learning-cancel-run` with the same arguments to stop it.
+   A cancellation reply is a request, not confirmed cleanup; `dispatch` then returns
+   the fenced `cancelled` result, which you record unchanged. The host also stops a
+   child that stays silent too long (`work_silence`); never retry or redispatch it.
+   Put everything the
    child needs in the assignment's objective, context and owned paths: it sees only
    the exported files, never this conversation.
 7. Track observable state: active, waiting on a named dependency, paused, blocked,
@@ -144,9 +158,11 @@ says `dispatch: native`, stop and report it.
    `<path>:read` permissions). The context must be exactly that one digest, or the
    open is refused, and operational QA accepts only a verifier opened with
    `verification_for_outcome` for that worker. The worker's result reaches the verifier
-   only from the ledger: the bridged verifier finds it read-only at
-   `.orchestration-input/worker-result.json` in its export. The ledger keeps that result
-   only while the orchestration is open (and at most seven days), so verify before
+   only from the project's own service: the bridged verifier finds it read-only at
+   `.orchestration-input/worker-result.json` in its export. That service keeps what it
+   needs to verify a recorded worker only while it runs (it stops after twelve idle
+   hours, or when the owner migrates or updates the project), and the result at most
+   seven days, so verify and run operational QA in the same working session, before
    closing. The router refuses an outcome that is unknown, from another provider or
    family, or from another orchestration. Open, dispatch, and finish the verifier
    through the same host lifecycle.

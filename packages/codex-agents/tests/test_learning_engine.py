@@ -2143,7 +2143,8 @@ class InstalledEvidenceTests(unittest.TestCase):
     def test_project_agent_snapshot_uses_discovered_path_not_internal_name(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
             bundle = Path(directory) / "bundle"
-            shutil.copytree(ORCHESTRATION_ROOT.parent.parent, bundle)
+            shutil.copytree(ORCHESTRATION_ROOT.parent.parent, bundle,
+                        ignore=shutil.ignore_patterns("__pycache__"))  # Written meanwhile by other tests.
             agent = bundle / ".codex/agents/technology-researcher.toml"
             agent.write_text(
                 'name = "technology_researcher"\n'
@@ -2216,7 +2217,8 @@ class InstalledEvidenceTests(unittest.TestCase):
     def test_claude_route_binds_claude_agent_definition(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
             bundle = Path(directory) / "bundle"
-            shutil.copytree(ORCHESTRATION_ROOT.parent.parent, bundle)
+            shutil.copytree(ORCHESTRATION_ROOT.parent.parent, bundle,
+                        ignore=shutil.ignore_patterns("__pycache__"))  # Written meanwhile by other tests.
             agent = bundle / ".claude/agents/claude_agents_researcher.md"
             agent.parent.mkdir(parents=True)
             # Installed Claude agents carry the packager's turn limit.
@@ -2369,7 +2371,8 @@ class InstalledEvidenceTests(unittest.TestCase):
     def test_package_digest_ignores_unmanaged_files_and_rejects_symlinks(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
             bundle = Path(directory) / "bundle"
-            shutil.copytree(ORCHESTRATION_ROOT.parent.parent, bundle)
+            shutil.copytree(ORCHESTRATION_ROOT.parent.parent, bundle,
+                        ignore=shutil.ignore_patterns("__pycache__"))  # Written meanwhile by other tests.
             task = {
                 "id": "package-fixture",
                 "objective": "Check installed package evidence",

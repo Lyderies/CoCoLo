@@ -63,7 +63,7 @@ def _payload(index: int) -> dict:
 
 
 def benchmark(iterations: int, hook_iterations: int, limits_path: Path | None) -> dict:
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as directory:
+    with tempfile.TemporaryDirectory(dir="/private/tmp" if sys.platform == "darwin" else "/tmp") as directory:
         base = Path(directory)
         state = LearningState(base / "state")
         project = base / "project"

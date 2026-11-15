@@ -7,6 +7,10 @@ import re
 from typing import Any
 
 
+class LedgerError(RuntimeError):
+    """Controlled owner/API failures without exposing persisted record content."""
+
+
 TASK_FAMILIES = {
     "inventory",
     "research",
@@ -91,6 +95,11 @@ RESULT_VALIDATION_REASON_CODES = {
     "unknown_fields",
     "inconsistent_axes",
 }
+# Durable bridge diagnostics also cover validators that raise an untyped error.
+# Never add exception text or caller-selected values to this vocabulary.
+RESULT_DIAGNOSTIC_REASON_CODES = frozenset(
+    RESULT_VALIDATION_REASON_CODES | {"contract_validation_failed"}
+)
 BOUND_FIELDS = {
     "max_attempts",
     "max_steers_per_attempt",
@@ -445,6 +454,55 @@ def model_selection_slice(data: Any) -> str:
     )
 
 
+def _execution_limits_shape(limits: Any) -> dict[str, int]:
+    if not isinstance(limits, dict) or not limits or set(limits) - {
+        "max_model_turns", "max_tool_calls",
+    }:
+        raise ContractError("execution_limits must name supported bound units",
+                            field="assignment.execution_limits")
+    for name, value in limits.items():
+        minimum = 0 if name == "max_tool_calls" else 1
+        if type(value) is not int or not minimum <= value <= 2**31 - 1:
+            raise ContractError("execution limit is outside its integer range",
+                                field=f"assignment.execution_limits.{name}")
+    return limits
+
+
+def validate_assignment_execution_limits(
+    assignment: dict[str, Any], route: dict[str, Any],
+) -> dict[str, int]:
+    """Check optional exact-unit requests without widening legacy ceilings.
+
+    The historical bounds.max_tool_calls projection remains a compatibility
+    ceiling, not a tool-execution guarantee. An explicit request is never silently
+    projected to a different unit or treated as an observed-event cutoff.
+    """
+
+    if "execution_limits" not in assignment:
+        return {}
+    limits = _execution_limits_shape(assignment["execution_limits"])
+    if "max_tool_calls" in limits:
+        raise ContractError("exact tool-call limits are unavailable for this route",
+                            field="assignment.execution_limits.max_tool_calls")
+    if not isinstance(route, dict):
+        raise ContractError("route must be an object", field="route")
+    if route.get("provider") != "claude" or route.get("dispatch") != "bridge":
+        raise ContractError("model-turn limits are unavailable for this route",
+                            field="assignment.execution_limits.max_model_turns")
+    for label, item in (("route", route), ("assignment", assignment)):
+        bounds = item.get("bounds")
+        if (not isinstance(bounds, dict) or type(bounds.get("max_tool_calls")) is not int
+                or bounds["max_tool_calls"] < 0):
+            raise ContractError("legacy ceiling must be a nonnegative integer",
+                                field=f"{label}.bounds.max_tool_calls")
+    ceiling = max(1, min(route["bounds"]["max_tool_calls"],
+                         assignment["bounds"]["max_tool_calls"]))
+    if limits["max_model_turns"] > ceiling:
+        raise ContractError("model-turn limit exceeds the legacy dispatch ceiling",
+                            field="assignment.execution_limits.max_model_turns")
+    return limits
+
+
 def validate_assignment_shape(data: Any) -> dict[str, Any]:
     """Validate the closed assignment contract without granting any authority."""
 
@@ -470,11 +528,13 @@ def validate_assignment_shape(data: Any) -> dict[str, Any]:
         "prohibited_actions",
     }
     _required(data, required, "assignment")
-    unknown = sorted(data.keys() - required - {"retry_of_assignment_id"})
+    unknown = sorted(data.keys() - required - {"retry_of_assignment_id", "execution_limits"})
     if unknown:
         raise ContractError(
             f"assignment has unknown fields: {', '.join(unknown)}", field="assignment"
         )
+    if "execution_limits" in data:
+        _execution_limits_shape(data["execution_limits"])
     for field in (
         "assignment_id",
         "task_id",
@@ -485,7 +545,7 @@ def validate_assignment_shape(data: Any) -> dict[str, Any]:
         "expected_output",
     ):
         _nonempty_string(data[field], field, f"assignment.{field}")
-    if not isinstance(data["attempt"], int) or data["attempt"] < 1:
+    if type(data["attempt"]) is not int or data["attempt"] < 1:
         raise ContractError("attempt must be a positive integer", field="assignment.attempt")
     retry_of = data.get("retry_of_assignment_id")
     if data["attempt"] == 1 and retry_of is not None:
@@ -551,7 +611,7 @@ def validate_assignment_shape(data: Any) -> dict[str, Any]:
         )
     for field in BOUND_FIELDS:
         minimum = 0 if field in {"max_steers_per_attempt", "max_tool_calls"} else 1
-        if not isinstance(bounds[field], int) or bounds[field] < minimum:
+        if type(bounds[field]) is not int or bounds[field] < minimum:
             raise ContractError(
                 f"bounds.{field} must be an integer of at least {minimum}",
                 field=f"assignment.bounds.{field}",
@@ -645,6 +705,12 @@ def validate_assignment(
     route_bounds = route["bounds"]
     if not isinstance(route_bounds, dict) or set(route_bounds) != BOUND_FIELDS:
         raise ContractError("route bounds are invalid", field="route.bounds")
+    for field in BOUND_FIELDS:
+        minimum = 0 if field in {"max_steers_per_attempt", "max_tool_calls"} else 1
+        if type(route_bounds[field]) is not int or route_bounds[field] < minimum:
+            raise ContractError("route bound must be an integer in its declared range",
+                                field=f"route.bounds.{field}")
+    validate_assignment_execution_limits(data, route)
     for field in BOUND_FIELDS:
         if bounds[field] > route_bounds[field]:
             raise ContractError(
@@ -832,11 +898,11 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
     execution_state = axes["execution_state"]
     semantic_verdict = axes["semantic_verdict"]
     admission_state = axes["admission_state"]
-    if execution_state not in EXECUTION_STATES:
+    if not isinstance(execution_state, str) or execution_state not in EXECUTION_STATES:
         raise ResultContractError("invalid_status", "execution_state is unsupported")
-    if semantic_verdict not in SEMANTIC_VERDICTS:
+    if not isinstance(semantic_verdict, str) or semantic_verdict not in SEMANTIC_VERDICTS:
         raise ResultContractError("invalid_status", "semantic_verdict is unsupported")
-    if admission_state not in ADMISSION_STATES:
+    if not isinstance(admission_state, str) or admission_state not in ADMISSION_STATES:
         raise ResultContractError("invalid_status", "admission_state is unsupported")
     if data["status"] != legacy_result_status(execution_state, semantic_verdict):
         raise ResultContractError(
@@ -999,12 +1065,18 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
                 f"usage has unknown fields: {', '.join(usage_unknown)}",
             )
         for field, value in usage.items():
-            if value is not None and (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
-                or value < 0
-            ):
+            if value is None:
+                continue
+            try:
+                valid_number = (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(value)
+                    and value >= 0
+                )
+            except OverflowError:
+                valid_number = False
+            if not valid_number:
                 raise ResultContractError(
                     "invalid_usage",
                     f"usage.{field} must be null or a non-negative number",
@@ -1060,3 +1132,41 @@ def validate_evaluation_record(data: Any) -> dict[str, Any]:
     ):
         raise ContractError("cost must be null or a non-negative number")
     return data
+
+
+def effective_dispatch_limits(route: dict[str, Any], assignment: dict[str, Any]) -> tuple[int, int]:
+    """Existing hard-timeout/model-turn projection, shared with preflight.
+
+    Inputs must have passed assignment/route validation. The historical
+    max_tool_calls field is not an exact host-enforced tool-call budget.
+    """
+
+    route_bounds, assigned_bounds = route["bounds"], assignment["bounds"]
+    explicit = validate_assignment_execution_limits(assignment, route)
+    return (
+        max(1, min(int(route_bounds["timeout_seconds"]), int(assigned_bounds["timeout_seconds"]))),
+        explicit.get("max_model_turns", max(1, min(
+            int(route_bounds["max_tool_calls"]), int(assigned_bounds["max_tool_calls"]),
+        ))),
+    )
+
+
+def effective_dispatch_bounds(route: dict[str, Any], assignment: dict[str, Any]) -> dict[str, Any]:
+    """The same requested/effective unit report for preflight and dispatch."""
+
+    deadline, turns = effective_dispatch_limits(route, assignment)
+    claude = route.get("provider") == "claude" and route.get("dispatch") == "bridge"
+    explicit = assignment.get("execution_limits", {})
+    return {
+        "execution_limit_contract": "explicit" if explicit else "legacy",
+        "requested_execution_limits": dict(explicit),
+        "hard_timeout_seconds": deadline,
+        "nominal_max_tool_calls": min(route["bounds"]["max_tool_calls"],
+                                      assignment["bounds"]["max_tool_calls"]),
+        "exact_tool_call_limit": None,
+        "model_turn_limit": turns if claude else None,
+        "model_turn_enforcement": "client --max-turns" if claude else "unavailable",
+        "model_turn_limit_source": (
+            "execution_limits.max_model_turns" if explicit else "legacy max_tool_calls projection"
+        ) if claude else "unavailable",
+    }

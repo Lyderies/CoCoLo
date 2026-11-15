@@ -1,5 +1,5 @@
 #!/bin/bash
-# Interactive setup wizard for the Codex-Claude agent orchestration.
+# Interactive setup wizard for COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 #
 #   ./setup.sh [PROJECT_PATH]
 #
@@ -412,6 +412,17 @@ def safe(value):
 op = sys.argv[1]
 if op == "get":
     print(fmt(walk(load(sys.argv[2]), sys.argv[3])))
+elif op == "reason":
+    # A refused command's reason code, for the screen, only when it is a plain identifier. The
+    # message only with "fixed": the orchestrator CLI's messages are fixed strings, while other
+    # programs' messages can hold account details and are never shown.
+    data = load(sys.argv[2])
+    if isinstance(data, dict):
+        code = next((data[k] for k in ("reason_code", "account_reason_code", "code")
+                     if isinstance(data.get(k), str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", data[k])), "")
+        error = data.get("error") if isinstance(data.get("error"), str) and sys.argv[3:] == ["fixed"] else ""
+        error = re.sub(r"[^A-Za-z0-9 _.,:;'()/-]", "", error)[:160].strip()
+        print(" ".join(part for part in (error, "(%s)" % code if code else "") if part))
 elif op == "sessions":
     # codex-session-scan's warnings, one per line: date, what it holds, folder and its plain
     # message, separated by \x1f. Control characters are dropped, so a folder or project name
@@ -760,7 +771,7 @@ usage() {
   cat <<'EOF'
 Usage: ./setup.sh [PROJECT_PATH]
 
-Interactive wizard that installs the Codex-Claude agent orchestration into a Git project.
+Interactive wizard that installs COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator) into a Git project.
 Run it from a terminal in the root of this repository. Keys: Up/Down move, Enter selects,
 Space toggles, q quits. Set NO_COLOR=1 for plain output.
 EOF
@@ -947,7 +958,7 @@ repeat_char() { # repeat_char CHAR COUNT
 
 draw_header() {
   local i name line plain width filled bar sep="  "
-  printf '%s%s Agent orchestration setup %s' "$C_BOLD" "$C_MAGENTA" "$C_RESET"
+  printf '%s%s COCOLO setup %s' "$C_BOLD" "$C_MAGENTA" "$C_RESET"
   if [ "$STEP" -gt 0 ]; then
     printf '%s Step %d of %d%s' "$C_DIM" "$STEP" "$STEP_TOTAL" "$C_RESET"
   fi
@@ -1066,11 +1077,16 @@ menu() { # menu DEFAULT_INDEX ITEM...
       fi
       i=$((i+1))
     done
-    printf '\n  %sUp/Down move   Enter select   q quit%s\n' "$C_DIM" "$C_RESET"
+    if [ "${IN_DETAILS:-0}" -eq 1 ]; then
+      printf '\n  %sEnter go back   q quit%s\n' "$C_DIM" "$C_RESET"
+    else
+      printf '\n  %sUp/Down move   Enter select   ? what ran   q quit%s\n' "$C_DIM" "$C_RESET"
+    fi
     read_key
     case "$KEY" in
       UP|k) sel=$(( (sel + n - 1) % n ));;
       DOWN|j) sel=$(( (sel + 1) % n ));;
+      '?') if [ "${IN_DETAILS:-0}" -eq 0 ]; then IN_DETAILS=1; show_details; IN_DETAILS=0; hide_cursor; fi;;
       ENTER) MENU_IDX=$sel; show_cursor; return 0;;
       q|Q) confirm_quit;;
       EOF) show_cursor; echo "Input closed; stopping." >&2; exit 1;;
@@ -1121,7 +1137,11 @@ ANSWER_RAW=""
 ask_text() { # ask_text PROMPT DEFAULT -> ANSWER (expanded), ANSWER_RAW (as typed)
   render
   show_cursor
-  printf '  %s%s%s [%s]\n  > ' "$C_BOLD" "$1" "$C_RESET" "$2"
+  if [ -n "$2" ]; then
+    printf '  %s%s%s [%s]\n  > ' "$C_BOLD" "$1" "$C_RESET" "$2"
+  else
+    printf '  %s%s%s (type or paste the full path)\n  > ' "$C_BOLD" "$1" "$C_RESET"
+  fi
   IFS= read -r -e ANSWER || { echo "Input closed; stopping." >&2; exit 1; }
   [ -z "$ANSWER" ] && ANSWER=$2
   case "$ANSWER" in
@@ -1186,7 +1206,39 @@ run_cmd() {
   ACTIVE_PID=""
   printf '\r\033[K'
   show_cursor
+  log_step "$label"
   return "$LAST_RC"
+}
+
+# log_step LABEL : one line in this step's record, which ? shows: what ran, how it ended and,
+# for a refusal, the command's own fixed reason. Never raw output.
+STEP_LOG=""
+LAST_FIXED=""
+REASON_FIXED=""
+log_step() {
+  local why=""
+  if [ "$RUN_QUIET" -ne 1 ] && [ "$LAST_RC" -ne 0 ]; then why=$(pj reason "$LAST_OUT" $LAST_FIXED 2>/dev/null); fi
+  REASON_FIXED=$LAST_FIXED
+  why=${why//[[:cntrl:]]/}
+  STEP_LOG="${STEP_LOG}$(date +%H:%M:%S)  ${1}: $([ "$LAST_RC" -eq 0 ] && echo "done" || echo "stopped, exit $LAST_RC")${why:+ - $why}
+"
+}
+
+# show_details : the ? screen. What ran in this step, in order, and where to look next.
+show_details() {
+  local saved_body=$BODY saved_list=$LIST
+  BODY="What ran in this step, in order:"
+  LIST=""
+  if [ -n "$STEP_LOG" ]; then
+    while IFS= read -r line; do [ -n "$line" ] && list_add info "$line"; done <<<"$STEP_LOG"
+  else
+    list_add info "Nothing has run in this step yet."
+  fi
+  list_sub ""
+  list_sub "A reason in brackets is the orchestrator's own code; docs/troubleshooting.md explains each one."
+  list_sub "Command output is kept private: it can hold account details, so it is not shown here."
+  menu 0 "Back"
+  BODY=$saved_body; LIST=$saved_list
 }
 
 # client_check NAME : NAME's sign-in status (codex or claude) through attest.py's
@@ -1226,7 +1278,7 @@ client_problem() {
 # Only step names, command labels, exit codes and fixed hints ever reach the screen or the
 # saved summary. Raw command output is never shown, logged or exported.
 FAIL_SUMMARY=""
-FAIL_HINT_DEFAULT="Run the same command yourself to see details."
+FAIL_HINT_DEFAULT="Press ? to see what ran in this step and why it stopped."
 record_failure() { # record_failure LABEL HINT
   FAILED_ANY=1
   FAIL_SUMMARY="${FAIL_SUMMARY}step ${STEP} (${STEP_NAMES[$((STEP-1))]}): $1 | exit code $LAST_RC | $2
@@ -1234,9 +1286,12 @@ record_failure() { # record_failure LABEL HINT
 }
 
 failure_detail() { # failure_detail LABEL [HINT]
-  local hint=${2:-$FAIL_HINT_DEFAULT}
+  local hint=${2:-$FAIL_HINT_DEFAULT} why=""
+  [ -n "$LAST_OUT" ] && [ "$LAST_OUT" != /dev/null ] && why=$(pj reason "$LAST_OUT" $REASON_FIXED 2>/dev/null)
+  why=${why//[[:cntrl:]]/}
   record_failure "$1" "$hint"
   list_add fail "$1 (exit $LAST_RC)"
+  [ -n "$why" ] && list_sub "Reason: $why"
   list_sub "$hint"
 }
 
@@ -1313,7 +1368,7 @@ save_summary() {
   fi
   if [ -e "$dest" ] || [ -L "$dest" ]; then
     list_add fail "$dest already exists; nothing written"
-  elif ( umask 077; set -C; printf 'Agent orchestration setup: what failed\n%s' "$FAIL_SUMMARY" >"$dest" ) 2>/dev/null; then
+  elif ( umask 077; set -C; printf 'COCOLO setup: what failed\n%s' "$FAIL_SUMMARY" >"$dest" ) 2>/dev/null; then
     list_add ok "Saved a summary of what failed (step names, labels, exit codes and fixed hints only)"
   else
     list_add fail "Could not write the summary"
@@ -1348,7 +1403,7 @@ retry_menu() {
 # ---------------------------------------------------------------------------
 # Step bookkeeping
 # ---------------------------------------------------------------------------
-begin_step() { STEP=$1; screen_reset; }
+begin_step() { [ "$STEP" = "$1" ] || STEP_LOG=""; STEP=$1; screen_reset; }
 mark_step() { STAT[$1]=$2; NOTE[$1]=$3; }
 
 # ---------------------------------------------------------------------------
@@ -1359,7 +1414,9 @@ step_checks() {
   while :; do
     begin_step 1
     hard=0; soft=0
-    body "Welcome. This wizard sets up delegation between Codex and Claude children in one of your Git projects. It uses only your existing subscription logins and never any metered API billing. First, a quick look at this machine."
+    body "Welcome to COCOLO
+Claude Orchestrator, Codex Orchestrator, Local Orchestrator"
+    body "This wizard sets up delegation between Codex and Claude children in one of your Git projects. It uses only your existing subscription logins and never any metered API billing. First, a quick look at this machine."
     body "Keep this setup folder outside every folder you open in Codex, so no Codex session can change the code that runs with your authority."
     os=$(uname -s)
     case "$os" in
@@ -1503,6 +1560,10 @@ basic_problem() {
     echo "That is inside a Git project but not its top. Use the project root instead: $top"
     return 1
   fi
+  if [ "$dir" = "$(resolve_dir "$ROOT_DIR")" ]; then
+    echo "That is this orchestrator's own folder, where setup runs from, not a project to set up. Type the folder of the project you want to use it in."
+    return 1
+  fi
   if inside_dir "$PY" "$dir"; then
     PY_PROBLEM=project
     echo "$(python_problem_text) Put a system Python, such as Homebrew's or python.org's, first on PATH."
@@ -1564,13 +1625,74 @@ prepare_project_inputs() {
   fi
 }
 
+# The projects set up on this machine, newest first, so a later run offers them in a list. The
+# list is kept in the installer's private folder in your records (attest.py projects-file).
+PROJECTS_FILE=""
+projects_file() { PROJECTS_FILE=$(owner_tool projects-file 2>/dev/null) || PROJECTS_FILE=""; }
+
+# remember_project DIR : put DIR first in the list (at most ten, one per line).
+remember_project() {
+  local dir=$1 line kept=0 rest=""
+  projects_file
+  [ -n "$PROJECTS_FILE" ] || return 0
+  case "$dir" in /*) ;; *) return 0;; esac
+  case "$dir" in *[[:cntrl:]]*) return 0;; esac
+  if [ -f "$PROJECTS_FILE" ] && [ ! -L "$PROJECTS_FILE" ]; then
+    while IFS= read -r line; do
+      [ "$line" = "$dir" ] && continue
+      [ "$kept" -lt 9 ] || break
+      rest="${rest}${line}
+"
+      kept=$((kept + 1))
+    done <"$PROJECTS_FILE"
+  fi
+  ( umask 077; new=$(mktemp "$PROJECTS_FILE.XXXXXX") || exit 1
+    printf '%s\n%s' "$dir" "$rest" >"$new" && mv -f "$new" "$PROJECTS_FILE" || rm -f "$new" ) 2>/dev/null
+  return 0
+}
+
+# pick_project DEFAULT : offer the remembered projects that still hold an install, and the
+# current folder. Sets ANSWER and returns 0 for a pick; returns 1 to ask for a path instead.
+pick_project() {
+  local default=$1 line items=() paths=()
+  projects_file
+  if [ -n "$PROJECTS_FILE" ] && [ -f "$PROJECTS_FILE" ] && [ ! -L "$PROJECTS_FILE" ]; then
+    while IFS= read -r line; do
+      case "$line" in /*) ;; *) continue;; esac
+      case "$line" in *[[:cntrl:]]*) continue;; esac
+      [ -f "$line/.codex/orchestration/install-manifest.json" ] || continue
+      paths+=("$line"); items+=("$line")
+    done <"$PROJECTS_FILE"
+  fi
+  [ "${#paths[@]}" -gt 0 ] || return 1
+  case " ${paths[*]} " in
+    *" $default "*) ;;
+    *) if [ -n "$default" ] && [ "$default" != "$ROOT_DIR" ] && [ -d "$default/.git" ]; then
+         paths+=("$default"); items+=("$default (this folder)")
+       fi;;
+  esac
+  items+=("Another folder..." "Quit")
+  menu 0 "${items[@]}"
+  if [ "$MENU_IDX" -lt "${#paths[@]}" ]; then
+    ANSWER=${paths[$MENU_IDX]}; ANSWER_RAW=$ANSWER
+    return 0
+  fi
+  [ "$MENU_IDX" -eq "${#paths[@]}" ] && return 1
+  echo "Stopped."; exit 0
+}
+
 step_project() {
   local default dir reason out rc guess
-  default=${1:-$PWD}
+  default=${1-$PWD}
   while :; do
     begin_step 2
     body "Choose the project to set up. It must be the top folder of a Git working tree. Nothing is changed in this step; it only previews."
-    ask_text "Project path" "$default"
+    if ! pick_project "$default"; then
+      screen_reset; begin_step 2
+      body "Choose the project to set up. It must be the top folder of a Git working tree. Nothing is changed in this step; it only previews."
+      ask_text "Project path" "$default"
+      [ -n "$ANSWER" ] || continue  # Nothing typed and nothing to suggest: ask again.
+    fi
     dir=$(resolve_dir "$ANSWER")
     screen_reset; begin_step 2
     if [ -z "$dir" ]; then
@@ -1609,6 +1731,7 @@ step_project() {
     INSTALL_EXISTS=0
     if [ -f "$dir/.codex/orchestration/install-manifest.json" ]; then
       INSTALL_EXISTS=1
+      remember_project "$dir"
       list_add ok "Project: $dir"
       owner_key_notice
       body "An existing install was found in this project. Choose what to do."
@@ -1777,7 +1900,7 @@ step_providers() {
 # ---------------------------------------------------------------------------
 # Step 4: install
 # ---------------------------------------------------------------------------
-COMMIT_MSG_1="Install agent orchestration packages"
+COMMIT_MSG_1="Install COCOLO"
 COMMIT_MSG_2="Adds the managed Codex and Claude agent packages and the provider routing configuration."
 PLAN_TEXT=""
 COMMIT_PATHS=()
@@ -2099,6 +2222,7 @@ step_install() {
     FAILED_ANY=1
   else
     mark_step 4 ok "$base; $commit_note"
+    remember_project "$PROJECT"
   fi
   menu 0 "Continue"
   return 0
@@ -2130,17 +2254,20 @@ runtime_refusal() {
 # run_owner_cli LABEL ARGS... : this repository's own orchestrator CLI, isolated in the trusted
 # Python; ARGS name the project with --project-root. The project's own copy never runs.
 run_owner_cli() {
-  local label=$1
+  local label=$1 rc
   shift
-  run_cmd "$label" "$PY" "${PYF[@]}" "$CLONE_CLI" "$@"
+  LAST_FIXED=fixed  # This CLI's messages are fixed strings, so they may be shown.
+  run_cmd "$label" "$PY" "${PYF[@]}" "$CLONE_CLI" "$@"; rc=$?
+  LAST_FIXED=""
+  return "$rc"
 }
 
 # ---------------------------------------------------------------------------
 # Step 5: learning collector
 # ---------------------------------------------------------------------------
 version_hint() {
-  case "$(cat "$LAST_OUT" "$LAST_ERR" 2>/dev/null)" in
-    *runtime*|*newer*|*authorized*|*conflict*)
+  case "$(pj reason "$LAST_OUT" $REASON_FIXED 2>/dev/null)" in
+    *"authorized runtime"*|*newer*|*other_version*|*runtime_mismatch*|*collector_runtime*)
       list_sub "The shared collector is authorised for a different version, so other projects on the old version need updating (run this setup there).";;
   esac
 }
@@ -2186,8 +2313,27 @@ review_legacy_state() {
   return 0
 }
 
+# approve_ledger_upgrade : the orchestrator records were written by an earlier version.
+# learning-register has refused without stopping or changing anything; say what the upgrade
+# does and ask before running it again with the approval it needs. Returns 1 when declined.
+approve_ledger_upgrade() {
+  list_add warn "Your orchestrator records were written by an earlier version of the orchestrator."
+  list_sub "Setup can upgrade them now. It first keeps a checked copy of everything as it is, in the same protected folder."
+  list_sub "Every project on this machine shares these records. After the upgrade the other projects stop working with the orchestrator until you run this setup for each of them."
+  list_sub "Do this while no child agent is running in any project."
+  body "Upgrade the records now? [Y/n]"
+  menu 0 "Yes, upgrade them" "No, leave them as they are"
+  screen_reset; begin_step 5
+  if [ "$MENU_IDX" -ne 0 ]; then
+    list_add skip "The records were not upgraded, so the collector was not registered. Nothing was changed."
+    list_sub "This project cannot use the orchestrator until you upgrade them (run setup again) or install the earlier version here again."
+    return 1
+  fi
+  return 0
+}
+
 step_collector() {
-  local cli ready moved
+  local cli ready moved rc copy
   begin_step 5
   cli="$PROJECT/.codex/orchestration/cli.py"
   if [ ! -f "$cli" ]; then
@@ -2215,17 +2361,56 @@ step_collector() {
   render
   run_owner_cli "Registering the collector" learning-register --project-root "$PROJECT" \
     ${LEGACY_ARGS[@]+"${LEGACY_ARGS[@]}"}
-  if [ "$?" -ne 0 ]; then
+  rc=$?
+  moved=$(pj get "$LAST_OUT" state_moved)
+  if [ "$rc" -ne 0 ] && [ "$(pj get "$LAST_OUT" reason_code)" = ledger_upgrade_required ]; then
+    if ! approve_ledger_upgrade; then
+      mark_step 5 skip "records not upgraded"
+      pause; return 0
+    fi
+    render
+    run_owner_cli "Upgrading your records and registering the collector" learning-register \
+      --project-root "$PROJECT" --upgrade-ledger ${LEGACY_ARGS[@]+"${LEGACY_ARGS[@]}"}
+    rc=$?
+    # Old macOS records are moved by this second run: the first refused before moving them.
+    copy=$(pj get "$LAST_OUT" state_moved)
+    if [ "${copy:0:1}" = / ]; then moved=$copy; fi
+  fi
+  if [ "$rc" -ne 0 ]; then
     failure_detail "Collector registration failed"
     version_hint
+    # After an approved upgrade the failure says how far it got; one fixed sentence each.
+    case "$(pj get "$LAST_OUT" reason_code)" in
+      ledger_upgrade_failed)
+        list_sub "Your records were not upgraded: they are as the earlier version left them.";;
+      registration_incomplete_after_upgrade)
+        list_sub "Your records were upgraded, but registering this project did not finish. Run setup again and repeat this step.";;
+      ledger_upgrade_unknown)
+        list_sub "The upgrade stopped and the records could not be read afterwards. Delete nothing.";;
+      registration_incomplete_after_move)
+        list_sub "Registering this project did not finish. Run setup again and repeat this step.";;
+      collector_not_started_after_registration)
+        list_sub "This project is registered, but the collector did not start again. Run setup again and repeat this step.";;
+    esac
+    copy=$(pj get "$LAST_OUT" ledger_copy); copy=${copy//[[:cntrl:]]/}
+    if [ "${copy:0:1}" = / ]; then
+      list_sub "A copy of the records as they were before the upgrade is at $copy."
+    fi
+    copy=$(pj get "$LAST_OUT" state_moved); copy=${copy//[[:cntrl:]]/}
+    if [ "${copy:0:1}" = / ]; then
+      list_sub "Your records were moved to the protected folder first and stay there; the old copy is at $copy. The earlier version's collector was not started again."
+    fi
     mark_step 5 fail "registration failed"
     pause; return 1
   fi
   list_add ok "Collector registered"
+  copy=$(pj get "$LAST_OUT" ledger_copy); copy=${copy//[[:cntrl:]]/}
+  if [ "${copy:0:1}" = / ]; then
+    list_add info "Upgraded your orchestrator records. A copy of them as they were is at $copy; delete it once you're happy."
+  fi
   # learning-register reports "state_moved": the old copy's path when it has just copied the
   # learning state from its old macOS folder (once), else null. One fixed sentence says so and
   # names that path, with control characters removed, so it cannot drive the terminal.
-  moved=$(pj get "$LAST_OUT" state_moved)
   moved=${moved//[[:cntrl:]]/}
   if [ "${moved:0:1}" = / ]; then
     list_add info "Moved your orchestrator records once to a protected folder, ~/.local/state/codex-agents. The old copy at $moved can be deleted once you're happy."
@@ -2808,6 +2993,8 @@ reset_attempt() {
 
 main() {
   local start=${1:-$PWD} n
+  # Started from this repository itself (the usual way): there is no project to suggest yet.
+  [ "$(resolve_dir "$start")" = "$(resolve_dir "$ROOT_DIR")" ] && start=""
   setup_colors
   term_size
   step_checks

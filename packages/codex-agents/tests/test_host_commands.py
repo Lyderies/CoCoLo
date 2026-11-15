@@ -84,6 +84,7 @@ OWNER_COMMANDS = {
     "learning-calibrate-grader",
     "learning-record-feedback",
     "learning-expire",
+    "learning-migrate-project",
     "install-codex-rule",
     "remove-codex-rule",
     "codex-session-scan",
@@ -497,6 +498,36 @@ def _quoted(value: str) -> str:
 
 class ProtectedCopyTests(unittest.TestCase):
     """The rule runs an owner-only copy of the installed runtime, bound to its project."""
+
+    def test_runtime_integrity_check_does_not_load_persistence_owners(self) -> None:
+        program = '''
+import importlib.abc
+from pathlib import Path
+import sys
+
+class RefusePersistence(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in {"sqlite3", "codex_agents.learning_store"}:
+            raise AssertionError("runtime validation loaded persistence: " + fullname)
+
+sys.meta_path.insert(0, RefusePersistence())
+from codex_agents import host_commands
+host_commands._validate_runtime(Path(sys.argv[2]))
+assert "sqlite3" not in sys.modules
+assert "codex_agents.learning_store" not in sys.modules
+'''
+        completed = subprocess.run(
+            [sys.executable, "-I", "-B", "-c",
+             "import sys; sys.path.insert(0, sys.argv[1]); exec(sys.argv[3])",
+             str(ORCHESTRATION_ROOT), str(self.project / CLI_RELATIVE), program],
+            text=True, capture_output=True, timeout=30,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
+
+    def test_owner_reexports_the_same_runtime_integrity_validator(self) -> None:
+        from codex_agents import collector_runtime, learning_store
+
+        self.assertIs(collector_runtime.validate_collector_runtime, learning_store.validate_collector_runtime)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
@@ -1166,9 +1197,11 @@ class SandboxHintTests(unittest.TestCase):
     def blocked(self, *args, **kwargs):
         raise PermissionError("blocked by the sandbox")
 
-    def test_a_blocked_lifecycle_command_gets_the_hint(self) -> None:
+    def test_a_blocked_collector_report_gets_the_hint(self) -> None:
+        # Lifecycle mutations use project APIs now. Exercise a command that
+        # still contacts the collector, without restoring a client DB fallback.
         with mock.patch.object(cli.CollectorMaintenance, "acquire", self.blocked):
-            report = self.run_main("learning-open-orchestration")
+            report = self.run_main("learning-orchestration-report", "--orchestration-id", "orc-fixture")
         self.assertEqual("filesystem operation failed", report["error"])
         self.assertFalse(report["ready"])
         self.assertIn("host-command", report["hint"])
@@ -1180,7 +1213,7 @@ class SandboxHintTests(unittest.TestCase):
         with mock.patch.object(cli.CollectorMaintenance, "acquire", self.blocked):
             self.assertEqual(
                 {"ready": False, "error": "filesystem operation failed"},
-                self.run_main("learning-open-orchestration", env=unmarked),
+                self.run_main("learning-orchestration-report", "--orchestration-id", "orc-fixture", env=unmarked),
             )
             self.assertEqual(
                 {"ready": False, "error": "filesystem operation failed"},
@@ -1188,25 +1221,39 @@ class SandboxHintTests(unittest.TestCase):
             )
 
     def test_learning_status_hint_follows_reachability(self) -> None:
-        with mock.patch.object(cli, "ensure_collector", self.blocked):
+        from codex_agents import client_runtime
+        from codex_agents.collector_contracts import CollectorTransportError
+        with mock.patch.object(client_runtime.CollectorClient, "health", self.blocked):
             report = self.run_main("learning-status")
-        self.assertEqual("filesystem operation failed", report["error"])
+        self.assertEqual("Collector status is unavailable.", report["error"])
         self.assertIn("hint", report)
 
         def unhealthy(*args, **kwargs):
-            raise CollectorError("collector did not become healthy")
+            raise CollectorTransportError("collector is unavailable", code="transport_unavailable")
 
-        with mock.patch.object(cli, "ensure_collector", unhealthy):
+        with mock.patch.object(client_runtime.CollectorClient, "health", unhealthy):
             report = self.run_main("learning-status")
-        self.assertEqual("collector or project registration is unavailable", report["error"])
+        self.assertEqual("Collector status is unavailable.", report["error"])
         self.assertIn("hint", report)
 
         def rejected(*args, **kwargs):
             raise CollectorError("collector rejected request: x", code="project_unregistered")
 
-        with mock.patch.object(cli, "ensure_collector", rejected):
+        with mock.patch.object(client_runtime.CollectorClient, "health", rejected):
             report = self.run_main("learning-status")
         self.assertNotIn("hint", report)
+
+    def test_status_rejection_cannot_claim_transport_failure_to_trigger_sandbox_hint(self) -> None:
+        from codex_agents import client_runtime
+
+        def rejected(*args, **kwargs):
+            raise CollectorError('collector rejected request: transport_unavailable', code='transport_unavailable')
+
+        with mock.patch.object(client_runtime.CollectorClient, 'health', rejected):
+            report = self.run_main('learning-status')
+        self.assertFalse(report['ready'])
+        self.assertNotIn('hint', report)
+        self.assertEqual('status_collector_unavailable', report['reason_code'])
 
 
 class OwnRootTests(unittest.TestCase):
@@ -1274,10 +1321,97 @@ class OwnRootTests(unittest.TestCase):
         self.assertTrue(report["error"].startswith(f"{option} is refused"), (arguments, report))
         self.assertEqual({"ready", "error"}, set(report))
 
+    def start_orchestration_fixture(self, state, project_id):
+        """Real project owner/socket; independently supplied synthetic enrollment."""
+        import socket
+        from codex_agents.client_runtime import runtime_hint_path
+        from codex_agents.collector_paths import CollectorPaths
+        from codex_agents.learning_contracts import canonical_json, keyed_digest
+        from codex_agents.orchestration_api import OrchestrationLimits, OrchestrationScope, orchestration_request_digest
+        from codex_agents.orchestration_service import OrchestrationAuthorization, OrchestrationService
+        from codex_agents.project_history import ProjectHistory
+        from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
+
+        scope = OrchestrationScope(project_id, 'own-root-primary', COLLECTOR_RUNTIME_DIGEST, 'own-root-supervisor', 1)
+        directory = self.base / 'project-history'
+        directory.mkdir(mode=0o700)
+        endpoint = state.root / 'project-api.sock'
+        ready, stopped = threading.Event(), threading.Event()
+        failures, requests = [], []
+        token, key = object(), state.digest_key()
+
+        def serve():
+            store = service = None
+            try:
+                store = ProjectHistory(directory, project_id, result_key=key,
+                    result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000),
+                    orchestration_limits=OrchestrationLimits(8, 8))
+
+                def authorize(request, context):
+                    if context is not token:
+                        return None
+                    return OrchestrationAuthorization(scope, orchestration_request_digest(request),
+                                                       'codex-host-v1', frozenset({'orchestration.open'}))
+
+                service = OrchestrationService(project_id, COLLECTOR_RUNTIME_DIGEST, lambda: store, authorizer=authorize)
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                    listener.bind(str(endpoint))
+                    endpoint.chmod(0o600)
+                    listener.listen(4)
+                    listener.settimeout(.05)
+                    ready.set()
+                    while not stopped.is_set():
+                        try:
+                            connection, _ = listener.accept()
+                        except TimeoutError:
+                            continue
+                        with connection:
+                            connection.settimeout(2)
+                            raw = b''
+                            while not raw.endswith(b'\n'):
+                                chunk = connection.recv(16_385 - len(raw))
+                                if not chunk or len(raw) + len(chunk) > 16_384:
+                                    raise AssertionError('invalid disposable project frame')
+                                raw += chunk
+                            requests.append(json.loads(raw))
+                            connection.sendall(service.handle(raw[:-1], token) + b'\n')
+            except BaseException as error:
+                failures.append(error)
+                ready.set()
+            finally:
+                if service is not None:
+                    service.close()
+                if store is not None:
+                    store.close()
+
+        thread = threading.Thread(target=serve)
+        thread.start()
+
+        def close():
+            stopped.set()
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual([], failures)
+
+        self.addCleanup(close)
+        self.assertTrue(ready.wait(5))
+        self.assertEqual([], failures)
+        paths = CollectorPaths(state.root)
+        hint = runtime_hint_path(paths, self.project)
+        hint.parent.mkdir(mode=0o700)
+        hint.write_bytes(canonical_json({'schema_version': 1,
+            'project_root_digest': keyed_digest(paths.digest_key(), str(self.project.resolve())),
+            'scope': scope.as_data(), 'dispatch_endpoint': str(endpoint), 'result_endpoint': str(endpoint)}))
+        hint.chmod(0o600)
+        self.env.update(CODEX_THREAD_ID='own-root-primary', CODEX_SESSION_ID='',
+                        CLAUDECODE='', CLAUDE_CODE_SESSION_ID='')
+        return requests
+
     def test_other_roots_state_and_policy_are_refused_before_any_work(self) -> None:
         own, other, state = str(self.project), str(self.other), str(self.other_state)
         context = ("--assignment", "a.json", "--task", "t.json", "--parent-grant", "g.json")
         lifecycle = {
+            "dispatch-preflight": context,
             "dispatch": (*context, "--route", "r.json", "--run-handle", "h"),
             "provider-observe": ("--provider", "claude", "--billing-probe"),
             "learning-open-host-run": (
@@ -1308,6 +1442,8 @@ class OwnRootTests(unittest.TestCase):
         self.assert_refused("--root", "route", "--task", "t.json", "--root", other)
         self.assert_refused("--policy", "route", "--task", "t.json", "--policy", "p.json")
         self.assert_refused("--policy", "inventory", "--policy", "p.json")
+        self.assert_refused("--policy", "dispatch-preflight", *context,
+                            "--project-root", own, "--policy", "p.json")
         for command in ("validate-assignment", "result-preflight", "validate-result"):
             with self.subTest(command=command):
                 result = ("--result", "r.json") if command == "validate-result" else ()
@@ -1330,8 +1466,10 @@ class OwnRootTests(unittest.TestCase):
                 ORCHESTRATION_ROOT / "config" / "learning-clients.json"
             ),
         )
-        ledger.register_project(self.project, now_ms=1)
+        project_id = ledger.register_project(self.project, now_ms=1)
         ledger.close()
+        requests = self.start_orchestration_fixture(state, project_id)
+        handles = []
         link = self.base / "link"
         link.symlink_to(self.project)
         for arguments, cwd in (
@@ -1343,6 +1481,9 @@ class OwnRootTests(unittest.TestCase):
                 code, report = self.run_cli("learning-open-orchestration", *arguments, cwd=cwd)
                 self.assertEqual(0, code, report)
                 self.assertTrue(report["ready"])
+                handles.append(report['orchestration_handle'])
+        self.assertEqual(3, len(set(handles)))
+        self.assertEqual(['orchestration.open'] * 3, [request['operation'] for request in requests])
         for arguments in ((), ("--root", str(self.project))):
             code, report = self.run_cli("validate", *arguments)
             self.assertIn("package_ready", report)

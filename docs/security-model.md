@@ -1,7 +1,7 @@
 # Security model
 
-This page explains what dogfood toolchain v1 (release 0.2.2, Codex package 0.8.12) protects, how,
-and what it does not protect against. It is for users deciding whether to run it and for
+This page explains what COCOLO release 0.3.0 (in progress; Codex package 0.8.13) protects, how, and
+what it does not protect against. It is the exact version of the README's "Safety, in short". It is for users deciding whether to run it and for
 contributors changing it. To report a vulnerability, follow [SECURITY.md](../SECURITY.md).
 
 ## Threat model
@@ -41,22 +41,42 @@ project is the top of the session's folder, so a session opened above it could p
 session that can write your home folder or `~/.codex` could change the Codex rule, its protected copy
 and tools installed under your home folder, which the rule then runs.
 
-## What v1 enforces
+## What COCOLO enforces
 
 - **Subscription only.** Admission fails closed on an API key in the environment, an unreviewed client
-  version, an identity reading over 30 minutes old, a non-subscription plan, a missing attestation,
-  unknown or paid-usage billing, exhausted headroom (90% of a window) or a run cap, and re-checks at
-  launch.
-- **Owner-signed attestation.** Per account in each project, you sign that extra usage and credit purchases are off, with
-  your one passphrase-protected owner key. `attest.py` signs only the bytes it rebuilt from your answers,
-  keys without a passphrase are refused, and signing runs without `ssh-agent`, so no program, an AI
-  agent included, can use your key to sign in your name. See
+  version, an identity or billing reading over 30 minutes old, a non-subscription plan, a missing
+  attestation, unknown or paid-usage billing, exhausted headroom (90% of a window) or a run cap, and
+  re-checks at launch.
+- **Reviewed client versions only.** The installed routing policy admits Claude Code from 2.1.0 up to,
+  not including, 2.2.0, and Codex CLI from 0.164.0 up to, not including, 0.170.0. Codex 0.164.0 was
+  checked live; for 0.169.0 the launch surface was compared without a model call, and the live
+  containment check on 0.169.0 is part of this release's real-install trial. The release is not to be
+  published with that range unless the check passes; otherwise the upper bound goes back to 0.164.1.
+  Widening the range needs the same comparison and a live containment check first.
+- **Owner-signed attestation.** Per account in each project, you sign that extra usage and credit
+  purchases are off, with your one passphrase-protected owner key. `attest.py` signs only the bytes it
+  rebuilt from your answers, keys without a passphrase are refused, and signing runs without `ssh-agent`,
+  so no program, an AI agent included, can use your key to sign in your name. The attestation is your
+  own statement about your billing settings: admission also checks what the clients report, but relies
+  on extra usage and Codex credit purchases being off, so re-attest whenever they change. See
   [what the owner key does not stop](#what-the-owner-key-does-not-stop).
+- **Signatures are checked in a confined helper.** The account service checks each owner signature with
+  `ssh-keygen` in a separate helper that cannot start another process, open a network connection or
+  write outside its private working folder. On macOS that is a `sandbox-exec` policy. On Linux the helper
+  confines itself before it reads any input: a seccomp filter refuses new processes and sockets (required;
+  only x86_64 and arm64 are supported, and the helper refuses to start otherwise), and Landlock refuses
+  writes elsewhere on Linux 5.13 or later. An older kernel without Landlock keeps the process and network
+  limits only.
 - **Read-only children in a private export.** A bridged child sees only the committed bytes of its granted
   paths, under a hard deadline. Claude children get `Read`, `Glob` and `Grep` only. Codex children run
   `codex exec` read-only and ephemeral, without user config, execpolicy rules, approvals or connectors.
-  Every Codex child is bridged, from either primary; only a Claude primary spawns children natively,
-  and only Claude children.
+  Every child is bridged, from either primary; none runs inside the primary's session. Each is watched
+  by its project's service and stopped on silence, at its deadline, on a prohibited tool or on a paid or
+  rejected rate-limit event ([run health](how-it-works.md#run-health)).
+- **Capacity limits.** At most two children run at once on the machine and per provider account, and
+  no request can raise those installed limits ([capacity](how-it-works.md#capacity)).
+- **Your terminal cannot start work.** Commands from your own terminal, outside a Codex or Claude Code
+  session, may read status and observe providers, but cannot start work or spend usage.
 - **Results bound in the ledger.** `dispatch` fences an invalid result and binds a digest of the one it
   returns. QA accepts only the verifier opened for that outcome and runs only the project's hashed
   commands.
@@ -70,8 +90,7 @@ and tools installed under your home folder, which the rule then runs.
 The passphrase protects your key; it cannot stop a program swapping in a different key. The ledger records
 the enrolled key, and a signer file that does not match is refused: nothing is signed, and every billing
 statement stops counting, because each signature is checked against the current key. That applies when a run
-opens and when a bridged child launches; a native Claude child opened before the change can still start. A
-replaced key cannot be made current again.
+opens and when a child launches. A replaced key cannot be made current again.
 
 - "Replace a lost owner key" cannot ask for the old key, since that is what was lost. Nothing proves
   cryptographically who replaced it, as at first setup. The new key's date shows in the wizard's menu and in
@@ -90,7 +109,7 @@ replaced key cannot be made current again.
 ## The protected copy and the Codex rule
 
 Codex's sandbox blocks the learning collector, so a Codex primary needs the optional Codex commands
-rule, which you allow in step 8 of the [setup wizard](setup-wizard.md). The rule lets only the 23
+rule, which you allow in step 8 of the [setup wizard](setup-wizard.md). The rule lets only the 27
 everyday orchestrator commands run outside Codex's sandbox.
 
 - The rule does not run the project's own `cli.py`, which a session opened above the project could
@@ -150,7 +169,11 @@ client or basic tool from an earlier `PATH` entry.
   moves them once, only with your approval, after showing when that folder was created and which owner
   key it names. Until then every orchestrator command refuses.
 - A result that needs verification is kept only while its orchestration is open, and at most seven days
-  after its outcome was recorded. Afterwards only the outcome's digests and closed metadata stay.
+  after its outcome was recorded. Afterwards only the outcome's digests and closed metadata stay. In
+  practice the project's service holds what a verifier needs only while it runs (up to twelve idle
+  hours).
+- Each project's own history is kept in its store under the records folder
+  (`projects/<project id>`), owned by the project's service.
 
 How the setup tools keep your authority away from the agents (trusted Python, Git plumbing only, the
 owner key only from your own `~/.ssh`) is described in the
@@ -158,23 +181,43 @@ owner key only from your own `~/.ssh`) is described in the
 
 ## What it does not protect against
 
-These are accepted limits of v1. A report that shows one is worse than documented is welcome.
+These are accepted limits of this release. A report that shows one is worse than documented is welcome.
 
-- **Codex reads.** Codex's read-only sandbox can read outside the export; enforced read roots come in
-  G3. A native Claude child has the primary's permissions, so its reads are advisory.
+- **Codex reads.** Codex's read-only sandbox can read outside the export; enforced read roots come
+  with the later milestone that adds children working in their own worktrees (G3).
 - **A session that already writes `~/.codex`** (opened on `/`, or given it with `--add-dir`) can forge its
   own session record, the rule and the protected copy. The guard stops the ordinary mistake, not that. A
   session opened on a trusted installation folder itself could change the tools there too.
 - **Parent-folder sessions.** A session opened above the project is refused by the guard, but can still
   change the project's `.codex` (its hooks and `config.toml`), `.codex/orchestration` and `.git/config`
   directly; the orchestrator refuses that session's commands, but cannot undo what it wrote.
-- **A primary that ignores its route.** A Codex primary can still spawn a native Codex child that shares
-  its rule. A Claude primary's native children spend its own allowance whatever admission says: for them
-  admission is accounting and policy, not a spend boundary.
+- **A primary that ignores its route.** Routed children are always separate processes, but a primary
+  can still bypass COCOLO: a Codex primary can spawn its own native Codex subagent, which shares its
+  rule, and a Claude primary can spawn its own Claude Code subagents. Those are outside admission and
+  spend the primary's own allowance.
 - **Other spellings and detached processes.** The installer's Claude Code deny rules are a policy layer,
-  so a command spelled another way (such as `bash -c`) is not matched. A process that double-forks
-  between snapshots can outlive cleanup; it stays inside the child's read-only, network-disabled
-  sandbox.
+  so a command spelled another way (such as `bash -c`) is not matched. The process tracker polls, so a
+  descendant that detaches (starts its own session) while its parent exits between two snapshots is
+  never seen as part of the child's tree. Every child therefore carries a fresh, unguessable marker in
+  its environment (`COCOLO_RUN_TAG`), which its descendants inherit, and a child's place is not given
+  back while any of your processes started since the child still carries it, or is still in the
+  child's own session. A process whose environment cannot be read at all (a setuid `login`, say) is
+  judged by the nearest readable parent it inherited its environment from; one detached under
+  launchd/init with no such parent holds the place. What is still not found: a process that clears or rewrites its own
+  environment, or, on macOS, runs one of Apple's own system tools (such as `sh` or `sleep`, whose
+  environment macOS hides from other processes), and that also starts a new session and detaches
+  between snapshots. Such a process can outlive cleanup; it stays inside the child's read-only,
+  network-disabled sandbox. When a process that could have carried the marker ends before a check
+  reads it, the check lists your processes again, so one that forks and exits mid-check cannot hide
+  what it started; processes ending under an ordinary parent (a busy build, say) do not hold it up. On Linux two more cases apply,
+  because a process can make its own environment unreadable (`PR_SET_DUMPABLE`): such a process
+  started during a run and detached (an `ssh-agent`, say) holds that run's place until it exits, and
+  a marked process that does this and is adopted by a parent other than systemd (a container's init,
+  say) is not found. macOS is not affected by these two.
+- **Settling a lost service's run.** The account accepts a project service's settlement of a lost run
+  (`account.settle_lost_run`) on that project's own evidence, its result lease and storage evidence;
+  the account cannot check the kernel itself. Each project service runs as you, so this is within the
+  same-user trust boundary. A stronger, generic reconcile is planned for 0.4.0.
 - **Prompt content and a modified package.** Repository text, and your own `AGENTS.md` and Codex skills,
   reach a child's prompt as instructions (never as authority). The protected copy is checked against
   this package, not against a signature: an owner who installs a modified package gets that package

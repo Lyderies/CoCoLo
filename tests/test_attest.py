@@ -341,7 +341,7 @@ class AttestHarness(unittest.TestCase):
         in the owner's scratch container, and the copy is gone now."""
 
         used = Path(call[call.index("-f") + 1])
-        self.assertEqual(used.name, "owner-key")
+        self.assertEqual(used.name, key.name)  # Named like the owner's file, so the prompt is recognisable.
         self.assertTrue(used.parent.name.startswith("key-"), used)
         self.assertEqual(Path(os.path.realpath(used.parent.parent)),
                          Path(os.path.realpath(self.scratch_base)) / attest.SCRATCH_CONTAINER)
@@ -511,7 +511,7 @@ class AttestTests(AttestHarness):
         self.assertEqual(self.run_main(["REPLACE", "y", "n", "y"], replace=True), 0)
         Path(f"{old}.pub").unlink()
         self.assertEqual(self.run_main(["y", "n", "y"]), 0)
-        self.assertIn(f"Using the owner key file at {self.home / '.ssh/codex-agents-owner-2'}", self.output)
+        self.assertIn("Using the owner key file at ~/.ssh/codex-agents-owner-2", self.output)
 
     def test_a_replaced_key_is_found_again_at_its_numbered_location(self) -> None:
         self.set_providers(codex=True)
@@ -519,7 +519,7 @@ class AttestTests(AttestHarness):
         self.assertEqual(self.run_main(["REPLACE", "y", "n", "y"], replace=True), 0)
         self.world.key_files.clear()
         self.assertEqual(self.run_main(["y", "n", "y"]), 0)
-        self.assertIn(f"Using the owner key file at {self.home / '.ssh/codex-agents-owner-2'}", self.output)
+        self.assertIn("Using the owner key file at ~/.ssh/codex-agents-owner-2", self.output)
 
     def test_new_key_with_empty_passphrase_is_refused(self) -> None:
         self.set_providers(codex=True)
@@ -575,7 +575,7 @@ class AttestTests(AttestHarness):
         key = self.configure_key()
         self.set_providers(codex=True)
         self.assertEqual(self.run_main(["y", "y", "y"]), 0)
-        self.assertIn(f"Using the owner key file at {key}", self.output)
+        self.assertIn(f"Using the owner key file at ~/{key.relative_to(self.home)}", self.output)
         self.assertFalse(any("private key file" in prompt for prompt in self.prompts))
         self.assertEqual(len(self.prompts), 3)  # only the billing questions
 
@@ -597,11 +597,72 @@ class AttestTests(AttestHarness):
         self.assertNotIn("passphrase:", self.prompts[0].lower())
         self.assert_used_a_removed_copy_of(other, next(c for c in self.world.calls if "-Y" in c))
 
+    def test_a_key_under_another_name_is_found_by_its_public_file(self) -> None:
+        # The owner made a key with a name of their own; its .pub file says it is the one on record.
+        (self.state / "owner-allowed-signers").write_text("codex-agents-owner ssh-ed25519 AAAAkey\n")
+        own = self.ssh_dir() / "codex-agents-trial"
+        write_key(own)
+        (self.ssh_dir() / "codex-agents-trial.pub").write_text(f"ssh-ed25519 AAAAkey {COMMENT}\n")
+        self.set_providers(codex=True)
+        self.assertEqual(self.run_main(["y", "y", "y"]), 0)
+        self.assertIn("Using the owner key file at ~/.ssh/codex-agents-trial", self.output)
+        self.assertFalse(any("Press Enter to use" in prompt for prompt in self.prompts))
+        self.assert_used_a_removed_copy_of(own, next(c for c in self.world.calls if "-Y" in c))
+
+    def test_planted_public_files_and_names_cannot_hang_steer_or_drive_the_terminal(self) -> None:
+        (self.state / "owner-allowed-signers").write_text("codex-agents-owner ssh-ed25519 AAAAkey\n")
+        ssh = self.ssh_dir()
+        write_key(ssh / "a-planted")
+        os.mkfifo(ssh / "a-planted.pub")  # would block a plain read for ever
+        write_key(ssh / "b-planted")
+        os.symlink("/dev/zero", ssh / "b-planted.pub")  # would never end
+        odd = ssh / "own\x1b[2J-key"
+        write_key(odd)
+        Path(str(odd) + ".pub").write_text(f"ssh-ed25519 AAAAkey {COMMENT}\n")
+        self.set_providers(codex=True)
+        self.assertEqual(self.run_main(["y", "y", "y"]), 0)
+        self.assertNotIn("\x1b[2J", self.output)
+        self.assertIn("Using the owner key file at ~/.ssh/own?[2J-key", self.output)
+        # A key at a standard place, even without its .pub file, comes before any other name.
+        self.world.key_files.clear()
+        standard = ssh / "codex-agents-owner"
+        write_key(standard)
+        self.assertEqual(self.run_main(["y", "y", "y"]), 0)
+        self.assertIn("Using the owner key file at ~/.ssh/codex-agents-owner\n", self.output)
+
+    def test_a_mistyped_location_is_asked_again(self) -> None:
+        (self.state / "owner-allowed-signers").write_text("codex-agents-owner ssh-ed25519 AAAAkey\n")
+        other = self.ssh_dir() / "elsewhere-key"
+        write_key(other)
+        self.set_providers(codex=True)
+        self.assertEqual(self.run_main(["~/.ssh/elsewhere-kye", "~/.ssh/elsewhere-key", "y", "y", "y"]), 0)
+        self.assertIn("What you typed was hidden, so check it and try again.", self.output)
+        self.assertNotIn("elsewhere-kye", self.output)
+        self.assert_used_a_removed_copy_of(other, next(c for c in self.world.calls if "-Y" in c))
+
+    def test_a_refusal_names_its_reason_and_what_to_do(self) -> None:
+        refused = subprocess.CompletedProcess([], 2, json.dumps({
+            "ready": False, "error": "provider observation unavailable",
+            "reason_code": "account_invalid_response"}), "")
+        with mock.patch.object(attest, "cli_command", return_value=["cli"]), \
+                mock.patch.object(attest.subprocess, "run", return_value=refused):
+            with self.assertRaises(attest.AttestError) as stopped:
+                attest.run_cli(self.target, ["provider-observe"], None)
+        self.assertIn("(reason: account_invalid_response)", str(stopped.exception))
+        self.assertIn("Run ./setup.sh again", str(stopped.exception))
+        # A reason that is not a plain identifier is never shown.
+        odd = subprocess.CompletedProcess([], 2, json.dumps({"ready": False, "reason_code": "x\x1b[2J"}), "")
+        with mock.patch.object(attest, "cli_command", return_value=["cli"]), \
+                mock.patch.object(attest.subprocess, "run", return_value=odd):
+            with self.assertRaises(attest.AttestError) as stopped:
+                attest.run_cli(self.target, ["provider-observe"], None)
+        self.assertNotIn("\x1b", str(stopped.exception))
+
     def test_a_non_path_entry_is_refused_and_never_echoed(self) -> None:
         (self.state / "owner-allowed-signers").write_text("codex-agents-owner ssh-ed25519 AAAAkey\n")
         self.set_providers(codex=True)
         secret = "correct horse battery staple"
-        self.assertEqual(self.run_main([secret]), 1)
+        self.assertEqual(self.run_main([secret] * 3), 1)  # Asked again twice, then stopped.
         self.assertNotIn(secret, self.output)
         self.assertNotIn("horse", self.output)
         self.assertIn("That is not a file location.", self.output)
@@ -654,7 +715,7 @@ class AttestTests(AttestHarness):
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(attest.ensure_owner_key(self.target, self.state, None), key)
         derive = [(path, data) for path, data in self.world.key_files
-                  if path.endswith("/owner-key")]
+                  if Path(path).parent.name.startswith("key-")]
         self.assertGreaterEqual(len(derive), 3)
         check_and_derive = [entry for entry in derive if entry[1] is not None][-2:]
         self.assertEqual({data for _path, data in check_and_derive}, {original})
@@ -669,7 +730,7 @@ class AttestTests(AttestHarness):
                 contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(attest.AttestError, "does not match"):
                 attest.ensure_owner_key(self.target, self.state, None)
-        self.assertTrue(any(path.endswith("/owner-key") for path, _ in self.world.key_files))
+        self.assertTrue(any(Path(path).parent.name.startswith("key-") for path, _ in self.world.key_files))
         self.assertEqual(self.key_copies_left(), [])
         self.world.derived = f"ssh-ed25519 AAAAkey {COMMENT}\n"
         self.world.change_rc = 1

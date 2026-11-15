@@ -96,15 +96,15 @@ def _record(args: argparse.Namespace, raw: bytes, checkout_root: Path | None) ->
     # Appended, never first: with -I the script's folder is not on the path, so a module
     # planted beside this file (a `socket.py`) can never shadow the standard library.
     sys.path.append(str(ORCHESTRATION_ROOT))
+    from codex_agents.collector_client import CollectorClient
+    from codex_agents.collector_contracts import CollectorError
     from codex_agents.contracts import ContractError
     from codex_agents.host_paths import HostPathError
     from codex_agents.learning_adapters import normalize_hook
     from codex_agents.learning_contracts import parse_bounded_json
-    from codex_agents.learning_store import (
-        CollectorClient,
-        CollectorError,
-        LearningState,
-        StateError,
+    from codex_agents.collector_paths import CollectorPaths, StateError
+    from codex_agents.collector_runtime import (
+        HOOK_START_SECONDS,
         client_health_clear,
         client_health_increment,
         ensure_collector,
@@ -117,7 +117,7 @@ def _record(args: argparse.Namespace, raw: bytes, checkout_root: Path | None) ->
         payload = parse_bounded_json(raw)
         if not isinstance(payload, dict):
             raise ContractError("hook payload must be an object")
-        state = LearningState(args.state_root, create=False)
+        state = CollectorPaths(args.state_root)
         session = payload.get("session_id")
         cwd = payload.get("cwd")
         if not isinstance(cwd, str):
@@ -140,6 +140,7 @@ def _record(args: argparse.Namespace, raw: bytes, checkout_root: Path | None) ->
             state,
             ORCHESTRATION_ROOT / "cli.py",
             project_root=project_root,
+            timeout=HOOK_START_SECONDS,
         )
         client = CollectorClient(state.socket)
         try:

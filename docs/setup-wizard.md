@@ -1,14 +1,17 @@
 # Setup wizard reference
 
-`./setup.sh [/path/to/project]`, run from the root of this repository, is a terminal wizard: arrow keys
-move, Enter selects, Space toggles and `q` quits. It needs an interactive terminal and refuses to run
-piped or scripted, because the billing attestation is a human step. Full command output goes to a
-private log, shown only if something fails. `NO_COLOR=1` gives plain output. Paths accept a leading `~`,
+`./setup.sh [/path/to/project]`, run from the root of this repository, is COCOLO's terminal wizard:
+arrow keys move, Enter selects, Space toggles, `?` shows what ran in the current step and `q` quits. It needs an
+interactive terminal and refuses to run piped or scripted, because the billing attestation is a human
+step. A failed step says why in the orchestrator's own words and reason code (see
+[troubleshooting](troubleshooting.md)); `?` lists each command the step ran, how it ended and its
+reason. Command output itself stays in a private log and is never shown, because it can hold account
+details. `NO_COLOR=1` gives plain output. Paths accept a leading `~`,
 `$HOME` or surrounding quotes. The commands each step runs are listed in [manual setup](manual-setup.md).
 
 ## Steps
 
-1. **Checks.** The OS (macOS or Linux; on Linux, verify reports not ready because operational checks need
+1. **Checks.** The welcome screen names COCOLO and what the wizard does, then checks the OS (macOS or Linux; on Linux, verify reports not ready because operational checks need
    macOS), bash, a trusted `python3` 3.11 or later, a trusted Git, both sign-ins, and that no
    `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set. Each client is found and run only as the orchestrator
    runs it (from `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin` or `~/.local/bin`, its file
@@ -16,7 +19,10 @@ private log, shown only if something fails. `NO_COLOR=1` gives plain output. Pat
    records from the last 14 days and warns, with Continue or Quit, about a session that could write this
    repository (the orchestrator clone), your orchestrator records or your home folder, or that was opened
    on a folder containing a set-up project. The warnings end with the rule for where to open Codex.
-2. **Project.** The top folder of a Git working tree. Nothing changes; it previews the install. A project
+2. **Project.** The top folder of a Git working tree. Nothing changes; it previews the install. Once a
+   project is set up, later runs offer a list of the projects set up on this machine (newest first, those
+   still installed), the folder you started in, and "Another folder..." for typing a path; the list is
+   kept in the installer folder of your orchestrator records. A project
    that has never been set up needs a prepared `operational-checks.json` (see the
    [recipe](manual-setup.md#operational-checks)); the wizard asks for its path and works from a private
    snapshot of it. An existing install offers: update the install and walk through every step, verify the
@@ -53,6 +59,14 @@ private log, shown only if something fails. `NO_COLOR=1` gives plain output. Pat
    - After the move it says once where the old copy went, `codex-agents.moved-<time>` beside the old
      folder, and that you can delete it once you're happy. Until you do, it stays readable, digest key
      included.
+   - **Records from an earlier version.** If the records were written by an earlier version of the
+     orchestrator (release 0.2.x), nothing is stopped or changed until the step has asked "Upgrade the
+     records now?". "Yes" first keeps a checked copy of the whole ledger in `ledger-before-upgrade`
+     inside the records folder, and of each project's records among its backups for thirty days, then
+     upgrades them and registers; the step says where the copy is. The records are shared, so the other
+     projects on the machine stop working with the orchestrator until you run setup for each of them.
+     Do it while no child is running in any project. "No" changes nothing and skips registration: this
+     project cannot use the orchestrator until you upgrade, or install the earlier version here again.
 6. **Billing.** Hands the terminal to `scripts/attest.py`; the wizard never touches its screens.
 7. **Profile.** Only when Codex sessions may orchestrate Claude children: creates
    `~/.codex/orchestrator.config.toml` with network on, for sessions started with `codex -p orchestrator`.
@@ -144,7 +158,7 @@ or a folder above it (a nested project's tree, `.git` and `.claude` included).
 - **Claude primaries cannot run owner commands through Claude Code's tools.** The installer merges deny
   rules into the project's `.claude/settings.json` and records which ones it added in your orchestrator
   records folder, outside the project, so nothing in the project can claim a rule for it: two `Bash` rules
-  for each owner-only CLI subcommand (every command that is not one of the 23 primary-host commands), in the
+  for each owner-only CLI subcommand (every command that is not one of the 27 primary-host commands), in the
   forms `Bash(*.codex/orchestration/cli.py <command>)` and `Bash(*.codex/orchestration/cli.py <command> *)`,
   plus `Edit` rules for `.codex/**`, `.agents/**`, `.claude/settings*.json` and `.git/**`. Existing
   settings are kept; `verify` reports missing rules and `remove` takes out only the entries that record

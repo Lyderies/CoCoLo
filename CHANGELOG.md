@@ -1,5 +1,214 @@
 # Changelog
 
+What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
+
+## 0.3.0: COCOLO, watched and stoppable children (Codex package 0.8.13)
+
+- From the first CI run on Linux: the account service started only on macOS, because its owner-signature
+  helper ran only under macOS's `sandbox-exec`, so no child could run on Linux. On Linux the helper now
+  confines itself before reading any input, with a seccomp filter (no new processes or sockets) and,
+  on Linux 5.13 or later, Landlock (no writes outside its private folder). Also: a command that has
+  just started the collector waits up to 20 seconds for it (it was 8, too short on a busy machine),
+  and an account request made while the account services are still starting waits for them, bounded,
+  instead of failing. Tests that assumed macOS (its `/private/tmp`, how it closes a refused
+  connection, its process table) now also run on Linux, and the provider-observation CLI test runs
+  the account services in its own process, so it observes the fake clients and never the developer's
+  own installed one.
+
+- From the final security review: a child's process that detached from its tree while its parent
+  exited between two checks could keep running after its place was given back. Every child now
+  carries a fresh, private run marker in its environment, which everything it starts inherits, and its
+  place is held while any of your processes still carries it or is still in the child's session. A
+  process that clears its environment, or on macOS runs one of Apple's own tools such as `sleep` (macOS
+  hides their environment), and also starts a session of its own is still not found; it stays inside
+  the child's read-only sandbox. A process that could have carried the marker and ends mid-check makes
+  the check list your processes again, so it cannot hide what it started (a busy build does not slow
+  this down); a new Terminal tab (whose `login`
+  cannot be read) never holds a place. Also: a run whose
+  claim fence the account refused now asks again, waiting longer each time, instead of holding one of
+  the project's four preparations until the service restarted; a preparation whose cleanup failed is
+  cleaned up again later instead of being lost; and a finished run's monitor place that could not be
+  freed is asked for less and less often instead of on every step. The documentation now says that the
+  account settles a lost run on the project service's own evidence, within your own user's trust.
+- From the real install's containment check on Codex 0.169: a Codex child was stopped with
+  `codex_tool_not_allowed:mcp_tool_call`. It had called Codex's own built-in `list_mcp_resources`
+  tool (reported as an MCP call from server "codex"). Codex 0.164 offers the same tool, and both
+  builds also offered every child the sub-agent tools (`spawn_agent` and five more), because the
+  model catalog turns them on whatever the feature switches say. Children are now launched with a
+  setting that removes the sub-agent tools (checked on 0.164.0 and 0.169.0 without a model call), and
+  are told not to call the MCP resource tools, which no setting removes; a call to one is still stopped.
+- The product is now called COCOLO: Claude Orchestrator, Codex Orchestrator, Local Orchestrator. The
+  README, the user documentation and the setup wizard's header and welcome screen use the name. Folder,
+  package, skill, command, file and field names are unchanged, so nothing you type or see in command
+  output changes. The README is rewritten as a short, friendly introduction; the technical detail it
+  held (architecture, records, admitted client versions, known limits) is in the documentation pages,
+  which were reviewed against this release: how-it-works describes the project services, run health,
+  capacity limits and runs that close by themselves; the Codex commands rule is documented with its 27
+  everyday commands (it said 23); statements about native Claude children are removed or corrected;
+  troubleshooting explains `claim_busy`; and maintainers' design notes are listed separately, for
+  developers.
+- From the second real install: a finished Codex child never gave its slot back (Claude children did),
+  so after two Codex runs no child could start anywhere on the machine (`claim_busy`). Real Codex runs
+  short shell commands that it reaps itself; the process tracker could not tell such a vanished
+  process from one that escaped, so it never confirmed the child's tree clean. A process whose id the
+  kernel positively no longer knows now counts as stopped; an unreadable one, or one still running
+  outside the tree, still does not. Checked on the real install: the slot is released two seconds
+  after the child ends.
+- From the first real install's checks (the tests had used short time limits and one child per
+  project): a child with the route's standard time limit (6 hours) was refused at claim
+  (`claim_storage_expired`), because its result space was reserved for 30 minutes; the reservation
+  now outlasts the longest route time limit. A project could prepare one child at a time and a refused run
+  never gave that back, so the next child failed (`run_unavailable`) until its service restarted;
+  a project now prepares up to four (as many as it may run) and a refused run frees its share.
+  `dispatch` now says why a run could not start, with the run's own reason code. The verifier's
+  `validate-assignment` and `result-preflight` no longer pause the shared collector (they were
+  refused while any child ran).
+- A run that can never launch now closes by itself, with no command: a claim the account denied
+  (stale billing, say) is fenced by the account, its result space and preparation are freed, and
+  `dispatch` gives the denial's reason; a run that failed before its claim was sent frees them the
+  same way. The orchestration can then close, and the next child launches. Called anyway,
+  `learning-classify-host-run-abandoned` answers `already_closed`. A claim refused without a
+  receipt (`claim_storage_expired`, say), or whose reply was lost, is now settled by the account's
+  new claim fence: if the account admitted the claim the run keeps everything; otherwise the fence
+  makes sure it can never be admitted and the run closes the same way, and the account no longer
+  counts it as pending. A denied Claude child closes like a Codex one.
+- From the first real install: setup, `learning-status` and the billing attestation run in your own
+  terminal, with no Codex or Claude Code markers, and the account service refused them, so setup said
+  "Collector status: not ready" and attestation stopped with "provider observation unavailable". Your
+  terminal may now read status and observe providers (nothing that starts work or spends usage). A test
+  walks those steps with every client marker removed.
+- Setup is easier to follow: a failed step says why, with the orchestrator's reason code; `?` shows what
+  ran in the step; projects set up before are offered in a list; the attestation names your own key file
+  in its prompts, finds the key by its `.pub` file whatever its name, and asks again after a mistyped
+  key location instead of stopping.
+- Updating from 0.2.x: the wizard's Collector step asks before it upgrades your orchestrator records,
+  keeps a checked copy of them first and says where it is. Every project on the machine shares those
+  records and needs this release. Until this change the step failed on existing installs, and on a
+  new machine it refused to create the records at all.
+- Commands wait up to eight seconds for the shared collector to start (it used to be one, which a busy
+  machine exceeds), and wait their turn when another command has the collector paused.
+- Result-contract failures retain a bounded validator reason in the bridge report and durable
+  dispatch metadata. The failed fence and exact result binding remain in force; rejected content
+  is discarded. Host-result reporting obtains the reason from the trusted dispatch record.
+  Version-1 records remain readable without invented historical reasons. This diagnostic slice
+  uses Codex package 0.8.13; the development project's installed stable toolchain remains 0.8.12.
+- Malformed explicit result axes now produce `invalid_status` instead of escaping the validator
+  as an unhashable-value exception. Dispatch regressions cover failed fencing and durable reasons
+  for list/object values on all three axes; legacy pending results still bind correctly after restart.
+- Unrepresentable result usage numbers produce `invalid_usage`. Reroute annotation validates the
+  original answer before changing its verdict or claim list. Invalid string encoding at the parser
+  boundary and parser recursion keep the existing parse-failure outcomes; Codex last-message bytes
+  retain their existing UTF-8 replacement decoding. New dispatch-record versions require integers. These fixes address
+  findings from independent review/verifier pairs; the corrected slice awaits fresh review.
+- A deeply nested Codex result that parses successfully but exceeds optional-null normalization's
+  recursion limit now follows the existing `unparseable_result` fence and remains recordable.
+- Bridge preflight rejects child-authored admission decisions and timeout claims before immutable
+  result binding, matching the host's existing admission rules. These become failed replacements
+  with `inconsistent_axes`; actual bridge-observed timeouts retain their authoritative outcome.
+- Results that exceed the existing host-outcome evidence capacity are fenced as `result_too_large`
+  before binding. The durable limit is retained, including room for assignment/result digests.
+- Markdown result fences use linear extraction, preserving accepted syntax while avoiding regex
+  backtracking on long whitespace in an incomplete fence. A bounded subprocess regression covers it.
+- Legacy version-1 record validation retains its original numeric representation semantics and bytes;
+  strict version typing is confined to the new dispatch metadata, preserving existing ledger replay.
+- Reroute annotation updates the legacy status projection with its unknown verdict, so a valid
+  blocked answer stays unreviewed without a host-created `inconsistent_axes` rejection.
+- Malformed Claude init-frame tool entries retain the existing `init_tool_not_allowed` fence,
+  child cleanup and recordable failed result instead of escaping through unhashable-value errors.
+- Bounded Claude client observations retain process exit status, final-frame presence/subtype and
+  allowlisted assistant error codes separately from result-validator reasons. Unknown values use
+  fixed fallbacks. Version-3 dispatch metadata preserves these observations through cleanup and
+  host commitment; version-1/2 bytes remain readable without invented historical observations.
+  Existing outcomes, failed replacements, result/verifier digests and admission rules are unchanged.
+- Unknown Codex event/item names now use a fixed `unknown` denial label before constructing
+  returned or stored fences. Only known denied item names are retained. Regression tests pin
+  independent legacy fence bytes and cover CLI rejection reasons, invalid Claude reroutes,
+  and observed positive/signal exit statuses without retaining rejected child text.
+- Offline service foundation adds a pure, closed request codec for project status and cancellation.
+  It bounds messages, rejects duplicate/authority/SQL fields and binds canonical request digests to
+  project, primary session, supervisor instance/generation, runtime and exact attempt target.
+  Valid requests confer no authority. Authenticated transport, responses, account operations,
+  independent supervisors and database migration remain unimplemented; no endpoint is enabled.
+- Service-contract constructors enforce the same closed types as decoding; canonicalization
+  revalidates their snapshot. Parser/decode exceptions are not chained onto fixed public errors.
+  Adversarial checks distinguish specific identifier formats, enforce size checks before parsing,
+  and independently bind run handles in request digests.
+- The collector client uses a database-free metadata transport with one deadline across connect,
+  send and response fragments. Slow replies cannot renew that deadline; ambiguous exchanges are
+  never retried automatically. Existing framing, error mapping and runtime checks are retained.
+  Project/account authorization, server queues and database ownership migration remain incomplete.
+- Malformed peer runtime versions use the existing compatibility error path, including Unicode
+  digit strings and integer-conversion rejection. Valid ASCII three-part versions retain their
+  numeric comparison behavior. Adapter regressions retain negative binding/error propagation.
+- Bridge prompts include the validator-owned enums and consistency rules from result preflight,
+  with explicit legacy status projections for completed verdicts. The sample positive template
+  does not request a positive conclusion. Result validation, host admission and fencing remain
+  in force; the additional guidance is not an output field or new authority.
+- The bridge and its detached watchdog now share one absolute monotonic hard deadline,
+  including the existing watchdog grace. Fixture clock disagreement cannot kill a child
+  early or extend cleanup after bridge death. No host clock setting is changed by the tests.
+- Collector client code and its shared metadata/errors are separate from the SQLite owner.
+  Existing imports remain compatibility aliases; protocol behavior and runtime checks are
+  preserved. This is preparation for the service boundary, not completed API migration.
+- An internal metadata queue has finite per-project quotas, round-robin scheduling and fixed
+  overload codes. Separate lane instances can reserve control/terminal capacity. It grants no
+  caller authority or durable receipt; service integration and measured defaults remain open.
+- `dispatch-preflight` previews a committed bridge manifest and effective configured tools and
+  bound units in pages of at most 16 KiB, without admission or launch. Export pins one commit,
+  checks sizes before reading blobs and bounds Git output. Optional expected-commit checks
+  prevent later preview pages or dispatch from silently switching snapshots. Exact tool-call
+  enforcement remains unavailable and is reported explicitly; native preview remains open.
+- Preflight resolves released learning candidates through the same trusted path as open and
+  dispatch, without a base-route fallback or legacy fallback receipt. It reports nominal zero
+  separately from the existing client turn-limit floor. Export rejects folded Git/context names
+  and shares one absolute budget across inspection and copying; Git-command checks observe both
+  process launch paths.
+- Each project now has its own service, started on demand, that runs the project's children and
+  owns the project's history. Children of several projects run at the same time; one project's
+  child, registration, provider observation or owner attestation no longer waits for or stops
+  another's. Normal commands talk to the project's service and the account service in the
+  collector; they do not open the shared ledger or pause the collector.
+- Every routed child is a separate read-only process, from either primary: `codex exec` or
+  `claude -p`. A Claude primary's Claude children are no longer native subagents, so they can
+  be watched and stopped from outside the session.
+- `learning-run-status` reports a running child's health (`starting`, `active`, `quiet`,
+  `stale`, `stopping`, `terminal`) and `learning-cancel-run` requests a stop. A child with no new
+  work for ten minutes is stopped without a request. Stops are immediate for an invalid client
+  start, a prohibited tool and a paid or rejected rate-limit event, with partial message
+  streaming enabled for Claude children. Replayed, blank or other-model frames do not count as
+  work.
+- Verification and operational QA of a result go through the project's service. It keeps what a
+  verifier needs only while it runs (twelve idle hours when it holds recorded results).
+- A project's service can run any number of children over its lifetime: a finished,
+  released and recorded child no longer keeps one of its four tracking slots (third real
+  trial: the fifth run was refused with `run_failed`). Status of such a run answers
+  `control_attempt_not_found`.
+- If a project's service stops or crashes while a child is claimed, the project's next service
+  settles that run by itself as soon as the operating system shows that the child, everything
+  left in its process group and session, and its deadline watchdog are gone, and the watchdog
+  confirmed before exiting that every process it tracked had stopped (or that it never
+  started a child): the run is reported as `run_lost` (abandoned, outcome unknown, never an
+  outcome) and its capacity slot is freed within seconds, exactly once (new account operation
+  `account.settle_lost_run`, backed by a durable per-run launch journal in the project's state
+  folder). A service stopped normally settles its own runs this way before it exits. Nothing is
+  relaunched, and nothing is freed while any of the run may still be running. Only when that
+  evidence is missing or damaged is the slot freed one hour after the run's hard deadline,
+  measured on both the wall clock and the run's own monotonic clock (finding 18).
+- Learning (case mining, analysis, inert proposals) runs on each project's own history after a
+  result or its QA is recorded, and the command reports it (compact by default,
+  `--full-report` for everything). A project's earlier learning history moves from the shared
+  ledger to its store by itself on first use after an update, when no child is running;
+  `learning-migrate-project` does it on request and can roll it back before new learning is
+  recorded. Owner feedback, case review, analysis and the orchestration report work on the
+  project's store. The candidate pipeline commands (evaluation, comparison, promotion, canary,
+  rollback, drift, calibration) refuse for a moved project and return with 0.4.0.
+- Commands that need the shared ledger to themselves refuse while any child is running instead
+  of stopping the collector under it. A project service left running by an earlier version is
+  replaced when no child is running.
+- Not yet done in this entry: testing on a real install with real provider clients (event
+  shapes and timings for both providers, two projects at once). Write-capable children belong
+  to 0.4.0 and are excluded from this release.
+
 ## 0.2.2: readiness and hook diagnostics (Codex package 0.8.12)
 
 - Repeated hook deliveries include their observation time in their identity, matching their timestamped

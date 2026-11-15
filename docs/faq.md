@@ -1,5 +1,11 @@
 # FAQ
 
+## What does COCOLO stand for?
+
+Claude Orchestrator, Codex Orchestrator, Local Orchestrator. It is the product's name; the folders,
+skills and commands it installs keep their earlier names (`codex-agents`, `agent-orchestration`,
+`orchestrate-agents`), so nothing you type changes.
+
 ## Can this charge me beyond my subscriptions?
 
 It is built not to. API keys, usage credits and paid fallback are never eligible, admission fails closed
@@ -9,8 +15,8 @@ purchases are off, so re-attest whenever that changes. See the [security model](
 
 ## Can a child edit my files?
 
-Not in v1: every child runs read-only, in a private export of the committed files it was granted.
-Children that edit files in their own worktrees are planned for G3.
+Not in this release: every child runs read-only, in a private export of the committed files it was
+granted. Children that edit files in their own worktrees are planned for release 0.4.0.
 
 ## Does a model decide where work goes?
 
@@ -26,8 +32,20 @@ it fails closed elsewhere, so verify reports Linux as not ready. Native Windows 
 
 ## Where are my records?
 
-In `~/.local/state/codex-agents` on your machine, shared by every set-up project on it through one local
-collector, and never committed. See [configuration](configuration.md#machine-files).
+In `~/.local/state/codex-agents` on your machine, and never committed. Account-level records are shared
+by every set-up project through one local collector; each project's own history is kept in its own store
+there. See [configuration](configuration.md#machine-files).
+
+## Can I use several projects at once?
+
+Yes. Each project has its own service, and projects do not wait for each other. For now at most two
+children run at once on the machine. See [capacity](how-it-works.md#capacity).
+
+## Can I see what a child is doing, or stop it?
+
+Yes. Ask the primary for the child's status or to stop it. A child that goes silent for ten minutes, or
+reaches its deadline, is stopped for you. See
+[watching and stopping a child](using-it.md#watching-and-stopping-a-child).
 
 ## Why must I open Codex on the project itself?
 
@@ -38,19 +56,27 @@ a folder above the project could plant them. See
 ## Why does a Codex session need the commands rule?
 
 Codex's sandbox blocks the local learning collector, so the orchestrator's everyday commands cannot run
-inside it. The rule lets only those 23 commands run outside the sandbox, through a protected copy of the
+inside it. The rule lets only those 27 commands run outside the sandbox, through a protected copy of the
 orchestrator. See [the protected copy](security-model.md#the-protected-copy-and-the-codex-rule).
 
-## Why are Claude children sometimes native and Codex children never?
+## Why is every child a separate process, never a subagent of my session?
 
-A Claude primary can spawn Claude children with its own Agent tool. A native Codex child would share the
-Codex primary's session and its command rule, so every Codex child goes through the bridge instead. See
-[dispatch paths](how-it-works.md#dispatch-paths).
+A subagent shares its parent session: its permissions, its allowance and, for Codex, its command rule,
+and nothing outside the session can stop it. A separate read-only process can be watched, stopped when it
+goes silent and cut off at its deadline whatever the primary is doing, so every child, Claude or Codex,
+from either primary, goes through the bridge. See [dispatch paths](how-it-works.md#dispatch-paths).
 
 ## I lost my owner key passphrase. What now?
 
 Choose "Replace a lost owner key" in `./setup.sh`. You then sign again in each project. See
 [troubleshooting](troubleshooting.md#i-lost-my-owner-key-passphrase).
+
+## What is planned?
+
+- Release 0.4.0: children that can edit files in their own worktrees (milestone G3), and the return of
+  the learning candidate commands for projects whose history has moved to their own store.
+- Later: routing that changes from recorded evidence, with headroom tie-breaking (milestone G4), and a
+  Codex plan loop that keeps a Codex session working through a plan, where code decides every stop.
 
 ## How do I remove it?
 

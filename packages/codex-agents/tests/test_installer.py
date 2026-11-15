@@ -14,7 +14,7 @@ from unittest.mock import patch
 from tests.support import REPOSITORY_ROOT, MACOS_SANDBOX_ONLY, TEMP_ROOT, trusted_hook_interpreter
 
 from codex_agents import hook_config, host_paths, validation
-from codex_agents.learning_store import CollectorClient, CollectorError, LearningState
+from codex_agents.learning_store import LEDGER_SCHEMA_VERSION, CollectorClient, CollectorError, LearningState
 
 SPEC = importlib.util.spec_from_file_location(
     "codex_agents_installer", REPOSITORY_ROOT / "scripts" / "install.py"
@@ -383,7 +383,7 @@ class InstallerTests(unittest.TestCase):
                 )
                 self.assertEqual(2, failed_backup.returncode, failed_backup.stdout)
                 self.assertEqual(
-                    6,
+                    LEDGER_SCHEMA_VERSION,
                     CollectorClient(
                         LearningState(state_root, create=False).socket
                     ).health(target)["schema_version"],

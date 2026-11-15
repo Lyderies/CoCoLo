@@ -1,7 +1,8 @@
 # Configuration
 
 The [setup wizard](setup-wizard.md) writes most of this for you. This page lists every file and option it
-touches, for reference and for repairs. The commands that write them are in [manual setup](manual-setup.md).
+touches, for reference and for repairs. The file and folder names predate the name COCOLO and are kept as
+they are. The commands that write them are in [manual setup](manual-setup.md).
 
 ## Project files
 
@@ -65,7 +66,8 @@ installs `{"version": 1, "roles": {}, "verifiers": {}}`.
 
 | Path | Purpose |
 |---|---|
-| `~/.local/state/codex-agents` | Your orchestrator records: the ledger, the owner key record and the collector's files. Never committed |
+| `~/.local/state/codex-agents` | Your orchestrator records: the shared ledger, the owner key record and the collector's files. Never committed |
+| `~/.local/state/codex-agents/projects/<project id>` | Each project's own history (runs, results, QA, learning), owned by that project's service |
 | `~/.ssh/codex-agents-owner` | The passphrase-protected owner key that signs billing attestations; `attest.py` creates it if you have none, and a replacement creates `codex-agents-owner-2` or the next free number |
 | `~/.codex/orchestrator.config.toml` | The optional Codex profile with sandbox network on, for `codex -p orchestrator` (step 7) |
 | `~/.codex/rules/agent-orchestration-<digest>.rules` | The optional Codex commands rule (step 8) |

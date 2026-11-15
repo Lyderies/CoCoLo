@@ -14,7 +14,19 @@ FIXTURES_ROOT = Path(__file__).resolve().parent / "fixtures"
 # The system temp directory with symlinks resolved (macOS /tmp is a symlink), because the
 # package refuses symlinked paths.
 TEMP_ROOT = os.path.realpath(tempfile.gettempdir())
+# A short, unsymlinked root for tests that bind Unix sockets (macOS caps their paths at
+# 103 bytes and its per-user temp directory is long). Linux has no /private.
+SHORT_TMP = "/private/tmp" if sys.platform == "darwin" else "/tmp"
 sys.path.insert(0, str(ORCHESTRATION_ROOT))
+
+
+def assert_dropped(test, client):
+    """The service closed the connection. Linux resets it when unread input remains."""
+    try:
+        test.assertEqual(b"", client.recv(1))
+    except ConnectionResetError:
+        pass
+
 
 # Operational QA runs checks inside macOS Seatbelt (sandbox-exec); other platforms fail closed.
 MACOS_SANDBOX_ONLY = unittest.skipUnless(

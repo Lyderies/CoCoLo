@@ -538,7 +538,8 @@ class UmbrellaInstallTests(unittest.TestCase):
         orchestration = installer.ORCHESTRATION
         parsed = installer._parser_commands(orchestration / "cli.py")
         primary = installer._primary_commands(orchestration / "codex_agents" / "host_commands.py")
-        self.assertEqual(len(primary), 23)
+        self.assertEqual(len(primary), 27)
+        self.assertIn("dispatch-preflight", primary)
         owner = installer.owner_only_commands()
         self.assertEqual(set(owner), (set(parsed) - set(primary)) | {"install-codex-rule", "remove-codex-rule"})
         for name in ("learning-register", "learning-record-billing-attestation", "learning-configure-owner-key",

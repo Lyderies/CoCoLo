@@ -22,6 +22,7 @@ from codex_agents.contracts import (
     routing_task_slice,
     result_preflight,
     validate_assignment,
+    validate_assignment_shape,
     validate_parent_grant,
     validate_result,
     validate_task,
@@ -565,6 +566,16 @@ class ContractTests(unittest.TestCase):
                 parent_grant=self.parent_grant(),
             )["assignment_id"],
         )
+
+    def test_assignment_attempt_requires_an_exact_integer_in_shape_and_full_validation(self) -> None:
+        for invalid in (True, False, 1.0, None, "1", [1]):
+            candidate = self.assignment()
+            candidate["attempt"] = invalid
+            for validate in (validate_assignment_shape, self.validate_assignment):
+                with self.subTest(attempt=invalid, validator=validate.__name__), self.assertRaises(ContractError) as caught:
+                    validate(candidate)
+                self.assertEqual("assignment.attempt", caught.exception.field)
+                self.assertEqual("attempt must be a positive integer", str(caught.exception))
 
     def test_assignment_rejects_unlisted_authority(self) -> None:
         assignment = self.assignment()

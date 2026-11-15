@@ -1,132 +1,140 @@
-# Codex–Claude agent orchestration
+# COCOLO
 
-[![CI](https://github.com/Lyderies/codex-claude-agent-orchestration/actions/workflows/ci.yml/badge.svg)](https://github.com/Lyderies/codex-claude-agent-orchestration/actions/workflows/ci.yml)
+**Claude Orchestrator, Codex Orchestrator, Local Orchestrator**
+
+[![CI](https://github.com/Lyderies/cocolo/actions/workflows/ci.yml/badge.svg)](https://github.com/Lyderies/cocolo/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Let a Claude Code or Codex session hand bounded sub-tasks to Codex or Claude child agents, on subscription logins only.
+You're deep in a Claude Code or Codex session and you'd love a second pair of eyes: someone to
+review that change, dig through the docs, or sketch a plan, while you keep going.
 
-**Status:** dogfood toolchain v1 (release 0.2.2, Codex package 0.8.12). Children are read-only.
-macOS first, Linux partly untested, no Windows. Subscription logins only, never metered APIs.
+COCOLO is that second pair of eyes. Your session hands the job over, COCOLO picks a helper (Claude or
+Codex, whichever is best at that kind of job), keeps an eye on it while it works, has the answer
+checked, and hands it back. All on your own machine, all on the subscriptions you already pay for.
+No API keys, no surprise bills.
+
+> **Status:** 0.3.0, nearly there. Made on a Mac; Linux mostly works. Windows, sadly, no.
+
+## How a job travels
 
 ```mermaid
 flowchart LR
-    P["Your session<br/>Claude Code or Codex"] -->|"task"| R["Router<br/>fixed rules"]
-    R --> G{"Guard and<br/>admission checks"}
-    G -->|"denied"| S["Stop with<br/>a reason"]
-    G -->|"admitted"| C["Read-only child<br/>Codex or Claude"]
-    C -->|"result"| P
-    G -.-> L[("Local route record<br/>replayable")]
-    C -.-> L
+    you(["You"]) -- "can someone review src/?" --> session["Your Claude Code<br/>or Codex session"]
+    session -- hands it over --> cocolo{{"COCOLO"}}
+    cocolo -- "picks the best helper<br/>for this kind of job" --> helper["A helper<br/>Claude or Codex<br/>(reads, never writes)"]
+    helper -- answer --> second["A second opinion<br/>from the other provider"]
+    second --> checks["Your project's own<br/>tests and security checks"]
+    checks -- checked answer --> session
 ```
 
-In words: your session hands a task to the router. Guard and admission checks either stop it with a
-reason or start one read-only Codex or Claude child. The route and the outcome are recorded locally and
-can be replayed.
+The choice of helper follows fixed rules, written down in a [routing table](docs/routing-table.md):
+quality first, then whatever uses the least of your allowance. No AI gets to pick its own favourite.
 
-## Why
+## Getting started
 
-- **Code picks the child, not a model.** A route comes from the installed policy, the task and your
-  project's committed configuration, in the [routing table](docs/routing-table.md)'s fixed order:
-  quality first, then expected usage cost. Model output never grants tools, paths or spend.
-- **Subscription logins only.** API keys, usage credits and paid fallback are never eligible, and no child
-  runs until you have signed a billing attestation for that account.
-- **Independent checking.** Each meaningful result goes to a verifier from the other provider when one is
-  eligible, then to your project's own hashed test and security commands.
-- **Evidence stays on your machine.** Routes, admission decisions and outcomes go to a local ledger in
-  `~/.local/state/codex-agents` that is never committed, and every recorded route replays exactly.
+You'll need a Mac (or Linux), Git, Python 3.11 or newer, and Claude Code and/or the Codex CLI, signed
+in with your subscription. COCOLO works with Claude Code 2.1 and Codex CLI 0.164 to 0.169.
 
-It does not yet run children that can edit files, and it never changes its own routing without you.
-
-## Quick start
-
-You need:
-
-- macOS, or Linux (WSL counts) without operational QA yet, with Git from the Command Line Tools, Xcode
-  or Homebrew and Python 3.11 or later from a trusted install such as Homebrew or python.org;
-- Claude Code 2.1.x, Codex CLI 0.164.0 or both, signed in with their subscriptions, and no API key in
-  the environment;
-- for a new project, an `operational-checks.json` naming its exact test and security commands
-  ([recipe](docs/manual-setup.md#operational-checks)).
-
-From the root of this repository:
+Clone this repository somewhere that isn't inside one of your projects, then:
 
 ```sh
-./setup.sh /path/to/project
+./setup.sh /path/to/your/project
 ```
 
-The wizard checks your machine, asks which providers children may use, installs into the project,
-registers the local collector and hands you the billing attestation to sign. Run it again to update,
-verify or re-attest. The [getting started](docs/getting-started.md) guide walks through a first run.
+![The COCOLO setup wizard's first screen](docs/images/setup-welcome.svg)
+
+The wizard does the fiddly parts: it checks your machine, asks which helpers you'd like, installs
+into your project, and asks you to sign a one-line promise that your accounts can't be billed beyond
+their subscriptions. Arrow keys and Enter get you through. Press `?` whenever you want to see what
+just happened, and `q` to leave. Run it again any time to update, check, or re-sign.
+
+A project you haven't set up before needs one small file naming its test and security commands.
+The [recipe](docs/manual-setup.md#operational-checks) takes about five minutes, and
+[getting started](docs/getting-started.md) walks you through the whole first run.
+
+## Then just ask
+
+Open your project and ask in plain words:
+
+- **Claude Code:** "Use the `agent-orchestration` skill to have the routed reviewer check the error
+  handling in `src/`."
+- **Codex:** start `codex` in the project's own folder (from your own terminal) and ask for the
+  `orchestrate-agents` skill.
+
+Your session does the rest and tells you what came back. If something gets refused, the answer says
+why and what to do about it, and nine times out of ten the fix is "run `./setup.sh` again".
+[Using it](docs/using-it.md) has more examples.
 
 > [!CAUTION]
-> Open Codex on the project itself. Never open it on a folder that contains a set-up project, on this
-> repository, on your home folder, on a folder above it or on `/`. A session opened above a project
-> could plant files that Codex runs outside its sandbox. [Why](docs/security-model.md#where-to-open-codex)
+> Open Codex on the project's own folder, never on a folder full of projects, on this repository,
+> on your home folder or on `/`. A session opened too high up could change files that run outside
+> Codex's sandbox. [Here's why](docs/security-model.md#where-to-open-codex).
 
-## Using it
+## COCOLO keeps an eye on every helper
 
-**From Claude Code**, open the project and ask, for example: "Use the `agent-orchestration` skill to
-have the routed reviewer check the error handling in `src/`." It routes the task, starts the child,
-has the result verified, runs your checks and reports back.
+Helpers are separate programs COCOLO starts and watches, so you can always ask how one is doing, or
+stop it. It also notices when one has wandered off:
 
-**From Codex**, start `codex` (or `codex -p orchestrator`, if setup created that profile) in the
-project's own folder from your own terminal, and ask for the `orchestrate-agents` skill.
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> starting
+    starting --> active: first sign of work
+    active --> quiet: nothing for 2 minutes
+    quiet --> active: back at it
+    quiet --> stale: nothing for 5 minutes
+    stale --> stopped: nothing for 10 minutes, or out of time
+    active --> finished: done
+```
 
-A denied task comes back with a `reason_code` saying why. Your only command is `./setup.sh`; the
-orchestrator CLI is for the agent, which runs it through the skill. More in
-[using it](docs/using-it.md).
+Quiet isn't a crime: helpers think, too. But ten minutes of silence, or running past its time limit,
+and the helper is stopped, along with anything it started.
 
-## Safety at a glance
+## Several projects at once
 
-- **Subscription only.** Admission fails closed on an API key in the environment, an unreviewed client
-  version, unknown or paid-usage billing, a missing attestation or exhausted headroom, and checks
-  again at launch.
-- **Read-only children.** Every child is read-only. A bridged child sees only the committed files it was
-  granted, in a private copy, under a hard deadline.
-- **Results are bound.** A bridged child's result is validated and recorded by digest in the ledger,
-  and only the verifier opened for that result counts.
-- **Protected Codex commands.** The optional Codex rule runs a byte-verified, owner-only copy of the
-  orchestrator, and its session guard refuses sessions that can write too much.
-- **Your authority stays yours.** Setup and attestation run this repository's own code, never the
-  project's, and only you can sign with your owner key.
+Each project gets its own little service with its own history, so two projects can each have a
+helper working at the same time without waiting on each other, or peeking at each other's work.
 
-Known limits include: Codex children can still read outside their export until G3, and a session that
-can already write `~/.codex` can forge what the guard checks. The full list and the threat model are in
-the [security model](docs/security-model.md).
+```mermaid
+flowchart TB
+    subgraph mac["Your machine"]
+        a["Project A<br/>its own service and history"]
+        b["Project B<br/>its own service and history"]
+        shared[("Shared, and only this:<br/>your accounts, your signed<br/>billing promise, the limits")]
+    end
+    a --- shared
+    b --- shared
+```
 
-> [!WARNING]
-> The attestation is your own statement about your billing settings. Admission also checks what the
-> clients report, but relies on extra usage and Codex credit purchases being off; re-attest whenever
-> they change.
+## The ground rules
 
-## Documentation
+- **Your subscriptions, nothing else.** No helper starts until you've signed that your accounts can't
+  be charged extra. An API key in your terminal, an unknown client version, or billing that looks paid
+  or unclear: everything stops.
+- **Helpers look, they don't touch.** Every helper is read-only and only sees the committed files it
+  was given.
+- **You hold the pen.** Only you can sign, with your own key, and setup runs this repository's code,
+  never your project's.
 
-- [Getting started](docs/getting-started.md): from a fresh clone to a first routed review
-- [Using it](docs/using-it.md): orchestrating from Claude Code and from Codex
-- [Setup wizard](docs/setup-wizard.md) and [manual setup](docs/manual-setup.md)
-- [Configuration](docs/configuration.md): project files, machine files and options
-- [How it works](docs/how-it-works.md): routes, admission, children, verification and the ledger
-- [Security model](docs/security-model.md): what v1 protects and what it does not
-- [Troubleshooting](docs/troubleshooting.md) and [FAQ](docs/faq.md)
-- [All documentation](docs/README.md)
+The [security model](docs/security-model.md) has the exact rules, and the honest list of known limits.
 
-## Roadmap
+## Want to know more?
 
-- **v1.1:** child liveness from real client events, so a silent child is noticed and stopped.
-- **v1.2:** a Codex plan loop that keeps a Codex session working through a plan; code decides every stop.
-- **Then G3 and G4:** children that can edit files in their own worktrees, then evidence-driven routing.
+- [Getting started](docs/getting-started.md): from a fresh clone to your first review
+- [Using it](docs/using-it.md): asking for help from Claude Code and from Codex
+- [Setup wizard](docs/setup-wizard.md): every step and every choice
+- [How it works](docs/how-it-works.md): the machinery, for the curious
+- [Troubleshooting](docs/troubleshooting.md) and the [FAQ](docs/faq.md)
+- [Everything else](docs/README.md)
 
-What changed in each release is in the [CHANGELOG](CHANGELOG.md).
+## What's next
 
-## Contributing
+Helpers that can edit files, each in its own copy of your project, are planned for 0.4.0. What
+changed in each release lives in the [CHANGELOG](CHANGELOG.md).
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch model and the checks. Changes to authority,
-containment or billing logic need an independent security review.
+## Contributing, security and license
 
-## Security
-
-Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), not in public issues.
-
-## License
-
-[Apache License 2.0](LICENSE). See [NOTICE](NOTICE).
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to help. Anything touching safety or billing gets an
+  independent security review.
+- [SECURITY.md](SECURITY.md): found a vulnerability? Please report it privately, not in an issue.
+- [Apache License 2.0](LICENSE), see [NOTICE](NOTICE).

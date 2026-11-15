@@ -324,7 +324,7 @@ provider API key, and a run handle that was already dispatched.
 - Every bridged child's prompt carries the objective, each required criterion's id and
   description, the literal result template and its rules, after `--`. Codex children
   also get the routed role's developer instructions as `-c developer_instructions=...`
-  (codex-cli 0.164.0 renders that as a developer message), read from the role's agent
+  (codex-cli 0.164.0 and 0.169.0 render that as a developer message), read from the role's agent
   file and refused unless the file and the instructions hash to what the run's execution
   configuration recorded.
 - Codex children run `codex exec` read-only and ephemeral, between non-spending
@@ -341,8 +341,14 @@ provider API key, and a run handle that was already dispatched.
   (`--disable <feature>`, never `code_mode_host`) and web search
   (`web_search="disabled"`). The feature disables plus `--ephemeral` are the pre-dispatch denial (on
   codex-cli 0.164.0, `spawn_agent` fails before any sub-agent run because no rollout
-  exists), so the reviewed Codex range is pinned to 0.164.0 and widening it needs a
-  live containment check on the new build. The event stream is allowlisted only to
+  exists). The admitted Codex range runs from 0.164.0 up to, but not including, 0.170.0.
+  Only 0.164.0 was checked live. On 0.169.0 the options, features, event names and
+  developer-message rendering this launch relies on were compared without a model call
+  and are unchanged; the builds in between were neither compared nor checked. The live
+  containment check on 0.169.0 belongs to the release's real-install trial and must pass
+  before the release is published with this range. Widening it further needs the same
+  comparison and a live containment check first. The event
+  stream is allowlisted only to
   detect emitted, typed events: only the events `thread.started`, `turn.started`,
   `turn.completed`, `turn.failed`, `error` and `item.started/updated/completed`, and
   the item types `agent_message`, `reasoning`, `command_execution`, `file_change`,
