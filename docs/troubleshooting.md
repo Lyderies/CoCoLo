@@ -200,6 +200,16 @@ The project's service prepares a child before launching it, and says which step 
 
 Release 0.3.1 and earlier said only `run_unavailable` for all of these.
 
+## A billing probe refused with `observation_unavailable` or `probe_..._failed`
+
+The probe names the step that stopped it before launching anything:
+- `observation_unavailable` (after one automatic retry): the Claude client could not be read; check it
+  is installed and signed in, then try again;
+- `probe_preparation_failed` or `probe_preparation_unknown`: preparing the probe failed (unknown when
+  its cleanup could not be confirmed, which keeps its slot);
+- `probe_worker_failed` or `probe_step_failed`: the probe's worker or another step failed. Report it
+  with the reason.
+
 ## `probe_busy`
 
 The Claude billing probe needs one of its account's two run slots, and none was free, or another probe

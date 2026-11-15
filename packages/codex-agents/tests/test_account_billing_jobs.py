@@ -216,7 +216,7 @@ class AccountBillingJobTests(unittest.TestCase):
             reply = take(ticket, **options)
             if reply is not None and len(refused) < times:
                 refused.append(ticket)
-                return ObservationJobReply(reply.key, reply.request, None, reason, *reply[4:])
+                return ObservationJobReply(reply.key, reply.request, None, reason, reply.before_publish)
             return reply
         self.enterContext(mock.patch.object(self.observations, 'take', side_effect=flaky))
         return refused
@@ -239,10 +239,12 @@ class AccountBillingJobTests(unittest.TestCase):
         self.assertEqual(1, len(self.launches()))
 
     def test_P1_a_probe_whose_preparation_fails_names_it(self):
-        snapshot = self.billing._executions.snapshot
-        self.enterContext(mock.patch.object(self.billing._executions, 'snapshot', side_effect=lambda handle: {
-            **snapshot(handle), 'worker_state': 'failed'}))
-        with self.assertRaisesRegex(AccountError, '^probe_preparation_failed$'):
+        from codex_agents import bridge
+        # Preparing the probe fails for real: it cannot create its private workspace.
+        self.enterContext(mock.patch.object(bridge, 'private_workspace', side_effect=RuntimeError('unexpected')))
+        # P1, refined: a failed preparation names itself, as unknown when its cleanup cannot
+        # be confirmed (a workspace failure part-way): its slot is then kept, not recycled.
+        with self.assertRaisesRegex(AccountError, '^probe_preparation_(failed|unknown)$'):
             self.take(self.begin())
         self.assertEqual([], self.launches())
 
@@ -332,7 +334,8 @@ class AccountBillingJobTests(unittest.TestCase):
         ticket = self.begin()
         with mock.patch.object(self.workers._registry, 'acknowledge_release',
                                side_effect=RuntimeError('PRIVATE-POST-COMMIT-FAULT')):
-            with self.assertRaisesRegex(AccountError, 'probe_unavailable'):
+            # Requirement P1 (0.3.2): an unexpected fault in a probe step is named.
+            with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
                 self.take(ticket)
         self.assertEqual('committed', self.ledger._connection.execute(
             'SELECT state FROM account_billing_probe_requests').fetchone()[0])

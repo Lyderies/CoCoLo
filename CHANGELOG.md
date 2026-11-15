@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.2: admission on a project with history (Codex package 0.8.20)
+## 0.3.2: admission on a project with history (Codex package 0.8.21)
 
 - From a busy project after upgrading to 0.3.1: no child could be opened and no Claude billing probe
   run. Before admitting anything, the account service reads the provider readings and earlier
@@ -27,7 +27,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   still finds the decision and identity it was admitted on. A damaged old record that no rule keeps no
   longer blocks admission; every record admission reads is still checked in full.
 - A Claude billing probe refused because every run slot of its account was in use reported
-  `probe_unavailable`; it now reports `probe_busy`.
+  `probe_unavailable`; it now reports `probe_busy`. A probe stopped before it launched now names the
+  step: its identity observation's own reason (such as `observation_unavailable`),
+  `probe_preparation_failed`, `probe_preparation_unknown`, `probe_worker_failed` or `probe_step_failed`.
+  A refused identity observation is tried once more first: straight after setup restarts the services,
+  the first one could be refused, and observing spends nothing. Found in an owner's live tests.
 - Under the owner's protected command rule, no bridged child could start, Codex or Claude. The project
   service runs from the protected runtime copy there, and prepared children from the copy, which holds
   only runtime code and none of the agent files a child's role comes from. It now prepares them from
