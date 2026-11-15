@@ -174,6 +174,24 @@ busy machine or when it cannot start at all. It keeps starting by itself: run th
 keeps failing, run `./setup.sh` and choose "Update the install and walk through every step"; step 5
 (Collector) says what is wrong.
 
+## A dispatch refused with `preparation_...` or `run_client_changed`
+
+The project's service prepares a child before launching it, and says which step stopped it:
+
+- `preparation_managed_configuration`: managed (enterprise or MDM) settings for the provider's client
+  are present on this machine, which COCOLO does not run children under;
+- `preparation_client_missing` or `preparation_client_unsupported`: the provider's client was not found,
+  or lacks an option a child needs; update or reinstall the client;
+- `preparation_client_changed` or `run_client_changed`: the client changed while the child was being
+  prepared (an update, say); dispatch a fresh run;
+- `preparation_export_failed`: the committed files the child reads could not be exported; check that
+  every path the assignment reads is committed;
+- `preparation_backend_refused`: the client is set to a metered (API) backend;
+- `preparation_invalid_input` or `preparation_not_authorized`: the run's inputs were refused; open a
+  fresh run.
+
+Release 0.3.1 and earlier said only `run_unavailable` for all of these.
+
 ## `probe_busy`
 
 The Claude billing probe needs one of its account's two run slots, and none was free, or another probe

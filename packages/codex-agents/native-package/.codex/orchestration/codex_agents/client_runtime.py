@@ -15,6 +15,7 @@ import time
 from .collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient, empty_ingestion_snapshot
 from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError, integer as account_integer, _ID as _ACCOUNT_ID
 from .account_claim_contracts import CLAIM_DENIAL_CODES
+from .preparation_reasons import PREPARATION_STAGE_REASONS
 from .account_open_contracts import AccountOpenInput, OpenError
 from .collector_paths import CollectorPaths, StateError, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
 from .contracts import ContractError
@@ -50,8 +51,8 @@ BRIDGE_PROVIDERS = frozenset({"codex", "claude"})  # Read-only children the proj
 # the account's (a refused claim, say) and a denied claim receipt's. All fixed identifiers, safe to report.
 START_REASONS = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable',
-    'run_abandoned', 'run_closed', 'run_lost', 'run_lost_held',
-}) | ACCOUNT_REASON_CODES | CLAIM_DENIAL_CODES
+    'run_abandoned', 'run_closed', 'run_lost', 'run_lost_held', 'run_client_changed',
+}) | ACCOUNT_REASON_CODES | CLAIM_DENIAL_CODES | PREPARATION_STAGE_REASONS
 # A run whose project service stopped or crashed: ended abandoned with an unknown outcome.
 # Its capacity is released once the next service saw nothing of it still running.
 LOST_CAPACITY = {'run_lost': 'released', 'run_lost_held': 'held'}
