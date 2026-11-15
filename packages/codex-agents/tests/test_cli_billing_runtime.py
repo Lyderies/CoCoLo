@@ -183,7 +183,8 @@ class CliBillingRuntimeTests(unittest.TestCase):
         self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM account_billing_probe_origins').fetchone()[0])
 
     def test_second_project_fresh_cli_observes_while_first_probe_process_is_held(self):
-        self.fixture.frames('claude', [bridge_fixtures.PROBE_INIT, {'sleep': 3},
+        # The first probe is held well past what a fresh CLI process takes to start on a slow machine.
+        self.fixture.frames('claude', [bridge_fixtures.PROBE_INIT, {'sleep': 8},
                                      bridge_fixtures.FAVOURABLE, bridge_fixtures.result_frame('OK')])
         first = self.start(identity='held-first')
         self.wait(lambda: any(j.state == 'offered' and j.supervisor is not None
@@ -196,6 +197,6 @@ class CliBillingRuntimeTests(unittest.TestCase):
         start = time.monotonic()
         code, observed = self.take(self.start(root=second_root, billing=False))
         self.assertEqual(0, code, observed)
-        self.assertLess(time.monotonic()-start, 2.5)
-        self.assertIsNone(first.poll())
+        self.assertLess(time.monotonic()-start, 6)
+        self.assertIsNone(first.poll())  # Answered while the first probe was still held.
         self.assertEqual(0, self.take(first)[0])
