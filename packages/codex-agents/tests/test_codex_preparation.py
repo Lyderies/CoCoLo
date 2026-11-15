@@ -189,6 +189,31 @@ class CodexPreparationTests(unittest.TestCase):
                 self.lane.retire(handle)
                 self.assertEqual({'state': 'failed', 'reason_code': reason}, snapshot)
 
+    def test_an_unexpected_error_names_the_step_it_happened_in(self):
+        # local-routing's 0.8.18 test: dispatch said preparation_unavailable and nothing more.
+        for target, name, reason in (
+                (bridge, 'assignment_read_paths', 'preparation_failed_at_read_paths'),
+                (codex_preparation, '_worker_input', 'preparation_failed_at_worker_input'),
+                (bridge, '_codex_role_prompt', 'preparation_failed_at_role_prompt')):
+            with self.subTest(step=name):
+                with mock.patch.object(target, name, side_effect=RuntimeError('unexpected')):
+                    handle = self.lane.submit(self.context)
+                    self.until(lambda: self.lane.snapshot(handle)['state'] in {'failed', 'unknown'})
+                snapshot = self.lane.snapshot(handle)
+                self.lane.retire(handle)
+                self.assertEqual({'state': 'failed', 'reason_code': reason}, snapshot)
+
+    def test_a_refused_worker_handoff_says_so(self):
+        for error, reason in ((codex_worker.CodexWorkerError('worker_busy'), 'preparation_worker_busy'),
+                              (RuntimeError('unexpected'), 'preparation_worker_failed')):
+            with self.subTest(reason=reason):
+                with mock.patch.object(self.runtime.pool, 'prepare', side_effect=error):
+                    handle = self.lane.submit(self.context)
+                    self.until(lambda: self.lane.snapshot(handle)['state'] in {'failed', 'unknown', 'cleaned'})
+                snapshot = self.lane.snapshot(handle)
+                self.lane.retire(handle)
+                self.assertEqual(reason, snapshot['reason_code'], snapshot)
+
     def test_revocation_after_export_drops_original_scratch_without_worker_handoff(self):
         handle = self.lane.submit(self.context)
         end = time.monotonic()+8
