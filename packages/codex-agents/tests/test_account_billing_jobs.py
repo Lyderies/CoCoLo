@@ -207,6 +207,16 @@ class AccountBillingJobTests(unittest.TestCase):
         self.assertEqual(1, len(self.launches()))
         self.assertEqual(0, self.workers._charged)
 
+    def test_a_probe_whose_admission_history_does_not_fit_says_so_and_launches_nothing(self):
+        from codex_agents.admission_inputs import AdmissionCaptureError
+        with mock.patch.object(self.claims._intake._views, 'capture_admission_inputs',
+                               side_effect=AdmissionCaptureError('admission_capture_limit')), \
+                self.assertRaisesRegex(AccountError, '^admission_capture_limit$'):
+            self.take(self.begin())
+        self.assertEqual([], self.launches())
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM account_billing_probe_requests WHERE state='admitted'").fetchone()[0])
+
     def test_cancel_while_signature_intake_is_full_retires_unadmitted_preparation(self):
         intake = self.claims._intake
         occupied = [intake._reserve(self.fixture.project_id, 'claude') for _ in range(2)]
