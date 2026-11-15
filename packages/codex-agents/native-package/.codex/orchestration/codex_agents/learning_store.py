@@ -66,6 +66,9 @@ from .account_cleanup_schema import RELEASE_COLUMN, RELEASE_COLUMNS, RELEASE_SCH
 from .account_observation_schema import (OBSERVATION_COLUMNS, OBSERVATION_SCHEMA, assert_observation_schema,
                                          OBSERVATION_ORIGIN_COLUMNS, OBSERVATION_ORIGIN_SCHEMA,
                                          check_observation_coverage, install_observation_schema)
+from .admission_evidence_schema import (
+    assert_admission_evidence_schema, check_admission_evidence_coverage, install_admission_evidence_schema,
+)
 from .billing_probe_schema import (BILLING_PROBE_COLUMNS, BILLING_PROBE_ORIGIN_COLUMNS,
                                    BILLING_PROBE_OBJECTS, assert_billing_probe_schema,
                                    check_billing_probe_coverage, install_billing_probe_schema)
@@ -761,7 +764,7 @@ def _verify_project_backup_body(
     }:
         raise LedgerError("project backup body is invalid")
     schema_version = body["ledger_schema_version"]
-    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13}:
+    if body["schema_version"] != 2 or schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14}:
         raise LedgerError("project backup body is invalid")
     if (
         expected_ledger_schema_version is not None
@@ -2580,6 +2583,11 @@ class LearningLedger:
                         ("trigger", "cleanup_launch_operation_state", _LAUNCH_CLEANUP_SCHEMA)]
         if version >= 9:
             schemas += [entry for entry in CAPACITY_OBJECTS if version < 11 or entry[1] != 'capacity_executions']
+        if version >= 14:
+            try:
+                assert_admission_evidence_schema(self._connection)
+            except ValueError:
+                raise LedgerError('admission evidence schema is unavailable or incompatible') from None
         if version >= 13:
             try:
                 assert_billing_probe_schema(self._connection)
@@ -2654,6 +2662,12 @@ class LearningLedger:
         except ValueError:
             raise LedgerError('billing probe migration is unavailable or incompatible') from None
 
+    def _initialize_admission_evidence_locked(self):
+        try:
+            install_admission_evidence_schema(self._connection)
+        except ValueError:
+            raise LedgerError('admission evidence migration is unavailable or incompatible') from None
+
     def _migrate_six_or_seven_to_current(self, version: int) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -2673,6 +2687,7 @@ class LearningLedger:
             self._initialize_account_cleanup_locked()
             self._initialize_account_observations_locked()
             self._initialize_billing_probes_locked()
+            self._initialize_admission_evidence_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
@@ -2775,6 +2790,7 @@ class LearningLedger:
             self._initialize_account_cleanup_locked()
             self._initialize_account_observations_locked()
             self._initialize_billing_probes_locked()
+            self._initialize_admission_evidence_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             self.state.harden_database_files()
             self._connection.execute("COMMIT")
@@ -2815,6 +2831,7 @@ class LearningLedger:
                 self._initialize_account_cleanup_locked()
                 self._initialize_account_observations_locked()
                 self._initialize_billing_probes_locked()
+                self._initialize_admission_evidence_locked()
                 self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
             return
         if current >= 9:
@@ -2842,6 +2859,7 @@ class LearningLedger:
                     self._initialize_account_cleanup_locked()
                     self._initialize_account_observations_locked()
                     self._initialize_billing_probes_locked()
+                    self._initialize_admission_evidence_locked()
                     self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
                 return
             if current == 10:
@@ -2850,6 +2868,7 @@ class LearningLedger:
                     self._initialize_account_cleanup_locked()
                     self._initialize_account_observations_locked()
                     self._initialize_billing_probes_locked()
+                    self._initialize_admission_evidence_locked()
                     self._connection.execute(f'PRAGMA user_version = {LEDGER_SCHEMA_VERSION}')
                 return
             if current >= 11:
@@ -2862,6 +2881,7 @@ class LearningLedger:
                 with self._account_transaction():
                     self._initialize_account_observations_locked()
                     self._initialize_billing_probes_locked()
+                    self._initialize_admission_evidence_locked()
                     self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
                 return
             if current >= 13 and not check_billing_probe_coverage(self._connection):
@@ -2870,6 +2890,15 @@ class LearningLedger:
                 self._require_project_migration_backups(12, LEDGER_SCHEMA_VERSION)
                 with self._account_transaction():
                     self._initialize_billing_probes_locked()
+                    self._initialize_admission_evidence_locked()
+                    self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
+                return
+            if current >= 14 and not check_admission_evidence_coverage(self._connection):
+                raise LedgerError('admission evidence coverage is unavailable')
+            if current == 13:
+                self._require_project_migration_backups(13, LEDGER_SCHEMA_VERSION)
+                with self._account_transaction():
+                    self._initialize_admission_evidence_locked()
                     self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
                 return
         with self._account_transaction():
@@ -3462,6 +3491,7 @@ class LearningLedger:
                 self._initialize_account_cleanup_locked()
                 self._initialize_account_observations_locked()
                 self._initialize_billing_probes_locked()
+                self._initialize_admission_evidence_locked()
             self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
         self.state.harden_database_files()
 
@@ -7213,7 +7243,7 @@ class LearningLedger:
         def read():
             current = view._capture_admission_rows_locked(
                 context.project_id, snapshot.provider, policy,
-                AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer,
+                AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer, snapshot.anchor_ms,
             )
             if not same_admission_inputs(snapshot, current):
                 raise ClaimError("claim_preparation_stale")

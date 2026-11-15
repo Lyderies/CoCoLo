@@ -174,6 +174,16 @@ busy machine or when it cannot start at all. It keeps starting by itself: run th
 keeps failing, run `./setup.sh` and choose "Update the install and walk through every step"; step 5
 (Collector) says what is wrong.
 
+## `admission_capture_limit` or `admission_capture_work_limit`
+
+Before admitting a child or a billing probe, the account service reads the provider readings and earlier
+decisions that can still change the decision: about the last day of them, plus older ones still in force.
+These reasons mean even that did not fit in one bounded check, so nothing was admitted. It happens only
+under very heavy use. Readings stop counting after a day, and usage windows when they reset (up to a
+week), so try again later; if it keeps happening, report it with the reason. Release
+0.3.1 and earlier read the whole history, so a project with long use refused every run and reported
+`account_unavailable` instead. Update to 0.3.2 or later.
+
 ## `claim_busy`
 
 Usually two children are already running on this machine, or on the same provider account, which is this

@@ -53,6 +53,7 @@ RUNTIME_FILES = (
     "codex_agents/account_run_provenance.py",
     "codex_agents/account_service.py",
     "codex_agents/active_run_capacity.py",
+    "codex_agents/admission_evidence_schema.py",
     "codex_agents/admission_input_decode.py",
     "codex_agents/admission_inputs.py",
     "codex_agents/admission_metadata.py",

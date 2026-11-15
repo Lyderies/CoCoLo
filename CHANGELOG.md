@@ -2,6 +2,29 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
+## 0.3.2: admission on a project with history (Codex package 0.8.15)
+
+- From a busy project after upgrading to 0.3.1: no child could be opened and no Claude billing probe
+  run. Before admitting anything, the account service reads the provider readings and earlier
+  decisions it decides on. It read every one ever recorded and refused once more than 512 matched,
+  and the project had over 2,000. The open then reported `account_unavailable` and the probe
+  `probe_unavailable`, which pointed at the service rather than at the cause. Admission now reads only
+  the history that can still change a decision:
+  - identities from the last 30 minutes, decisions from the last 5 hours, and billing and headroom
+    from the last day;
+  - every billing attestation;
+  - headroom whose window has not reset yet, at any age;
+  - the first admitted Claude run of each account, and Claude's latest older billing and headroom
+    per account.
+
+  Every restriction that still applies still denies, and decisions and their cited evidence are
+  unchanged. Those last rules select records by a field inside them (the account, a reset time, a
+  Claude admission), which the account service never parses. So a new table, `admission_evidence`,
+  holds those fields: the ledger fills it as each record is written (schema 14), and the upgrade
+  fills it once for existing records. If even the bounded history cannot be read in one check, the
+  open or probe now says so with `admission_capture_limit` (or `admission_capture_work_limit`), and
+  nothing is admitted.
+
 ## 0.3.1: upgrading busy projects (Codex package 0.8.14)
 
 - From an owner's upgrade of a busy project to 0.3.0: its records (about 192,000 learning records,

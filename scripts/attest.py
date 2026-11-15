@@ -888,6 +888,11 @@ REASON_HELP = {
                            "starts the service.",
     "observation_unavailable": "The orchestrator could not reach the provider's client. Check that the "
                                "client is installed and signed in, then run ./setup.sh again.",
+    "admission_capture_limit": "The provider history admission reads did not fit in one check. Try again "
+                               "later; if it repeats, see admission_capture_limit in "
+                               "docs/troubleshooting.md.",
+    "admission_capture_work_limit": "The provider history admission reads took too long to check. Try "
+                                    "again later; if it repeats, see docs/troubleshooting.md.",
     "billing_attestation_missing": "No billing statement is recorded for this provider yet. Choose Re-run "
                                    "the billing attestation only in ./setup.sh.",
 }

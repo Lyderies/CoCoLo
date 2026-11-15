@@ -256,7 +256,8 @@ class AccountBillingAdmission:
         signer = self._ledger._current_signer_bytes()
         policy = self._intake._views._claim_policy('claude')
         current = self._read(lambda: self._intake._views._capture_admission_rows_locked(reservation.project,
-            'claude', policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer))
+            'claude', policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer,
+            snapshot.anchor_ms))
         expected = snapshot
         if appended is not None:
             rows = [r for r in current.rows if r[1] == reservation.project and r[2] == appended['record_id']]
