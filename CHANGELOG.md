@@ -29,6 +29,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - A Claude billing probe refused because every run slot of its account was in use reported
   `probe_unavailable`; it now reports `probe_busy`. Right after an upgrade from 0.2.x this is what the
   earlier version's runs cause until a day after they started.
+- After an upgrade from 0.2.x, `learning-status` and `learning-migrate-project --status` say how many
+  runs the earlier version left still hold a slot, and when the last stops counting
+  (`earlier_version_runs`); a learning move refused with `migration_not_drained` says the same.
 
 ## 0.3.1: upgrading busy projects (Codex package 0.8.14)
 

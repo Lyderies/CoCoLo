@@ -263,14 +263,24 @@ class CollectorClient:
             raise CollectorError("collector response is invalid", code="response_invalid")
         return committed
 
-    def learning_migration(self, project_root: Path) -> dict[str, bool]:
-        """Whether this project's learning history still has to move, and whether a move could start now."""
+    def learning_migration(self, project_root: Path) -> dict:
+        """Whether this project's learning history still has to move, and whether a move could start now.
+
+        `earlier_version_runs` says how many runs an earlier version left still hold
+        a slot (and so hold the move back), and when the last of them stops counting.
+        """
         response = self._request({"protocol": COLLECTOR_PROTOCOL_VERSION, "op": "learning_migration",
                                   "project_root": str(project_root.resolve())})
         names = ("moved", "has_learning", "drained", "activation_pending")
         if any(type(response.get(name)) is not bool for name in names):
             raise CollectorError("collector response is invalid", code="response_invalid")
-        return {name: response[name] for name in names}
+        earlier = response.get("earlier_version_runs")
+        if (type(earlier) is not dict or set(earlier) != {"holding", "finished_by_ms"}
+                or type(earlier["holding"]) is not int or earlier["holding"] < 0
+                or (earlier["finished_by_ms"] is not None if earlier["holding"] == 0
+                    else type(earlier["finished_by_ms"]) is not int or earlier["finished_by_ms"] < 0)):
+            raise CollectorError("collector response is invalid", code="response_invalid")
+        return {**{name: response[name] for name in names}, "earlier_version_runs": dict(earlier)}
 
     def learning_moved_if_empty(self, project_root: Path) -> bool:
         """Mark a project with no ledger learning history as living in its own store; whether it is moved."""

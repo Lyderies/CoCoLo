@@ -3557,6 +3557,24 @@ class LearningLedger:
                 return False
             return True
 
+    def earlier_version_runs(self) -> dict:
+        """Runs an earlier version left that still hold a slot, and when the last stops counting.
+
+        A 0.2.x run became a `legacy_unknown` reservation at the upgrade; it counts
+        as running until LEGACY_RUN_MAX_MS after it was claimed. Until then it holds
+        one of its account's slots and the learning move waits for it.
+        """
+
+        from .active_run_capacity import crashed_claim
+
+        with self._lock:
+            crashed, parameters = crashed_claim("a", self._clock_ms(), self._capacity_clock_reference())
+            count, newest = self._connection.execute(
+                "SELECT COUNT(*),MAX(a.claimed_at_ms) FROM active_run_capacity a "
+                f"WHERE a.kind='legacy_unknown' AND a.released_at_ms IS NULL AND NOT {crashed}", parameters,
+            ).fetchone()
+        return {"holding": count, "finished_by_ms": None if not count else newest + LEGACY_RUN_MAX_MS}
+
     def mark_learning_moved_if_empty(self, project_id: str) -> bool:
         """Retire the ledger for a project that has no learning history in it.
 
@@ -11894,6 +11912,7 @@ class CollectorServer:
                     "has_learning": self.ledger.has_learning_history(project_id),
                     "drained": self.ledger.drained(),
                     "activation_pending": self.ledger.learning_activation_pending(project_id),
+                    "earlier_version_runs": self.ledger.earlier_version_runs(),
                 }
             if request.get("op") == "learning_moved_if_empty" and set(request) == {
                 "protocol", "op", "project_root",

@@ -652,7 +652,8 @@ def _migrate_learning(args):
             # Read from the running services; nothing is stopped for a question.
             with _collector_contact():
                 snapshot = client.learning_migration(args.project_root)
-            return {"ready": True, "can_start_now": snapshot["drained"], "state": _migration_state(snapshot)}
+            return {"ready": True, "can_start_now": snapshot["drained"], "state": _migration_state(snapshot),
+                    "earlier_version_runs": snapshot["earlier_version_runs"]}
 
     def refused(reason):
         return {"ready": False, "reason_code": reason,
@@ -675,7 +676,8 @@ def _migrate_learning(args):
             if error.reason_code != "history_writer_busy" or args.status:
                 raise
             if not ledger.drained():
-                return refused("migration_not_drained")
+                # Say what holds it back when it is runs an earlier version left.
+                return {**refused("migration_not_drained"), "earlier_version_runs": ledger.earlier_version_runs()}
             # No run is active anywhere, so this project's idle service is asked to
             # stop: it exits once its published hint is withdrawn, and the next
             # command starts another. Its journals are durable.
@@ -689,7 +691,8 @@ def _migrate_learning(args):
                     if retry.reason_code != "history_writer_busy" or time.monotonic() >= deadline:
                         raise
         if args.status:
-            report = migration_status(ledger, history, project_id)
+            report = {**migration_status(ledger, history, project_id),
+                      "earlier_version_runs": ledger.earlier_version_runs()}
         elif args.rollback:
             report = rollback_project(ledger, history, project_id)
         else:
