@@ -7,6 +7,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - Tests are sorted into stages: `unit`, `integration` and `e2e` (`scripts/test-stages.json`).
   `scripts/parallel_tests.py --stage unit` runs only the unit tests; a unit test that starts a
   process, opens a socket or sleeps fails. `scripts/measure_test_behaviour.py` measures each module.
+- CI runs by stage: pull requests run unit tests on Linux and macOS and integration tests on Linux;
+  `main`, tags and a nightly run add the rest on both systems. Each job uses every core.
 
 ## 0.3.1: upgrading busy projects (Codex package 0.8.14)
 

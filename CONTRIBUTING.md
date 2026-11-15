@@ -27,7 +27,9 @@ python3 -m unittest discover -s tests -v
 (cd packages/claude-agents && PYTHONPATH=src python3 -m unittest discover -s tests)
 ```
 
-CI runs the identifier guard, Ruff and all three suites on Linux and macOS.
+CI runs the identifier guard and Ruff, then the tests by stage: a pull request runs the unit tests on
+Linux and macOS and the integration tests on Linux; `main`, tags and a nightly run add the end-to-end
+tests on both systems and the integration tests on macOS.
 
 `python3 -B scripts/parallel_tests.py` runs all three suites in parallel. Every test module has a
 stage in `scripts/test-stages.json`: `unit` (no process, socket or sleep; a unit test that does one
