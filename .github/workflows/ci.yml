@@ -1,8 +1,17 @@
 name: ci
 
+# A pull request is checked once, as a pull request; other branches are checked when a
+# pull request opens for them, and main and tags on every push.
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
+
+# A newer push to the same pull request or branch replaces a run still in progress.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
