@@ -290,14 +290,16 @@ class ProjectDriverTests(DriverHarness):
         process = self.separate_dispatch(context, route_path, run_handle)
         self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
         client = CollectorClient(self.state.socket, timeout=5)
-        self.assertEqual({'moved': False, 'has_learning': False, 'drained': False, 'activation_pending': False},
+        self.assertEqual({'moved': False, 'has_learning': False, 'drained': False, 'activation_pending': False,
+                          'earlier_version_runs': {'holding': 0, 'finished_by_ms': None}},
                          client.learning_migration(self.project))
         with self.assertRaises(CollectorError) as busy:
             client.shutdown(only_if_drained=True)
         self.assertEqual('collector_busy', busy.exception.code)
         # The owner's command reports and refuses; it stops nothing and opens no store.
         with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
-            self.assertEqual({'ready': True, 'state': 'not_needed', 'can_start_now': False},
+            self.assertEqual({'ready': True, 'state': 'not_needed', 'can_start_now': False,
+                              'earlier_version_runs': {'holding': 0, 'finished_by_ms': None}},
                              self.cli('learning-migrate-project', '--status'))
             refused = self.cli_for(self.project, 'learning-migrate-project', expected=2)
         self.assertEqual('migration_not_drained', refused['reason_code'])
