@@ -12,7 +12,7 @@ import threading
 
 from .preparation_reasons import PREPARATION_STAGE_REASONS
 from . import bridge
-from .codex_worker import MAX_INPUT_BYTES, CodexWorkerPool, _decode_input
+from .codex_worker import MAX_INPUT_BYTES, CodexWorkerError, CodexWorkerPool, _decode_input
 from .contracts import validate_assignment
 from .history_api import HistoryClient
 from .history_contracts import valid_integer
@@ -161,18 +161,21 @@ def _worker_input(prospective, endpoint, supplied=None):
 
 
 def _build(payload, scope):
-    workspace, started = None, False
+    workspace, started, stage = None, False, 'decode'
     try:
         value = parse_bounded_json(payload, max_bytes=MAX_INPUT_BYTES)
         if (type(value) is not dict or value.keys() != {'prospective', 'project_root', 'bundle_root',
                 'environ', 'expected_export_commit', 'history_endpoint', 'worker_result'}):
             raise PreparationError('preparation_invalid_input')
+        stage = 'scope'
         prospective = OpenScopeContext.from_snapshot(value['prospective'])
         if prospective.scope != scope:
             raise PreparationError('preparation_not_authorized')
+        stage = 'assignment'
         assignment = validate_assignment(prospective.assignment, task=prospective.task,
             route=prospective.route, parent_grant=prospective.parent_grant)
         route, environment = prospective.route, value['environ']
+        stage = 'route'
         provider = route.get('provider')
         claude = provider == 'claude'
         if (provider not in {'codex', 'claude'} or route.get('dispatch') != 'bridge'
@@ -184,11 +187,13 @@ def _build(payload, scope):
             raise PreparationError('preparation_invalid_input')
         if bridge.managed_configuration_present() if claude else bridge.codex_managed_configuration_present():
             raise PreparationError('preparation_managed_configuration')
+        stage = 'roots'
         for name in ('project_root', 'bundle_root'):
             if (type(value[name]) is not str or not 0 < len(value[name]) <= 4096
                     or not Path(value[name]).is_absolute() or '..' in Path(value[name]).parts):
                 raise PreparationError('preparation_invalid_input')
         root, bundle = Path(value['project_root']), Path(value['bundle_root'])
+        stage = 'role_prompt'
         if claude:
             role_prompt, schema = bridge._claude_role_prompt(bundle, route), None
         else:
@@ -196,18 +201,23 @@ def _build(payload, scope):
             from .learning_engine import _read_managed_bytes
             schema = _read_managed_bytes(bundle, '.codex/orchestration/schemas/result.schema.json', max_bytes=MAX_RESULT_BODY_BYTES)
             bridge.codex_schemas(schema)
+        stage = 'worker_input'
         worker_result = _worker_input(prospective, value['history_endpoint'], value['worker_result'])
+        stage = 'read_paths'
         paths = bridge.assignment_read_paths(assignment, worker_outcome_digest=prospective.task.get('verification_for_outcome'))
+        stage = 'client'
         identity = resolve_client(provider, untrusted=[root])
         if identity[0] is None:
             raise PreparationError('preparation_client_missing')
         started = True
+        stage = 'workspace'
         workspace = bridge.private_workspace('prepare-', claude=claude, project_root=root)
         try:
             metadata = bridge.export_committed_snapshot(root, paths, workspace/'export',
                 expected_commit=value['expected_export_commit'])
         except Exception:
             raise PreparationError('preparation_export_failed') from None
+        stage = 'worker_result'
         worker_path = None if worker_result is None else bridge.place_worker_result(workspace/'export', worker_result)
         if claude:
             # The same metered-backend refusal an open applies, against the export.
@@ -219,14 +229,17 @@ def _build(payload, scope):
         elif not set(bridge.CODEX_REQUIRED_EXEC_OPTIONS) <= bridge.codex_exec_options(
                 identity[0], environ=environment, tmpdir=workspace/'tmp'):
             raise PreparationError('preparation_client_unsupported')
+        stage = 'client_recheck'
         if resolve_client(provider, untrusted=[root]) != identity:
             raise PreparationError('preparation_client_changed')
+        stage = 'body'
         body = canonical_json({'task': prospective.task, 'route': route, 'assignment': assignment,
             'parent_grant': prospective.parent_grant, 'schema': None if schema is None else schema.decode('utf-8'),
             'export': str(workspace/'export'), 'control': str(workspace/'control'), 'executable': identity[0],
             'environ': environment, 'role_prompt': role_prompt, 'worker_result_path': worker_path})
         if len(body) > MAX_INPUT_BYTES:
             raise PreparationError('preparation_invalid_input')
+        stage = 'decode_check'
         _decode_input(body)  # The original execution decoder must accept it before account readiness.
         artifact = _Artifact(body, workspace, (metadata['file_count'], metadata['commit'], metadata['manifest_digest']),
             open_inputs_digest(assignment, prospective.task, route, prospective.parent_grant), identity)
@@ -234,7 +247,8 @@ def _build(payload, scope):
     except BaseException as error:
         # No exception text, traceback or rejected/private input is retained: only the
         # fixed reason of the stage that refused, if it was one.
-        reason = getattr(error, 'reason_code', None) if type(error) is PreparationError else None
+        reason = (getattr(error, 'reason_code', None) if type(error) is PreparationError
+                  else 'preparation_failed_at_' + stage)
         reason = reason if reason in PREPARATION_STAGE_REASONS else 'preparation_unavailable'
         if workspace is not None:
             clean = _remove(workspace)
@@ -330,8 +344,12 @@ class CodexPreparationLane:
                     self._authorize(job)
                     with self._lock:
                         job.artifact, job.state = None, 'ready'
-                except Exception:
-                    job.reason = 'preparation_unavailable'
+                except Exception as error:
+                    # Which part of the handoff refused: authorization, a busy pool, or other.
+                    job.reason = (error.reason_code if type(error) is PreparationError
+                                  and error.reason_code in PREPARATION_STAGE_REASONS
+                                  else 'preparation_worker_busy' if type(error) is CodexWorkerError
+                                  and error.reason_code == 'worker_busy' else 'preparation_worker_failed')
                     self.discard(handle)
         finally:
             self._busy = False

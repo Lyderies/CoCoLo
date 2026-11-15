@@ -191,7 +191,10 @@ The project's service prepares a child before launching it, and says which step 
   fresh run;
 - `preparation_full` or `preparation_busy`: the project's service had no free preparation slot; wait for
   a run to finish, or run `./setup.sh` to restart the service, then open a fresh run;
-- `preparation_unavailable`: an unexpected error while preparing; report it with the reason;
+- `preparation_failed_at_<step>` or `preparation_unavailable`: an unexpected error at that step of
+  preparing (for example `preparation_failed_at_workspace`); report it with the reason;
+- `preparation_worker_busy` or `preparation_worker_failed`: the prepared run could not be handed to its
+  worker; run `./setup.sh` to restart the project's service, then open a fresh run;
 - `run_account_call_failed`: a call to the account service failed; run `learning-status`, then open a
   fresh run.
 

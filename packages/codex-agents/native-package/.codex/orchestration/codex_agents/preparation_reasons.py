@@ -12,4 +12,10 @@ PREPARATION_STAGE_REASONS = frozenset({
     'preparation_full', 'preparation_busy',
     # An unexpected error inside preparation, at no named stage.
     'preparation_unavailable',
+    # Handing the prepared run to its worker was refused: the pool is full, or failed.
+    'preparation_worker_busy', 'preparation_worker_failed',
+    # An unexpected error at one step of building the run's inputs.
+    *(f'preparation_failed_at_{step}' for step in (
+        'decode', 'scope', 'assignment', 'route', 'roots', 'role_prompt', 'worker_input', 'read_paths',
+        'client', 'workspace', 'worker_result', 'client_recheck', 'body', 'decode_check')),
 })

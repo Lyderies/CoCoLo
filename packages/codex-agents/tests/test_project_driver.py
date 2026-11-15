@@ -192,7 +192,7 @@ class ProjectDriverTests(DriverHarness):
         cases = (
             ('submit', codex_preparation.PreparationError('preparation_full'), 'preparation_full'),
             ('submit', codex_preparation.PreparationError('preparation_not_authorized'), 'preparation_not_authorized'),
-            ('build', RuntimeError('unexpected'), 'preparation_unavailable'),
+            ('build', RuntimeError('unexpected'), 'preparation_failed_at_read_paths'),
         )
         for where, error, reason in cases:
             with self.subTest(reason=reason, where=where):

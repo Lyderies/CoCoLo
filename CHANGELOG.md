@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.2: admission on a project with history (Codex package 0.8.18)
+## 0.3.2: admission on a project with history (Codex package 0.8.19)
 
 - From a busy project after upgrading to 0.3.1: no child could be opened and no Claude billing probe
   run. Before admitting anything, the account service reads the provider readings and earlier
@@ -33,8 +33,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   `preparation_client_unsupported`, `preparation_client_changed`, `preparation_export_failed` (the
   committed files the child reads could not be exported), `preparation_backend_refused`,
   `preparation_invalid_input`, `preparation_not_authorized`, `preparation_full` or `preparation_busy`
-  (the run was refused before preparing), `preparation_unavailable` (an unexpected error while
-  preparing), `run_client_changed` (the client observed just before launch is not the one prepared) or
+  (the run was refused before preparing), `preparation_failed_at_<step>` (an unexpected error at
+  that step of preparing), `preparation_worker_busy` or `preparation_worker_failed` (the prepared run
+  could not be handed to its worker), `run_client_changed` (the client observed just before launch is not the one prepared) or
   `run_account_call_failed`. Fixed names only; no paths or messages. Found
   in an owner's live test of 0.3.2.
 - Runs that 0.2.x recorded still count as running for a day after they started (a cautious rule: 0.2.x
