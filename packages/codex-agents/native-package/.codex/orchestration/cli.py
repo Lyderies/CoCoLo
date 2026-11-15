@@ -477,7 +477,8 @@ def _replace_other_version_host(args):
         else:
             ledger = LearningLedger(state)
             try:
-                drained = ledger.drained()
+                # Runs an earlier version left never ran under a project service.
+                drained = ledger.drained(ignore_earlier_version=True)
             finally:
                 ledger.close()
             replaced = drained and withdraw_project_host(args.state_root, args.project_root, directory)
@@ -699,6 +700,8 @@ def _migrate_learning(args):
             report = migrate_project(ledger, history, project_id, now_ms=time.time_ns() // 1_000_000)
         return {"ready": True, **report}
     except MigrationError as error:
+        if error.reason_code == "migration_not_drained" and ledger is not None:
+            return {**refused(error.reason_code), "earlier_version_runs": ledger.earlier_version_runs()}
         return refused(error.reason_code)
     except HistoryError as error:
         return refused("migration_project_service_running" if error.reason_code == "history_writer_busy"

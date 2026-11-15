@@ -172,11 +172,13 @@ CAPACITY_OBJECTS = (
 # much sooner, once kernel evidence shows that nothing of it still runs
 # (`account_lost_run`), and from then on it does not count either.
 CRASHED_CLAIM_GRACE_MS = 3_600_000
-# A run an earlier version (0.2.x) left in the records: it ran inside its own CLI
-# command, under a route deadline of at most six hours (`timeout_seconds` 21600),
-# so with the same grace as a crashed claim of this version it cannot still be
-# running seven hours after it was claimed.
-LEGACY_RUN_MAX_MS = 6 * 3_600_000 + CRASHED_CLAIM_GRACE_MS
+# A run an earlier version (0.2.x) left in the records. A bridged one (`bridge-v1`)
+# is over by the upgrade: its dispatch held the collector's maintenance lock for
+# its whole run, and the upgrade takes that lock. A native one (spawned by the
+# host's own agent tool) had no deadline anyone enforced, so nothing proves when
+# it ended; it counts until a day after it was claimed, a cautious rule.
+LEGACY_RUN_MAX_MS = 24 * 3_600_000
+LEGACY_BRIDGE_CLIENT = "bridge-v1"
 # A run settled that way has this fixed abandonment reason on its host binding.
 LOST_RUN_REASON = 'service_lost'
 
@@ -189,8 +191,9 @@ def crashed_claim(alias, now_ms, monotonic_ns):
     grace past the claim's deadline AND the monotonic clock is too (or has
     restarted below the claim's reference: the machine rebooted since, and no
     child survives that). A reservation an earlier version left (`legacy_unknown`,
-    with no deadline) qualifies once it was claimed more than LEGACY_RUN_MAX_MS
-    ago, by the wall clock: it has no monotonic reference.
+    with no deadline) qualifies at once for a bridged run, and otherwise once it was
+    claimed more than LEGACY_RUN_MAX_MS ago, by the wall clock: it has no monotonic
+    reference.
     """
     column = (alias + ".") if alias else ""
     table = alias or "active_run_capacity"
@@ -198,7 +201,9 @@ def crashed_claim(alias, now_ms, monotonic_ns):
         f"(({column}deadline_at_ms IS NOT NULL AND {column}deadline_at_ms<? "
         f"AND {column}execution_deadline_ns IS NOT NULL "
         f"AND ({column}execution_deadline_ns<=? OR {column}clock_reference_ns>?)) "
-        f"OR ({column}kind='legacy_unknown' AND {column}claimed_at_ms<?) "
+        f"OR ({column}kind='legacy_unknown' AND ({column}claimed_at_ms<? OR EXISTS(SELECT 1 FROM host_run_bindings "
+        f"bridged WHERE bridged.project_id={table}.project_id AND bridged.handle_digest={table}.handle_digest "
+        f"AND bridged.client_version='{LEGACY_BRIDGE_CLIENT}'))) "
         f"OR EXISTS(SELECT 1 FROM host_run_bindings lost WHERE lost.project_id={table}.project_id "
         f"AND lost.handle_digest={table}.handle_digest AND lost.binding_state='abandoned' "
         f"AND lost.abandoned_reason='{LOST_RUN_REASON}'))",

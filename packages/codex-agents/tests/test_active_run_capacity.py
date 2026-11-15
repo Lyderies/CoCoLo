@@ -271,8 +271,14 @@ class ActiveRunCapacityTests(unittest.TestCase):
         after = [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM records ORDER BY rowid")]
         self.assertEqual(before, after[:len(before)])
         self.assertEqual(signatures, [tuple(row) for row in self.ledger._connection.execute("SELECT * FROM owner_attestations")])
-        with mock.patch.object(learning_store, "INSTALLED_ACTIVE_RUN_LIMITS", ActiveRunLimits(3, 1)), \
-                self.ledger._account_transaction(), self.assertRaisesRegex(ClaimError, "claim_busy"):
+        limits = mock.patch.object(learning_store, "INSTALLED_ACTIVE_RUN_LIMITS", ActiveRunLimits(3, 1))
+        # This run was bridged: its dispatch held the maintenance lock the upgrade took,
+        # so it cannot still be running and holds no slot.
+        with limits, self.ledger._account_transaction():
+            self.ledger._check_active_capacity_locked("claude", "f" * 64)
+        # A native run of the earlier version had no enforced deadline: it still holds one.
+        self.ledger._connection.execute("UPDATE host_run_bindings SET client_version='codex-host-v1'")
+        with limits, self.ledger._account_transaction(), self.assertRaisesRegex(ClaimError, "claim_busy"):
             self.ledger._check_active_capacity_locked("claude", "f" * 64)
 
     def test_schema_eight_interruption_rolls_back_table_and_version_then_reuses_backup(self):

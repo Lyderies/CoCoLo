@@ -426,14 +426,14 @@ class DrainedRuleTests(unittest.TestCase):
         self.connection = sqlite3.connect(":memory:")
         self.addCleanup(self.connection.close)
         self.connection.executescript(
-            "CREATE TABLE host_run_bindings(project_id,handle_digest,binding_state,abandoned_reason);"
+            "CREATE TABLE host_run_bindings(project_id,handle_digest,binding_state,abandoned_reason,client_version);"
             "CREATE TABLE active_run_capacity(project_id,handle_digest,deadline_at_ms,released_at_ms,"
             "clock_reference_ns,execution_deadline_ns,kind,claimed_at_ms);")
         self.now = 10 * learning_store.CRASHED_CLAIM_GRACE_MS
         self.monotonic = self.now * 1_000_000  # Both clocks at the same instant, for simplicity.
 
     def claim(self, name, *, deadline, released=None, binding="pending", monotonic_deadline="same", reason=None):
-        self.connection.execute("INSERT INTO host_run_bindings VALUES('p',?,?,?)", (name, binding, reason))
+        self.connection.execute("INSERT INTO host_run_bindings VALUES('p',?,?,?,'bridge-v1')", (name, binding, reason))
         if monotonic_deadline == "same":
             monotonic_deadline = None if deadline is None else deadline * 1_000_000
         self.connection.execute("INSERT INTO active_run_capacity VALUES('p',?,?,?,?,?,'claimed',?)", (
