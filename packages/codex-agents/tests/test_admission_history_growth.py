@@ -187,5 +187,65 @@ class AdmissionHistoryGrowthTests(unittest.TestCase):
         self.assertEqual("provider_exhausted", self.outcome(self.open.pump(self.open.submit())))
 
 
+    def late_claim(self, delay_ms):
+        """Open a managed run, wait `delay_ms`, observe the client again and claim its launch."""
+        from dataclasses import replace
+        from pathlib import Path
+        from codex_agents import account_api
+        from codex_agents.account_api import AccountClient
+        from codex_agents.account_claim_contracts import LaunchClaimInput
+        from codex_agents.account_service import AccountAuthorization, AccountService
+        from codex_agents.account_api import AccountRequest, account_request_digest
+        from codex_agents.learning_contracts import content_digest
+        p = self.open.reference
+        original = p.base.worker.fixture
+        wall = [original.base.stamp]
+        self.enterContext(mock.patch.object(self.ledger, "_clock_ms", side_effect=lambda: wall[0]))
+        self.enterContext(mock.patch.object(p.base.store, "_result_clock", side_effect=lambda: wall[0]))
+        state, token = {"scope": None, "evidence": None}, object()
+        operations = frozenset({"account.open_host_run", "account.claim_launch"})
+
+        def authorize(request, supplied):
+            if supplied is not token:
+                return None
+            return AccountAuthorization(request.project_id, request.runtime_digest, account_request_digest(request),
+                                        "host", operations, "a" * 64, state["scope"], state["evidence"], None, p.context)
+        service = AccountService(p.base.scope.runtime_digest, self.jobs._views, authorizer=authorize,
+                                 claim_jobs=self.jobs, run_provenance_work_limits=p.work,
+                                 open_provenance_work_limits=p.work)
+        self.addCleanup(service.close)
+
+        def exchange(path, raw, **options):
+            ticket = service.begin(raw, token)
+            if account_api.decode_account_request(raw).operation == "account.open_host_run":
+                wall[0] += 50
+            return self.open.pump_wire(service, ticket)
+        self.enterContext(mock.patch.object(account_api, "exchange_frame", side_effect=exchange))
+        client = AccountClient(Path("/private/tmp/late-claim.sock"), p.base.scope.project_id,
+                               p.base.scope.runtime_digest, timeout=1)
+        opened = client.open_host_run(p.request, request_id="original-account-open")
+        wall[0] += delay_ms
+        identity = self.ledger.observe_provider(p.base.scope.project_id, "codex", project_root=p.base.bridge.tools,
+                                                environ={}, run_handle=opened["run_handle"], phase="before")[0]
+        launch = LaunchClaimInput(opened["run_handle"], content_digest(identity))
+        claim = AccountRequest(1, "account.claim_launch", "late-claim", p.base.scope.project_id,
+                               p.base.scope.runtime_digest, launch.payload())
+        scope = replace(original.scope, run_handle=opened["run_handle"], run_id=opened["run_id"],
+                        claim_request_id=claim.request_id, claim_request_digest=account_request_digest(claim))
+        p.base.store.reserve_result_lease(scope, p.base.assignment)
+        p.base.store.arm_result_lease(scope)
+        state.update(scope=scope, evidence=p.base.store.attest_pending_result_lease(scope))
+        return client.claim_launch(launch.run_handle, launch.identity_digest, request_id=claim.request_id)
+
+    def test_a_launch_claimed_long_after_its_open_still_finds_its_admission(self):
+        # Within the open's observation window, but later than the identity it cited (30
+        # minutes) and than the run cap's window (5 hours) the capture keeps for opens.
+        for delay_ms in (45 * 60 * 1000, 5 * 60 * 60 * 1000 + 60_000):
+            with self.subTest(delay_ms=delay_ms):
+                if delay_ms > 45 * 60 * 1000:
+                    self.setUp()
+                self.assertEqual("claimed", self.late_claim(delay_ms)["state"])
+
+
 if __name__ == "__main__":
     unittest.main()
