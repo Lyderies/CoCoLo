@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.2: admission on a project with history (Codex package 0.8.19)
+## 0.3.2: admission on a project with history (Codex package 0.8.20)
 
 - From a busy project after upgrading to 0.3.1: no child could be opened and no Claude billing probe
   run. Before admitting anything, the account service reads the provider readings and earlier
@@ -28,6 +28,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   longer blocks admission; every record admission reads is still checked in full.
 - A Claude billing probe refused because every run slot of its account was in use reported
   `probe_unavailable`; it now reports `probe_busy`.
+- Under the owner's protected command rule, no bridged child could start, Codex or Claude. The project
+  service runs from the protected runtime copy there, and prepared children from the copy, which holds
+  only runtime code and none of the agent files a child's role comes from. It now prepares them from
+  the project the copy is bound to, exactly as the CLI does; a copy serves no other project. Found in an
+  owner's live test of 0.3.2, which ended `preparation_failed_at_role_prompt`.
 - A run that could not start said only `run_unavailable`. It now says which stage stopped it:
   `preparation_managed_configuration` (managed client settings are present), `preparation_client_missing`,
   `preparation_client_unsupported`, `preparation_client_changed`, `preparation_export_failed` (the
