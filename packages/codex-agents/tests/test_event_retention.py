@@ -181,10 +181,10 @@ class EventRetentionTests(unittest.TestCase):
         now = 1_000_000_000_000
         for number in range(5):
             self.append(event(f"e{number}", "tool_started", observed_at_ms=now + number), now_ms=now + number)
+        # A summary the ledger refuses keeps its events: nothing is removed undescribed.
         with mock.patch.object(learning_store.LearningLedger, "_append_checked_locked", autospec=True,
                                side_effect=LedgerError("summary refused")):
-            with self.assertRaises(LedgerError):
-                self.ledger.sweep_event_retention(now_ms=now + 8 * DAY)
+            self.assertEqual(0, self.ledger.sweep_event_retention(now_ms=now + 8 * DAY))
         self.assertEqual(5, self.connection.execute(
             "SELECT COUNT(*) FROM records WHERE project_id=? AND record_type='event'", (self.project,)).fetchone()[0])
         self.assertEqual(0, self.connection.execute(

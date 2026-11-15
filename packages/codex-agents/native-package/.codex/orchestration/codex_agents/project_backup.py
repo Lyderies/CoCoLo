@@ -31,6 +31,8 @@ BATCH_ROWS = 512
 # record header, page and index share); a backup's size is planned, not measured.
 ROW_OVERHEAD_BYTES = 64
 SCHEMA_OVERHEAD_BYTES = 1_048_576
+# B-tree pages are not filled completely: a quarter more covers it.
+PAGE_SLACK_DIVISOR = 4
 _MANIFEST_SCHEMA = (
     "CREATE TABLE cocolo_backup_manifest(format TEXT NOT NULL,format_version INTEGER NOT NULL,"
     "ledger_schema_version INTEGER NOT NULL,project_id TEXT NOT NULL,manifest BLOB NOT NULL)"
@@ -53,19 +55,56 @@ def _columns(schema_version: int, table: str) -> list[str]:
 
 
 def estimate_bytes(connection: sqlite3.Connection, project_id: str, schema_version: int) -> int:
-    """Planned size of one project's backup, from SQL totals; no row is read into memory."""
+    """Planned size of one project's backup, from SQL totals; no row is read into memory.
+
+    It counts every stored byte of each row (project_id included), once more for
+    every index of the backup's schema that copies a column, the per-row
+    overhead, and slack for partly filled pages, so it is not smaller than the
+    file. The file's real size is checked again after it is written.
+    """
     store = _store()
     total = SCHEMA_OVERHEAD_BYTES
     for table in store._backup_tables(schema_version):
         columns = _columns(schema_version, table)
         if not columns:
             continue
-        lengths = "+".join(f"IFNULL(length({column}),0)" for column in columns)
+        stored = ["project_id", *columns]
+        weights = {name: 1 + _index_copies(table).get(name, 0) for name in stored}
+        lengths = "+".join(f"{weights[name]}*IFNULL(length(CAST({name} AS BLOB)),0)" for name in stored)
         count, size = connection.execute(
             f"SELECT COUNT(*),IFNULL(SUM({lengths}),0) FROM {table} WHERE project_id=?", (project_id,)
         ).fetchone()
-        total += int(size) + int(count) * ROW_OVERHEAD_BYTES
-    return total
+        indexes = 1 + sum(1 for _ in _index_names(table))
+        total += int(size) + int(count) * ROW_OVERHEAD_BYTES * indexes
+    return total + total // PAGE_SLACK_DIVISOR
+
+
+_INDEXES: dict[str, dict[str, int]] = {}
+
+
+def _index_names(table: str) -> list[str]:
+    return [name for name, _ in _index_columns(table)]
+
+
+def _index_columns(table: str) -> list[tuple[str, list[str]]]:
+    reference = sqlite3.connect(":memory:")
+    try:
+        reference.executescript(_store()._BACKUP_RESTORE_SCHEMA + ";")
+        return [(row[1], [info[2] for info in reference.execute(f"PRAGMA index_info({row[1]!r})")])
+                for row in reference.execute(f"PRAGMA index_list({table})")]
+    finally:
+        reference.close()
+
+
+def _index_copies(table: str) -> dict[str, int]:
+    """For each column, how many of the backup schema's indexes on `table` copy it."""
+    if table not in _INDEXES:
+        copies: dict[str, int] = {}
+        for _, names in _index_columns(table):
+            for name in names:
+                copies[name] = copies.get(name, 0) + 1
+        _INDEXES[table] = copies
+    return _INDEXES[table]
 
 
 def write(connection: sqlite3.Connection, path: Path, project_id: str, schema_version: int) -> dict[str, Any]:

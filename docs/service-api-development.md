@@ -854,8 +854,11 @@ run against a ledger the 0.2.2 runtime itself created.
   `<state root>/ledger-before-upgrade/` and accepts the copy only if it is sound, names
   the same schema and holds the same rows per table (`copy_ledger_before_upgrade`), then
   opens the ledger with `allow_schema_upgrade` and `backup_before_upgrade`. The latter
-  first sizes every active project's backup from SQL totals and checks the disk
-  (`_plan_project_backups`): one over `MAX_PROJECT_BACKUP_BYTES` (16 GiB), or all of them
+  first clears partial files a stopped write left, sizes every active project's backup
+  from SQL totals (every stored byte, `project_id` and index copies included, plus page
+  slack, so the plan is not smaller than the file) and checks the disk
+  (`_plan_project_backups`); the written file's real size is checked against the same
+  limit before it is kept: one over `MAX_PROJECT_BACKUP_BYTES` (16 GiB), or all of them
   together (twice over, plus 256 MiB) beyond the free space, refuses with
   `LedgerCapacityError` before any backup is written, reported as
   `ledger_upgrade_capacity` with sizes and the project's position only. It then writes, for
@@ -1088,9 +1091,12 @@ identity check; feedback alone carries its own authority, the owner's signature.
 - `learning-expire` still applies the ledger's retention to the ledger. Separately, the
   collector's `sweep_event_retention` runs every `WORKER_RESULT_SWEEP_SECONDS`: up to
   `EVENT_SWEEP_BATCH` (500) expired hook and app-server events that no record link
-  touches are grouped by run and UTC day into `event_summary` records (closed contract:
-  counts per event code and per source, first and last seen, span; written by the
-  ledger only, source `lifecycle`, never evidence) and removed in the same transaction.
+  touches, and no stored file, grant or owner attestation names, are grouped by run
+  and UTC day into `event_summary` records (closed contract: counts per event code and
+  per source, first and last seen, span; written by the ledger only, source
+  `lifecycle`, never evidence) and removed in one explicit transaction (the ledger
+  connection autocommits); a group that cannot be summarised is left whole, under a
+  savepoint, and the others still go.
   An event's expiry is set at ingestion from `config/retention-policy.json`
   (`load_retention_policy`: every event code exactly once, 1 to 365 days; summaries 1
   to 3650), so existing rows keep theirs. Backups and stored files are not touched.

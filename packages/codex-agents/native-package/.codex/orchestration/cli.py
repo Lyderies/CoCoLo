@@ -808,8 +808,9 @@ def _capacity_error(capacity) -> str:
         return ("the records were not upgraded and nothing was changed: their backups need about "
                 f"{_mebibytes(capacity['needed_bytes'])} of free disk space and "
                 f"{_mebibytes(capacity['available_bytes'])} is free; free some space and run setup again")
-    return ("the records were not upgraded and nothing was changed: project "
-            f"{capacity['project_number']} of {capacity['projects']} needs a backup of about "
+    which = ("a project" if capacity.get("project_number") is None
+             else f"project {capacity['project_number']} of {capacity['projects']}")
+    return (f"the records were not upgraded and nothing was changed: {which} needs a backup of about "
             f"{_mebibytes(capacity['needed_bytes'])}, over the {_mebibytes(capacity['limit_bytes'])} limit; "
             "keep using the earlier version and report this")
 

@@ -192,7 +192,7 @@ The host's own lifecycle events (a child starting, stopping) are kept as long as
 days, and outcomes, cases, feedback and QA keep their own retention. The collector removes expired raw
 events by itself, a small batch every minute. Before it removes them, it writes one summary per run and
 day (how many of each event code, first and last seen, and the span between), kept 90 days, so the totals
-outlive the raw rows. It leaves alone any event a record link points to or from, and your backups, which
+outlive the raw rows. It leaves alone any event a record link, a stored file, a grant or an attestation names, and your backups, which
 keep their own lifetime: an expired event can stay inside a backup until that backup expires.
 `learning-expire` still applies all of the ledger's retention, lineage included, when you run it. A period
 applies from when an event is recorded, so records an earlier version kept keep the expiry they were given.

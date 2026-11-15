@@ -252,10 +252,11 @@ def load_retention_policy(path: Path = INSTALLED_RETENTION_POLICY) -> RetentionP
         setting, codes = value["weights"][weight], value["events"][weight]
         if not isinstance(setting, dict) or set(setting) != {"keep_days"} or not isinstance(codes, list):
             raise LedgerError("retention policy is invalid")
+        period = days(setting["keep_days"], MAX_EVENT_KEEP_DAYS)  # Checked even for a weight with no codes.
         for code in codes:
-            if code not in EVENT_CODES or code in keep:
+            if type(code) is not str or code not in EVENT_CODES or code in keep:
                 raise LedgerError("retention policy is invalid")
-            keep[code] = days(setting["keep_days"], MAX_EVENT_KEEP_DAYS)
+            keep[code] = period
     if set(keep) != set(EVENT_CODES):
         raise LedgerError("retention policy is invalid")
     return RetentionPolicy(keep, days(value["summary_keep_days"], MAX_SUMMARY_KEEP_DAYS))
@@ -1274,6 +1275,12 @@ def project_backup_bytes(connection: sqlite3.Connection, project_id: str, schema
     return estimate_bytes(connection, project_id, schema_version)
 
 
+def _file_identity(info: os.stat_result) -> tuple:
+    """Which file, and whether it changed: a swapped-in copy differs in inode or change time."""
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
 def _free_backup_bytes(path: Path) -> int:
     return int(shutil.disk_usage(path).free)
 
@@ -2189,16 +2196,19 @@ class LearningLedger:
     def sweep_event_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
         """Summarise, then remove, up to `batch` expired raw events; returns how many were removed.
 
-        Only hook and app-server events past their expiry that no record link
-        touches are taken (linked ones, and every other record type, are left to
-        the owner's learning-expire, which also follows lineage). Each run's
-        events of one UTC day become one event_summary, written in the same
-        transaction as the removal. Backups keep their own lifetime.
+        Only hook and app-server events past their expiry that nothing else
+        names are taken: a record link, a stored file, a grant or an owner
+        attestation keeps an event for the owner's learning-expire, which also
+        follows lineage and removes files. Each run's events of one UTC day
+        become one event_summary. All of a sweep's summaries and removals are
+        one transaction; a group that cannot be summarised is left as it was and
+        the others still go. Backups keep their own lifetime.
         """
+        from .contracts import ContractError
         from .learning_contracts import validate_learning_record
 
         with self._lock:
-            if self._active_readers:
+            if self._active_readers or self._connection.in_transaction:
                 return 0
             now = self._clock_ms() if now_ms is None else now_ms
             rows = self._connection.execute(
@@ -2208,37 +2218,58 @@ class LearningLedger:
                 "AND r.expires_at_ms IS NOT NULL AND r.expires_at_ms<=? "
                 "AND NOT EXISTS (SELECT 1 FROM record_links l WHERE l.project_id=r.project_id "
                 "AND (l.from_record_id=r.record_id OR l.to_record_id=r.record_id)) "
+                "AND NOT EXISTS (SELECT 1 FROM stored_files f WHERE f.project_id=r.project_id "
+                "AND f.source_record_id=r.record_id) "
+                "AND NOT EXISTS (SELECT 1 FROM owner_attestations a WHERE a.project_id=r.project_id "
+                "AND a.subject_record_id=r.record_id) "
+                "AND NOT EXISTS (SELECT 1 FROM consumed_grants g WHERE g.project_id=r.project_id "
+                "AND (g.grant_id=r.record_id OR g.promotion_record_id=r.record_id)) "
                 "ORDER BY r.project_id,r.source_sequence LIMIT ?",
                 (now, batch),
             ).fetchall()
-            if not rows:
-                return 0
             groups: dict[tuple[str, str, str], dict[str, Any]] = {}
             for row in rows:
-                record = json.loads(bytes(row["content"]))
+                try:
+                    record = json.loads(bytes(row["content"]))
+                    run_id, code = str(record["run_id"]), str(record["event_code"])
+                except (ValueError, KeyError, TypeError):
+                    continue  # Left for the owner's learning-expire.
                 observed = int(row["observed_at_ms"])
                 day = time.strftime("%Y-%m-%d", time.gmtime(observed / 1000))
-                group = groups.setdefault((str(row["project_id"]), str(record["run_id"]), day), {
+                group = groups.setdefault((str(row["project_id"]), run_id, day), {
                     "ids": [], "codes": {}, "sources": {}, "first": observed, "last": observed})
                 group["ids"].append(str(row["record_id"]))
-                group["codes"][record["event_code"]] = group["codes"].get(record["event_code"], 0) + 1
+                group["codes"][code] = group["codes"].get(code, 0) + 1
                 group["sources"][str(row["source"])] = group["sources"].get(str(row["source"]), 0) + 1
                 group["first"], group["last"] = min(group["first"], observed), max(group["last"], observed)
-            with self._connection:
-                for (project_id, run_id, day), group in groups.items():
-                    identity = hashlib.sha256(canonical_json(
-                        [project_id, run_id, day, sorted(group["ids"])])).hexdigest()[:32]
-                    summary = validate_learning_record({
-                        "schema_version": 1, "record_type": "event_summary", "record_id": "evsum-" + identity,
-                        "run_id": run_id, "day": day, "observed_at_ms": group["last"],
-                        "first_observed_at_ms": group["first"], "last_observed_at_ms": group["last"],
-                        "span_ms": group["last"] - group["first"], "event_count": len(group["ids"]),
-                        "event_counts": group["codes"], "source_counts": group["sources"]})
-                    self._append_checked_locked(project_id, summary, producer="lifecycle", timestamp=now)
+            if not groups:
+                return 0
+            removed = 0
+            with self._account_transaction():
+                for number, ((project_id, run_id, day), group) in enumerate(groups.items()):
+                    self._connection.execute(f"SAVEPOINT summary_{number}")
+                    try:
+                        identity = hashlib.sha256(canonical_json(
+                            [project_id, run_id, day, sorted(group["ids"])])).hexdigest()[:32]
+                        summary = validate_learning_record({
+                            "schema_version": 1, "record_type": "event_summary",
+                            "record_id": "evsum-" + identity, "run_id": run_id, "day": day,
+                            "observed_at_ms": group["last"], "first_observed_at_ms": group["first"],
+                            "last_observed_at_ms": group["last"], "span_ms": group["last"] - group["first"],
+                            "event_count": len(group["ids"]), "event_counts": group["codes"],
+                            "source_counts": group["sources"]})
+                        self._append_checked_locked(project_id, summary, producer="lifecycle", timestamp=now)
+                    except (ContractError, LedgerError, ValueError, KeyError, TypeError):
+                        # This group cannot be summarised: it stays, the others go.
+                        self._connection.execute(f"ROLLBACK TO summary_{number}")
+                        self._connection.execute(f"RELEASE summary_{number}")
+                        continue
                     self._connection.executemany(
                         "DELETE FROM records WHERE project_id=? AND record_id=?",
                         [(project_id, identifier) for identifier in group["ids"]])
-            return len(rows)
+                    self._connection.execute(f"RELEASE summary_{number}")
+                    removed += len(group["ids"])
+            return removed
 
     def sweep_worker_results(self) -> int:
         """Delete worker results past their retention or orchestration; return how many.
@@ -2383,10 +2414,22 @@ class LearningLedger:
                 raise LedgerCapacityError(projects=len(projects), project_number=number, needed_bytes=size,
                                           limit_bytes=MAX_PROJECT_BACKUP_BYTES)
         self.state.backups.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for project_id in projects:
+            self._clear_partial_backups(project_id)
         needed = sum(sizes) * BACKUP_SPACE_FACTOR + BACKUP_SPACE_MARGIN_BYTES
         available = _free_backup_bytes(self.state.backups)
         if needed > available:
             raise LedgerCapacityError(projects=len(projects), needed_bytes=needed, available_bytes=available)
+
+    def _clear_partial_backups(self, project_id: str) -> None:
+        """Remove what a stopped backup write left: never registered, never read."""
+        partition = self.state.backups / project_id
+        if not partition.is_dir() or partition.is_symlink():
+            return
+        for leftover in partition.glob(".*.partial"):
+            if leftover.is_file() and not leftover.is_symlink():
+                with contextlib.suppress(OSError):
+                    leftover.unlink()
 
     def _write_upgrade_backup(self, project_id: str, schema_version: int, taken_at_ms: int) -> None:
         """Keep one project's records exactly as the earlier version left them.
@@ -2419,6 +2462,9 @@ class LearningLedger:
         os.close(os.open(partial, flags, 0o600))
         try:
             project_backup.write(self._connection, partial, project_id, schema_version)
+            size = os.stat(partial, follow_symlinks=False).st_size
+            if size > MAX_PROJECT_BACKUP_BYTES:  # The plan is an estimate; the file is the fact.
+                raise LedgerCapacityError(projects=1, needed_bytes=size, limit_bytes=MAX_PROJECT_BACKUP_BYTES)
             descriptor = os.open(partial, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
             try:
                 os.fsync(descriptor)
@@ -2464,8 +2510,8 @@ class LearningLedger:
                 compare=self._connection if compare else None, exclude_file_id=exclude_file_id)
             # The file is read again by path above; it must still be the one that was hashed.
             after = os.stat(path, follow_symlinks=False)
-            if ((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-                    != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            if (_file_identity(after) != _file_identity(before)
+                    or _file_identity(os.fstat(descriptor)) != _file_identity(before)
                     or project_backup.file_digest(descriptor) != expected_digest):
                 raise LedgerError("project backup changed while it was checked")
         finally:
