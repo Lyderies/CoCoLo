@@ -167,6 +167,28 @@ class CodexPreparationTests(unittest.TestCase):
             self.assertEqual({}, self.runtime.pool._jobs)
             self.lane.retire(handle)
 
+    def test_a_failed_preparation_keeps_the_fixed_reason_of_its_stage(self):
+        # Every failure used to read preparation_unavailable, so a refused run could not
+        # say what stopped it (local-routing's 0.3.2 test: dispatch said only run_unavailable).
+        cases = {
+            'preparation_managed_configuration': mock.patch.object(
+                bridge, 'codex_managed_configuration_present', return_value=True),
+            'preparation_client_missing': mock.patch.object(
+                codex_preparation, 'resolve_client', return_value=(None, None)),
+            'preparation_export_failed': None,
+        }
+        for reason, patch in cases.items():
+            with self.subTest(reason=reason):
+                self.context = PreparationContext(preparation_payload(
+                    self.prospective, self.fixture.project, self.fixture.bundle, fixtures.CLEAN,
+                    expected_export_commit='f' * 40 if patch is None else None))
+                with patch or mock.patch.object(self, 'allowed', True):
+                    handle = self.lane.submit(self.context)
+                    self.until(lambda: self.lane.snapshot(handle)['state'] in {'failed', 'unknown'})
+                snapshot = self.lane.snapshot(handle)
+                self.lane.retire(handle)
+                self.assertEqual({'state': 'failed', 'reason_code': reason}, snapshot)
+
     def test_revocation_after_export_drops_original_scratch_without_worker_handoff(self):
         handle = self.lane.submit(self.context)
         end = time.monotonic()+8

@@ -6,6 +6,7 @@ they resolve. Everything else is the product path: the in-process CLI, the
 hosts' enrollment, the run driver and the original owners.
 """
 import base64
+import dataclasses
 import io
 import contextlib
 import sqlite3
@@ -28,7 +29,7 @@ from tests.test_bridge import (
     CLEAN, PARENT_GRANT, RATE_LIMIT, CliTestCase, cli, git, init_frame, null_filled, result, result_frame,
 )
 
-from codex_agents import codex_worker, learning_store, project_driver
+from codex_agents import codex_preparation, codex_worker, learning_store, project_driver
 from codex_agents.account_api import AccountClient, AccountError
 from codex_agents.rate_limit_contracts import RateLimitError
 from codex_agents.liveness_clock import LivenessLimits
@@ -178,6 +179,25 @@ class ProjectDriverTests(DriverHarness):
             self.assertTrue(self.cli('result-preflight', *other)['ready'])
         self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
         process.communicate(timeout=30)
+
+    def test_a_run_whose_preparation_fails_says_which_stage_stopped_it(self):
+        context, route_path, _, run_handle = self.open_run()
+        with mock.patch.object(codex_preparation.bridge, 'codex_managed_configuration_present', return_value=True):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('preparation_managed_configuration', refused['reason_code'], refused)
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
+
+    def test_a_run_whose_client_changed_after_preparation_says_so(self):
+        context, route_path, _, run_handle = self.open_run()
+        original = codex_preparation.CodexPreparationLane.prepared
+
+        def changed(lane, handle):
+            value = original(lane, handle)
+            return dataclasses.replace(value, client_identity=('/srv/other/codex', 'f' * 64))
+        with mock.patch.object(codex_preparation.CodexPreparationLane, 'prepared', autospec=True, side_effect=changed):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('run_client_changed', refused['reason_code'], refused)
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
     def test_only_the_opening_host_class_can_prepare_and_dispatch_its_run(self):
         context, route_path, orchestration, run_handle = self.open_run()
