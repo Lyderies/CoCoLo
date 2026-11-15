@@ -614,12 +614,137 @@ class LearningCliTests(unittest.TestCase):
                                                 kept.execute("SELECT count(*) FROM records").fetchone()[0]))
             finally:
                 kept.close()
-            self.assertEqual(1, len(list((self.state_root / "backups" / self.project_id).glob("upgrade_schema6_*.json"))))
+            self.assertEqual(1, len(list((self.state_root / "backups" / self.project_id).glob("upgrade_schema6_*.sqlite3"))))
             # Approving again when there is nothing left to upgrade changes nothing.
             again = self._run("learning-register", "--upgrade-ledger")
             self.assertEqual((True, None, None), (again["ready"], again["ledger_upgraded_from"], again["ledger_copy"]))
             self.assertEqual([copy], list(copy.parent.iterdir()))
             self.assertTrue(self._run("learning-status")["active"])
+        finally:
+            self._stop_collector()
+
+    def _register_here(self, *arguments: str, expected: int = 0) -> dict:
+        """learning-register in this process, so a test's patches apply to it."""
+        stdout = io.StringIO()
+        argv = ["cli.py", "learning-register", "--state-root", str(self.state_root),
+                "--project-root", str(self.project), *arguments]
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(stdout):
+            code = cli_main()
+        self.assertEqual(expected, code, stdout.getvalue())
+        return json.loads(stdout.getvalue())
+
+    def _upgrade_backups(self) -> list[Path]:
+        return sorted((self.state_root / "backups").glob("*/upgrade_schema6_*"))
+
+    def test_a_project_backup_is_streamed_so_its_size_never_meets_a_memory_bound(self) -> None:
+        # Release 0.3.0 built each project's upgrade backup as one document in memory
+        # and refused any over 128 MiB, so a busy project could never be upgraded. The
+        # backup is now written and checked row by row: building that document at all
+        # is a regression.
+        from tests.test_account_launch_claims import downgrade_ledger_to_six
+
+        ledger = LearningLedger(LearningState(self.state_root, create=False))
+        records = ledger._connection.execute("SELECT count(*) FROM records").fetchone()[0]
+        downgrade_ledger_to_six(ledger)
+        ledger.close()
+        whole = mock.patch.object(learning_store, "_snapshot_project_partition",
+                                  side_effect=AssertionError("a whole partition was built in memory"))
+        try:
+            with whole:
+                upgraded = self._register_here("--upgrade-ledger")
+            self.assertEqual((True, 6), (upgraded["ready"], upgraded["ledger_upgraded_from"]))
+            [backup] = self._upgrade_backups()
+            self.assertEqual(".sqlite3", backup.suffix)
+            self.assertEqual(0o600, backup.stat().st_mode & 0o777)
+            self._stop_collector()
+            ledger = LearningLedger(LearningState(self.state_root, create=False))
+            try:
+                with whole:
+                    verified = ledger.verify_sanitized_backup(self.project_id, file_id=backup.stem)
+            finally:
+                ledger.close()
+            self.assertEqual((True, 6, records), (
+                verified["verified"], verified["ledger_schema_version"], verified["counts"]["records"]))
+        finally:
+            self._stop_collector()
+
+    def _second_project_after(self, ledger, first: str) -> str:
+        """A further registered project whose identifier sorts after `first`, so it is backed up later."""
+        for index in range(64):
+            root = self.project.parent / f"later-{index}"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            project_id = ledger.register_project(root, now_ms=1)
+            if project_id > first:
+                return project_id
+        self.fail("no later project identifier")
+
+    def test_an_upgrade_that_cannot_fit_refuses_before_writing_any_backup(self) -> None:
+        from tests.test_account_launch_claims import downgrade_ledger_to_six
+
+        ledger = LearningLedger(LearningState(self.state_root, create=False))
+        try:
+            later = self._second_project_after(ledger, self.project_id)
+            downgrade_ledger_to_six(ledger)
+            # The first project (with the fixture's records) fits; the later, empty one is
+            # made "too large" by a limit between their sizes, so an upgrade that sized
+            # projects one at a time would already have written the first one's backup.
+            sizes = {project: learning_store.project_backup_bytes(ledger._connection, project, 6)
+                     for project in (self.project_id, later)}
+        finally:
+            ledger.close()
+        self.assertGreater(sizes[self.project_id], sizes[later])
+        order = sorted(sizes)
+        try:
+            for patch, expected in (
+                    # The later project alone is over the per-project limit.
+                    (mock.patch.object(learning_store, "MAX_PROJECT_BACKUP_BYTES", sizes[later] - 1),
+                     {"project_number": order.index(later) + 1, "projects": 2,
+                      "needed_bytes": sizes[later], "limit_bytes": sizes[later] - 1}),
+                    # Every project fits, but not all of them on this disk.
+                    (mock.patch.object(learning_store, "_free_backup_bytes", return_value=1),
+                     {"project_number": None, "projects": 2, "available_bytes": 1})):
+                with self.subTest(expected=sorted(expected)), patch:
+                    refused = self._register_here("--upgrade-ledger", expected=2)
+                self.assertEqual(("ledger_upgrade_capacity", False), (refused["reason_code"], refused["ready"]))
+                for name, value in expected.items():
+                    self.assertEqual(value, refused["capacity"][name], name)
+                self.assertIn("nothing was changed", refused["error"])
+                self.assertEqual([], self._upgrade_backups())
+                self.assertEqual(6, learning_store.ledger_schema_behind(LearningState(self.state_root, create=False)))
+                kept = sqlite3.connect(self.state_root / "learning.sqlite3")
+                try:
+                    self.assertEqual(0, kept.execute(
+                        "SELECT count(*) FROM stored_files WHERE file_id LIKE 'upgrade_schema6_%'").fetchone()[0])
+                finally:
+                    kept.close()
+            # With room, the same records upgrade, both projects' backups included.
+            upgraded = self._register_here("--upgrade-ledger")
+            self.assertEqual((True, 6), (upgraded["ready"], upgraded["ledger_upgraded_from"]))
+            self.assertEqual(2, len(self._upgrade_backups()))
+        finally:
+            self._stop_collector()
+
+    def test_a_failed_upgrade_names_its_cause_only_in_plain_fixed_words(self) -> None:
+        from tests.test_account_launch_claims import downgrade_ledger_to_six
+
+        try:
+            for message, shown in (("project backup cannot represent records exactly",
+                                    "project backup cannot represent records exactly"),
+                                   # A path, or anything that could identify a project or account, is never shown.
+                                   ("cannot read /srv/records/private/ledger", None),
+                                   ("project prj_0123456789abcdef0123456789abcdef is not active", None)):
+                ledger = LearningLedger(LearningState(self.state_root, create=False), allow_schema_upgrade=True)
+                if learning_store.ledger_schema_behind(ledger.state) is None:
+                    downgrade_ledger_to_six(ledger)
+                ledger.close()
+                with self.subTest(message=message), \
+                        mock.patch.object(LearningLedger, "_initialize_launch_claims_locked", autospec=True,
+                                          side_effect=learning_store.LedgerError(message)):
+                    report = self._register_here("--upgrade-ledger", expected=2)
+                self.assertEqual(("ledger_upgrade_failed", shown), (report["reason_code"], report["cause"]))
+                self.assertNotIn("/srv/records", json.dumps(report))
+                self.assertNotIn("prj_0123456789abcdef", json.dumps(report))
         finally:
             self._stop_collector()
 
