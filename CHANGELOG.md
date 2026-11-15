@@ -28,16 +28,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   longer blocks admission; every record admission reads is still checked in full.
 - A Claude billing probe refused because every run slot of its account was in use reported
   `probe_unavailable`; it now reports `probe_busy`.
-- Runs that 0.2.x recorded, after an upgrade from it:
-  - a bridged run (one 0.2.x dispatched as its own command) counts as finished straight away. Its
-    dispatch held the collector's maintenance lock for its whole run, and the upgrade takes that lock,
-    so none can still be running. 0.3.1 counted them for a day;
-  - a native Claude run (spawned by the host's own agent tool) still counts for a day after it started.
-    0.2.x enforced no deadline on those, so a day is a cautious rule, not a proof;
-  - neither holds back updating COCOLO itself any more: it said "a child run is active" while none was.
-    They never ran under the collector or a project service.
-
-  Found in an owner's live test of 0.3.2.
+- Runs that 0.2.x recorded still count as running for a day after they started (a cautious rule: 0.2.x
+  enforced no deadline on a native Claude child), but they no longer hold back updating COCOLO or
+  replacing a project service: an update said "a child run is active" while none was. They never ran
+  under the collector or a project service. This applies once 0.3.2's collector is running; updating to
+  0.3.2 itself, the earlier collector still waits for them. Found in an owner's live test of 0.3.2.
 - After an upgrade from 0.2.x, `learning-status` and `learning-migrate-project --status` say how many
   runs the earlier version left still hold a slot, and when the last stops counting
   (`earlier_version_runs`); a learning move refused with `migration_not_drained` says the same.

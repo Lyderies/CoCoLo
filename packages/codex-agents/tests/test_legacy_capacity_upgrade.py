@@ -78,25 +78,22 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         self.assertEqual(0, self.counted(ledger))
         self.assertTrue(ledger.drained())
 
-    def test_the_bound_for_a_native_run_is_a_cautious_day(self):
-        # A 0.2.x native child (spawned by the host's own agent tool) had no deadline
-        # anyone enforced, so no bound is proven; a day is a cautious rule.
+    def test_the_bound_is_a_cautious_day(self):
+        # Not a proof: a native 0.2.x child had no enforced deadline, and a bridged one
+        # could outlive a dispatch process that was killed outright.
         self.assertEqual(24 * HOUR, learning_store.LEGACY_RUN_MAX_MS)
 
-    def test_a_bridged_run_from_an_earlier_version_never_counts_after_the_upgrade(self):
-        # A 0.2.x dispatch held the collector's maintenance lock for its whole run, and
-        # the upgrade takes that lock: no bridged child of 0.2.x can still be running.
-        ledger = self.upgrade_with_runs(HOUR, 3 * HOUR, client_version="bridge-v1")
-        self.assertEqual(0, self.counted(ledger))
-        self.assertTrue(ledger.drained())
-        self.assertEqual({"holding": 0, "finished_by_ms": None}, ledger.earlier_version_runs())
-
-    def test_a_native_run_from_an_earlier_version_counts_for_a_day(self):
-        ledger = self.upgrade_with_runs(21 * HOUR)
-        self.assertEqual(1, self.counted(ledger))
-        later = ledger._clock_ms() + 3 * HOUR + 60_000
-        ledger._clock_ms = lambda: later
-        self.assertEqual(0, self.counted(ledger))
+    def test_bridged_and_native_runs_from_an_earlier_version_count_for_a_day(self):
+        for client_version in ("bridge-v1", "codex-host-v1"):
+            with self.subTest(client_version=client_version):
+                if client_version != "bridge-v1":
+                    self.fixture.tearDown()
+                    self.setUp()
+                ledger = self.upgrade_with_runs(21 * HOUR, client_version=client_version)
+                self.assertEqual(1, self.counted(ledger))
+                later = ledger._clock_ms() + 3 * HOUR + 60_000
+                ledger._clock_ms = lambda: later
+                self.assertEqual(0, self.counted(ledger))
 
     def test_replacing_the_collector_does_not_wait_for_runs_an_earlier_version_left(self):
         # They ran inside their own 0.2.x commands, never under a collector or a

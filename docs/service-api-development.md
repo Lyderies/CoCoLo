@@ -3695,13 +3695,11 @@ Schema 9 requires verified schema-8 backups before migration. Existing consumed
 or fenced launch markers become `legacy_unknown` reservations; migration does
 not infer that historical execution never happened or invent account/cleanup
 evidence. Unknown reservations count conservatively for every candidate account
-while their run could still be alive. A bridged 0.2.x child ran inside its own CLI
-`dispatch`, which held the collector's maintenance lock for its whole run; the upgrade
-takes that lock, so `crashed_claim` treats a bridged (`bridge-v1`) `legacy_unknown`
-reservation as one that cannot still be running at once. A native 0.2.x child had no
-enforced deadline, so its reservation counts until it was claimed more than
-`LEGACY_RUN_MAX_MS` (24 hours, by the wall clock; it has no monotonic reference) ago, a
-cautious rule rather than a proof. From then on a reservation is one that cannot still be running:
+while their run could still be alive. `crashed_claim` treats a `legacy_unknown`
+reservation claimed more than `LEGACY_RUN_MAX_MS` (24 hours, by the wall clock; it has
+no monotonic reference) ago as one that cannot still be running. That is a cautious
+rule, not a proof: a native 0.2.x child had no enforced deadline, and a bridged one could
+outlive a dispatch process killed outright. From then on such a reservation:
 it stops counting against the limits and no longer blocks the learning move's drain,
 while its row stays unreleased. (Release 0.3.0 had no such rule, so two historical
 markers blocked every new claim and any of them blocked the move, for ever.) Service-path execution/release integration

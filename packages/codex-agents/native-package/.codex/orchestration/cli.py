@@ -701,7 +701,10 @@ def _migrate_learning(args):
         return {"ready": True, **report}
     except MigrationError as error:
         if error.reason_code == "migration_not_drained" and ledger is not None:
-            return {**refused(error.reason_code), "earlier_version_runs": ledger.earlier_version_runs()}
+            try:
+                return {**refused(error.reason_code), "earlier_version_runs": ledger.earlier_version_runs()}
+            except Exception:  # The refusal stands without the detail.
+                pass
         return refused(error.reason_code)
     except HistoryError as error:
         return refused("migration_project_service_running" if error.reason_code == "history_writer_busy"
