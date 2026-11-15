@@ -207,6 +207,17 @@ class AccountBillingJobTests(unittest.TestCase):
         self.assertEqual(1, len(self.launches()))
         self.assertEqual(0, self.workers._charged)
 
+    def test_a_probe_when_every_slot_is_taken_says_busy_and_launches_nothing(self):
+        # Both of the account's slots are held (for example by runs an earlier version
+        # left): the probe is refused as busy, not as unavailable.
+        from codex_agents.account_claim_contracts import ClaimError
+        with mock.patch.object(self.ledger, '_check_active_capacity_locked', side_effect=ClaimError('claim_busy')), \
+                self.assertRaisesRegex(AccountError, '^probe_busy$'):
+            self.take(self.begin())
+        self.assertEqual([], self.launches())
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM account_billing_probe_requests WHERE state='admitted'").fetchone()[0])
+
     def test_a_probe_whose_admission_history_does_not_fit_says_so_and_launches_nothing(self):
         from codex_agents.admission_inputs import AdmissionCaptureError
         with mock.patch.object(self.claims._intake._views, 'capture_admission_inputs',
