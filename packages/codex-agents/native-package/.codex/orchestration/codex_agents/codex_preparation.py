@@ -29,6 +29,13 @@ MAX_PREPARATION_BYTES = 3*MAX_INPUT_BYTES + MAX_RESULT_BODY_BYTES
 MAX_PREPARATION_EXPORT_BYTES = bridge.MAX_EXPORT_BYTES + MAX_RESULT_BODY_BYTES
 
 
+# The runtime this code runs from (the folder holding `.codex`): the protected copy,
+# a project install or a checkout. Data that no route digest binds, such as the
+# result schema, is read from here, as the CLI reads it from ORCHESTRATION_ROOT;
+# only digest-bound agent files come from the project's bundle.
+RUNTIME_ROOT = Path(__file__).resolve().parents[3]
+
+
 class PreparationError(RuntimeError):
     def __init__(self, reason='preparation_unavailable'):
         self.reason_code = reason if reason in {'preparation_unavailable', 'preparation_full', 'preparation_busy',
@@ -199,7 +206,8 @@ def _build(payload, scope):
         else:
             role_prompt = bridge._codex_role_prompt(bundle, route)
             from .learning_engine import _read_managed_bytes
-            schema = _read_managed_bytes(bundle, '.codex/orchestration/schemas/result.schema.json', max_bytes=MAX_RESULT_BODY_BYTES)
+            schema = _read_managed_bytes(RUNTIME_ROOT, '.codex/orchestration/schemas/result.schema.json',
+                                         max_bytes=MAX_RESULT_BODY_BYTES)
             bridge.codex_schemas(schema)
         stage = 'worker_input'
         worker_result = _worker_input(prospective, value['history_endpoint'], value['worker_result'])

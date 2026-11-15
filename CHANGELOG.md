@@ -31,7 +31,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - Under the owner's protected command rule, no bridged child could start, Codex or Claude. The project
   service runs from the protected runtime copy there, and prepared children from the copy, which holds
   only runtime code and none of the agent files a child's role comes from. It now prepares them from
-  the project the copy is bound to, exactly as the CLI does; a copy serves no other project. Found in an
+  the project the copy is bound to, exactly as the CLI does; a copy serves no other project. Only the
+  agent files, which the run's route binds by digest, come from the project: the result schema and
+  client capabilities still come from the runtime the service runs from, as for the CLI. Found in an
   owner's live test of 0.3.2, which ended `preparation_failed_at_role_prompt`.
 - A run that could not start said only `run_unavailable`. It now says which stage stopped it:
   `preparation_managed_configuration` (managed client settings are present), `preparation_client_missing`,

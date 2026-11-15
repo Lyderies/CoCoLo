@@ -115,6 +115,9 @@ MAX_FORGET_ATTEMPTS = 12
 # one settlement request may take.
 SWEEP_SECONDS = 1.0
 SETTLE_TIMEOUT_SECONDS = 10
+# The runtime this code runs from, as for preparation: the client capabilities a
+# result is admitted against come from here, as the CLI reads them from its runtime.
+RUNTIME_ROOT = Path(__file__).resolve().parents[3]
 REASON_CODES = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable', 'run_abandoned',
     'run_closed',
@@ -746,7 +749,7 @@ class RunDriver:
             return None
         run = self._runs[(binding.run_handle, binding.attempt)]
         capability = load_client_capabilities(
-            self._bundle / '.codex' / 'orchestration' / 'config' / 'learning-clients.json')['bridge-v1']
+            RUNTIME_ROOT / '.codex' / 'orchestration' / 'config' / 'learning-clients.json')['bridge-v1']
         original = run.prospective
         return HostResultContext(run.binding, original.assignment, original.task, original.route, capability)
 
