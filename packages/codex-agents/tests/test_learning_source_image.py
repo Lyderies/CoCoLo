@@ -15,7 +15,7 @@ from tests import test_learning_store as legacy
 from codex_agents import learning_source_image as image
 from codex_agents import learning_store as store
 from codex_agents.history_contracts import HistoryError
-from codex_agents.learning_contracts import canonical_json, content_digest, keyed_digest
+from codex_agents.learning_contracts import canonical_json, keyed_digest
 from codex_agents.sql_read_budget import SQLReadLimits
 
 
@@ -54,14 +54,19 @@ class LearningSourceImageTests(unittest.TestCase):
             expires_at_ms=time.time_ns() // 1_000_000 + 3_600_000)
 
     def rewrite(self, mutate):
-        envelope = json.loads(self.backup.read_bytes())
-        mutate(envelope['body'])
-        envelope['backup_sha256'] = content_digest(envelope['body'])
-        raw = json.dumps(envelope, ensure_ascii=False, indent=3).encode()
-        self.backup.write_bytes(raw)
+        """Change the registered backup file itself, then re-register its digest."""
+        with sqlite3.connect(self.backup) as backup:
+            mutate(backup)
+        raw = self.backup.read_bytes()
         self.connection.execute('UPDATE stored_files SET content_digest=? WHERE project_id=? AND file_id=?',
             (hashlib.sha256(raw).hexdigest(), self.project, self.file_id)).close()
-        return envelope['body']
+        return raw
+
+    def manifest(self, backup, change):
+        raw = backup.execute('SELECT manifest FROM cocolo_backup_manifest').fetchone()[0]
+        value = json.loads(raw)
+        change(value)
+        backup.execute('UPDATE cocolo_backup_manifest SET manifest=?', (canonical_json(value),))
 
     def test_empty_project_still_queries_all_thirty_tables_and_preserves_settings(self):
         statements = []
@@ -239,31 +244,40 @@ class LearningSourceImageTests(unittest.TestCase):
         self.backup = self.source.create_sanitized_backup(self.project, file_id=self.file_id,
             expires_at_ms=time.time_ns() // 1_000_000 + 3_600_000)
         self.refresh()
-        body = self.rewrite(lambda b: b['tables']['hook_ingestion'].reverse())
-        raw = self.backup.read_bytes()
+        # Rows stored in another physical order are still read, and compared, in key order.
+        def reverse(backup):
+            rows = backup.execute('SELECT * FROM hook_ingestion ORDER BY event_code DESC').fetchall()
+            backup.execute('DELETE FROM hook_ingestion')
+            backup.executemany('INSERT INTO hook_ingestion VALUES(?,?,?,?)', rows)
+        raw = self.rewrite(reverse)
         result = self.capture()
-        self.assertEqual(canonical_json(body), result['body'])
+        self.assertEqual(self.backup, result['archive'].path)
         self.assertEqual(hashlib.sha256(raw).hexdigest(), result['backup_digest'])
         self.assertEqual(raw, self.backup.read_bytes())
 
     def test_boolean_counts_and_duplicate_original_keys_refuse(self):
-        self.rewrite(lambda b: b['counts'].__setitem__('records', False))
+        self.rewrite(lambda b: self.manifest(b, lambda m: m['counts'].__setitem__('records', False)))
         self.refuse('history_incompatible')
         self.connection.execute('INSERT INTO hook_ingestion VALUES(?,?,?,?)', (self.project, 'tool_started', 1, 10)).close()
         self.refresh()
-        def duplicate(body):
-            body['tables']['hook_ingestion'] *= 2
-            body['counts']['hook_ingestion'] = 2
-        self.rewrite(duplicate)
-        self.refuse('history_unavailable')
+        # The backup's primary keys make a duplicate original row impossible to store;
+        # a row the ledger does not have is a conflict.
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.rewrite(lambda b: b.execute('INSERT INTO hook_ingestion VALUES(?,?,?,?)',
+                                             (self.project, 'tool_started', 1, 10)))
+        def extra(backup):
+            backup.execute('INSERT INTO hook_ingestion VALUES(?,?,?,?)', (self.project, 'turn_started', 1, 10))
+            self.manifest(backup, lambda m: m['counts'].__setitem__('hook_ingestion', 2))
+        self.rewrite(extra)
+        self.refuse('history_conflict')
 
     def test_original_manifest_versions_require_exact_integers(self):
-        for field, value in (('schema_version', 2.0), ('ledger_schema_version', 13.0)):
-            def changed(body):
-                body['schema_version'], body['ledger_schema_version'] = 2, 13
-                body[field] = value
-            self.rewrite(changed)
-            with self.subTest(field=field):
+        # SQLite keeps 3.0 as the integer 3 in these columns; values that stay non-integers are refused.
+        for column, value in (('format_version', 3.5), ('ledger_schema_version', 13.5),
+                              ('format_version', b'3'), ('ledger_schema_version', 'thirteen')):
+            self.refresh()
+            self.rewrite(lambda b: b.execute(f'UPDATE cocolo_backup_manifest SET {column}=?', (value,)))
+            with self.subTest(column=column, value=value):
                 self.refuse('history_incompatible')
 
     def test_rows_and_bytes_use_keyset_pages_without_losing_unconsumed_rows(self):

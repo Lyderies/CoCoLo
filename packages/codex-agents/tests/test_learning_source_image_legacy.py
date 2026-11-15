@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 from tests import test_learning_store as legacy
-from tests.learning_support import event_record
+from tests.learning_support import backup_body, event_record
 from codex_agents import learning_store
 from codex_agents import project_learning_corpus as corpus
 from codex_agents import project_learning_qa as qa
@@ -40,7 +40,7 @@ class LearningSourceImageLegacyTests(unittest.TestCase):
         self.domain = self.target.learning_key_domain_digest()
         self.backup = self.source.create_sanitized_backup(
             self.project, file_id='source_image', expires_at_ms=time.time_ns() // 1_000_000 + 3_600_000)
-        self.body = json.loads(self.backup.read_bytes())['body']
+        self.body = backup_body(self.backup, self.project)
 
     def capture(self, *, file_id='source_image', domain=None):
         return self.source._capture_learning_source_image(
@@ -68,14 +68,16 @@ class LearningSourceImageLegacyTests(unittest.TestCase):
         self.assertEqual(30, len(image['counts']))
         self.assertEqual((23, 2, 1), tuple(dict(image['counts'])[n] for n in
                                          ('records', 'owner_attestations', 'operational_qa')))
-        self.assertEqual(canonical_json(self.body), image['body'])
+        self.assertEqual(self.backup, image['archive'].path)
+        self.assertEqual(self.body, backup_body(image['archive'].path, self.project))
         self.assertEqual(self.domain, image['key_domain_digest'])
         metadata = {n: image[n] for n in ('project_id', 'ledger_schema_version',
                                         'backup_digest', 'manifest_digest', 'key_domain_digest')}
         self.assertEqual(keyed_digest(self.key, b'learning-source-image-v1\0' + canonical_json(metadata)),
                          image['source_identity_digest'])
         self.assertEqual(hashlib.sha256(raw_backup).hexdigest(), image['backup_digest'])
-        self.assertEqual(content_digest(self.body), image['manifest_digest'])
+        # The archived image is the backup file itself.
+        self.assertEqual(image['backup_digest'], image['manifest_digest'])
         self.assertIs(False, image['learning_ready'])
         self.assertEqual(changes, self.source._connection.total_changes)
         self.assertFalse(self.source._connection.in_transaction)
@@ -122,9 +124,9 @@ class LearningSourceImageLegacyTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, '^history_conflict$'):
             self.capture()
         image = self.capture(file_id='source_image_second')
-        self.assertEqual(canonical_json(json.loads(second.read_bytes())['body']), image['body'])
+        self.assertEqual(second, image['archive'].path)
         self.assertTrue(any(row['file_id'] == 'source_image'
-                            for row in json.loads(image['body'])['tables']['stored_files']))
+                            for row in backup_body(image['archive'].path, self.project)['tables']['stored_files']))
         self.assertTrue(self.backup.exists())
 
     def test_existing_unicode_backup_identifiers_keep_their_original_file_and_body(self):
@@ -133,13 +135,13 @@ class LearningSourceImageLegacyTests(unittest.TestCase):
             self.project, file_id=identifier, expires_at_ms=time.time_ns() // 1_000_000 + 3_600_000)
         raw = path.read_bytes()
         image = self.capture(file_id=identifier)
-        self.assertEqual(canonical_json(json.loads(raw)['body']), image['body'])
+        self.assertEqual(path, image['archive'].path)
         self.assertEqual(raw, path.read_bytes())
         self.assertIs(False, image['learning_ready'])
 
     def test_real_complete_source_identity_binds_record_signature_and_qa_staging(self):
         image = self.capture()
-        body = json.loads(image['body'])
+        body = backup_body(image['archive'].path, self.project)
         decode = learning_store._backup_decode_value
         records = [{n: decode(row[n]) for n in corpus._ENTRY_FIELDS - {'late'}} | {'late': bool(row['late'])}
                    for row in sorted(body['tables']['records'], key=lambda r: r['source_sequence'])]

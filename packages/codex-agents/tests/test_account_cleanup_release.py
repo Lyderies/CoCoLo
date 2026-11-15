@@ -22,6 +22,7 @@ from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST
 from codex_agents.capacity_status_contracts import CapacityStatusInput
 from codex_agents.release_contracts import verify_release_receipt
 from codex_agents.service_transport import ServiceTransportError
+from tests.learning_support import backup_body
 
 
 class AccountCleanupReleaseTests(unittest.TestCase):
@@ -272,7 +273,7 @@ class AccountCleanupReleaseTests(unittest.TestCase):
         original = tuple(self.ledger._connection.execute('SELECT * FROM account_cleanup_receipts').fetchone())
         path = self.ledger.create_sanitized_backup(self.binding.project_id, file_id='cleanup_release_backup',
             expires_at_ms=self.base.fixture.base.stamp+60_000)
-        body = json.loads(path.read_bytes())['body']
+        body = backup_body(path, self.binding.project_id)
         self.assertEqual(13, body['ledger_schema_version'])
         self.assertEqual(1, body['counts']['account_cleanup_receipts'])
         self.assertTrue(self.ledger.verify_sanitized_backup(self.binding.project_id, file_id='cleanup_release_backup')['verified'])

@@ -1,7 +1,6 @@
 """Real registered signature returns; model launch/native enrollment remain gated."""
 from copy import copy
 from pathlib import Path
-import json
 import runpy
 import sys
 import time
@@ -24,6 +23,7 @@ from codex_agents.providers import claude_rate_limit_records
 from codex_agents.signature_job_intake import SignatureJobIntake, SignatureIntakeLimits
 from codex_agents.signature_worker_pool import SignatureWorkerPool, SignatureWorkerLimits
 from codex_agents.sql_read_budget import SQLReadLimits
+from tests.learning_support import backup_body
 
 
 @unittest.skipUnless((sys.platform.startswith('linux') or (sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file())),
@@ -208,7 +208,7 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         before = self.rows()
         path = self.ledger.create_sanitized_backup(self.fixture.project_id, file_id='original_probe',
             expires_at_ms=time.time_ns()//1_000_000+60_000)
-        body = json.loads(path.read_bytes())['body']
+        body = backup_body(path, self.fixture.project_id)
         self.assertEqual(13, body['ledger_schema_version'])
         self.assertTrue(self.ledger.verify_sanitized_backup(self.fixture.project_id, file_id='original_probe')['verified'])
         tool = runpy.run_path(str(REPOSITORY_ROOT/'scripts/backup_installed_project.py'))

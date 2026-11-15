@@ -668,42 +668,47 @@ class LearningCliTests(unittest.TestCase):
         finally:
             self._stop_collector()
 
-    def _second_project_after(self, ledger, first: str) -> str:
-        """A further registered project whose identifier sorts after `first`, so it is backed up later."""
+    def _project_before(self, ledger, first: str) -> str:
+        """A further, empty project whose identifier sorts before `first`, so it is backed up first."""
         for index in range(64):
-            root = self.project.parent / f"later-{index}"
+            root = self.project.parent / f"earlier-{index}"
             root.mkdir()
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             project_id = ledger.register_project(root, now_ms=1)
-            if project_id > first:
+            if project_id < first:
                 return project_id
-        self.fail("no later project identifier")
+        self.fail("no earlier project identifier")
 
     def test_an_upgrade_that_cannot_fit_refuses_before_writing_any_backup(self) -> None:
         from tests.test_account_launch_claims import downgrade_ledger_to_six
 
         ledger = LearningLedger(LearningState(self.state_root, create=False))
         try:
-            later = self._second_project_after(ledger, self.project_id)
+            earlier = self._project_before(ledger, self.project_id)
             downgrade_ledger_to_six(ledger)
-            # The first project (with the fixture's records) fits; the later, empty one is
-            # made "too large" by a limit between their sizes, so an upgrade that sized
-            # projects one at a time would already have written the first one's backup.
+            # The earlier, empty project fits; the later one (with the fixture's records)
+            # is made too large by a limit between their sizes, so an upgrade that sized
+            # projects one at a time would already have written the earlier one's backup.
+            # Every registered project is backed up, in identifier order. Finding an
+            # earlier identifier can register a few more empty projects on the way.
+            active = [row[0] for row in ledger._connection.execute(
+                "SELECT project_id FROM projects WHERE status='active' ORDER BY project_id")]
             sizes = {project: learning_store.project_backup_bytes(ledger._connection, project, 6)
-                     for project in (self.project_id, later)}
+                     for project in active}
         finally:
             ledger.close()
-        self.assertGreater(sizes[self.project_id], sizes[later])
-        order = sorted(sizes)
+        later = self.project_id
+        self.assertTrue(all(sizes[later] > size for project, size in sizes.items() if project != later))
+        self.assertLess(active.index(earlier), active.index(later))
         try:
             for patch, expected in (
                     # The later project alone is over the per-project limit.
                     (mock.patch.object(learning_store, "MAX_PROJECT_BACKUP_BYTES", sizes[later] - 1),
-                     {"project_number": order.index(later) + 1, "projects": 2,
+                     {"project_number": active.index(later) + 1, "projects": len(active),
                       "needed_bytes": sizes[later], "limit_bytes": sizes[later] - 1}),
                     # Every project fits, but not all of them on this disk.
                     (mock.patch.object(learning_store, "_free_backup_bytes", return_value=1),
-                     {"project_number": None, "projects": 2, "available_bytes": 1})):
+                     {"project_number": None, "projects": len(active), "available_bytes": 1})):
                 with self.subTest(expected=sorted(expected)), patch:
                     refused = self._register_here("--upgrade-ledger", expected=2)
                 self.assertEqual(("ledger_upgrade_capacity", False), (refused["reason_code"], refused["ready"]))
@@ -718,10 +723,10 @@ class LearningCliTests(unittest.TestCase):
                         "SELECT count(*) FROM stored_files WHERE file_id LIKE 'upgrade_schema6_%'").fetchone()[0])
                 finally:
                     kept.close()
-            # With room, the same records upgrade, both projects' backups included.
+            # With room, the same records upgrade, every project backed up.
             upgraded = self._register_here("--upgrade-ledger")
             self.assertEqual((True, 6), (upgraded["ready"], upgraded["ledger_upgraded_from"]))
-            self.assertEqual(2, len(self._upgrade_backups()))
+            self.assertEqual(len(active), len(self._upgrade_backups()))
         finally:
             self._stop_collector()
 
