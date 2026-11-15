@@ -2382,7 +2382,13 @@ step_collector() {
     # After an approved upgrade the failure says how far it got; one fixed sentence each.
     case "$(pj get "$LAST_OUT" reason_code)" in
       ledger_upgrade_failed)
-        list_sub "Your records were not upgraded: they are as the earlier version left them.";;
+        list_sub "Your records were not upgraded: they are as the earlier version left them."
+        why=$(pj get "$LAST_OUT" cause); why=${why//[[:cntrl:]]/}
+        if [ -n "$why" ]; then list_sub "What stopped it: $why."; fi;;
+      ledger_upgrade_capacity)
+        list_sub "Your records were not upgraded and nothing was changed: their backups do not fit."
+        why=$(pj get "$LAST_OUT" error); why=${why//[[:cntrl:]]/}
+        list_sub "${why#the records were not upgraded and nothing was changed: }.";;
       registration_incomplete_after_upgrade)
         list_sub "Your records were upgraded, but registering this project did not finish. Run setup again and repeat this step.";;
       ledger_upgrade_unknown)

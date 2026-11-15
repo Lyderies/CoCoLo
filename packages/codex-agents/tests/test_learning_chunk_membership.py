@@ -323,7 +323,7 @@ class LearningChunkMembershipTests(unittest.TestCase):
         self.begin()
         self.chunk()
         self.assert_fixed(lambda: self.read(True), "history_invalid_input")
-        self.assert_fixed(lambda: self.read(200000), "history_invalid_input")
+        self.assert_fixed(lambda: self.read(2 * corpus.MAX_IMPORT_RECORDS), "history_invalid_input")
         self.write("BEGIN")
         try:
             self.assert_fixed(self.read, "history_conflict")

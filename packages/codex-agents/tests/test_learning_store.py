@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -71,6 +72,7 @@ from codex_agents.learning_engine import (
     review_evaluation_case,
 )
 from tests.learning_support import (
+    backup_body,
     admit_provider,
     fake_provider_tools,
     DIGEST_A,
@@ -2556,7 +2558,7 @@ class LearningStoreTests(unittest.TestCase):
         path = self.ledger.create_sanitized_backup(
             self.project_a_id, file_id='sealed_probes',
             expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
-        body = json.loads(path.read_bytes())['body']
+        body = backup_body(path, self.project_a_id)
         report = self.ledger.verify_sanitized_backup(self.project_a_id, file_id='sealed_probes')
         self.assertEqual(13, report['ledger_schema_version'])
         for table in names:
@@ -2653,7 +2655,7 @@ class LearningStoreTests(unittest.TestCase):
             file_id="complete_backup",
             expires_at_ms=time.time_ns() // 1_000_000 + 60_000,
         )
-        body = json.loads(path.read_bytes())["body"]
+        body = backup_body(path, self.project_a_id)
 
         self.assertEqual(set(body["tables"]), {
             "sessions", "run_provenance", "records", "record_links",
@@ -2706,18 +2708,14 @@ class LearningStoreTests(unittest.TestCase):
             file_id="corrupt_backup",
             expires_at_ms=time.time_ns() // 1_000_000 + 60_000,
         )
-        envelope = json.loads(path.read_bytes())
-        envelope["body"]["tables"]["record_links"].append({
-            "from_record_id": "missing-a",
-            "to_record_id": "missing-b",
-            "relation": "evidence",
-        })
-        envelope["body"]["counts"]["record_links"] = 1
-        envelope["backup_sha256"] = hashlib.sha256(
-            canonical_json(envelope["body"])
-        ).hexdigest()
-        payload = canonical_json(envelope)
-        path.write_bytes(payload)
+        # A link to records the backup does not hold, written into the file itself.
+        with closing(sqlite3.connect(path)) as backup, backup:
+            backup.execute("INSERT INTO record_links VALUES(?,?,?,?)",
+                           (self.project_a_id, "missing-a", "missing-b", "evidence"))
+            manifest = json.loads(backup.execute("SELECT manifest FROM cocolo_backup_manifest").fetchone()[0])
+            manifest["counts"]["record_links"] += 1
+            backup.execute("UPDATE cocolo_backup_manifest SET manifest=?", (canonical_json(manifest),))
+        payload = path.read_bytes()
         with self.ledger._connection:
             self.ledger._connection.execute(
                 "UPDATE stored_files SET content_digest=? "
@@ -2725,7 +2723,7 @@ class LearningStoreTests(unittest.TestCase):
                 (hashlib.sha256(payload).hexdigest(), self.project_a_id),
             )
 
-        with self.assertRaisesRegex(LedgerError, "restoration rejected"):
+        with self.assertRaisesRegex(LedgerError, "foreign-key check failed"):
             self.ledger.verify_sanitized_backup(
                 self.project_a_id, file_id="corrupt_backup"
             )

@@ -24,14 +24,15 @@ from .learning_contracts import (
 )
 
 MAX_IMPORTS = 2
-MAX_IMPORT_RECORDS = 100_000
-MAX_IMPORT_BYTES = 128 * 1_048_576
+# A busy project's history: a 0.2.x ledger held 192,000 records (312 MB) for one.
+MAX_IMPORT_RECORDS = 10_000_000
+MAX_IMPORT_BYTES = 16 * 1024 ** 3
 MAX_CHUNK_ENTRIES = 64
 MAX_CHUNK_BYTES = 262_144
 MAX_SIGNATURE_BYTES = 16_384
 EMPTY_CHAIN_DIGEST = "0" * 64
 _RECORD_TYPES = frozenset({
-    "event", "outcome", "feedback", "evaluation_case", "evaluation_assignment",
+    "event", "event_summary", "outcome", "feedback", "evaluation_case", "evaluation_assignment",
     "qa_evidence", "evidence_review", "evaluation_trial", "candidate", "comparison",
     "canary_report", "grader_calibration", "owner_grant", "promotion", "learning_export",
     "verification_binding", "host_run_profile", "dispatch_intent", "dispatch_result",

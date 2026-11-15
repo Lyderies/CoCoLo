@@ -243,12 +243,14 @@ class CliObservationRuntimeTests(unittest.TestCase):
             self.assertNotIn('PRIVATE INVALID ID', json.dumps(reply))
         code, reply = self.take(self.start(extra=('--run-handle', 'hrn_'+'0'*48, '--phase', 'before')))
         self.assertEqual((2, 'observation_not_authorized'), (code, reply['reason_code']))
+        # A stale or foreign service hint means COCOLO's services cannot be reached, which
+        # is not a provider client problem: attest.py then says to run setup, not to sign in.
         self.hint(self.projects[0], self.roots[0], version=1)
         code, reply = self.take(self.start())
-        self.assertEqual((2, 'observation_unavailable'), (code, reply['reason_code']))
+        self.assertEqual((2, 'account_unavailable'), (code, reply['reason_code']))
         self.hint(self.projects[0], self.roots[0], digest='f'*64)
         code, reply = self.take(self.start())
-        self.assertEqual((2, 'observation_unavailable'), (code, reply['reason_code']))
+        self.assertEqual((2, 'account_unavailable'), (code, reply['reason_code']))
         self.assertEqual(0, self.backend.provider_rows())
         self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM account_observation_origins').fetchone()[0])
 

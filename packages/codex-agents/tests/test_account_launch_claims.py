@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 import threading
 import time
@@ -14,6 +13,7 @@ import tests.test_bridge as bridge_fixture
 from codex_agents import learning_store
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.learning_store import DEFAULT_RETENTION_MS, LearningLedger, LedgerError, StateError
+from tests.learning_support import backup_body
 
 
 def drop_account_observations_for_legacy_fixture(ledger):
@@ -198,7 +198,7 @@ class AccountLaunchClaimsTests(unittest.TestCase):
         checked = self.ledger.verify_sanitized_backup(self.project, file_id="claim_fixture_backup")
         self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, checked["ledger_schema_version"])
         self.assertEqual(1, checked["counts"]["launch_claims"])
-        body = json.loads(backup.read_bytes())["body"]
+        body = backup_body(backup, self.project)
         row = body["tables"]["launch_claims"][0]
         body["tables"]["launch_claims"].append(dict(row))
         body["counts"]["launch_claims"] = 2
@@ -326,7 +326,7 @@ class AccountLaunchClaimsTests(unittest.TestCase):
         active = [row[0] for row in self.ledger._connection.execute("SELECT project_id FROM projects WHERE status='active'")]
         self.assertEqual(sorted(active), sorted(row["project_id"] for row in kept))
         for row in kept:
-            body = json.loads((state.backups / row["project_id"] / (row["file_id"] + ".json")).read_bytes())["body"]
+            body = backup_body(state.backups / row["project_id"] / (row["file_id"] + ".sqlite3"), row["project_id"])
             self.assertEqual(6, body["ledger_schema_version"])
             self.assertGreater(row["expires_at_ms"], time.time_ns() // 1_000_000 + 29 * 24 * 60 * 60 * 1000)
 

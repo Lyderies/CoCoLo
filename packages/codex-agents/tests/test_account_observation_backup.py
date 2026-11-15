@@ -8,6 +8,7 @@ import unittest
 
 from tests import test_account_observation as fixtures
 from tests.support import REPOSITORY_ROOT
+from tests.learning_support import backup_body
 from codex_agents.learning_contracts import content_digest, validate_learning_record
 from codex_agents.learning_store import LedgerError, _verify_project_backup_body
 
@@ -24,7 +25,7 @@ class AccountObservationBackupTests(unittest.TestCase):
         self.fixture.owner.abort(pending)
         path = self.ledger.create_sanitized_backup(self.project, file_id='observations',
             expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
-        self.body = json.loads(path.read_bytes())['body']
+        self.body = backup_body(path, self.project)
         self.tool = runpy.run_path(str(REPOSITORY_ROOT / 'scripts/backup_installed_project.py'))
 
     def standalone(self, body):

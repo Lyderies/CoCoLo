@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "weights": {
+    "low": {"keep_days": 7},
+    "medium": {"keep_days": 30},
+    "high": {"keep_days": 90}
+  },
+  "events": {
+    "low": [
+      "hook_completed",
+      "item_completed",
+      "tool_output_observed",
+      "tool_started",
+      "turn_started",
+      "turn_stop_observed",
+      "usage_snapshot"
+    ],
+    "medium": [
+      "model_rerouted",
+      "session_ended",
+      "session_started",
+      "subagent_started",
+      "subagent_stop_observed",
+      "turn_completed",
+      "turn_failed",
+      "turn_interrupted"
+    ],
+    "high": [
+      "escalation",
+      "no_progress",
+      "repair",
+      "retry"
+    ]
+  },
+  "host_events": "run_bound",
+  "summary_keep_days": 90
+}

@@ -673,3 +673,35 @@ def admit_provider(
         ledger, project_id, private_key, provider, identity["account_fingerprint"]
     )
     return identity["account_fingerprint"]
+
+
+def backup_body(path, project_id: str) -> dict:
+    """A streamed (format 3) backup's rows in the layout an in-memory partition snapshot has.
+
+    For tests that compare row content with the ledger; the product never builds this.
+    """
+    from codex_agents import learning_store as store
+    from codex_agents.project_backup import open_backup
+
+    backup = open_backup(Path(path))
+    try:
+        version = backup.execute("SELECT ledger_schema_version FROM cocolo_backup_manifest").fetchone()[0]
+        names = store._BACKUP_PROJECT_COLUMNS
+        project = backup.execute(f"SELECT {','.join(names)} FROM projects").fetchone()
+        tables, columns = {}, {}
+        for table in store._backup_tables(version):
+            declared = list(store._backup_expected_columns(version, table))
+            columns[table] = declared
+            if not declared:
+                tables[table] = []
+                continue
+            order = [name for name in store._BACKUP_ORDER_COLUMNS[table] if name in declared]
+            rows = backup.execute(f"SELECT {','.join(declared)} FROM {table} WHERE project_id=?"
+                                  + (f" ORDER BY {','.join(order)}" if order else ""), (project_id,)).fetchall()
+            tables[table] = [{name: store._backup_encode_value(value) for name, value in zip(declared, row)}
+                             for row in rows]
+        return {"schema_version": 2, "ledger_schema_version": version,
+                "project": {name: store._backup_encode_value(value) for name, value in zip(names, project)},
+                "columns": columns, "tables": tables, "counts": {name: len(rows) for name, rows in tables.items()}}
+    finally:
+        backup.close()

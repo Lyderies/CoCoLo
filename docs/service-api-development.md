@@ -827,6 +827,22 @@ the real-install runs; until then the frame shapes remain an assumption.
 Both were broken until this section's changes and are now covered by tests and by a
 run against a ledger the 0.2.2 runtime itself created.
 
+- **Project backups (format 3).** A project backup is one private SQLite file,
+  `<state root>/backups/<project>/<file id>.sqlite3` (0600), made by `project_backup.write`:
+  the partition is copied row by row, in batches, into the isolated-restore schema plus a
+  one-row manifest (format, version, ledger schema, project, columns, counts), so the file
+  is the restored copy. `project_backup.verify` checks the file's exact schema objects
+  (nothing else may be in it), the manifest, per-table counts, `integrity_check`,
+  `foreign_key_check`, the coverage a restored partition must keep and every learning
+  record's digest, and can compare it with the live partition: both sides are read in
+  the same total order (primary key, then every other column), one batch at a time, and
+  values must match in type and value. The ledger registers the file's SHA-256 only after
+  the file checks out and is renamed into place, and re-hashes it, with its identity,
+  after every read. Memory never grows with the project: the step that held about twelve
+  times a project's records in 0.3.0 now holds a few batches. Format 2 (one canonical
+  JSON document, limited to 128 MiB) is still read for backups earlier releases made;
+  nothing writes it. The learning move archives this file as its source image (the image's
+  manifest digest is the file's) and streams records, signatures and QA rows from it.
 - **Upgrade.** A 0.2.x ledger is schema 6; this release is 13, and a ledger never
   upgrades itself on open (`ledger schema upgrade requires explicit drained-owner
   authorization and verified backups`). The owner's registration is where it happens:
@@ -838,11 +854,20 @@ run against a ledger the 0.2.2 runtime itself created.
   `<state root>/ledger-before-upgrade/` and accepts the copy only if it is sound, names
   the same schema and holds the same rows per table (`copy_ledger_before_upgrade`), then
   opens the ledger with `allow_schema_upgrade` and `backup_before_upgrade`. The latter
-  writes, for every active project, the same sealed and registered partition backup the
-  owner's backup command writes, in the old schema's layout, and the existing migration
-  gate (`_require_project_migration_backups`) restores and compares each before one
-  transaction upgrades the schema. A failure inside that transaction leaves schema 6
-  and reports `ledger_upgrade_failed` with the copy's path; a failure after it (the
+  first clears partial files a stopped write left, sizes every active project's backup
+  from SQL totals (every stored byte, `project_id` and index copies included, plus page
+  slack, so the plan is not smaller than the file) and checks the disk
+  (`_plan_project_backups`); the written file's real size is checked against the same
+  limit before it is kept: one over `MAX_PROJECT_BACKUP_BYTES` (16 GiB), or all of them
+  together (twice over, plus 256 MiB) beyond the free space, refuses with
+  `LedgerCapacityError` before any backup is written, reported as
+  `ledger_upgrade_capacity` with sizes and the project's position only. It then writes, for
+  every active project, the same registered partition backup the owner's backup command
+  writes, in the old schema's layout, and the existing migration gate
+  (`_require_project_migration_backups`) checks each and compares it with the records row
+  by row before one transaction upgrades the schema. A failure inside that transaction
+  leaves schema 6 and reports `ledger_upgrade_failed` with the copy's path and, when the
+  ledger's message is fixed wording (no path, identifier or digest), its `cause`; a failure after it (the
   project's registration or the runtime's authorization) reports
   `registration_incomplete_after_upgrade`, never that the records are unchanged; if the
   ledger cannot be read to tell, `ledger_upgrade_unknown`. One report
@@ -1063,7 +1088,18 @@ identity check; feedback alone carries its own authority, the owner's signature.
   One checkpoint per orchestration is read to find it; rows are selected by SQLite and
   only that orchestration's (at most 512 runs, else refused) are parsed in the service.
   The SQLite scans themselves still grow with the project's history.
-- `learning-expire` still applies the ledger's retention to the ledger.
+- `learning-expire` still applies the ledger's retention to the ledger. Separately, the
+  collector's `sweep_event_retention` runs every `WORKER_RESULT_SWEEP_SECONDS`: up to
+  `EVENT_SWEEP_BATCH` (500) expired hook and app-server events that no record link
+  touches, and no stored file, grant or owner attestation names, are grouped by run
+  and UTC day into `event_summary` records (closed contract: counts per event code and
+  per source, first and last seen, span; written by the ledger only, source
+  `lifecycle`, never evidence) and removed in one explicit transaction (the ledger
+  connection autocommits); a group that cannot be summarised is left whole, under a
+  savepoint, and the others still go.
+  An event's expiry is set at ingestion from `config/retention-policy.json`
+  (`load_retention_policy`: every event code exactly once, 1 to 365 days; summaries 1
+  to 3650), so existing rows keep theirs. Backups and stored files are not touched.
 - The candidate pipeline commands (evaluation assignments, trials, comparison,
   promotion, canary, rollback, drift, grader calibration, grants) are refused by the
   ledger with "project learning has moved to its project store"; they return with
@@ -3658,10 +3694,14 @@ concurrent-client release criteria remain separate mandatory activation gates.
 Schema 9 requires verified schema-8 backups before migration. Existing consumed
 or fenced launch markers become `legacy_unknown` reservations; migration does
 not infer that historical execution never happened or invent account/cleanup
-evidence. Unknown reservations count conservatively for every candidate account.
-At the two-slot policy, two historical markers therefore block all new claims and
-held projects cannot be deleted. Trusted drained migration and orphan reconciliation
-must resolve this before a usable upgrade. Service-path execution/release integration
+evidence. Unknown reservations count conservatively for every candidate account
+while their run could still be alive. A 0.2.x child ran inside its own CLI command
+under a route deadline of at most six hours, so `crashed_claim` treats a
+`legacy_unknown` reservation claimed more than `LEGACY_RUN_MAX_MS` (24 hours, by the
+wall clock; it has no monotonic reference) ago as one that cannot still be running:
+it stops counting against the limits and no longer blocks the learning move's drain,
+while its row stays unreleased. (Release 0.3.0 had no such rule, so two historical
+markers blocked every new claim and any of them blocked the move, for ever.) Service-path execution/release integration
 and recovery after an uncertain or committed registration also remain incomplete.
 Migration and capacity backfill commit together or roll back together. Current
 startup refuses missing/mismatched reservation coverage instead of rebuilding an

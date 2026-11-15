@@ -177,6 +177,26 @@ Called anyway, `learning-classify-host-run-abandoned` answers `already_closed`.
   result or its QA is recorded. It never changes routing by itself.
 - Neither is ever committed, and every recorded route replays exactly.
 
+### How long records are kept
+
+Raw events from Codex and Claude hooks are most of a busy project's records, so each event code has a
+weight in the installed policy `config/retention-policy.json`:
+
+| Weight | Kept | Event codes |
+|---|---|---|
+| Low | 7 days | `tool_started`, `tool_output_observed`, `hook_completed`, `usage_snapshot`, `item_completed`, `turn_started`, `turn_stop_observed` |
+| Medium | 30 days | `session_started`, `session_ended`, `turn_completed`, `turn_failed`, `turn_interrupted`, `subagent_started`, `subagent_stop_observed`, `model_rerouted` |
+| High | 90 days | `no_progress`, `retry`, `repair`, `escalation` |
+
+The host's own lifecycle events (a child starting, stopping) are kept as long as their run's outcome, 90
+days, and outcomes, cases, feedback and QA keep their own retention. The collector removes expired raw
+events by itself, a small batch every minute. Before it removes them, it writes one summary per run and
+day (how many of each event code, first and last seen, and the span between), kept 90 days, so the totals
+outlive the raw rows. It leaves alone any event a record link, a stored file, a grant or an attestation names, and your backups, which
+keep their own lifetime: an expired event can stay inside a backup until that backup expires.
+`learning-expire` still applies all of the ledger's retention, lineage included, when you run it. A period
+applies from when an event is recorded, so records an earlier version kept keep the expiry they were given.
+
 Commands that need the shared ledger to themselves (backup, owner-key replacement, migration and similar)
 refuse while any child is running instead of stopping the collector under it.
 

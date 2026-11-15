@@ -380,7 +380,7 @@ def billing_probe_client(state_root, project_root, *, request_id=None):
         result = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=60).billing_probe(
             request_id=identity)
     except DispatchError:
-        raise RuntimeBillingProbeError('probe_unavailable', request_id=identity) from None
+        raise RuntimeBillingProbeError('account_unavailable', request_id=identity) from None
     except AccountError as error:
         raise RuntimeBillingProbeError(error.reason_code, request_id=identity) from None
     if result['probe'] == 'denied' or result['reason_code'] is not None:
@@ -406,7 +406,8 @@ def observe_provider_client(state_root, project_root, provider, *, request_id=No
         result = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=60).observe_provider(
             request.provider, request_id=identity, run_handle=request.run_handle, phase=request.phase)
     except DispatchError:
-        raise RuntimeObservationError('observation_unavailable', request_id=identity) from None
+        # COCOLO's own services cannot be reached: not a provider client problem.
+        raise RuntimeObservationError('account_unavailable', request_id=identity) from None
     except (AccountError, ObservationError) as error:
         raise RuntimeObservationError(error.reason_code, request_id=identity) from None
     # Provider identity may include its local executable path in the owner

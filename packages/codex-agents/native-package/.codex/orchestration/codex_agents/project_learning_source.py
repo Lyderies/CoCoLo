@@ -14,7 +14,8 @@ from .history_contracts import HistoryError, _DIGEST, matches, valid_integer
 from .learning_contracts import canonical_json, parse_bounded_json
 
 CHUNK_BYTES = 65_536
-MAX_BYTES = 128 * 1_048_576
+# The archived image is the project's streamed backup file (format 3).
+MAX_BYTES = 16 * 1024 ** 3
 MAX_CHUNKS = MAX_BYTES // CHUNK_BYTES
 _FIELDS = frozenset({"project_id", "ledger_schema_version", "backup_digest", "manifest_digest",
                      "key_domain_digest", "source_identity_digest", "total_bytes"})

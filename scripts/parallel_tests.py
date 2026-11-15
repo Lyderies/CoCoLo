@@ -42,6 +42,7 @@ _RESULT = re.compile(r"^(OK|FAILED)(?: \((.*)\))?$", re.M)
 # A unit that runs this long is stuck: it prints every thread's stack and exits, so the
 # run names it and shows where it waits instead of hanging silently (the slowest takes ~1 min).
 UNIT_SECONDS = 600
+PROGRESS_SECONDS = 60
 _RUNNER = (
     "import faulthandler, sys, unittest\n"
     f"faulthandler.dump_traceback_later({UNIT_SECONDS}, exit=True)\n"
@@ -109,7 +110,7 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool) -> int:
     running, results, started = {}, [], time.monotonic()
     environment = {k: v for k, v in os.environ.items()
                    if not any(marker in k.upper() for marker in ("API_KEY", "ACCESS_TOKEN", "SECRET"))}
-    counter = 0
+    counter, total, reported = 0, len(queue), time.monotonic()
     while queue or running:
         while queue and len(running) < jobs:
             expected, suite, name, names = queue.pop(0)
@@ -125,6 +126,13 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool) -> int:
                 stdout=handle, stderr=subprocess.STDOUT)
             running[process] = (suite, name, names, log, handle, time.monotonic(), folder)
         time.sleep(0.05)
+        if time.monotonic() - reported >= PROGRESS_SECONDS:
+            # A passing run otherwise prints nothing until the end, which looks like a hang.
+            reported = time.monotonic()
+            now = ", ".join(f"{entry[0]}:{entry[1]} {reported - entry[5]:.0f}s"
+                            for entry in sorted(running.values(), key=lambda e: e[5]))
+            print(f"[{reported - started:.0f}s] {len(results)}/{total} units done, "
+                  f"{sum(1 for r in results if r['returncode'] != 0)} failed; running: {now}", flush=True)
         for process, entry in running.items():
             if process.poll() is None and time.monotonic() - entry[5] > UNIT_SECONDS + 60:
                 process.kill()  # It did not stop itself.

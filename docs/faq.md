@@ -34,7 +34,8 @@ it fails closed elsewhere, so verify reports Linux as not ready. Native Windows 
 
 In `~/.local/state/codex-agents` on your machine, and never committed. Account-level records are shared
 by every set-up project through one local collector; each project's own history is kept in its own store
-there. See [configuration](configuration.md#machine-files).
+there. See [configuration](configuration.md#machine-files). Raw hook events are kept 7, 30 or 90 days by
+their kind and then summarised; see [how long records are kept](how-it-works.md#how-long-records-are-kept).
 
 ## Can I use several projects at once?
 

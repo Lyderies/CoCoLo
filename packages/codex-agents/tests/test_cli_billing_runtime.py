@@ -170,7 +170,8 @@ class CliBillingRuntimeTests(unittest.TestCase):
             self.assertNotIn('PRIVATE', json.dumps(failed))
         self.endpoint.unlink()
         code, failed = self.take(self.start(identity='missing-endpoint'))
-        self.assertEqual((2, 'probe_unavailable'), (code, failed['reason_code']))
+        # COCOLO's own account service is unreachable: never reported as a provider client problem.
+        self.assertEqual((2, 'account_unavailable'), (code, failed['reason_code']))
         self.assertEqual('missing-endpoint', failed['request_id'])
         self.assertEqual([], self.launches())
 

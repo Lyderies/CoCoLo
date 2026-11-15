@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
-import json
 import sqlite3
 import threading
 import unittest
@@ -16,6 +15,7 @@ from codex_agents.account_claim_contracts import ClaimError, LaunchClaimInput
 from codex_agents.active_run_capacity import ActiveRunLimits
 from codex_agents.learning_contracts import canonical_json, content_digest
 from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST, LearningLedger, LedgerError, DEFAULT_RETENTION_MS
+from tests.learning_support import backup_body
 
 
 class ActiveRunCapacityTests(unittest.TestCase):
@@ -221,7 +221,7 @@ class ActiveRunCapacityTests(unittest.TestCase):
     def test_verified_backup_retains_capacity_and_refuses_missing_or_cross_bound_rows(self):
         self.case.claim()
         backup = self.ledger.create_sanitized_backup(self.project, file_id="capacity_backup", expires_at_ms=self.case.stamp + 60_000)
-        body = json.loads(backup.read_bytes())["body"]
+        body = backup_body(backup, self.project)
         self.assertEqual(1, learning_store._verify_project_backup_body(body)["active_run_capacity"])
         for change in ("missing", "run", "bridge"):
             broken = deepcopy(body)

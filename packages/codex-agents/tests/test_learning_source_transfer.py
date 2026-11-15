@@ -1,7 +1,6 @@
 """Actual original owner -> complete inert image and record/signature/QA staging."""
 from contextlib import closing
 import hashlib
-import json
 from pathlib import Path
 import sqlite3
 import threading
@@ -9,12 +8,11 @@ import unittest
 from unittest import mock
 
 from tests import test_learning_source_image_legacy as legacy
-from tests.learning_support import event_record
+from tests.learning_support import backup_body, event_record
 from codex_agents import project_history as history
 from codex_agents import learning_source_transfer as transfer
 from codex_agents import project_learning_source as archive
 from codex_agents.history_contracts import HistoryError
-from codex_agents.learning_contracts import canonical_json
 from codex_agents.project_history import ProjectHistory
 from codex_agents.project_learning_activation import ACTIVATION_COLUMNS
 from codex_agents.result_contracts import ResultCapacity
@@ -44,7 +42,8 @@ class LearningSourceTransferTests(unittest.TestCase):
         self.addCleanup(self.target.close)
 
     def test_complete_original_rows_signatures_and_qa_survive_restart_and_exact_replay(self):
-        original = canonical_json(self.body_source())
+        # The archived image is the registered backup file, byte for byte.
+        original = self.backup.read_bytes()
         source_changes = self.source._connection.total_changes
         result = self.transfer()
         self.assertEqual(original, self.archive_body())
@@ -67,11 +66,20 @@ class LearningSourceTransferTests(unittest.TestCase):
         self.assertEqual(0, self.target._connection.execute('SELECT COUNT(*) FROM records').fetchone()[0])
 
     def body_source(self):
-        return json.loads(self.backup.read_bytes())['body']
+        return backup_body(self.backup, self.project)
+
+    def archived_rows(self):
+        copy = Path(self.fixture.temporary.name) / 'archived-image.sqlite3'
+        copy.write_bytes(self.archive_body())
+        copy.chmod(0o600)
+        try:
+            return backup_body(copy, self.project)
+        finally:
+            copy.unlink()
 
     def test_full_original_qa_and_host_check_rows_are_not_replaced_by_subsets(self):
         self.transfer()
-        body = json.loads(self.archive_body())
+        body = self.archived_rows()
         self.assertEqual(self.body_source(), body)
         for name in ('run_provenance', 'host_run_bindings', 'operational_check_receipts',
                      'launch_inputs', 'account_open_receipts'):
@@ -118,7 +126,7 @@ class LearningSourceTransferTests(unittest.TestCase):
         self.reopen()
         self.assertIs(False, self.transfer()['learning_ready'])
         self.assertEqual(chunk, self.target.learning_import_chunk('source', 0))
-        self.assertEqual(canonical_json(self.body_source()), self.archive_body())
+        self.assertEqual(self.backup.read_bytes(), self.archive_body())
 
     def test_different_key_default_owner_outer_transaction_and_foreign_thread_refuse(self):
         self.target._allow_schema_upgrade = False
@@ -217,7 +225,7 @@ class LearningSourceTransferTests(unittest.TestCase):
         self.target.close()
         self.target = target
         self.assertIs(False, self.transfer()['learning_ready'])
-        self.assertEqual(canonical_json(self.body_source()), self.archive_body())
+        self.assertEqual(self.backup.read_bytes(), self.archive_body())
 
     def test_many_original_records_use_bounded_archive_and_original_staging_pages(self):
         import time
@@ -229,7 +237,7 @@ class LearningSourceTransferTests(unittest.TestCase):
             expires_at_ms=time.time_ns() // 1_000_000 + 3_600_000)
         result = self.transfer()
         self.assertGreater(result['source']['next_chunk'], 1)
-        self.assertEqual(canonical_json(self.body_source()), self.archive_body())
+        self.assertEqual(self.backup.read_bytes(), self.archive_body())
         for index in range(result['source']['next_chunk']):
             self.assertLessEqual(len(archive.read_image_chunk(self.target, 'source', index)), archive.CHUNK_BYTES)
         self.assertEqual(173, dict(result['counts'])['records'])

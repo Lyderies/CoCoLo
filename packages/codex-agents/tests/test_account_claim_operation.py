@@ -19,6 +19,7 @@ from codex_agents.learning_contracts import content_digest
 from codex_agents.learning_engine import OwnerGrantAuthority
 from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST, DEFAULT_RETENTION_MS, LearningLedger, LedgerError, StateError
 from codex_agents.service_transport import ServiceTransportError
+from tests.learning_support import backup_body
 
 
 class AccountClaimOperationTests(unittest.TestCase):
@@ -265,7 +266,7 @@ class AccountClaimOperationTests(unittest.TestCase):
     def test_restore_rejects_a_claimed_receipt_without_its_consumed_marker(self):
         self.claim()
         path = self.ledger.create_sanitized_backup(self.project, file_id="claim_backup", expires_at_ms=self.stamp + 60_000)
-        body = json.loads(path.read_bytes())["body"]
+        body = backup_body(path, self.project)
         self.assertEqual(1, learning_store._verify_project_backup_body(body)["launch_receipts"])
         body["tables"]["launch_claims"] = []
         body["counts"]["launch_claims"] = 0

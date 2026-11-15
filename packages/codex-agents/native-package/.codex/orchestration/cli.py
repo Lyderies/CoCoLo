@@ -8,6 +8,8 @@ import base64
 import contextlib
 import json
 import os
+import re
+import sqlite3
 import sys
 import time
 from collections.abc import Iterator
@@ -147,6 +149,7 @@ from codex_agents.learning_store import (  # noqa: E402
     CollectorMaintenance,
     LearningLedger,
     LearningState,
+    LedgerCapacityError,
     LedgerError,
     StateError,
     authorize_collector_runtime,
@@ -783,6 +786,35 @@ def _register_project(args, moved_aside, upgrade_required, progress):
     }
 
 
+# A cause is shown only when it is fixed wording: no path, no identifier or digest, no other text.
+_PLAIN_CAUSE = re.compile(r"[A-Za-z][A-Za-z0-9 ,;:()'_.-]{0,199}")
+_IDENTIFYING = re.compile(r"[0-9a-f]{12,}|\b(?:prj|hrn|orc|brg|run)_|@")
+
+
+def _plain_cause(failure) -> str | None:
+    text = str(failure)
+    if not _PLAIN_CAUSE.fullmatch(text) or _IDENTIFYING.search(text):
+        return None
+    return text
+
+
+def _mebibytes(value) -> str:
+    return f"{-(-int(value) // 1_048_576):,} MiB"
+
+
+def _capacity_error(capacity) -> str:
+    """One sentence about sizes only; the ledger was not touched."""
+    if capacity.get("available_bytes") is not None:
+        return ("the records were not upgraded and nothing was changed: their backups need about "
+                f"{_mebibytes(capacity['needed_bytes'])} of free disk space and "
+                f"{_mebibytes(capacity['available_bytes'])} is free; free some space and run setup again")
+    which = ("a project" if capacity.get("project_number") is None
+             else f"project {capacity['project_number']} of {capacity['projects']}")
+    return (f"the records were not upgraded and nothing was changed: {which} needs a backup of about "
+            f"{_mebibytes(capacity['needed_bytes'])}, over the {_mebibytes(capacity['limit_bytes'])} limit; "
+            "keep using the earlier version and report this")
+
+
 def _registration_failure(moved_aside, progress, failure):
     """What a failed registration tells the owner once records were moved or an upgrade began; else None.
 
@@ -808,7 +840,9 @@ def _registration_failure(moved_aside, progress, failure):
             still_behind = ledger_schema_behind(progress["state"]) is not None
         except Exception:
             still_behind = None
-        if still_behind:
+        if still_behind and isinstance(failure, LedgerCapacityError):
+            reason, error = "ledger_upgrade_capacity", _capacity_error(failure.capacity)
+        elif still_behind:
             reason, error = "ledger_upgrade_failed", (
                 "the records could not be upgraded and are as the earlier version left them; "
                 "install that version again to keep using them" + kept)
@@ -823,8 +857,11 @@ def _registration_failure(moved_aside, progress, failure):
         "ready": False,
         "reason_code": reason,
         "error": error,
-        # What the collector said, when that is what failed: its messages are fixed text.
-        "cause": str(failure)[:200] if isinstance(failure, CollectorError) else None,
+        # What failed, when that is the collector's or the ledger's own fixed text.
+        "cause": (str(failure)[:200] if isinstance(failure, CollectorError)
+                  else _plain_cause(failure) if isinstance(failure, (LedgerError, sqlite3.Error))
+                  and not isinstance(failure, LedgerCapacityError) else None),
+        **({"capacity": failure.capacity} if isinstance(failure, LedgerCapacityError) else {}),
         # Old macOS records moved by this same command stay moved.
         "state_moved": str(moved_aside) if moved_aside is not None else None,
         "ledger_schema_version": behind,
