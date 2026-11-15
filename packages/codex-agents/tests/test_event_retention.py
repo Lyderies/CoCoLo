@@ -245,6 +245,43 @@ class EventRetentionTests(unittest.TestCase):
         self.assertIsNone(self.expiry("good"))
         self.assertIsNotNone(self.expiry("bad"))
 
+    def test_unreadable_rows_never_use_up_a_sweep(self):
+        # Rows that cannot be summarised (left for learning-expire) may sort first;
+        # the sweep reads past them instead of stalling every project behind them.
+        now = 1_000_000_000_000
+        sequence = self.connection.execute("SELECT COALESCE(MAX(source_sequence),0)+1 FROM records "
+                                           "WHERE project_id=?", (self.project,)).fetchone()[0]
+        self.connection.execute(
+            "INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (self.project, "early", "event", "app_server", sequence, now, now, now + DAY, b"not json",
+             "0" * 64, 0)).close()
+        for number in range(5):
+            self.append(event(f"good-{number}", "tool_started", observed_at_ms=now + 1 + number),
+                        now_ms=now + 1 + number)
+        self.assertEqual(1, self.ledger.sweep_event_retention(now_ms=now + 8 * DAY, batch=1))
+        while self.ledger.sweep_event_retention(now_ms=now + 8 * DAY, batch=1):
+            pass
+        self.assertEqual([None] * 5, [self.expiry(f"good-{number}") for number in range(5)])
+        self.assertIsNotNone(self.expiry("early"))
+
+    def test_a_database_error_in_one_summary_leaves_only_that_group(self):
+        import sqlite3
+        now = 1_000_000_000_000
+        self.append(event("good", "tool_started", observed_at_ms=now, run_id="run_good"), now_ms=now)
+        self.append(event("bad", "tool_started", observed_at_ms=now + 1, run_id="run_bad"), now_ms=now + 1)
+        real = learning_store.LearningLedger._append_checked_locked
+
+        def refuse_bad(ledger, project_id, checked, **options):
+            if checked.get("run_id") == "run_bad":
+                raise sqlite3.OperationalError("summary write failed")
+            return real(ledger, project_id, checked, **options)
+
+        with mock.patch.object(learning_store.LearningLedger, "_append_checked_locked", autospec=True,
+                               side_effect=refuse_bad):
+            self.assertEqual(1, self.ledger.sweep_event_retention(now_ms=now + 8 * DAY))
+        self.assertIsNone(self.expiry("good"))
+        self.assertIsNotNone(self.expiry("bad"))
+
     def test_a_summary_record_is_closed_and_consistent(self):
         summary = {"schema_version": 1, "record_type": "event_summary", "record_id": "evsum-" + "a" * 32,
                    "run_id": "run_1", "day": "2025-10-01", "observed_at_ms": 1_759_309_200_100,

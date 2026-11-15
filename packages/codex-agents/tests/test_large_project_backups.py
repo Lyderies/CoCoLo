@@ -159,3 +159,67 @@ class BackupPlanTests(unittest.TestCase):
         self.source.create_sanitized_backup(
             self.project, file_id="after_stop", expires_at_ms=time.time_ns() // 1_000_000 + 3_600_000)
         self.assertFalse(stale.exists())
+
+
+class BackupLimitWhileWritingTests(unittest.TestCase):
+    setUp = legacy.LearningSourceImageLegacyTests.setUp
+
+    def test_the_limit_stops_a_write_before_the_file_is_complete(self):
+        add_events(self.source, self.project, 3000)
+        from codex_agents import project_backup
+        written = []
+        real = project_backup.write
+
+        def observed(connection, path, *args, **options):
+            try:
+                return real(connection, path, *args, **options)
+            finally:
+                written.append(path.stat().st_size if path.exists() else 0)
+
+        with unittest.mock.patch.object(learning_store, "project_backup_bytes", return_value=1), \
+                unittest.mock.patch.object(learning_store, "MAX_PROJECT_BACKUP_BYTES", 256 * 1024), \
+                unittest.mock.patch.object(project_backup, "write", side_effect=observed):
+            with self.assertRaises(learning_store.LedgerCapacityError):
+                self.source.create_sanitized_backup(
+                    self.project, file_id="stopped_early", expires_at_ms=time.time_ns() // 1_000_000 + 3_600_000)
+        # Stopped within a batch or so of the limit, not after writing the whole partition (about 3 MB).
+        self.assertLess(written[0], 1_048_576)
+
+    def test_an_upgrade_that_stops_part_way_leaves_no_backups_behind(self):
+        from tests.test_account_launch_claims import downgrade_ledger_to_six
+        later_root = Path(self.fixture.temporary.name) / "second-project"
+        later_root.mkdir()
+        import subprocess
+        subprocess.run(["git", "init", "-q", str(later_root)], check=True)
+        self.source.register_project(later_root, now_ms=1)
+        state = self.source.state
+        downgrade_ledger_to_six(self.source)
+        self.source.close()
+        written = []
+        real = learning_store.LearningLedger._write_streamed_backup
+
+        def second_fails(ledger, project_id, *args, **options):
+            if written:
+                raise learning_store.LedgerCapacityError(projects=2, needed_bytes=10, limit_bytes=1)
+            path = real(ledger, project_id, *args, **options)
+            written.append(path)
+            return path
+
+        with unittest.mock.patch.object(learning_store.LearningLedger, "_write_streamed_backup", autospec=True,
+                                        side_effect=second_fails):
+            with self.assertRaises(learning_store.LedgerCapacityError):
+                learning_store.LearningLedger(state, client_capabilities=self.fixture.clients,
+                                              allow_schema_upgrade=True, backup_before_upgrade=True)
+        self.assertEqual(1, len(written))
+        self.assertFalse(written[0].exists())
+        import sqlite3
+        kept = sqlite3.connect(state.root / "learning.sqlite3")
+        try:
+            self.assertEqual(0, kept.execute(
+                "SELECT COUNT(*) FROM stored_files WHERE file_id LIKE 'upgrade_schema6_%'").fetchone()[0])
+            self.assertEqual(6, kept.execute("PRAGMA user_version").fetchone()[0])
+        finally:
+            kept.close()
+        self.source = learning_store.LearningLedger(state, client_capabilities=self.fixture.clients,
+                                                    allow_schema_upgrade=True, backup_before_upgrade=True)
+        self.fixture.ledger = self.source
