@@ -178,8 +178,8 @@ keeps failing, run `./setup.sh` and choose "Update the install and walk through 
 
 The Claude billing probe needs one of its account's two run slots, and none was free, or another probe
 for the account was running. Nothing was admitted. Try again when a run has finished. Right after an
-upgrade from 0.2.x, runs that version recorded count as running for a day after they started (it never
-recorded when one finished), so they can hold both slots until then; see `claim_busy`. Release 0.3.1
+upgrade from 0.2.x, runs that version recorded count as running for seven hours after they started (it
+never recorded when one finished), so they can hold both slots until then; see `claim_busy`. Release 0.3.1
 and earlier reported this as `probe_unavailable`.
 
 ## `admission_capture_limit` or `admission_capture_work_limit`
@@ -200,7 +200,7 @@ again. A place held by a run whose project service stopped or crashed is freed b
 service, which starts with the project's next command, as soon as nothing of the run is still running;
 `learning-run-status` then reports that run as `run_lost` (abandoned, outcome unknown). Only when the
 service cannot tell (its records of the run are missing or damaged) is the place freed one hour after
-that run's deadline. After an upgrade from 0.2.x, runs that version left can hold slots for a day; see
+that run's deadline. After an upgrade from 0.2.x, runs that version left can hold slots for seven hours; see
 `earlier_version_runs` under `learning_migration` stays `pending`, below.
 
 ## `project_service_other_version`
@@ -215,8 +215,10 @@ The project's learning history moves to its own store the first time the project
 update, but only while no child is running anywhere. Use the project again when things are quiet, or
 run `cli.py learning-migrate-project --project-root <root>`; it says what is in the way.
 
-After an upgrade from 0.2.x, runs that version recorded count as running for a day after they
-started, because 0.2.x never recorded when one finished. `learning-status` and
+After an upgrade from 0.2.x, runs that version recorded count as running for seven hours after they
+started, because 0.2.x never recorded when one finished: a 0.2.x child was stopped after at most six
+hours, and an hour is allowed on top, as for a crashed run of this version. They never hold back an
+update of COCOLO itself: they never ran under its collector. `learning-status` and
 `learning-migrate-project --status` show them as `earlier_version_runs`: `holding` is how many still
 count, and `finished_by_ms` is when the last stops counting (milliseconds since 1970). From then on, the
 move can start and their slots are free. Nothing has to be done.

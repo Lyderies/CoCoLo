@@ -3544,15 +3544,20 @@ class LearningLedger:
                 "SELECT 1 FROM operational_qa WHERE project_id=? LIMIT 1", (project_id,)
             ).fetchone() is not None
 
-    def drained(self) -> bool:
-        """No run is active or unsettled anywhere (long-crashed claims aside)."""
+    def drained(self, *, ignore_earlier_version: bool = False) -> bool:
+        """No run is active or unsettled anywhere (long-crashed claims aside).
+
+        `ignore_earlier_version` leaves out runs a 0.2.x version left: they ran
+        inside their own commands, never under a collector or a project service,
+        so stopping the collector cannot affect them.
+        """
 
         from .history_contracts import HistoryError
         from .learning_source_image import _drained
 
         with self._lock:
             try:
-                _drained(self._connection, self._clock_ms())
+                _drained(self._connection, self._clock_ms(), ignore_earlier_version=ignore_earlier_version)
             except HistoryError:
                 return False
             return True
@@ -11920,8 +11925,9 @@ class CollectorServer:
                 project_id = self.ledger.project_for_root(Path(request["project_root"]))
                 return {"ok": True, "moved": self.ledger.mark_learning_moved_if_empty(project_id)}
             if request.get("op") == "shutdown_if_drained" and set(request) == {"protocol", "op"}:
-                # For a migration tool: never taken away from under an active run.
-                if not self.ledger.drained():
+                # For a migration tool: never taken away from under an active run. Runs an
+                # earlier version left never ran under a collector, so they do not count.
+                if not self.ledger.drained(ignore_earlier_version=True):
                     return {"ok": False, "code": "collector_busy"}
                 self._stop.set()
                 return {"ok": True}

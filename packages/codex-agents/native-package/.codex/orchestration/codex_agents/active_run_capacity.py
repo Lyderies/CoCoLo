@@ -174,8 +174,9 @@ CAPACITY_OBJECTS = (
 CRASHED_CLAIM_GRACE_MS = 3_600_000
 # A run an earlier version (0.2.x) left in the records: it ran inside its own CLI
 # command, under a route deadline of at most six hours (`timeout_seconds` 21600),
-# so one claimed more than a day ago cannot still be running.
-LEGACY_RUN_MAX_MS = 24 * 3_600_000
+# so with the same grace as a crashed claim of this version it cannot still be
+# running seven hours after it was claimed.
+LEGACY_RUN_MAX_MS = 6 * 3_600_000 + CRASHED_CLAIM_GRACE_MS
 # A run settled that way has this fixed abandonment reason on its host binding.
 LOST_RUN_REASON = 'service_lost'
 

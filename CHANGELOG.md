@@ -27,8 +27,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   still finds the decision and identity it was admitted on. A damaged old record that no rule keeps no
   longer blocks admission; every record admission reads is still checked in full.
 - A Claude billing probe refused because every run slot of its account was in use reported
-  `probe_unavailable`; it now reports `probe_busy`. Right after an upgrade from 0.2.x this is what the
-  earlier version's runs cause until a day after they started.
+  `probe_unavailable`; it now reports `probe_busy`.
+- Runs that 0.2.x recorded count as running for seven hours after they started, not a day: a 0.2.x
+  child was stopped after at most six hours, and an hour is allowed on top, as for a crashed run of this
+  version. They also no longer hold back replacing the collector during an update (it said "a child
+  run is active" while none was), because they never ran under a collector. Found in an owner's live
+  test of 0.3.2.
 - After an upgrade from 0.2.x, `learning-status` and `learning-migrate-project --status` say how many
   runs the earlier version left still hold a slot, and when the last stops counting
   (`earlier_version_runs`); a learning move refused with `migration_not_drained` says the same.
