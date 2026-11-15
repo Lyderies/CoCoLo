@@ -187,6 +187,25 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual('preparation_managed_configuration', refused['reason_code'], refused)
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
+    def test_a_run_refused_before_or_inside_preparation_names_the_refusal(self):
+        # local-routing's 0.8.17 test still saw only run_unavailable, 0.3 s after dispatch.
+        cases = (
+            ('submit', codex_preparation.PreparationError('preparation_full'), 'preparation_full'),
+            ('submit', codex_preparation.PreparationError('preparation_not_authorized'), 'preparation_not_authorized'),
+            ('build', RuntimeError('unexpected'), 'preparation_unavailable'),
+        )
+        for where, error, reason in cases:
+            with self.subTest(reason=reason, where=where):
+                context, route_path, _, run_handle = self.open_run()
+                patch = (mock.patch.object(codex_preparation.CodexPreparationLane, 'submit', side_effect=error)
+                         if where == 'submit' else mock.patch.object(
+                             codex_preparation.bridge, 'assignment_read_paths', side_effect=error))
+                with patch:
+                    refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle,
+                                       expected=2)
+                self.assertEqual(reason, refused['reason_code'], refused)
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
+
     def test_a_run_whose_client_changed_after_preparation_says_so(self):
         context, route_path, _, run_handle = self.open_run()
         original = codex_preparation.CodexPreparationLane.prepared
