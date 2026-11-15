@@ -33,7 +33,7 @@ class LegacyRunsFixture:
         self.addCleanup(self.fixture.tearDown)
         self.project = self.fixture.project_a_id
 
-    def upgrade_with_runs(self, *ages_ms):
+    def upgrade_with_runs(self, *ages_ms, client_version="codex-host-v1"):
         ledger = self.fixture.ledger
         downgrade_ledger_to_six(ledger)
         now = time.time_ns() // 1_000_000
@@ -43,7 +43,7 @@ class LegacyRunsFixture:
                 "route_digest,configuration_digest,client_version,created_at_ms,expires_at_ms,binding_state) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (self.project, f"{number:064x}", f"legacy-run-{number}", "b" * 64, "c" * 64, "d" * 64,
-                 "e" * 64, "codex-host-v1", now - age, now - age + 90 * 24 * HOUR,
+                 "e" * 64, client_version, now - age, now - age + 90 * 24 * HOUR,
                  "consumed" if number % 2 else "pending")).close()
         ledger.close()
         self.fixture.ledger = learning_store.LearningLedger(
@@ -78,16 +78,25 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         self.assertEqual(0, self.counted(ledger))
         self.assertTrue(ledger.drained())
 
-    def test_the_bound_is_the_earlier_versions_longest_run_plus_the_crash_grace(self):
-        # A 0.2.x child ran under a route deadline of at most six hours; after that and
-        # this version's grace for a crashed run, it cannot still be running.
-        self.assertEqual(6 * HOUR + active_run_capacity.CRASHED_CLAIM_GRACE_MS, learning_store.LEGACY_RUN_MAX_MS)
+    def test_the_bound_for_a_native_run_is_a_cautious_day(self):
+        # A 0.2.x native child (spawned by the host's own agent tool) had no deadline
+        # anyone enforced, so no bound is proven; a day is a cautious rule.
+        self.assertEqual(24 * HOUR, learning_store.LEGACY_RUN_MAX_MS)
 
-    def test_a_run_from_an_earlier_version_past_that_bound_no_longer_counts(self):
-        ledger = self.upgrade_with_runs(8 * HOUR, 21 * HOUR)
+    def test_a_bridged_run_from_an_earlier_version_never_counts_after_the_upgrade(self):
+        # A 0.2.x dispatch held the collector's maintenance lock for its whole run, and
+        # the upgrade takes that lock: no bridged child of 0.2.x can still be running.
+        ledger = self.upgrade_with_runs(HOUR, 3 * HOUR, client_version="bridge-v1")
         self.assertEqual(0, self.counted(ledger))
         self.assertTrue(ledger.drained())
         self.assertEqual({"holding": 0, "finished_by_ms": None}, ledger.earlier_version_runs())
+
+    def test_a_native_run_from_an_earlier_version_counts_for_a_day(self):
+        ledger = self.upgrade_with_runs(21 * HOUR)
+        self.assertEqual(1, self.counted(ledger))
+        later = ledger._clock_ms() + 3 * HOUR + 60_000
+        ledger._clock_ms = lambda: later
+        self.assertEqual(0, self.counted(ledger))
 
     def test_replacing_the_collector_does_not_wait_for_runs_an_earlier_version_left(self):
         # They ran inside their own 0.2.x commands, never under a collector or a
@@ -112,9 +121,6 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         server._stop.set.assert_called_once()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
     """Status says how many slots runs from an earlier version hold, and until when (F2)."""
@@ -137,9 +143,17 @@ class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
         with mock.patch.object(client, "_request", return_value=answer):
             self.assertEqual({"holding": 2, "finished_by_ms": 1_800_000_000_000},
                              client.learning_migration(Path("/srv/project"))["earlier_version_runs"])
+        older = {key: value for key, value in answer.items() if key != "earlier_version_runs"}
+        with mock.patch.object(client, "_request", return_value=older):
+            # A collector of an earlier release does not report it: unknown, not an error.
+            self.assertIsNone(client.learning_migration(Path("/srv/project"))["earlier_version_runs"])
         for bad in ({"holding": -1, "finished_by_ms": None}, {"holding": 1, "finished_by_ms": None},
                     {"holding": True, "finished_by_ms": None}, {"holding": 0}, "two"):
             with self.subTest(bad=bad), mock.patch.object(
                     client, "_request", return_value={**answer, "earlier_version_runs": bad}), \
                     self.assertRaises(CollectorError):
                 client.learning_migration(Path("/srv/project"))
+
+
+if __name__ == "__main__":
+    unittest.main()
