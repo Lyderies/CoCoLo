@@ -10,6 +10,7 @@ LEGACY_RUN_MAX_MS ago cannot still be running; it stops counting, while its row
 stays unreleased, exactly like a crashed claim of this version.
 """
 
+import json
 import time
 import unittest
 from pathlib import Path
@@ -77,9 +78,38 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         self.assertEqual(0, self.counted(ledger))
         self.assertTrue(ledger.drained())
 
-    def test_the_bound_covers_every_earlier_versions_longest_run(self):
-        self.assertGreaterEqual(learning_store.LEGACY_RUN_MAX_MS,
-                                6 * HOUR + active_run_capacity.CRASHED_CLAIM_GRACE_MS)
+    def test_the_bound_is_the_earlier_versions_longest_run_plus_the_crash_grace(self):
+        # A 0.2.x child ran under a route deadline of at most six hours; after that and
+        # this version's grace for a crashed run, it cannot still be running.
+        self.assertEqual(6 * HOUR + active_run_capacity.CRASHED_CLAIM_GRACE_MS, learning_store.LEGACY_RUN_MAX_MS)
+
+    def test_a_run_from_an_earlier_version_past_that_bound_no_longer_counts(self):
+        ledger = self.upgrade_with_runs(8 * HOUR, 21 * HOUR)
+        self.assertEqual(0, self.counted(ledger))
+        self.assertTrue(ledger.drained())
+        self.assertEqual({"holding": 0, "finished_by_ms": None}, ledger.earlier_version_runs())
+
+    def test_replacing_the_collector_does_not_wait_for_runs_an_earlier_version_left(self):
+        # They ran inside their own 0.2.x commands, never under a collector or a
+        # project service, so stopping the collector cannot affect them.
+        ledger = self.upgrade_with_runs(HOUR)
+        self.assertFalse(ledger.drained())
+        self.assertTrue(ledger.drained(ignore_earlier_version=True))
+        server = learning_store.CollectorServer.__new__(learning_store.CollectorServer)
+        server.ledger = ledger
+        server._stop = mock.Mock()
+        frame = json.dumps({"protocol": learning_store.COLLECTOR_PROTOCOL_VERSION, "op": "shutdown_if_drained"})
+
+        class Connection:
+            sent = [(frame + "\n").encode(), b""]
+
+            def settimeout(self, seconds):
+                pass
+
+            def recv(self, size):
+                return self.sent.pop(0)
+        self.assertEqual({"ok": True}, server._handle(Connection()))
+        server._stop.set.assert_called_once()
 
 
 if __name__ == "__main__":
@@ -90,7 +120,7 @@ class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
     """Status says how many slots runs from an earlier version hold, and until when (F2)."""
 
     def test_the_ledger_says_how_many_earlier_runs_hold_slots_and_when_the_last_stops(self):
-        ledger = self.upgrade_with_runs(30 * 24 * HOUR, 3 * HOUR, 20 * HOUR)
+        ledger = self.upgrade_with_runs(30 * 24 * HOUR, HOUR, 3 * HOUR)
         claimed = sorted(row[0] for row in ledger._connection.execute(
             "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown'"))
         self.assertEqual({"holding": 2, "finished_by_ms": claimed[-1] + learning_store.LEGACY_RUN_MAX_MS},
