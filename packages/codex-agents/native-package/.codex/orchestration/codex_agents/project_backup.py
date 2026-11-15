@@ -86,12 +86,19 @@ def _index_names(table: str) -> list[str]:
     return [name for name, _ in _index_columns(table)]
 
 
+_INDEX_COLUMNS: dict[str, list[tuple[str, list[str]]]] = {}
+
+
 def _index_columns(table: str) -> list[tuple[str, list[str]]]:
+    if table in _INDEX_COLUMNS:
+        return _INDEX_COLUMNS[table]
     reference = sqlite3.connect(":memory:")
     try:
         reference.executescript(_store()._BACKUP_RESTORE_SCHEMA + ";")
-        return [(row[1], [info[2] for info in reference.execute(f"PRAGMA index_info({row[1]!r})")])
-                for row in reference.execute(f"PRAGMA index_list({table})")]
+        _INDEX_COLUMNS[table] = [
+            (row[1], [info[2] for info in reference.execute(f"PRAGMA index_info({row[1]!r})")])
+            for row in reference.execute(f"PRAGMA index_list({table})")]
+        return _INDEX_COLUMNS[table]
     finally:
         reference.close()
 
@@ -107,11 +114,14 @@ def _index_copies(table: str) -> dict[str, int]:
     return _INDEXES[table]
 
 
-def write(connection: sqlite3.Connection, path: Path, project_id: str, schema_version: int) -> dict[str, Any]:
+def write(connection: sqlite3.Connection, path: Path, project_id: str, schema_version: int, *,
+          limit_bytes: int | None = None) -> dict[str, Any]:
     """Copy one partition into the empty owner-only file at `path`; returns its manifest.
 
     The caller created `path` (0600, exclusive) and renames it into place only
     after this returns and the file verifies. On any failure it removes it.
+    With `limit_bytes`, the file's size is checked after every batch, so an
+    oversized partition is refused before it fills the disk.
     """
     store = _store()
     project = connection.execute(
@@ -147,6 +157,9 @@ def write(connection: sqlite3.Connection, path: Path, project_id: str, schema_ve
                     except sqlite3.IntegrityError:
                         raise _error("isolated project backup restoration rejected a row") from None
                     counts[table] += len(batch)
+                    if limit_bytes is not None and os.stat(path).st_size > limit_bytes:
+                        raise _store().LedgerCapacityError(projects=1, needed_bytes=os.stat(path).st_size,
+                                                           limit_bytes=limit_bytes)
             finally:
                 cursor.close()
         manifest = {"columns": columns_manifest, "counts": counts}

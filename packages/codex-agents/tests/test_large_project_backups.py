@@ -104,8 +104,8 @@ class LargeProjectBackupTests(unittest.TestCase):
         from codex_agents import project_backup
         original = project_backup.write
 
-        def interrupted(connection, path, *args):
-            original(connection, path, *args)
+        def interrupted(connection, path, *args, **options):
+            original(connection, path, *args, **options)
             raise KeyboardInterrupt
 
         project_backup.write = interrupted

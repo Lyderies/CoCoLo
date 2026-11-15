@@ -668,36 +668,34 @@ class LearningCliTests(unittest.TestCase):
         finally:
             self._stop_collector()
 
-    def _project_before(self, ledger, first: str) -> str:
-        """A further, empty project whose identifier sorts before `first`, so it is backed up first."""
-        for index in range(64):
-            root = self.project.parent / f"earlier-{index}"
-            root.mkdir()
-            subprocess.run(["git", "init", "-q", str(root)], check=True)
-            project_id = ledger.register_project(root, now_ms=1)
-            if project_id < first:
-                return project_id
-        self.fail("no earlier project identifier")
+    def _later_large_project(self, ledger) -> tuple[str, str]:
+        """Two projects, the one backed up later made the larger: (earlier, later)."""
+        from tests.test_large_project_backups import add_events
+
+        root = self.project.parent / "second-project"
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        other = ledger.register_project(root, now_ms=1)
+        earlier, later = sorted((self.project_id, other))
+        add_events(ledger, later, 400)
+        return earlier, later
 
     def test_an_upgrade_that_cannot_fit_refuses_before_writing_any_backup(self) -> None:
         from tests.test_account_launch_claims import downgrade_ledger_to_six
 
         ledger = LearningLedger(LearningState(self.state_root, create=False))
         try:
-            earlier = self._project_before(ledger, self.project_id)
+            earlier, later = self._later_large_project(ledger)
             downgrade_ledger_to_six(ledger)
-            # The earlier, empty project fits; the later one (with the fixture's records)
-            # is made too large by a limit between their sizes, so an upgrade that sized
-            # projects one at a time would already have written the earlier one's backup.
-            # Every registered project is backed up, in identifier order. Finding an
-            # earlier identifier can register a few more empty projects on the way.
+            # The earlier project fits; the later one is made too large by a limit
+            # between their sizes, so an upgrade that sized projects one at a time
+            # would already have written the earlier one's backup.
             active = [row[0] for row in ledger._connection.execute(
                 "SELECT project_id FROM projects WHERE status='active' ORDER BY project_id")]
             sizes = {project: learning_store.project_backup_bytes(ledger._connection, project, 6)
                      for project in active}
         finally:
             ledger.close()
-        later = self.project_id
         self.assertTrue(all(sizes[later] > size for project, size in sizes.items() if project != later))
         self.assertLess(active.index(earlier), active.index(later))
         try:
