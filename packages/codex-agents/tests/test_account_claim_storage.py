@@ -229,7 +229,7 @@ class AccountClaimStorageTests(unittest.TestCase):
             self.assertLess(time.monotonic(), end, "fixture deferred claim did not finish")
             time.sleep(.002)
 
-    @unittest.skipUnless(sys.platform == "darwin", "fixed macOS signature helpers")
+    @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"), "fixed signature helpers")
     def test_deferred_default_cannot_use_reference_fallback_and_freezes_original_adapter_data(self):
         service = self.async_service()
         ticket = service.begin(encode_account_request(self.request), self.base.token)
@@ -250,7 +250,7 @@ class AccountClaimStorageTests(unittest.TestCase):
         with self.assertRaisesRegex(AccountError, "account_invalid_request"):
             self.new_service(claim_jobs=self.jobs, allow_unleased_claim_reference=True)
 
-    @unittest.skipUnless(sys.platform == "darwin", "fixed macOS signature helpers")
+    @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"), "fixed signature helpers")
     def test_assignment_change_during_deferred_work_is_stale_before_claim_consumption(self):
         self.arm()
         service = self.async_service()

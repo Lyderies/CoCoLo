@@ -31,7 +31,7 @@ from codex_agents.signature_worker_pool import SignatureWorkerLimits
 from codex_agents.sql_read_budget import SQLReadLimits
 
 
-@unittest.skipUnless(sys.platform == 'darwin', 'existing signature-worker startup requires reviewed macOS policy')
+@unittest.skipUnless(sys.platform == 'darwin' or sys.platform.startswith('linux'), 'signature workers need macOS or Linux')
 class CliObservationRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.backend = fixtures.AccountObservationTests(methodName='runTest')

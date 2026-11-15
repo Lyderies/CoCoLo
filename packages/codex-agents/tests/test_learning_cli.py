@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -1273,9 +1274,68 @@ class LearningCliTests(unittest.TestCase):
             generated["record"]["champion_configuration"],
         )
 
+    @contextlib.contextmanager
+    def _account_services(self):
+        """The collector and account services as threads of this process, as `collector_host.py` runs them.
+
+        The account services run the observation, so they must see the fake clients as the
+        trusted ones; a detached collector would resolve whatever client this machine has.
+        """
+        from codex_agents.account_host import AccountServiceHost
+        from codex_agents.collector_paths import CollectorPaths
+        from codex_agents.service_enrollment import capability_path
+
+        stop, failures, ready = threading.Event(), [], threading.Event()
+
+        def serve():
+            ledger = LearningLedger(
+                LearningState(self.state_root, create=False),
+                client_capabilities=load_client_capabilities(
+                    ORCHESTRATION_ROOT / "config" / "learning-clients.json"),
+            )
+            server, account = CollectorServer(ledger), None
+            try:
+                server.start()
+                account = AccountServiceHost(ledger, CollectorPaths(self.state_root))
+                ready.set()
+                while not stop.is_set() and not server.wait(0.002):
+                    account.serve_once()
+            except BaseException as error:
+                failures.append(repr(error))
+            finally:
+                ready.set()
+                try:
+                    if account is not None:
+                        account.close()
+                        end = time.monotonic() + 10
+                        while not account.drained() and time.monotonic() < end:
+                            time.sleep(0.01)
+                finally:
+                    server.stop()
+                    ledger.close()
+
+        with trusted_tools(self.tools):
+            thread = threading.Thread(target=serve, name="test-collector")
+            thread.start()
+            try:
+                self.assertTrue(ready.wait(30), "account services did not start")
+                self.assertEqual([], failures)
+                self.assertTrue(capability_path(CollectorPaths(self.state_root), None, "account").exists())
+                yield
+            finally:
+                stop.set()
+                thread.join(30)
+            self.assertFalse(thread.is_alive(), "collector thread did not stop")
+            self.assertEqual([], failures)
+
     def test_provider_observation_and_billing_attestation_commands(self) -> None:
         # The fake clients answer from recorded fixtures; nothing is spent. The
-        # command runs in-process so the trusted search path can name them.
+        # command and the account services run in-process so the trusted search
+        # path can name them.
+        with self._account_services():
+            self._provider_observation_and_billing_attestation_commands()
+
+    def _provider_observation_and_billing_attestation_commands(self) -> None:
         tools = self.tools
         observed = self._observe("claude")
         identity = observed["records"][0]

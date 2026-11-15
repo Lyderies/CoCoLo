@@ -26,7 +26,7 @@ from codex_agents.signature_worker_pool import SignatureWorkerPool, SignatureWor
 from codex_agents.sql_read_budget import SQLReadLimits
 
 
-@unittest.skipUnless(sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file(),
+@unittest.skipUnless((sys.platform.startswith('linux') or (sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file())),
                      'original fixed macOS signature worker guard')
 class AccountBillingAdmissionTests(unittest.TestCase):
     def setUp(self):

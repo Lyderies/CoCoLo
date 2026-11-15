@@ -187,7 +187,7 @@ class ClaimOriginalWindowTests(unittest.TestCase):
         self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM launch_claims').fetchone()[0])
 
 
-@unittest.skipUnless(job_fixtures.MACOS_WORKER, 'fixed macOS worker guard; no Linux policy selected')
+@unittest.skipUnless(job_fixtures.SIGNATURE_WORKER, 'fixed macOS worker guard; no Linux policy selected')
 class DeferredClaimOriginalWindowTests(unittest.TestCase):
     def setUp(self):
         self.base = job_fixtures.AccountClaimJobTests(methodName='runTest')

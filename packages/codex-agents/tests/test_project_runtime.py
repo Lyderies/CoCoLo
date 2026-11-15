@@ -1,4 +1,5 @@
 """Original runtime startup and shutdown; no native enrollment or provider calls."""
+from tests.support import SHORT_TMP
 from dataclasses import replace
 from pathlib import Path
 import socket
@@ -37,7 +38,7 @@ def limits():
 
 class ProjectRuntimeTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir='/private/tmp')
+        self.temp = tempfile.TemporaryDirectory(dir=SHORT_TMP)
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
         self.scope = OrchestrationScope('prj_'+'a'*32, 'primary', COLLECTOR_RUNTIME_DIGEST, 'supervisor', 1)

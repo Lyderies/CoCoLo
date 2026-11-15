@@ -1,5 +1,6 @@
 """Owned process cleanup and durable capacity release; no real AI client."""
 from __future__ import annotations
+from tests.support import SHORT_TMP
 
 from copy import copy
 from copy import deepcopy
@@ -107,7 +108,10 @@ class RunMarkerParsingTests(unittest.TestCase):
 
 
 class UnreadableParentageTests(unittest.TestCase):
-    """An unreadable process born since the child is judged by the parent its environment came from."""
+    """An unreadable process born since the child is judged by the parent its environment came from.
+
+    The pids are made up, so Linux's systemd check (it reads /proc) is held to "not systemd".
+    """
 
     TAG = "f" * 32
     CHILD_BIRTH = "10.000000"
@@ -124,6 +128,7 @@ class UnreadableParentageTests(unittest.TestCase):
                 mock.patch.object(process_tree, "process_arguments", side_effect=arguments.get), \
                 mock.patch.object(process_tree, "_in_session",
                                   side_effect=lambda pid, session, *rest: sessions.get(pid) == session), \
+                mock.patch.object(process_tree, "_subreaper", return_value=False), \
                 mock.patch.object(process_tree.time, "sleep"):
             return process_tree.tagged_process_running(self.TAG, self.CHILD_BIRTH, 20000)
 
@@ -185,6 +190,7 @@ class ScanStabilityTests(unittest.TestCase):
                 mock.patch.object(process_tree, "process_gone", side_effect=lambda pid: pid not in records), \
                 mock.patch.object(process_tree, "process_arguments", side_effect=arguments.get), \
                 mock.patch.object(process_tree, "_in_session", return_value=False), \
+                mock.patch.object(process_tree, "_subreaper", return_value=False), \
                 mock.patch.object(process_tree.time, "sleep"):
             return process_tree.tagged_process_running(self.TAG, self.CHILD_BIRTH, 20000)
 
@@ -510,7 +516,7 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
     def spawn_sleep(self, ticket):
         return ticket.spawn([sys.executable, "-I", "-B", "-c", "import time; time.sleep(30)"],
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                            env={"PATH": os.defpath}, cwd="/private/tmp", start_new_session=True)
+                            env={"PATH": os.defpath}, cwd=SHORT_TMP, start_new_session=True)
 
     def assert_custody_held(self, registry, ticket):
         with self.assertRaises(ExecutionCustodyError):
@@ -593,7 +599,7 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
         with mock.patch.object(registry, "tree", side_effect=error), \
                 self.assertRaises(KeyboardInterrupt) as caught:
             bridge.run_child([sys.executable, "-I", "-B", "-c", "import time; time.sleep(30)"],
-                             environment={"PATH": os.defpath}, cwd=Path("/private/tmp"),
+                             environment={"PATH": os.defpath}, cwd=Path(SHORT_TMP),
                              deadline_seconds=5, on_frame=lambda frame: None, _execution=ticket)
         self.assertIs(error, caught.exception)
         self.assertIsNotNone(entry.process.returncode)
@@ -611,7 +617,7 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
         with mock.patch.object(process_tree.ProcessTree, "terminate", side_effect=OSError("tracking failed")), \
                 self.assertRaises(KeyboardInterrupt) as caught:
             bridge.run_child([sys.executable, "-I", "-B", "-c", "import time; print('{}', flush=True); time.sleep(30)"],
-                             environment={"PATH": os.defpath}, cwd=Path("/private/tmp"),
+                             environment={"PATH": os.defpath}, cwd=Path(SHORT_TMP),
                              deadline_seconds=5, on_frame=interrupt, _execution=ticket)
         self.assertIs(error, caught.exception)
         self.assertIsNotNone(entry.process.returncode)
@@ -634,7 +640,7 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
                         self.assertRaises(expected) as caught:
                     bridge.run_child([sys.executable, "-I", "-B", "-c",
                                       "import time; print('{}', flush=True); time.sleep(30)"],
-                                     environment={"PATH": os.defpath}, cwd=Path("/private/tmp"),
+                                     environment={"PATH": os.defpath}, cwd=Path(SHORT_TMP),
                                      deadline_seconds=5, on_frame=abort, _execution=ticket)
                 self.assertIs(original if interrupted else cleanup, caught.exception)
                 self.assertIsNotNone(entry.process.returncode)
@@ -658,7 +664,7 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
                 self.assertRaises(SystemExit) as caught:
             bridge.run_child([sys.executable, "-I", "-B", "-c",
                               "import time; print('{}', flush=True); time.sleep(30)"],
-                             environment={"PATH": os.defpath}, cwd=Path("/private/tmp"),
+                             environment={"PATH": os.defpath}, cwd=Path(SHORT_TMP),
                              deadline_seconds=5, on_frame=abort, _execution=ticket)
         self.assertIs(first, caught.exception)
         self.assertIsNotNone(entry.process.returncode)
@@ -676,7 +682,7 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
 
         with mock.patch.object(ExecutionTicket, "spawn", handoff), self.assertRaises(KeyboardInterrupt) as caught:
             bridge.run_child([sys.executable, "-I", "-B", "-c", "import time; time.sleep(30)"],
-                             environment={"PATH": os.defpath}, cwd=Path("/private/tmp"),
+                             environment={"PATH": os.defpath}, cwd=Path(SHORT_TMP),
                              deadline_seconds=5, on_frame=lambda frame: None, _execution=ticket)
         self.assertIs(error, caught.exception)
         self.assertIsNotNone(entry.process.returncode)
@@ -725,7 +731,7 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
         registry = OwnedExecutionRegistry()
         ticket = registry.issue(self.key(), deadline_ns=time.monotonic_ns() + 60_000_000_000)
         factory = mock.Mock(side_effect=AssertionError("custom factory executed"))
-        outcome = bridge.run_child([], environment={}, cwd=Path("/private/tmp"), deadline_seconds=1,
+        outcome = bridge.run_child([], environment={}, cwd=Path(SHORT_TMP), deadline_seconds=1,
                                    on_frame=lambda frame: None, popen=factory, _execution=ticket)
         self.assertEqual("launch_failed", outcome["abort"])
         factory.assert_not_called()
@@ -764,7 +770,7 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
             factory = mock.Mock(side_effect=AssertionError("expired process factory"))
             with mock.patch.object(owned_execution.time, "monotonic_ns", return_value=now), \
                     mock.patch.object(owned_execution, "_POPEN", factory):
-                result = bridge.run_child([], environment={}, cwd=Path("/private/tmp"), deadline_seconds=10,
+                result = bridge.run_child([], environment={}, cwd=Path(SHORT_TMP), deadline_seconds=10,
                                           on_frame=lambda frame: None, _execution=ticket)
             self.assertEqual(expected, result["abort"])
             factory.assert_not_called()

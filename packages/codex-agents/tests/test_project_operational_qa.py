@@ -5,6 +5,7 @@ disposable persistence operations. The legacy account opener's central worker
 lookup is explicitly replaced by the actual project lookup in this fixture only;
 production account-open API integration and native identity remain unproved.
 """
+from tests.support import SHORT_TMP
 from copy import deepcopy
 from dataclasses import replace
 import hashlib
@@ -368,7 +369,7 @@ print(json.dumps({'scope':scope,'sqlite_loaded':'sqlite3' in sys.modules}))
 
 class ProjectQASocketTests(unittest.TestCase):
     def test_real_separate_client_and_writer_processes_keep_sqlite_out_of_client(self):
-        with tempfile.TemporaryDirectory(prefix='project-qa-', dir='/private/tmp') as temporary:
+        with tempfile.TemporaryDirectory(prefix='project-qa-', dir=SHORT_TMP) as temporary:
             endpoint = Path(temporary) / 'qa.sock'
             server_program = 'import sys;sys.path.insert(0,' + repr(str(Path(__file__).resolve().parents[1])) + ');' + QA_SERVER
             server = subprocess.Popen([sys.executable, '-I', '-B', '-S', '-c', server_program, str(endpoint)],

@@ -1,5 +1,6 @@
 """Capacity recovery over the actual owner/service, using fake providers only."""
 from __future__ import annotations
+from tests.support import SHORT_TMP
 
 from copy import deepcopy
 import json
@@ -306,7 +307,7 @@ class CapacityStatusApiTests(unittest.TestCase):
         self.assertEqual(1, self.ledger._connection.execute("SELECT COUNT(*) FROM capacity_executions").fetchone()[0])
 
     def start_server(self, mode):
-        directory = tempfile.TemporaryDirectory(prefix="capacity-status-", dir="/private/tmp")
+        directory = tempfile.TemporaryDirectory(prefix="capacity-status-", dir=SHORT_TMP)
         self.addCleanup(directory.cleanup)
         endpoint = Path(directory.name) / "view.sock"
         source = wire_fixtures.ACCOUNT_SERVER_FIXTURE.replace(

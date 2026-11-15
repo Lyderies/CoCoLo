@@ -60,6 +60,13 @@ and tools installed under your home folder, which the rule then runs.
   own statement about your billing settings: admission also checks what the clients report, but relies
   on extra usage and Codex credit purchases being off, so re-attest whenever they change. See
   [what the owner key does not stop](#what-the-owner-key-does-not-stop).
+- **Signatures are checked in a confined helper.** The account service checks each owner signature with
+  `ssh-keygen` in a separate helper that cannot start another process, open a network connection or
+  write outside its private working folder. On macOS that is a `sandbox-exec` policy. On Linux the helper
+  confines itself before it reads any input: a seccomp filter refuses new processes and sockets (required;
+  only x86_64 and arm64 are supported, and the helper refuses to start otherwise), and Landlock refuses
+  writes elsewhere on Linux 5.13 or later. An older kernel without Landlock keeps the process and network
+  limits only.
 - **Read-only children in a private export.** A bridged child sees only the committed bytes of its granted
   paths, under a hard deadline. Claude children get `Read`, `Glob` and `Grep` only. Codex children run
   `codex exec` read-only and ephemeral, without user config, execpolicy rules, approvals or connectors.

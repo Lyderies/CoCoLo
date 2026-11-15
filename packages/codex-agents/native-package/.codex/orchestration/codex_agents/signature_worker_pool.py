@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 import queue
-import sys
 import threading
 import time
 
@@ -194,7 +193,7 @@ class SignatureWorkerPool:
     """
 
     def __init__(self, intake, limits):
-        if sys.platform != 'darwin' or type(intake) is not SignatureJobIntake:
+        if not execution.signature_execution_supported() or type(intake) is not SignatureJobIntake:
             raise SignatureWorkerError()
         intake._guard()
         if type(limits) is not SignatureWorkerLimits:

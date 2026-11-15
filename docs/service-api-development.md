@@ -723,7 +723,7 @@ What an update or an owner command may stop, and what it says when it may not:
 - Starting the collector: it starts as two interpreters (the CLI entry, which checks the
   runtime's authorization, then `collector_host.py`) and opens the account services, so on
   a busy machine it answers after one to three seconds. A command waits up to
-  `COLLECTOR_START_SECONDS` (8) for it, stops waiting as soon as it answers, and gives up
+  `COLLECTOR_START_SECONDS` (20) for it, stops waiting as soon as it answers, and gives up
   at once when the process it started has already ended (a start that cannot work is not
   waited for); before
   0.3.0 the wait was one second, which a loaded machine now exceeds (measured 1.6 to 2.5 s

@@ -1,4 +1,5 @@
 """Disposable account migration; no real native drain or provider work."""
+from tests.support import SHORT_TMP
 from copy import deepcopy
 import hashlib
 from pathlib import Path
@@ -18,7 +19,7 @@ from codex_agents.orchestration_api import OrchestrationScope
 
 class AccountOpenSchemaTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix='account-open-', dir='/private/tmp')
+        temporary = tempfile.TemporaryDirectory(prefix='account-open-', dir=SHORT_TMP)
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.state = LearningState(self.root/'state')

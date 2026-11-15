@@ -1,4 +1,5 @@
 """Verifier preparation reads one original actual project result through APIs."""
+from tests.support import SHORT_TMP
 import json
 from pathlib import Path
 import socket
@@ -30,7 +31,7 @@ class CodexVerifierPreparationTests(unittest.TestCase):
         self.scope, self.worker = self.prospective.scope, self.prospective.worker
         self.token, self.allowed = object(), True
         self.operations, self.peers = [], []
-        self.temp = tempfile.TemporaryDirectory(dir='/private/tmp')
+        self.temp = tempfile.TemporaryDirectory(dir=SHORT_TMP)
         self.addCleanup(self.temp.cleanup)
         self.endpoint = Path(self.temp.name)/'v.sock'
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

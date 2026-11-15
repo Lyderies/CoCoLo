@@ -1220,7 +1220,7 @@ log_step() {
   if [ "$RUN_QUIET" -ne 1 ] && [ "$LAST_RC" -ne 0 ]; then why=$(pj reason "$LAST_OUT" $LAST_FIXED 2>/dev/null); fi
   REASON_FIXED=$LAST_FIXED
   why=${why//[[:cntrl:]]/}
-  STEP_LOG="${STEP_LOG}$(date +%H:%M:%S)  ${1}: $([ "$LAST_RC" -eq 0 ] && echo done || echo "stopped, exit $LAST_RC")${why:+ - $why}
+  STEP_LOG="${STEP_LOG}$(date +%H:%M:%S)  ${1}: $([ "$LAST_RC" -eq 0 ] && echo "done" || echo "stopped, exit $LAST_RC")${why:+ - $why}
 "
 }
 

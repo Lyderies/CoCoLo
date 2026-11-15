@@ -36,12 +36,14 @@ from .provider_observation_contracts import ObservationError, ObservationInput
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .result_read_api import ResultReadClient
 from .service_enrollment import (
-    EnrollmentError, account_endpoint_path, enrollment_preamble, proof_directory, read_capability, withdraw_proof,
+    EnrollmentError, account_endpoint_path, capability_path, enrollment_preamble, proof_directory, read_capability,
+    withdraw_proof,
 )
 from .service_protocol import ServiceTarget
 from .service_transport import exchange_frame, install_enrollment
 
 
+ACCOUNT_START_SECONDS = 10.0
 ACCOUNT_GENERATION = 1  # account_host.GENERATION; that module is a persistence owner.
 BRIDGE_PROVIDERS = frozenset({"codex", "claude"})  # Read-only children the project host runs.
 # Why the project host could not start a run: its run driver's codes (project_driver.REASON_CODES),
@@ -181,11 +183,12 @@ def enroll_clients(state, project_root, scope, endpoints=(), *, account=None, ho
     return contexts
 
 
-def _account_target(state, project_root):
+def _account_target(state, project_root, *, await_start=False):
     """The account endpoint and this project's identifier, with or without a project host.
 
     A published project hint names both. Without one, the identifier comes from
-    the collector's registry lookup and the endpoint is the fixed account path.
+    the collector's registry lookup and the endpoint is the fixed account path;
+    `await_start` then waits, bounded, for account services that are still starting.
     """
     try:
         scope, endpoints = _read_runtime_endpoints(state, project_root, account=True, account_only=True)
@@ -197,7 +200,28 @@ def _account_target(state, project_root):
         project_id = CollectorClient(state.socket, timeout=2).project(_canonical_project_root(Path(project_root)))
     except (CollectorError, StateError, OSError):
         raise DispatchError('dispatch_unavailable') from None
-    return project_id, account_endpoint_path(state)
+    endpoint = account_endpoint_path(state)
+    if await_start:
+        _await_account_services(state, endpoint)
+    return project_id, endpoint
+
+
+def _await_account_services(state, endpoint):
+    """A collector that has just started answers before its account services listen.
+
+    Their signature workers start first, which takes a moment longer on a busy
+    machine. Wait, bounded, for the published key and endpoint; nothing is sent
+    before they exist, so the request itself is still made exactly once.
+    """
+    try:
+        key = capability_path(state, None, 'account')
+    except EnrollmentError:
+        return
+    end = time.monotonic() + ACCOUNT_START_SECONDS
+    while not (endpoint.exists() and key.exists()):
+        if time.monotonic() >= end:
+            return  # The request then reports the account services unavailable.
+        time.sleep(0.02)
 
 
 def _status_ingestion_unavailable():
@@ -351,7 +375,7 @@ def billing_probe_client(state_root, project_root, *, request_id=None):
         raise RuntimeBillingProbeError('provider_api_key_present', request_id=identity)
     try:
         state = CollectorPaths(state_root)
-        project_id, endpoint = _account_target(state, project_root)
+        project_id, endpoint = _account_target(state, project_root, await_start=True)
         enroll_clients(state, project_root, None, account=endpoint)
         result = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=60).billing_probe(
             request_id=identity)
@@ -377,7 +401,7 @@ def observe_provider_client(state_root, project_root, provider, *, request_id=No
     try:
         request = ObservationInput(provider, run_handle, phase)
         state = CollectorPaths(state_root)
-        project_id, endpoint = _account_target(state, project_root)
+        project_id, endpoint = _account_target(state, project_root, await_start=True)
         enroll_clients(state, project_root, None, account=endpoint)
         result = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=60).observe_provider(
             request.provider, request_id=identity, run_handle=request.run_handle, phase=request.phase)

@@ -1,4 +1,5 @@
 """Original pre-open project handoff; native/provider enrollment is synthetic."""
+from tests.support import SHORT_TMP
 from copy import deepcopy
 from dataclasses import replace
 import hashlib
@@ -292,7 +293,7 @@ v=c.original_open_scope(OrchestrationScope(**p['scope']),p['orchestration_handle
 assert 'sqlite3' not in sys.modules and '_sqlite3' not in sys.modules
 print(json.dumps(v))
 '''
-        with tempfile.TemporaryDirectory(prefix='opn-', dir='/private/tmp') as directory:
+        with tempfile.TemporaryDirectory(prefix='opn-', dir=SHORT_TMP) as directory:
             path = Path(directory)/'h.sock'
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
                 server.bind(str(path))

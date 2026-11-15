@@ -55,6 +55,17 @@ def signature_process_arguments(arguments: list[str]) -> tuple[str, SignatureWir
     raise SignatureProcessError()
 
 
+def _confine() -> None:
+    # macOS applies its policy before exec; Linux confines here, before any input.
+    if not sys.platform.startswith("linux"):
+        return
+    from .signature_sandbox import SignatureSandboxError, confine_signature_helper
+    try:
+        confine_signature_helper()
+    except (SignatureSandboxError, OSError):
+        raise SignatureProcessError() from None
+
+
 def _require_fork_denial() -> None:
     # Run before adding the audit hook: this must be an actual OS refusal.
     # The fixed control child immediately exits and is waited for on failure.
@@ -157,6 +168,7 @@ def main(arguments: list[str] | None = None) -> int:
 
     try:
         mode, limits = signature_process_arguments(sys.argv[1:] if arguments is None else arguments)
+        _confine()
         _require_fork_denial()
         if mode == "prepare":
             _prepare(limits)

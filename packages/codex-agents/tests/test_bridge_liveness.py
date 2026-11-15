@@ -1,5 +1,6 @@
 """Offline control/executor composition; fixture grants are not native proof."""
 from __future__ import annotations
+from tests.support import SHORT_TMP
 
 import contextlib
 from copy import copy
@@ -82,7 +83,7 @@ class BridgeLivenessTests(unittest.TestCase):
                 outcomes.append(bridge.run_child(
                     [sys.executable, "-I", "-B", "-S", "-c",
                      "import time; print('{}', flush=True); time.sleep(30)"],
-                    environment={"PATH": os.defpath}, cwd=Path("/private/tmp"),
+                    environment={"PATH": os.defpath}, cwd=Path(SHORT_TMP),
                     deadline_seconds=60, on_frame=blocked if where == "callback" else lambda frame: None,
                     _execution=ticket,
                 ))

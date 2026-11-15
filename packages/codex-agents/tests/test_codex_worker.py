@@ -1,5 +1,6 @@
 """Fixed worker/owner races with inert executable fixtures, never real Codex."""
 from __future__ import annotations
+from tests.support import SHORT_TMP
 
 from copy import copy
 from dataclasses import replace
@@ -44,7 +45,7 @@ class CodexWorkerTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.addCleanup(self.fixture.tearDown)
-        self.temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
+        self.temporary = tempfile.TemporaryDirectory(dir=SHORT_TMP)
         self.addCleanup(self.temporary.cleanup)
         self.workspaces = []
         self.registry = OwnedExecutionRegistry()

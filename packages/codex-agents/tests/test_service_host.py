@@ -5,6 +5,7 @@ capability and enrollment step are the only way in. The CLI wrapper used here
 disables the protected-entry and own-roots checks, so those are not exercised;
 `test_project_service_startup` drives the unmodified CLI.
 """
+from tests.support import assert_dropped
 from dataclasses import asdict
 import hashlib
 import json
@@ -295,7 +296,7 @@ class ServiceHostTests(unittest.TestCase):
         self.assertLess(time.monotonic()-started, 8)
         for client in stalled:
             client.settimeout(3)
-            self.assertEqual(b'', client.recv(1))
+            assert_dropped(self, client)
 
     def test_finished_exchanges_free_their_context_slots(self):
         _, ready = self.start()
@@ -367,7 +368,7 @@ class EnrolledFrontendTests(unittest.TestCase):
         self.frontend.step()
         self.assertEqual([], self.attached)
         client.settimeout(2)
-        self.assertEqual(b'', client.recv(1))
+        assert_dropped(self, client)
 
     def test_a_closed_connection_releases_its_context_at_once(self):
         for _ in range(5):  # Two context slots; each exchange closes before the next enrolls.

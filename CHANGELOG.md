@@ -4,6 +4,17 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.3.0: COCOLO, watched and stoppable children (Codex package 0.8.13)
 
+- From the first CI run on Linux: the account service started only on macOS, because its owner-signature
+  helper ran only under macOS's `sandbox-exec`, so no child could run on Linux. On Linux the helper now
+  confines itself before reading any input, with a seccomp filter (no new processes or sockets) and,
+  on Linux 5.13 or later, Landlock (no writes outside its private folder). Also: a command that has
+  just started the collector waits up to 20 seconds for it (it was 8, too short on a busy machine),
+  and an account request made while the account services are still starting waits for them, bounded,
+  instead of failing. Tests that assumed macOS (its `/private/tmp`, how it closes a refused
+  connection, its process table) now also run on Linux, and the provider-observation CLI test runs
+  the account services in its own process, so it observes the fake clients and never the developer's
+  own installed one.
+
 - From the final security review: a child's process that detached from its tree while its parent
   exited between two checks could keep running after its place was given back. Every child now
   carries a fresh, private run marker in its environment, which everything it starts inherits, and its

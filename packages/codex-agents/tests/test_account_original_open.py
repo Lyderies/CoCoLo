@@ -169,7 +169,7 @@ class OriginalAccountOpenPendingTests(unittest.TestCase):
                 self.preflight(limits=OpenOwnerLimits(1, 4, 1))
         self.assertEqual([], self.pending())
 
-@unittest.skipUnless(sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file(), 'fixed macOS signature worker guard')
+@unittest.skipUnless((sys.platform.startswith('linux') or (sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file())), 'fixed macOS signature worker guard')
 class OriginalAccountOpenJobTests(unittest.TestCase):
     def setUp(self):
         self.reference = OriginalAccountOpenPendingTests(methodName='runTest')

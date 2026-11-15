@@ -8,6 +8,7 @@ import os
 import struct
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -54,21 +55,27 @@ class SignatureProcessArgumentTests(unittest.TestCase):
                 signature_process_arguments(arguments)
 
     def test_process_boundary_fences_faults_without_echo_or_spawn_on_bad_args(self):
-        with mock.patch("codex_agents.signature_process._require_fork_denial") as denial:
+        with mock.patch("codex_agents.signature_process._confine"), \
+                mock.patch("codex_agents.signature_process._require_fork_denial") as denial:
             self.assertEqual(2, main(["CANARY-PRIVATE"]))
             denial.assert_not_called()
         for error_type in (AssertionError, RuntimeError, MemoryError, OSError, KeyboardInterrupt, SystemExit):
             stdout, stderr = io.StringIO(), io.StringIO()
             with self.subTest(error=error_type.__name__), contextlib.redirect_stdout(stdout), \
                     contextlib.redirect_stderr(stderr), \
+                    mock.patch("codex_agents.signature_process._confine"), \
                     mock.patch("codex_agents.signature_process._require_fork_denial"), \
                     mock.patch("codex_agents.signature_process._prepare", side_effect=error_type("CANARY-PRIVATE")):
                 self.assertEqual(3, main(["prepare", "8", "65536"]))
             self.assertEqual(("", ""), (stdout.getvalue(), stderr.getvalue()))
 
 
-@unittest.skipUnless(sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file(),
-                     "requires the disposable macOS no-fork test policy; no installed profile is selected")
+MACOS_POLICY = sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file()
+LINUX = sys.platform.startswith("linux")
+
+
+@unittest.skipUnless(MACOS_POLICY or LINUX,
+                     "requires the disposable macOS no-fork test policy, or Linux self-confinement")
 class SignatureProcessExecutionTests(unittest.TestCase):
     def setUp(self):
         self.fixture = capture_fixture.SignatureInputOwnerTests(
@@ -96,7 +103,7 @@ class SignatureProcessExecutionTests(unittest.TestCase):
 
     def run_helper(self, arguments, *, data=None, restricted=True):
         command = [sys.executable, "-I", "-B", "-S", "-c", BOOTSTRAP, str(ORCHESTRATION_ROOT), *arguments]
-        if restricted:
+        if restricted and MACOS_POLICY:
             command = ["/usr/bin/sandbox-exec", "-p", self.profile, *command]
         process = subprocess.Popen(
             command, cwd=self.scratch, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "TMPDIR": str(self.scratch)},
@@ -184,6 +191,7 @@ class SignatureProcessExecutionTests(unittest.TestCase):
         self.assertNotEqual(0, process.returncode)
         self.assertEqual(b"", raw)
 
+    @unittest.skipUnless(MACOS_POLICY, "on Linux the helper always confines itself")
     def test_unrestricted_helper_refuses_before_ready(self):
         process, raw = self.run_helper(["prepare", "8", "65536"], data=self.wire, restricted=False)
         self.assertEqual(2, process.returncode)
@@ -198,3 +206,50 @@ class SignatureProcessExecutionTests(unittest.TestCase):
             self.assertEqual(2, process.returncode)
             self.assert_ready(process, raw, b"P")
             self.assertEqual(17, len(raw))
+
+
+CONFINEMENT_PROBE = """import errno,json,os,socket,sys
+sys.path.insert(0,sys.argv[1])
+from codex_agents.signature_sandbox import confine_signature_helper
+confine_signature_helper()
+def attempt(action):
+    try:
+        action()
+    except OSError as error:
+        return errno.errorcode.get(error.errno, error.errno)
+    return "allowed"
+def fork():
+    if os.fork() == 0:
+        os._exit(0)
+outside = sys.argv[2]
+print(json.dumps({
+    "fork": attempt(fork),
+    "socket": attempt(lambda: socket.socket(socket.AF_INET, socket.SOCK_STREAM)),
+    "unix_socket": attempt(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)),
+    "write_inside": attempt(lambda: open("inside", "w").close()),
+    "write_outside": attempt(lambda: open(outside, "w").close()),
+}))
+"""
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "Linux self-confinement")
+class LinuxConfinementTests(unittest.TestCase):
+    def test_the_confined_helper_cannot_start_processes_open_sockets_or_write_elsewhere(self):
+        with tempfile.TemporaryDirectory() as scratch, tempfile.TemporaryDirectory() as elsewhere:
+            os.chmod(scratch, 0o700)
+            outside = os.path.join(elsewhere, "written")
+            completed = subprocess.run(
+                [sys.executable, "-I", "-B", "-S", "-c", CONFINEMENT_PROBE, str(ORCHESTRATION_ROOT), outside],
+                cwd=scratch, capture_output=True, timeout=30, check=False)
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            seen = json.loads(completed.stdout)
+            self.assertEqual(("EPERM", "EPERM", "EPERM", "allowed"),
+                             (seen["fork"], seen["socket"], seen["unix_socket"], seen["write_inside"]))
+            # Landlock is enforced where the kernel has it; seccomp alone applies otherwise.
+            landlock = subprocess.run(
+                [sys.executable, "-I", "-c", "import ctypes;l=ctypes.CDLL(None,use_errno=True);"
+                 "l.syscall.restype=ctypes.c_long;print(l.syscall(444,None,ctypes.c_size_t(0),ctypes.c_uint32(1)))"],
+                capture_output=True, text=True, timeout=30, check=True)
+            if int(landlock.stdout) >= 1:
+                self.assertIn(seen["write_outside"], ("EACCES", "EPERM"))
+                self.assertFalse(os.path.exists(outside))

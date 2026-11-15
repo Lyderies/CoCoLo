@@ -236,7 +236,7 @@ class AccountObservationJobTests(unittest.TestCase):
                         decode_account_response(self.service.take_claim_reply(known), request)
         self.assertEqual(0, self.jobs.snapshot()['jobs'])
 
-    @unittest.skipUnless(sys.platform == 'darwin', 'existing signature-worker startup requires reviewed macOS policy')
+    @unittest.skipUnless(sys.platform == 'darwin' or sys.platform.startswith('linux'), 'signature workers need macOS or Linux')
     def test_actual_account_client_round_trip_through_original_account_ingress(self):
         from codex_agents.account_claim_jobs import AccountClaimJobs
         from codex_agents.account_ingress import AccountIngress, AccountIngressLimits

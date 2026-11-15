@@ -1,4 +1,5 @@
 """Atomic original project QA; fake native/provider and fixed-runner boundaries."""
+from tests.support import SHORT_TMP
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
@@ -469,7 +470,7 @@ print(json.dumps({'summary':summary,'qa_digest':details['summary']['qa_digest'],
 
 class ProjectQASocketCommitTests(unittest.TestCase):
     def test_actual_separate_writer_and_sqlite_free_client_commit_and_read_qa(self):
-        with tempfile.TemporaryDirectory(prefix='qa-commit-',dir='/private/tmp') as temporary:
+        with tempfile.TemporaryDirectory(prefix='qa-commit-',dir=SHORT_TMP) as temporary:
             endpoint=Path(temporary)/'qa.sock'
             program='import sys;sys.path.insert(0,'+repr(str(Path(__file__).resolve().parents[1]))+');'+QA_COMMIT_SERVER
             server=subprocess.Popen([sys.executable,'-I','-B','-S','-c',program,str(endpoint)],

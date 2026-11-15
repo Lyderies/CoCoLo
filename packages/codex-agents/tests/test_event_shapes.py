@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.support import SHORT_TMP
 
 import io
 import json
@@ -62,7 +63,7 @@ CODEX_FRAMES = [
 
 class EventShapeTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
+        temporary = tempfile.TemporaryDirectory(dir=SHORT_TMP)
         self.addCleanup(temporary.cleanup)
         self.state = Path(temporary.name)
         self.diagnostics = self.state / "diagnostics"

@@ -1,4 +1,5 @@
 """Actual project/account stores, synthetic enrollment; no provider execution."""
+from tests.support import SHORT_TMP
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
@@ -459,7 +460,7 @@ from codex_agents.host_result_contracts import HostResultReference
     def test_actual_socket_client_reconciles_project_owned_outcome_on_writer_thread(self):
         # Explicit synthetic frontend, not native caller/enrollment evidence.
         self.fixture.store.close()
-        temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
+        temporary = tempfile.TemporaryDirectory(dir=SHORT_TMP)
         self.addCleanup(temporary.cleanup)
         endpoint = Path(temporary.name) / "history.sock"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

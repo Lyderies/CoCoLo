@@ -3,6 +3,7 @@
 The collector and project host are the product processes, started by the CLI
 itself; the test supplies only a registered disposable state and owner key.
 """
+from tests.support import assert_dropped
 import base64
 import json
 import os
@@ -28,7 +29,7 @@ from codex_agents.learning_store import LearningLedger, LearningState, authorize
 from codex_agents.service_enrollment import EnrollmentError, enrollment_preamble, proof_directory, read_capability
 
 
-@unittest.skipUnless(sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file(),
+@unittest.skipUnless((sys.platform.startswith('linux') or (sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file())),
                      'account signature workers need the reviewed macOS sandbox')
 class AccountHostTests(unittest.TestCase):
     def setUp(self):
@@ -213,7 +214,7 @@ class AccountHostTests(unittest.TestCase):
             client.settimeout(5)
             client.connect(endpoint)
             client.sendall(line + b'\n' + frame + b'\n')
-            self.assertEqual(b'', client.recv(1))
+            assert_dropped(self, client)
 
         for pid in self.processes('collector_host.py'):
             os.kill(pid, signal.SIGTERM)

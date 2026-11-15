@@ -21,7 +21,7 @@ from codex_agents.control_api import ControlScope
 from codex_agents.learning_contracts import canonical_json, keyed_digest
 
 
-@unittest.skipUnless(sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file(),
+@unittest.skipUnless((sys.platform.startswith('linux') or (sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file())),
                      'original fixed macOS signature worker guard')
 class CliBillingRuntimeTests(unittest.TestCase):
     launches = fixtures.AccountBillingJobTests.launches

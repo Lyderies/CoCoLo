@@ -1,5 +1,6 @@
 """Actual fixed reader/worker with an inert exec-protocol fixture, no AI client."""
 from __future__ import annotations
+from tests.support import SHORT_TMP
 
 import json
 import os
@@ -59,7 +60,7 @@ class CodexActivityExecutionTests(unittest.TestCase):
     assert_stopped_unreaped = owner_fixtures.BridgeLivenessTests.assert_stopped_unreaped
 
     def execution(self, rows):
-        temporary = tempfile.TemporaryDirectory(dir="/private/tmp")
+        temporary = tempfile.TemporaryDirectory(dir=SHORT_TMP)
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         for name in ("control", "export", "tmp"):

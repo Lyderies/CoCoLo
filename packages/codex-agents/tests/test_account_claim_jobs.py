@@ -31,10 +31,11 @@ from codex_agents.admission_inputs import AdmissionCaptureError, AdmissionInputP
 from codex_agents import claim_admission
 
 
-MACOS_WORKER = sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file()
+SIGNATURE_WORKER = ((sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file())
+                    or sys.platform.startswith("linux"))
 
 
-@unittest.skipUnless(MACOS_WORKER, "fixed macOS worker guard; no Linux policy selected")
+@unittest.skipUnless(SIGNATURE_WORKER, "needs the macOS sandbox-exec policy or Linux")
 class AccountClaimJobTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixture_module.AccountClaimOperationTests("test_handler_claims_with_owner_deadline_and_returns_known_state")

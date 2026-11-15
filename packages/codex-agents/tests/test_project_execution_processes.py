@@ -395,7 +395,7 @@ else:
         self.assertEqual(2, self.ledger._connection.execute("SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL").fetchone()[0])
 
 
-@unittest.skipUnless(sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file(), 'registered macOS signature worker')
+@unittest.skipUnless((sys.platform.startswith('linux') or (sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file())), 'registered macOS signature worker')
 class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
     """Same real process races, original APIs, synthetic native/provider boundary."""
     managed_original_open = True

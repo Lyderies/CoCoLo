@@ -1,4 +1,5 @@
 """Actual socket delivery; synthetic frontend contexts are not native proof."""
+from tests.support import assert_dropped
 import os
 import socket
 import subprocess
@@ -26,7 +27,7 @@ class AccountIngressLimitTests(unittest.TestCase):
                 AccountIngressLimits(**{**valid, key: value})
 
 
-@unittest.skipUnless(fixtures.MACOS_WORKER, "fixed macOS worker guard; no Linux policy selected")
+@unittest.skipUnless(fixtures.SIGNATURE_WORKER, "fixed macOS worker guard; no Linux policy selected")
 class AccountIngressTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.AccountClaimJobTests(
@@ -454,7 +455,7 @@ class AccountIngressTests(unittest.TestCase):
             client.sendall(frame)
             with mock.patch.object(self.service, "begin", side_effect=AssertionError("bad frame executed")):
                 self.wait(lambda: self.ingress.snapshot()["ordinary"] == 0)
-            self.assertEqual(b"", client.recv(1))
+            assert_dropped(self, client)
         self.assertEqual(0, self.jobs.snapshot()["tickets"])
 
     def test_disconnects_larger_than_owner_batch_precede_actual_completion(self):

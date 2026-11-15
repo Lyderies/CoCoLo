@@ -23,7 +23,8 @@ from codex_agents.signature_worker_pool import (
     SignatureWorkerError, SignatureWorkerLimits, SignatureWorkerPool,
 )
 
-MACOS_WORKER = sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file()
+SIGNATURE_WORKER = ((sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file())
+                    or sys.platform.startswith("linux"))
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -60,7 +61,7 @@ class SignatureWorkerLimitTests(unittest.TestCase):
         self.assertEqual("signature_pool_unavailable", str(SignatureWorkerError(CallbackTrap())))
 
 
-@unittest.skipUnless(MACOS_WORKER, "fixed macOS test guard; no Linux worker policy is selected")
+@unittest.skipUnless(SIGNATURE_WORKER, "needs the macOS sandbox-exec policy or Linux")
 class SignatureWorkerPoolTests(unittest.TestCase):
     def setUp(self):
         self.fixture = capture_fixture.SignatureInputOwnerTests(
@@ -309,7 +310,7 @@ class SignatureWorkerPoolTests(unittest.TestCase):
                 method(CallbackTrap())
 
 
-@unittest.skipUnless(MACOS_WORKER, "fixed macOS test guard; no Linux worker policy is selected")
+@unittest.skipUnless(SIGNATURE_WORKER, "needs the macOS sandbox-exec policy or Linux")
 class SignatureWorkerBlockedStartTests(unittest.TestCase):
     def test_blocked_fixture_failure_waits_for_all_actual_roots_before_cleanup(self):
         completed = subprocess.run(

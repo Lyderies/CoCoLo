@@ -13,15 +13,17 @@ from codex_agents import signature_execution as execution
 from codex_agents.signature_input_wire import SignatureWireLimits
 from codex_agents.signature_payloads import SignaturePayloadError
 
-MACOS_WORKER = sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file()
+SIGNATURE_WORKER = ((sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file())
+                    or sys.platform.startswith("linux"))
 BOOTSTRAP_HEADER = """import sys,time,os
 sys.path.insert(0,sys.argv[1])
-from codex_agents.signature_process import _require_fork_denial,_ready
+from codex_agents.signature_process import _confine,_require_fork_denial,_ready
+_confine()
 _require_fork_denial()
 """
 
 
-@unittest.skipUnless(MACOS_WORKER, "fixed macOS test guard; no Linux worker policy is selected")
+@unittest.skipUnless(SIGNATURE_WORKER, "needs the macOS sandbox-exec policy or Linux")
 class SignatureExecutionTests(unittest.TestCase):
     def setUp(self):
         self.fixture = capture_fixture.SignatureInputOwnerTests(

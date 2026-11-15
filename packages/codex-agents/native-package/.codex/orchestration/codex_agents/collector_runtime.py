@@ -367,7 +367,7 @@ def client_health_clear(state: CollectorPaths, project_root: Path) -> None:
 # How long a started collector is given to answer. It starts as two interpreters
 # (the CLI entry, then the collector's own) and opens the account services, which
 # takes over a second on a busy machine; the wait ends as soon as it answers.
-COLLECTOR_START_SECONDS = 8.0
+COLLECTOR_START_SECONDS = 20.0
 # A hook runs inside the client's own session and never holds it up that long: the
 # collector it started keeps starting, and a later event finds it.
 HOOK_START_SECONDS = 1.0

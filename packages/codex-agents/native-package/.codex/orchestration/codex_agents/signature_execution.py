@@ -34,7 +34,7 @@ _BOOTSTRAP = '''import sys
 sys.path.insert(0,sys.argv[1])
 allowed={"codex_agents.contracts","codex_agents.learning_contracts","codex_agents.owner_record_payload",
          "codex_agents.owner_key_contracts","codex_agents.signature_inputs","codex_agents.signature_input_wire",
-         "codex_agents.signature_payloads","codex_agents.signature_process"}
+         "codex_agents.signature_payloads","codex_agents.signature_process","codex_agents.signature_sandbox"}
 class FixedImports:
     def find_spec(self,name,path=None,target=None):
         if (name.partition(".")[0] in {"sqlite3","_sqlite3"}
@@ -99,6 +99,11 @@ class _Context:
         return now
 
 
+def signature_execution_supported():
+    """macOS wraps the helper in sandbox-exec; Linux confines it in signature_sandbox."""
+    return sys.platform == 'darwin' or sys.platform.startswith('linux')
+
+
 def _profile(scratch):
     # Experimental broad-read guard only; the narrower policy is stopped and
     # unselected. No OS read-isolation or native-caller authority is claimed.
@@ -158,8 +163,9 @@ def _cleanup_process_checked(context):
 def _exchange(context, mode, data=None):
     context.sample()
     arguments = ['prepare', str(context.limits.max_rows), str(context.limits.max_field_bytes)] if mode == b'P' else ['verify']
-    command = ['/usr/bin/sandbox-exec', '-p', _profile(context.scratch),
-               str(Path(sys.executable).resolve()), '-I', '-B', '-S', '-c', _BOOTSTRAP, str(_HELPER_ROOT), *arguments]
+    command = [str(Path(sys.executable).resolve()), '-I', '-B', '-S', '-c', _BOOTSTRAP, str(_HELPER_ROOT), *arguments]
+    if sys.platform == 'darwin':
+        command = ['/usr/bin/sandbox-exec', '-p', _profile(context.scratch), *command]
     context.spawn_ambiguous = True
     # Retain the actual handle before any later operation; no arbitrary PID or
     # executable/descriptor supplied by a client is accepted here.
@@ -266,7 +272,7 @@ def _execute_signature_job(inputs, limits, deadline_ns, cancelled, poll_ns, clea
             or type(cancelled) is not threading.Event
             or type(poll_ns) is not int or not 1 <= poll_ns <= 100_000_000
             or type(cleanup_ns) is not int or not 1 <= cleanup_ns <= 5_000_000_000
-            or sys.platform != 'darwin'):
+            or not signature_execution_supported()):
         raise ValueError('signature_execution_invalid_input')
     context = _Context(inputs, SignatureWireLimits(limits.max_rows, limits.max_field_bytes),
                        deadline_ns, cancelled, poll_ns, cleanup_ns)
