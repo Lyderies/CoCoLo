@@ -182,7 +182,8 @@ again. A place held by a run whose project service stopped or crashed is freed b
 service, which starts with the project's next command, as soon as nothing of the run is still running;
 `learning-run-status` then reports that run as `run_lost` (abandoned, outcome unknown). Only when the
 service cannot tell (its records of the run are missing or damaged) is the place freed one hour after
-that run's deadline.
+that run's deadline. After an upgrade from 0.2.x, runs that version left can hold slots for a day; see
+`earlier_version_runs` under `learning_migration` stays `pending`, below.
 
 ## `project_service_other_version`
 
@@ -195,6 +196,12 @@ service is then replaced by itself.
 The project's learning history moves to its own store the first time the project is used after an
 update, but only while no child is running anywhere. Use the project again when things are quiet, or
 run `cli.py learning-migrate-project --project-root <root>`; it says what is in the way.
+
+After an upgrade from 0.2.x, runs that version recorded count as running for a day after they
+started, because 0.2.x never recorded when one finished. `learning-status` and
+`learning-migrate-project --status` show them as `earlier_version_runs`: `holding` is how many still
+count, and `finished_by_ms` is when the last stops counting (milliseconds since 1970). From then on, the
+move can start and their slots are free. Nothing has to be done.
 
 ## A verifier is refused for a result recorded earlier
 

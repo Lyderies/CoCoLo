@@ -290,7 +290,9 @@ def status_client(state_root, project_root):
               'owner_key': {'state': 'unavailable', 'fingerprint': None,
                             'replacements': None, 'last_replaced_at_ms': None},
               # Whether this project's learning history still has to move to its own store.
-              'learning_migration': 'unavailable'}
+              'learning_migration': 'unavailable',
+              # Runs an earlier version left that still hold a slot, and when the last stops.
+              'earlier_version_runs': None}
     try:
         state = CollectorPaths(state_root)
         report['client_failures'] = client_health_snapshot(state, project_root)
@@ -305,6 +307,7 @@ def status_client(state_root, project_root):
             report['learning_migration'] = (
                 ('pending' if moved['activation_pending'] else 'complete') if moved['moved']
                 else 'pending' if moved['has_learning'] else 'not_needed')
+            report['earlier_version_runs'] = moved['earlier_version_runs']
         except (CollectorError, OSError):
             pass  # Only this field stays unavailable.
     except CollectorError as error:

@@ -323,10 +323,15 @@ class MigrationCliTests(unittest.TestCase):
         self.assertEqual("complete", self._run("learning-migrate-project")["state"])
 
     def test_first_start_of_the_project_service_moves_the_history_by_itself(self):
-        self.assertEqual("pending", self._run("learning-migrate-project", "--status")["state"])
+        pending = self._run("learning-migrate-project", "--status")
+        self.assertEqual("pending", pending["state"])
+        # No earlier version's run holds a slot here, so nothing holds the move back.
+        self.assertEqual({"holding": 0, "finished_by_ms": None}, pending["earlier_version_runs"])
         opened = self._run("learning-open-orchestration")
         self.assertRegex(opened["orchestration_handle"], "^orc_[0-9a-f]{48}$")
-        self.assertEqual("complete", self._run("learning-status")["learning_migration"])
+        status = self._run("learning-status")
+        self.assertEqual("complete", status["learning_migration"])
+        self.assertEqual({"holding": 0, "finished_by_ms": None}, status["earlier_version_runs"])
         # Its service is running and the history is in its store: the owner's cycle reads it there.
         self.assertTrue(self._run("learning-run-cycle")["ready"])
         ledger_records = self._stopped_ledger_count("records")
