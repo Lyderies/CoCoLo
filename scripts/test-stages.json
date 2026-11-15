@@ -30,6 +30,7 @@
  "codex:tests.test_account_store_recovery": "integration",
  "codex:tests.test_account_terminal_delivery": "integration",
  "codex:tests.test_active_run_capacity": "integration",
+ "codex:tests.test_admission_history_growth": "integration",
  "codex:tests.test_admission_input_decode": "integration",
  "codex:tests.test_admission_inputs": "integration",
  "codex:tests.test_admission_metadata": "integration",
