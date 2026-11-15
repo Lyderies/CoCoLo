@@ -185,12 +185,12 @@ class EventRetentionTests(unittest.TestCase):
 
     def test_a_summary_record_is_closed_and_consistent(self):
         summary = {"schema_version": 1, "record_type": "event_summary", "record_id": "evsum-" + "a" * 32,
-                   "run_id": "run_1", "day": "2026-10-01", "observed_at_ms": 1_759_309_200_100,
+                   "run_id": "run_1", "day": "2025-10-01", "observed_at_ms": 1_759_309_200_100,
                    "first_observed_at_ms": 1_759_309_200_000, "last_observed_at_ms": 1_759_309_200_100,
                    "span_ms": 100, "event_count": 2, "event_counts": {"tool_started": 2},
                    "source_counts": {"hook": 2}}
         validate_learning_record(summary)
-        for change in ({"event_count": 3}, {"span_ms": 5}, {"day": "2026-10-02"},
+        for change in ({"event_count": 3}, {"span_ms": 5}, {"day": "2025-10-02"},
                        {"event_counts": {"not_an_event": 2}}, {"event_counts": {"tool_started": 0}},
                        {"source_counts": {"owner": 2}}, {"extra": 1}):
             with self.subTest(change=sorted(change)), self.assertRaises(ContractError):

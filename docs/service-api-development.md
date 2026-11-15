@@ -1085,7 +1085,15 @@ identity check; feedback alone carries its own authority, the owner's signature.
   One checkpoint per orchestration is read to find it; rows are selected by SQLite and
   only that orchestration's (at most 512 runs, else refused) are parsed in the service.
   The SQLite scans themselves still grow with the project's history.
-- `learning-expire` still applies the ledger's retention to the ledger.
+- `learning-expire` still applies the ledger's retention to the ledger. Separately, the
+  collector's `sweep_event_retention` runs every `WORKER_RESULT_SWEEP_SECONDS`: up to
+  `EVENT_SWEEP_BATCH` (500) expired hook and app-server events that no record link
+  touches are grouped by run and UTC day into `event_summary` records (closed contract:
+  counts per event code and per source, first and last seen, span; written by the
+  ledger only, source `lifecycle`, never evidence) and removed in the same transaction.
+  An event's expiry is set at ingestion from `config/retention-policy.json`
+  (`load_retention_policy`: every event code exactly once, 1 to 365 days; summaries 1
+  to 3650), so existing rows keep theirs. Backups and stored files are not touched.
 - The candidate pipeline commands (evaluation assignments, trials, comparison,
   promotion, canary, rollback, drift, grader calibration, grants) are refused by the
   ledger with "project learning has moved to its project store"; they return with

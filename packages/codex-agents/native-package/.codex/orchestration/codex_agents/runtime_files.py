@@ -185,6 +185,7 @@ RUNTIME_FILES = (
     "config/learning-clients.json",
     "config/learning-overhead.json",
     "config/learning-producers.json",
+    "config/retention-policy.json",
     "config/routing-policy.json",
     "project_host.py",
     "schemas/agent-state.schema.json",

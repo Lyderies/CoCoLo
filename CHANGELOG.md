@@ -19,6 +19,14 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   upgrade (`ledger_upgrade_failed`), when that is a plain fixed message, instead of nothing.
 - `provider-observe` and the billing probe report `account_unavailable` when COCOLO's own services
   cannot be reached, so attestation says to run setup instead of telling you to sign in to the client.
+- Raw hook events no longer pile up: they were kept 90 days and removed only when the owner ran
+  `learning-expire` (one project had 191,000 of them). Each event code now has a weight in the installed
+  `config/retention-policy.json`: high-volume events such as tool and turn starts are kept 7 days, session
+  and turn milestones 30, retries, repairs, escalations and stalls 90, and the host's own lifecycle events
+  as long as their run's outcome. The collector removes expired raw events by itself, a small batch at a
+  time, after writing one `event_summary` per run and day (counts per event code, first and last seen,
+  span), kept 90 days. Linked events and backups are left alone, and records an earlier version kept keep
+  the expiry they were given.
 
 ## 0.3.0: COCOLO, watched and stoppable children (Codex package 0.8.13)
 

@@ -32,7 +32,7 @@ MAX_CHUNK_BYTES = 262_144
 MAX_SIGNATURE_BYTES = 16_384
 EMPTY_CHAIN_DIGEST = "0" * 64
 _RECORD_TYPES = frozenset({
-    "event", "outcome", "feedback", "evaluation_case", "evaluation_assignment",
+    "event", "event_summary", "outcome", "feedback", "evaluation_case", "evaluation_assignment",
     "qa_evidence", "evidence_review", "evaluation_trial", "candidate", "comparison",
     "canary_report", "grader_calibration", "owner_grant", "promotion", "learning_export",
     "verification_binding", "host_run_profile", "dispatch_intent", "dispatch_result",

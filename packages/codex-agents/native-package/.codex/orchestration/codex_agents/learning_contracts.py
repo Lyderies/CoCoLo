@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import math
+import datetime as _dt
 import re
 import base64
 import binascii
@@ -59,6 +60,7 @@ DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 RECORD_TYPES = {
     "event",
+    "event_summary",
     "outcome",
     "feedback",
     "evaluation_case",
@@ -2117,6 +2119,48 @@ def validate_observation_unavailable(data: Any) -> dict[str, Any]:
     return data
 
 
+EVENT_SUMMARY_FIELDS = {
+    "schema_version", "record_type", "record_id", "run_id", "day", "observed_at_ms",
+    "first_observed_at_ms", "last_observed_at_ms", "span_ms", "event_count", "event_counts",
+    "source_counts",
+}
+EVENT_SUMMARY_SOURCES = frozenset({"hook", "app_server"})
+_DAY = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+
+
+def _utc_day(milliseconds: int) -> str:
+    return _dt.datetime.fromtimestamp(milliseconds / 1000, _dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+def validate_event_summary(data: Any) -> dict[str, Any]:
+    """The counts left of raw events that expired: one run, one UTC day, written by the retention sweep.
+
+    It summarises, and grants nothing: no run, provenance or learning evidence
+    rests on it. Every number is checked against the others.
+    """
+
+    data = _closed(data, EVENT_SUMMARY_FIELDS, "event_summary")
+    _base(data, "event_summary")
+    _identifier(data["run_id"], "run_id")
+    for field in ("observed_at_ms", "first_observed_at_ms", "last_observed_at_ms", "span_ms"):
+        _integer(data[field], field)
+    _integer(data["event_count"], "event_count", minimum=1, maximum=1_000_000_000)
+    first, last = data["first_observed_at_ms"], data["last_observed_at_ms"]
+    if (first > last or data["observed_at_ms"] != last or data["span_ms"] != last - first
+            or not isinstance(data["day"], str) or not _DAY.fullmatch(data["day"])
+            or _utc_day(first) != data["day"] or _utc_day(last) != data["day"]):
+        raise ContractError("event_summary times are inconsistent")
+    for field, allowed in (("event_counts", EVENT_CODES), ("source_counts", EVENT_SUMMARY_SOURCES)):
+        counts = data[field]
+        if not isinstance(counts, dict) or not counts or not set(counts) <= set(allowed):
+            raise ContractError(f"{field} is invalid")
+        for value in counts.values():
+            _integer(value, field, minimum=1, maximum=1_000_000_000)
+        if sum(counts.values()) != data["event_count"]:
+            raise ContractError(f"{field} does not add up to event_count")
+    return data
+
+
 TOKEN_FIELDS = (
     "input_tokens", "cached_input_tokens", "cache_creation_input_tokens",
     "output_tokens", "reasoning_output_tokens",
@@ -2332,6 +2376,7 @@ VALIDATORS: dict[str, Callable[[Any], dict[str, Any]]] = {
     "observation_unavailable": validate_observation_unavailable,
     "provider_usage": validate_provider_usage,
     "verification_binding": validate_verification_binding,
+    "event_summary": validate_event_summary,
 }
 
 

@@ -13,9 +13,15 @@ from pathlib import Path
 from tests.support import TEMP_ROOT
 
 from codex_agents.learning_contracts import canonical_json
-from codex_agents.learning_store import DEFAULT_RETENTION_MS, LearningLedger, LearningState, LedgerError
+from codex_agents.learning_store import (
+    DEFAULT_RETENTION_MS, LearningLedger, LearningState, LedgerError, load_retention_policy,
+)
+
 from codex_agents.providers import headroom_record
 from tests.learning_support import event_record
+
+# A hook event is kept as long as its code's weight in the installed policy says.
+HOOK_KEEP_MS = load_retention_policy().event_keep_ms["turn_started"]
 
 
 class LegacyHistoryCompatibilityTests(unittest.TestCase):
@@ -52,7 +58,7 @@ class LegacyHistoryCompatibilityTests(unittest.TestCase):
         self.assertEqual(canonical_json(record), original["content"])
         self.assertEqual("hook", original["source"])
         self.assertEqual(200, original["ingested_at_ms"])
-        self.assertEqual(200 + DEFAULT_RETENTION_MS, original["expires_at_ms"])
+        self.assertEqual(200 + HOOK_KEEP_MS, original["expires_at_ms"])
         self.reopen()
         for producer in ("app_server", "host", "hook"):
             with self.subTest(producer=producer):
@@ -131,12 +137,12 @@ class LegacyHistoryCompatibilityTests(unittest.TestCase):
             self.ledger.append(project, event_record(identifier, observed_at_ms=observed),
                                producer="hook", now_ms=timestamp)
         self.ledger.link(project, "expired", "derived-tail", "derived_from")
-        self.assertEqual(2, self.ledger.expire(project, now_ms=1000 + DEFAULT_RETENTION_MS))
+        self.assertEqual(2, self.ledger.expire(project, now_ms=1000 + HOOK_KEEP_MS))
         self.reopen()
         self.assertEqual(
             {"stored": True, "duplicate": False, "source_sequence": 3, "late": False},
             self.ledger.append(project, event_record("new-tail", observed_at_ms=300),
-                               producer="app_server", now_ms=1001 + DEFAULT_RETENTION_MS),
+                               producer="app_server", now_ms=1001 + HOOK_KEEP_MS),
         )
         self.assertIsNone(self.row(project, "derived-tail"))
         self.assertEqual(2, self.row(project, "retained")["source_sequence"])

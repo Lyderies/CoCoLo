@@ -206,6 +206,68 @@ MAX_RUN_RATE_LIMIT_RECORDS = 64
 INSTALLED_ROUTING_POLICY = (
     Path(__file__).resolve().parent.parent / "config" / "routing-policy.json"
 )
+# How long each raw event is kept: a weight per event code, from the installed policy.
+INSTALLED_RETENTION_POLICY = (
+    Path(__file__).resolve().parent.parent / "config" / "retention-policy.json"
+)
+RETENTION_WEIGHTS = ("low", "medium", "high")
+MAX_EVENT_KEEP_DAYS = 365
+MAX_SUMMARY_KEEP_DAYS = 3650
+# The collector removes at most this many expired raw events per sweep.
+EVENT_SWEEP_BATCH = 500
+_DAY_MS = 24 * 60 * 60 * 1000
+
+
+@dataclass(frozen=True)
+class RetentionPolicy:
+    """Milliseconds to keep each hook or app-server event code, and each event summary."""
+
+    event_keep_ms: dict
+    summary_keep_ms: int
+
+
+def load_retention_policy(path: Path = INSTALLED_RETENTION_POLICY) -> RetentionPolicy:
+    """The installed retention policy; one that misses, repeats or invents a code is refused."""
+    from .learning_contracts import EVENT_CODES
+
+    try:
+        value = json.loads(Path(path).read_bytes())
+    except (OSError, ValueError):
+        raise LedgerError("retention policy is unavailable") from None
+
+    def days(item, maximum):
+        if type(item) is not int or not 1 <= item <= maximum:
+            raise LedgerError("retention policy is invalid")
+        return item * _DAY_MS
+
+    if (not isinstance(value, dict)
+            or set(value) != {"version", "weights", "events", "host_events", "summary_keep_days"}
+            or value["version"] != 1 or type(value["version"]) is not int
+            or value["host_events"] != "run_bound"
+            or not isinstance(value["weights"], dict) or set(value["weights"]) != set(RETENTION_WEIGHTS)
+            or not isinstance(value["events"], dict) or set(value["events"]) != set(RETENTION_WEIGHTS)):
+        raise LedgerError("retention policy is invalid")
+    keep = {}
+    for weight in RETENTION_WEIGHTS:
+        setting, codes = value["weights"][weight], value["events"][weight]
+        if not isinstance(setting, dict) or set(setting) != {"keep_days"} or not isinstance(codes, list):
+            raise LedgerError("retention policy is invalid")
+        for code in codes:
+            if code not in EVENT_CODES or code in keep:
+                raise LedgerError("retention policy is invalid")
+            keep[code] = days(setting["keep_days"], MAX_EVENT_KEEP_DAYS)
+    if set(keep) != set(EVENT_CODES):
+        raise LedgerError("retention policy is invalid")
+    return RetentionPolicy(keep, days(value["summary_keep_days"], MAX_SUMMARY_KEEP_DAYS))
+
+
+_RETENTION_POLICY: list[RetentionPolicy] = []
+
+
+def _retention_policy() -> RetentionPolicy:
+    if not _RETENTION_POLICY:
+        _RETENTION_POLICY.append(load_retention_policy())
+    return _RETENTION_POLICY[0]
 SOURCE_BY_PRODUCER = {
     "hook": "hook",
     "app_server": "app_server",
@@ -2123,6 +2185,60 @@ class LearningLedger:
             )
             due.append((str(row["project_id"]), str(row["relative_path"])))
         return due
+
+    def sweep_event_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
+        """Summarise, then remove, up to `batch` expired raw events; returns how many were removed.
+
+        Only hook and app-server events past their expiry that no record link
+        touches are taken (linked ones, and every other record type, are left to
+        the owner's learning-expire, which also follows lineage). Each run's
+        events of one UTC day become one event_summary, written in the same
+        transaction as the removal. Backups keep their own lifetime.
+        """
+        from .learning_contracts import validate_learning_record
+
+        with self._lock:
+            if self._active_readers:
+                return 0
+            now = self._clock_ms() if now_ms is None else now_ms
+            rows = self._connection.execute(
+                "SELECT r.project_id,r.record_id,r.source,r.observed_at_ms,r.content FROM records r "
+                "JOIN projects p ON p.project_id=r.project_id AND p.status='active' "
+                "WHERE r.record_type='event' AND r.source IN ('hook','app_server') "
+                "AND r.expires_at_ms IS NOT NULL AND r.expires_at_ms<=? "
+                "AND NOT EXISTS (SELECT 1 FROM record_links l WHERE l.project_id=r.project_id "
+                "AND (l.from_record_id=r.record_id OR l.to_record_id=r.record_id)) "
+                "ORDER BY r.project_id,r.source_sequence LIMIT ?",
+                (now, batch),
+            ).fetchall()
+            if not rows:
+                return 0
+            groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+            for row in rows:
+                record = json.loads(bytes(row["content"]))
+                observed = int(row["observed_at_ms"])
+                day = time.strftime("%Y-%m-%d", time.gmtime(observed / 1000))
+                group = groups.setdefault((str(row["project_id"]), str(record["run_id"]), day), {
+                    "ids": [], "codes": {}, "sources": {}, "first": observed, "last": observed})
+                group["ids"].append(str(row["record_id"]))
+                group["codes"][record["event_code"]] = group["codes"].get(record["event_code"], 0) + 1
+                group["sources"][str(row["source"])] = group["sources"].get(str(row["source"]), 0) + 1
+                group["first"], group["last"] = min(group["first"], observed), max(group["last"], observed)
+            with self._connection:
+                for (project_id, run_id, day), group in groups.items():
+                    identity = hashlib.sha256(canonical_json(
+                        [project_id, run_id, day, sorted(group["ids"])])).hexdigest()[:32]
+                    summary = validate_learning_record({
+                        "schema_version": 1, "record_type": "event_summary", "record_id": "evsum-" + identity,
+                        "run_id": run_id, "day": day, "observed_at_ms": group["last"],
+                        "first_observed_at_ms": group["first"], "last_observed_at_ms": group["last"],
+                        "span_ms": group["last"] - group["first"], "event_count": len(group["ids"]),
+                        "event_counts": group["codes"], "source_counts": group["sources"]})
+                    self._append_checked_locked(project_id, summary, producer="lifecycle", timestamp=now)
+                    self._connection.executemany(
+                        "DELETE FROM records WHERE project_id=? AND record_id=?",
+                        [(project_id, identifier) for identifier in group["ids"]])
+            return len(rows)
 
     def sweep_worker_results(self) -> int:
         """Delete worker results past their retention or orchestration; return how many.
@@ -9571,6 +9687,12 @@ class LearningLedger:
                 "billing_attestation",
                 "claim_denial_settlement",
             }
+            # A raw hook or app-server event is kept as long as its code's weight says;
+            # a host lifecycle event as long as its run's outcome (the default).
+            else timestamp + _retention_policy().event_keep_ms[checked["event_code"]]
+            if checked["record_type"] == "event" and source in {"hook", "app_server"}
+            else timestamp + _retention_policy().summary_keep_ms
+            if checked["record_type"] == "event_summary"
             else timestamp + DEFAULT_RETENTION_MS
         )
         existing = self._connection.execute(
@@ -11433,6 +11555,10 @@ class CollectorServer:
                     next_sweep = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS
                     with contextlib.suppress(LedgerError, OSError, sqlite3.Error):
                         self.ledger.sweep_worker_results()
+                    # Raw events past their weight's period are summarised and removed,
+                    # a small batch at a time, without the owner running anything.
+                    with contextlib.suppress(LedgerError, OSError, sqlite3.Error, ValueError, KeyError):
+                        self.ledger.sweep_event_retention()
                 try:
                     connection, _ = listener.accept()
                 except TimeoutError:
