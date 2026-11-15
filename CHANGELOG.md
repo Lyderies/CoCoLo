@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.2: admission on a project with history (Codex package 0.8.15)
+## 0.3.2: admission on a project with history (Codex package 0.8.16)
 
 - From a busy project after upgrading to 0.3.1: no child could be opened and no Claude billing probe
   run. Before admitting anything, the account service reads the provider readings and earlier
