@@ -174,6 +174,14 @@ busy machine or when it cannot start at all. It keeps starting by itself: run th
 keeps failing, run `./setup.sh` and choose "Update the install and walk through every step"; step 5
 (Collector) says what is wrong.
 
+## `probe_busy`
+
+The Claude billing probe needs one of its account's two run slots, and none was free, or another probe
+for the account was running. Nothing was admitted. Try again when a run has finished. Right after an
+upgrade from 0.2.x, runs that version recorded count as running for a day after they started (it never
+recorded when one finished), so they can hold both slots until then; see `claim_busy`. Release 0.3.1
+and earlier reported this as `probe_unavailable`.
+
 ## `admission_capture_limit` or `admission_capture_work_limit`
 
 Before admitting a child or a billing probe, the account service reads the provider readings and earlier

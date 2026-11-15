@@ -9,6 +9,7 @@ import hmac
 import os
 import time
 
+from .account_claim_contracts import ClaimError
 from .admission_inputs import AdmissionCaptureLimits
 from .admission_metadata import API_KEY_VARIABLES, evaluate_admission
 from .account_observation import ObservationContext
@@ -332,7 +333,13 @@ class AccountBillingAdmission:
                         cited_digests=prepared['cited_digests'], probe=True,
                         prior_run_admissions=[(f, t) for f, t in prepared['prior_admissions'] if t >= now-18_000_000]))
                 if decision['decision'] == 'pass':
-                    self._read(lambda: self._ledger._check_active_capacity_locked('claude', fingerprint))
+                    try:
+                        self._read(lambda: self._ledger._check_active_capacity_locked('claude', fingerprint))
+                    except ClaimError as error:
+                        if error.reason_code != 'claim_busy':
+                            raise
+                        # Every slot is held: a probe reason, so it is not reported as unavailable.
+                        raise ProbeAdmissionError('probe_busy') from None
                     if self._one("SELECT 1 FROM account_billing_probe_requests INDEXED BY billing_probe_active_account "
                             "WHERE state='admitted' AND account_fingerprint=? LIMIT 1", (fingerprint,)) is not None:
                         raise ProbeAdmissionError('probe_busy')

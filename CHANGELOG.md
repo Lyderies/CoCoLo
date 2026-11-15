@@ -26,6 +26,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   nothing is admitted. A launch claimed hours after its open reads history from its open on, so it
   still finds the decision and identity it was admitted on. A damaged old record that no rule keeps no
   longer blocks admission; every record admission reads is still checked in full.
+- A Claude billing probe refused because every run slot of its account was in use reported
+  `probe_unavailable`; it now reports `probe_busy`. Right after an upgrade from 0.2.x this is what the
+  earlier version's runs cause until a day after they started.
 
 ## 0.3.1: upgrading busy projects (Codex package 0.8.14)
 
