@@ -1180,8 +1180,11 @@ init_logdir() {
 # private log directory (deleted on exit), except when RUN_QUIET=1 (git, project hooks),
 # whose output is discarded because it may carry identity details.
 RUN_QUIET=0
+# A step running longer than this says it can take a few minutes (an upgrade backs up and
+# checks every project's records first), so a long wait never looks like a hang.
+RUN_SLOW_SECONDS=${RUN_SLOW_SECONDS:-10}
 run_cmd() {
-  local label=$1 pid i=0 frames='|/-\'
+  local label=$1 pid i=0 frames='|/-\' started=$SECONDS waited hint
   shift
   CMD_N=$((CMD_N + 1))
   if [ "$RUN_QUIET" -eq 1 ]; then
@@ -1198,7 +1201,9 @@ run_cmd() {
   ACTIVE_PID=$pid
   hide_cursor
   while kill -0 "$pid" 2>/dev/null; do
-    printf '\r  %s%s%s %s ' "$C_CYAN" "${frames:$((i % 4)):1}" "$C_RESET" "$label"
+    waited=$((SECONDS - started)); hint=""
+    if [ "$waited" -ge "$RUN_SLOW_SECONDS" ]; then hint="  (still working: this can take a few minutes)"; fi
+    printf '\r  %s%s%s %s  %ss%s ' "$C_CYAN" "${frames:$((i % 4)):1}" "$C_RESET" "$label" "$waited" "$hint"
     i=$((i + 1))
     sleep 0.15
   done
