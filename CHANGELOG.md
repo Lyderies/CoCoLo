@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.2: admission on a project with history (Codex package 0.8.21)
+## 0.3.2: admission on a project with history (Codex package 0.8.22)
 
 - From a busy project after upgrading to 0.3.1: no child could be opened and no Claude billing probe
   run. Before admitting anything, the account service reads the provider readings and earlier
@@ -49,6 +49,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   could not be handed to its worker), `run_client_changed` (the client observed just before launch is not the one prepared) or
   `run_account_call_failed`. Fixed names only; no paths or messages. Found
   in an owner's live test of 0.3.2.
+- A run admitted but refused before it claimed a slot (its preparation failed, say) stayed pending at
+  the account for ever and counted as possibly running: after an update every open was refused with
+  `project_service_other_version`, and the collector could not be replaced. A child launches only after
+  its claim, so replacing the collector or a project service now waits only for children that may run;
+  the learning move counts such a run until its binding expires. Found in an owner's live test.
 - Runs that 0.2.x recorded still count as running for a day after they started (a cautious rule: 0.2.x
   enforced no deadline on a native Claude child), but they no longer hold back updating COCOLO or
   replacing a project service: an update said "a child run is active" while none was. They never ran

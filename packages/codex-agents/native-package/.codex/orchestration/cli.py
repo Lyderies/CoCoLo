@@ -478,7 +478,7 @@ def _replace_other_version_host(args):
             ledger = LearningLedger(state)
             try:
                 # Runs an earlier version left never ran under a project service.
-                drained = ledger.drained(ignore_earlier_version=True)
+                drained = ledger.drained(children_only=True)
             finally:
                 ledger.close()
             replaced = drained and withdraw_project_host(args.state_root, args.project_root, directory)

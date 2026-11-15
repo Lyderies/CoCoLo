@@ -159,7 +159,7 @@ def _registry(connection, project_id, file_id):
     return tuple(row)
 
 
-def _drained(connection, now, monotonic_ns=None, *, ignore_earlier_version=False):
+def _drained(connection, now, monotonic_ns=None, *, children_only=False):
     # A run the project's own service drove settles by releasing its claim; the
     # ledger never consumes its binding. A claim more than the crash grace past
     # its hard deadline belongs to a run whose host is gone (the account already
@@ -167,16 +167,24 @@ def _drained(connection, now, monotonic_ns=None, *, ignore_earlier_version=False
     # every later migration back.
     from .active_run_capacity import crashed_claim
 
+    #
+    # `children_only` asks only whether a child may be running, for replacing the
+    # collector or a project service: a child launches only after its claim, so a run
+    # admitted but never claimed has none, and a run 0.2.x left never ran under either.
+    # Otherwise an unclaimed run counts until its binding expires: no claim can be
+    # admitted after that, so it can never record anything.
     monotonic_ns = time.monotonic_ns() if monotonic_ns is None else monotonic_ns
     crashed, parameters = crashed_claim("a", now, monotonic_ns)
-    if ignore_earlier_version:
+    if children_only:
         crashed = f"({crashed} OR a.kind='legacy_unknown')"
-    if (_one(connection,
+    if ((not children_only and _one(connection,
             "SELECT 1 FROM host_run_bindings h WHERE h.binding_state='pending' AND NOT EXISTS("
             "SELECT 1 FROM active_run_capacity a WHERE a.project_id=h.project_id "
-            f"AND a.handle_digest=h.handle_digest AND (a.released_at_ms IS NOT NULL OR {crashed})) LIMIT 1",
-            parameters)
-            is not None or _one(connection,
+            f"AND a.handle_digest=h.handle_digest AND (a.released_at_ms IS NOT NULL OR {crashed})) "
+            "AND (h.expires_at_ms>? OR EXISTS(SELECT 1 FROM active_run_capacity c "
+            "WHERE c.project_id=h.project_id AND c.handle_digest=h.handle_digest)) LIMIT 1",
+            (*parameters, now)) is not None)
+            or _one(connection,
                 f"SELECT 1 FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND NOT {crashed} LIMIT 1",
                 parameters) is not None):
         raise HistoryError("history_unavailable")
