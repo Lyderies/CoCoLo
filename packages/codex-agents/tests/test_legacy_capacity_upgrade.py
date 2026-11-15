@@ -12,15 +12,20 @@ stays unreleased, exactly like a crashed claim of this version.
 
 import time
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from tests import test_learning_store as legacy
 from tests.test_account_launch_claims import downgrade_ledger_to_six
 from codex_agents import active_run_capacity, learning_store
+from codex_agents.collector_client import CollectorClient, CollectorError
 
 HOUR = 60 * 60 * 1000
 
 
-class LegacyCapacityUpgradeTests(unittest.TestCase):
+class LegacyRunsFixture:
+    """A ledger upgraded from 0.2.x with runs of chosen ages."""
+
     def setUp(self):
         self.fixture = legacy.LearningStoreTests()
         self.fixture.setUp()
@@ -52,6 +57,8 @@ class LegacyCapacityUpgradeTests(unittest.TestCase):
             f"SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL AND NOT {crashed}",
             parameters).fetchone()[0]
 
+
+class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
     def test_old_runs_from_an_earlier_version_neither_hold_capacity_nor_block_the_move(self):
         ledger = self.upgrade_with_runs(30 * 24 * HOUR, 3 * 24 * HOUR, 2 * learning_store.LEGACY_RUN_MAX_MS)
         rows = ledger._connection.execute(
@@ -77,3 +84,32 @@ class LegacyCapacityUpgradeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
+    """Status says how many slots runs from an earlier version hold, and until when (F2)."""
+
+    def test_the_ledger_says_how_many_earlier_runs_hold_slots_and_when_the_last_stops(self):
+        ledger = self.upgrade_with_runs(30 * 24 * HOUR, 3 * HOUR, 20 * HOUR)
+        claimed = sorted(row[0] for row in ledger._connection.execute(
+            "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown'"))
+        self.assertEqual({"holding": 2, "finished_by_ms": claimed[-1] + learning_store.LEGACY_RUN_MAX_MS},
+                         ledger.earlier_version_runs())
+
+    def test_with_no_earlier_runs_holding_a_slot_there_is_no_time(self):
+        ledger = self.upgrade_with_runs(30 * 24 * HOUR)
+        self.assertEqual({"holding": 0, "finished_by_ms": None}, ledger.earlier_version_runs())
+
+    def test_the_collector_reports_it_with_the_learning_move_state(self):
+        answer = {"ok": True, "moved": False, "has_learning": True, "drained": False, "activation_pending": False,
+                  "earlier_version_runs": {"holding": 2, "finished_by_ms": 1_800_000_000_000}}
+        client = CollectorClient(Path("/srv/collector.sock"))
+        with mock.patch.object(client, "_request", return_value=answer):
+            self.assertEqual({"holding": 2, "finished_by_ms": 1_800_000_000_000},
+                             client.learning_migration(Path("/srv/project"))["earlier_version_runs"])
+        for bad in ({"holding": -1, "finished_by_ms": None}, {"holding": 1, "finished_by_ms": None},
+                    {"holding": True, "finished_by_ms": None}, {"holding": 0}, "two"):
+            with self.subTest(bad=bad), mock.patch.object(
+                    client, "_request", return_value={**answer, "earlier_version_runs": bad}), \
+                    self.assertRaises(CollectorError):
+                client.learning_migration(Path("/srv/project"))
