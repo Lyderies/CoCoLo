@@ -366,7 +366,16 @@ class CodexPreparationTests(unittest.TestCase):
         self.discard(handle)
         self.assertFalse(prepared.workspace.exists())
 
+    def test_the_result_schema_comes_from_the_running_runtime_never_the_project(self):
+        # Unlike a role, the schema is bound to no digest, so like the CLI (which reads it
+        # from ORCHESTRATION_ROOT) preparation reads it from the runtime it runs from: a
+        # session that can write the project cannot change what a child is told to return.
+        (self.fixture.bundle/'.codex/orchestration/schemas/result.schema.json').write_text('not json')
+        handle, prepared = self.prepare()
+        self.discard(handle)
+
     def test_oversized_installed_schema_is_refused_before_account_readiness(self):
+        self.enterContext(mock.patch.object(codex_preparation, 'RUNTIME_ROOT', self.fixture.bundle))
         schema = self.fixture.bundle/'.codex/orchestration/schemas/result.schema.json'
         schema.write_bytes(b' '*(MAX_RESULT_BODY_BYTES+1))
         handle = self.lane.submit(self.context)
@@ -407,6 +416,7 @@ class CodexPreparationTests(unittest.TestCase):
         self.assertEqual('cleaned', lane.snapshot(handle)['state'])
 
     def test_fifo_installed_schema_refuses_without_waiting_for_a_writer(self):
+        self.enterContext(mock.patch.object(codex_preparation, 'RUNTIME_ROOT', self.fixture.bundle))
         schema = self.fixture.bundle/'.codex/orchestration/schemas/result.schema.json'
         schema.unlink()
         os.mkfifo(schema, 0o600)
@@ -434,6 +444,7 @@ class CodexPreparationTests(unittest.TestCase):
                     os.close(writer)  # Release only the old buggy fixture read, if blocked.
 
     def test_malformed_and_nonobject_schema_refuse_before_account_readiness(self):
+        self.enterContext(mock.patch.object(codex_preparation, 'RUNTIME_ROOT', self.fixture.bundle))
         schema = self.fixture.bundle/'.codex/orchestration/schemas/result.schema.json'
         for contents in (b'{', b'[]'):
             with self.subTest(contents=contents):
