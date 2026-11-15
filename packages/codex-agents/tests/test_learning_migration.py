@@ -423,7 +423,7 @@ class DrainedRuleTests(unittest.TestCase):
         self.connection.executescript(
             "CREATE TABLE host_run_bindings(project_id,handle_digest,binding_state,abandoned_reason);"
             "CREATE TABLE active_run_capacity(project_id,handle_digest,deadline_at_ms,released_at_ms,"
-            "clock_reference_ns,execution_deadline_ns);")
+            "clock_reference_ns,execution_deadline_ns,kind,claimed_at_ms);")
         self.now = 10 * learning_store.CRASHED_CLAIM_GRACE_MS
         self.monotonic = self.now * 1_000_000  # Both clocks at the same instant, for simplicity.
 
@@ -431,8 +431,8 @@ class DrainedRuleTests(unittest.TestCase):
         self.connection.execute("INSERT INTO host_run_bindings VALUES('p',?,?,?)", (name, binding, reason))
         if monotonic_deadline == "same":
             monotonic_deadline = None if deadline is None else deadline * 1_000_000
-        self.connection.execute("INSERT INTO active_run_capacity VALUES('p',?,?,?,?,?)", (
-            name, deadline, released, None if monotonic_deadline is None else 1, monotonic_deadline))
+        self.connection.execute("INSERT INTO active_run_capacity VALUES('p',?,?,?,?,?,'claimed',?)", (
+            name, deadline, released, None if monotonic_deadline is None else 1, monotonic_deadline, self.now))
 
     def drained(self):
         image._drained(self.connection, self.now, self.monotonic)

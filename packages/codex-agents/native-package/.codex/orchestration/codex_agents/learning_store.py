@@ -58,6 +58,7 @@ from .collector_client import (
 from .active_run_capacity import CAPACITY_OBJECTS, CAPACITY_SCHEMA, CAPACITY_PARENT_SCHEMA, CAPACITY_COMPLETIONS_SCHEMA, CAPACITY_EXECUTIONS_SCHEMA
 from .active_run_capacity import INSTALLED_ACTIVE_RUN_LIMITS
 from .active_run_capacity import CRASHED_CLAIM_GRACE_MS as CRASHED_CLAIM_GRACE_MS, crashed_claim
+from .active_run_capacity import LEGACY_RUN_MAX_MS as LEGACY_RUN_MAX_MS
 from .owned_execution import ExecutionCustodyError, OwnedExecutionKey, OwnedExecutionRegistry
 from .capacity_status_contracts import CapacityStatusInput, checked_capacity_status
 from .account_open_schema import HISTORY_OWNER_COLUMN, OPEN_OBJECTS, assert_open_schema, install_open_schema

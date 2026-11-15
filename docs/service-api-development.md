@@ -3694,10 +3694,14 @@ concurrent-client release criteria remain separate mandatory activation gates.
 Schema 9 requires verified schema-8 backups before migration. Existing consumed
 or fenced launch markers become `legacy_unknown` reservations; migration does
 not infer that historical execution never happened or invent account/cleanup
-evidence. Unknown reservations count conservatively for every candidate account.
-At the two-slot policy, two historical markers therefore block all new claims and
-held projects cannot be deleted. Trusted drained migration and orphan reconciliation
-must resolve this before a usable upgrade. Service-path execution/release integration
+evidence. Unknown reservations count conservatively for every candidate account
+while their run could still be alive. A 0.2.x child ran inside its own CLI command
+under a route deadline of at most six hours, so `crashed_claim` treats a
+`legacy_unknown` reservation claimed more than `LEGACY_RUN_MAX_MS` (24 hours, by the
+wall clock; it has no monotonic reference) ago as one that cannot still be running:
+it stops counting against the limits and no longer blocks the learning move's drain,
+while its row stays unreleased. (Release 0.3.0 had no such rule, so two historical
+markers blocked every new claim and any of them blocked the move, for ever.) Service-path execution/release integration
 and recovery after an uncertain or committed registration also remain incomplete.
 Migration and capacity backfill commit together or roll back together. Current
 startup refuses missing/mismatched reservation coverage instead of rebuilding an

@@ -1,6 +1,7 @@
 """Offline row-image boundaries on disposable original owner databases."""
 
 from copy import deepcopy
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -55,7 +56,7 @@ class LearningSourceImageTests(unittest.TestCase):
 
     def rewrite(self, mutate):
         """Change the registered backup file itself, then re-register its digest."""
-        with sqlite3.connect(self.backup) as backup:
+        with closing(sqlite3.connect(self.backup)) as backup, backup:
             mutate(backup)
         raw = self.backup.read_bytes()
         self.connection.execute('UPDATE stored_files SET content_digest=? WHERE project_id=? AND file_id=?',
@@ -148,10 +149,12 @@ class LearningSourceImageTests(unittest.TestCase):
 
     def test_global_unreleased_unknown_capacity_is_not_adopted_or_released(self):
         other = self.fixture.project_b_id
+        # Claimed recently: its run could still be alive (an older one counts as finished).
+        recent = time.time_ns() // 1_000_000
         self.connection.execute('INSERT INTO launch_claims VALUES(?,?,?,?,?,?)',
-            (other, 'a' * 64, 'unknown', 'legacy_fenced', 1, None)).close()
+            (other, 'a' * 64, 'unknown', 'legacy_fenced', recent, None)).close()
         self.connection.execute('INSERT INTO active_run_capacity(project_id,handle_digest,run_id,kind,'
-            'claimed_at_ms) VALUES(?,?,?,?,?)', (other, 'a' * 64, 'unknown', 'legacy_unknown', 1)).close()
+            'claimed_at_ms) VALUES(?,?,?,?,?)', (other, 'a' * 64, 'unknown', 'legacy_unknown', recent)).close()
         before = self.connection.total_changes
         self.refuse('history_unavailable')
         self.assertEqual(before, self.connection.total_changes)

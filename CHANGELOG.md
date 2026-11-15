@@ -13,6 +13,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   records in memory now holds a few batches whatever its size. The move archives that file as its
   source image and streams the records from it, and takes up to 10 million records. Backups made by
   earlier releases can still be read.
+- After an upgrade from 0.2.x, every run the earlier version had made was kept as a reservation that
+  could never be counted as finished: two of them blocked every new child, and any of them blocked the
+  move of the project's learning history (`migration_not_drained`). A 0.2.x child ran inside its own
+  command under a deadline of at most six hours, so one started more than a day ago now counts as
+  finished; its record is kept as it was. Found by rehearsing the 0.3.1 upgrade on a copy of an owner's
+  records.
 - Every project's backup is sized, and the disk checked, before any is written: when they cannot fit,
   the upgrade stops with `ledger_upgrade_capacity`, says how much space is needed or which project is
   too large (by position, never by name), and nothing is changed. Setup also says what stopped a failed

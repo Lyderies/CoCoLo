@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -2708,7 +2709,7 @@ class LearningStoreTests(unittest.TestCase):
             expires_at_ms=time.time_ns() // 1_000_000 + 60_000,
         )
         # A link to records the backup does not hold, written into the file itself.
-        with sqlite3.connect(path) as backup:
+        with closing(sqlite3.connect(path)) as backup, backup:
             backup.execute("INSERT INTO record_links VALUES(?,?,?,?)",
                            (self.project_a_id, "missing-a", "missing-b", "evidence"))
             manifest = json.loads(backup.execute("SELECT manifest FROM cocolo_backup_manifest").fetchone()[0])
