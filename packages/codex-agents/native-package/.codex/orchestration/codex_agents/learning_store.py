@@ -7250,6 +7250,9 @@ class LearningLedger:
             rows = self._claim_run_rows_locked(context.project_id, context.handle)
             if context.run_context != tuple(None if row is None else tuple(row) for row in rows):
                 raise ClaimError("claim_preparation_stale")
+            # The capture kept history from the run's open on; only that anchor is sound.
+            if rows[0] is None or snapshot.anchor_ms != rows[0]["created_at_ms"]:
+                raise ClaimError("claim_preparation_stale")
             state = self._claim_scalar_context_locked(
                 context.project_id, context.handle, context.launch, current.captured_at_ms, rows=rows,
             )

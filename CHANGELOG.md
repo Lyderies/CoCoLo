@@ -23,7 +23,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   holds those fields: the ledger fills it as each record is written (schema 14), and the upgrade
   fills it once for existing records. If even the bounded history cannot be read in one check, the
   open or probe now says so with `admission_capture_limit` (or `admission_capture_work_limit`), and
-  nothing is admitted.
+  nothing is admitted. A launch claimed hours after its open reads history from its open on, so it
+  still finds the decision and identity it was admitted on. A damaged old record that no rule keeps no
+  longer blocks admission; every record admission reads is still checked in full.
 
 ## 0.3.1: upgrading busy projects (Codex package 0.8.14)
 

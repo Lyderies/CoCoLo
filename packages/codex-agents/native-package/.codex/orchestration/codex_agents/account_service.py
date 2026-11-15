@@ -295,9 +295,12 @@ class AccountOwnerViews:
 
     def capture_admission_inputs(
         self, project_id: str, provider: str, policy: AdmissionInputPolicy,
-        limits: AdmissionCaptureLimits, work_limits: SQLReadLimits,
+        limits: AdmissionCaptureLimits, work_limits: SQLReadLimits, anchor_ms: int | None = None,
     ) -> AdmissionInputSnapshot:
         """Capture raw evidence in one owner-local read snapshot, never admit.
+
+        `anchor_ms` is the earliest time any later evaluation of this capture may
+        use: the ledger clock by default, a claim's open time for a claim.
 
         Policy is explicit trusted owner configuration, not an RPC parameter or
         proof of the installed policy. Public-signer and filesystem observations
@@ -340,7 +343,8 @@ class AccountOwnerViews:
                 if filesystem_failed:
                     raise AdmissionCaptureError("admission_capture_unavailable")
                 return self._ledger._connection.read_call(
-                    work_limits, lambda: self._capture_admission_transaction(project_id, provider, policy, limits, signer),
+                    work_limits, lambda: self._capture_admission_transaction(
+                        project_id, provider, policy, limits, signer, anchor_ms),
                 )
         except (AccountError, AdmissionCaptureError):
             if getattr(self._ledger._connection, "_sql_unusable", False) is not True:
@@ -348,18 +352,18 @@ class AccountOwnerViews:
         except SQLReadError as error:
             if error.reason_code == "sql_read_invalid_limits":
                 reason = "admission_capture_invalid_request"
-            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit", "sql_read_busy"}:
+            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit"}:
                 reason = "admission_capture_work_limit"
         raise AdmissionCaptureError(reason)
 
-    def _capture_admission_transaction(self, project_id, provider, policy, limits, signer):
+    def _capture_admission_transaction(self, project_id, provider, policy, limits, signer, anchor_ms=None):
         connection = self._ledger._connection
         failure = traceback = result = None
         began = False
         try:
             connection.execute("BEGIN")
             began = True
-            result = self._capture_admission_rows_locked(project_id, provider, policy, limits, signer)
+            result = self._capture_admission_rows_locked(project_id, provider, policy, limits, signer, anchor_ms)
         except BaseException as error:
             failure, traceback = error, error.__traceback__
         if began:
@@ -1217,9 +1221,8 @@ class AccountService:
             reason = exc.reason_code
         except AdmissionCaptureError as exc:
             reason = public_capture_reason(exc)
-        except Exception as exc:
-            from .signature_job_intake import SignatureJobError  # It imports this module.
-            reason = public_capture_reason(exc) if type(exc) is SignatureJobError else "account_unavailable"
+        except Exception:
+            reason = "account_unavailable"
         return self._reply(labels, reason=reason)
 
     def _provenance_live(self):

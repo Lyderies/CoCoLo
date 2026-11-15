@@ -186,6 +186,12 @@ class AdmissionHistoryGrowthTests(unittest.TestCase):
             "SELECT * FROM admission_evidence ORDER BY project_id,record_id")])
         self.assertEqual("provider_exhausted", self.outcome(self.open.pump(self.open.submit())))
 
+    def test_coverage_finds_an_index_field_that_differs_from_its_record(self):
+        connection = self.ledger._connection
+        self.copies("provider_headroom", 1, age_ms=2 * DAY_MS)
+        self.assertTrue(check_admission_evidence_coverage(connection))
+        connection.execute("UPDATE admission_evidence SET live_until_ms=NULL WHERE live_until_ms IS NOT NULL")
+        self.assertFalse(check_admission_evidence_coverage(connection))
 
     def late_claim(self, delay_ms):
         """Open a managed run, wait `delay_ms`, observe the client again and claim its launch."""

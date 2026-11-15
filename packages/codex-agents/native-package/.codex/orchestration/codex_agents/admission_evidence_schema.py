@@ -56,6 +56,10 @@ ADMISSION_EVIDENCE_OBJECTS = (
     ("table", "admission_evidence", ADMISSION_EVIDENCE_SCHEMA),
     ("index", "admission_evidence_live",
      "CREATE INDEX admission_evidence_live ON admission_evidence(live_until_ms) WHERE live_until_ms IS NOT NULL"),
+    # The first passing Claude decision per account: a seek per account, not a scan.
+    ("index", "admission_evidence_claude_pass",
+     "CREATE INDEX admission_evidence_claude_pass ON admission_evidence"
+     "(account_fingerprint,observed_at_ms,project_id,record_id) WHERE claude_pass=1"),
     ("index", "admission_evidence_account",
      "CREATE INDEX admission_evidence_account ON admission_evidence"
      "(provider,source,record_type,account_fingerprint,observed_at_ms) WHERE account_fingerprint IS NOT NULL"),
@@ -94,12 +98,14 @@ def install_admission_evidence_schema(connection) -> None:
 
 
 def check_admission_evidence_coverage(connection) -> bool:
-    """Every evidence record has exactly its own index row, and no index row is left over."""
+    """Every evidence record has exactly its own index row, with every field as its content gives it,
+    and no index row is left over."""
     return connection.execute(
         "SELECT 1 FROM records r LEFT JOIN admission_evidence e "
         "ON e.project_id=r.project_id AND e.record_id=r.record_id "
         f"WHERE r.record_type IN ({_TYPES}) AND (e.record_id IS NULL OR e.record_type<>r.record_type "
-        "OR e.source<>r.source OR e.observed_at_ms<>r.observed_at_ms) "
+        "OR e.source<>r.source OR e.observed_at_ms<>r.observed_at_ms "
+        f"OR (e.provider,e.account_fingerprint,e.live_until_ms,e.claude_pass) IS NOT ({_fields('r.content')})) "
         "UNION ALL SELECT 1 FROM admission_evidence e LEFT JOIN records r "
         "ON r.project_id=e.project_id AND r.record_id=e.record_id "
         f"WHERE r.record_id IS NULL OR r.record_type NOT IN ({_TYPES}) LIMIT 1").fetchone() is None

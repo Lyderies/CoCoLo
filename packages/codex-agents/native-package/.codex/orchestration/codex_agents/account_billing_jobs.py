@@ -12,6 +12,7 @@ from .account_billing_admission import AccountBillingAdmission, ProbeAdmission, 
 from .account_billing_execution import AccountBillingExecutions
 from .account_observation import ObservationContext
 from .account_observation_jobs import AccountObservationJobs
+from .admission_inputs import AdmissionCaptureError, public_capture_reason
 from .billing_probe_worker import BillingProbeWorkers, ProbeWorkerError
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches
 from .provider_observation_contracts import ObservationInput
@@ -225,6 +226,11 @@ class AccountBillingJobs:
             if state == 'prepared':
                 try:
                     job.signature = self._owner.prepare(job.reservation)
+                except AdmissionCaptureError as error:
+                    # Nothing was admitted; the history admission needs did not fit or
+                    # could not be read, and the probe says which.
+                    self._discard(job, public_capture_reason(error))
+                    return
                 except SignatureJobError as error:
                     if error.reason_code in {'signature_job_project_full', 'signature_job_project_limit'}:
                         # Intake refused before returning any original handle.

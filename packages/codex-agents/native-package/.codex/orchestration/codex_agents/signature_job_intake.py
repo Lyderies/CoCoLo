@@ -21,7 +21,7 @@ from .signature_inputs import (
     SignatureInputSnapshot, signature_input_size,
 )
 from .sql_read_budget import SQLReadError, SQLReadLimits
-from .admission_inputs import AdmissionCaptureLimits, AdmissionInputSnapshot
+from .admission_inputs import AdmissionCaptureError, AdmissionCaptureLimits, AdmissionInputSnapshot
 from .claim_admission import admission_signature_rows
 
 MAX_SIGNATURE_JOB_PROJECTS = 256
@@ -338,7 +338,7 @@ class SignatureJobIntake:
             raise SignatureJobError("signature_job_invalid_transition")
         return job.inputs
 
-    def capture_admission(self, project_id, provider, work_limits):
+    def capture_admission(self, project_id, provider, work_limits, anchor_ms=None):
         """Reserve the combined raw admission/signature field share first.
 
         All candidates are captured before provider filtering. Signature rows
@@ -356,6 +356,7 @@ class SignatureJobIntake:
             policy = self._views._claim_policy(provider)
             admission = self._views.capture_admission_inputs(
                 project_id, provider, policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), work_limits,
+                anchor_ms,
             )
             if (type(admission) is not AdmissionInputSnapshot
                     or admission.origin is not self._views._admission_capture_origin):
@@ -364,7 +365,9 @@ class SignatureJobIntake:
             size = signature_input_size(project_id, provider, admission.owner, admission.signer, rows)
             if (len(rows) + len(admission.rows) > limits.rows_per_job
                     or size + admission.retained_bytes > limits.bytes_per_job):
-                raise SignatureJobError("signature_job_project_full")
+                # The history admission needs does not fit one job: waiting for a free
+                # job would not help, so say what does not fit.
+                raise AdmissionCaptureError("admission_capture_limit")
             inputs = SignatureInputSnapshot(self._views._ledger._attestation_origin, project_id, provider,
                                             admission.owner, admission.signer, rows, size)
             self._validate_inputs(inputs, project_id, provider)

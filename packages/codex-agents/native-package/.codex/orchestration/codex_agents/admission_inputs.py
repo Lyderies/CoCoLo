@@ -32,8 +32,6 @@ def public_capture_reason(error: BaseException) -> str:
     reason = getattr(error, "reason_code", None)
     if reason in ADMISSION_CAPTURE_PUBLIC_REASONS:
         return reason
-    if reason == "signature_job_project_full":
-        return "admission_capture_limit"
     if reason == "admission_capture_incompatible":
         return "account_incompatible"
     return "account_unavailable"
