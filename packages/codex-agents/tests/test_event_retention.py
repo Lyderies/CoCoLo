@@ -67,6 +67,14 @@ class RetentionPolicyTests(unittest.TestCase):
         version = copy.deepcopy(raw)
         version["version"] = 2
         broken.append(version)
+        # A weight with no codes still needs a valid period, and a code must be a string.
+        empty = copy.deepcopy(raw)
+        empty["events"]["high"], empty["events"]["medium"] = [], empty["events"]["medium"] + empty["events"]["high"]
+        empty["weights"]["high"]["keep_days"] = "x"
+        broken.append(empty)
+        unhashable = copy.deepcopy(raw)
+        unhashable["events"]["low"].append(["tool_started"])
+        broken.append(unhashable)
         for number, value in enumerate(broken):
             path = Path(self.enterContext(_temporary())) / f"policy-{number}.json"
             path.write_text(json.dumps(value))
@@ -182,6 +190,60 @@ class EventRetentionTests(unittest.TestCase):
         self.assertEqual(0, self.connection.execute(
             "SELECT COUNT(*) FROM records WHERE project_id=? AND record_type='event_summary'",
             (self.project,)).fetchone()[0])
+
+    def test_a_failure_part_way_leaves_every_summary_and_event_as_they_were(self):
+        # The ledger connection autocommits, so the sweep must own one explicit
+        # transaction: a removal that fails in a later group undoes every summary.
+        now = 1_000_000_000_000
+        for run, count in (("run_1", 3), ("run_2", 3)):
+            for number in range(count):
+                self.append(event(f"{run}-{number}", "tool_started", observed_at_ms=now + number, run_id=run),
+                            now_ms=now + number)
+        self.connection.execute("CREATE TEMP TRIGGER stop_removal BEFORE DELETE ON records "
+                                "WHEN OLD.record_id='run_2-1' BEGIN SELECT RAISE(ABORT,'stopped'); END").close()
+        with self.assertRaises(Exception):
+            self.ledger.sweep_event_retention(now_ms=now + 8 * DAY)
+        self.assertFalse(self.connection.in_transaction)
+        self.assertEqual(6, self.connection.execute(
+            "SELECT COUNT(*) FROM records WHERE project_id=? AND record_type='event'", (self.project,)).fetchone()[0])
+        self.assertEqual(0, self.connection.execute(
+            "SELECT COUNT(*) FROM records WHERE project_id=? AND record_type='event_summary'",
+            (self.project,)).fetchone()[0])
+        self.connection.execute("DROP TRIGGER stop_removal").close()
+        self.assertEqual(6, self.ledger.sweep_event_retention(now_ms=now + 8 * DAY))
+
+    def test_an_event_a_stored_file_or_attestation_names_is_left_to_the_owners_expiry(self):
+        # Removing it would cascade into the file's registration and leave the file behind.
+        now = 1_000_000_000_000
+        self.append(event("exported", "tool_started", observed_at_ms=now), now_ms=now)
+        self.append(event("plain", "tool_started", observed_at_ms=now), now_ms=now)
+        path = self.ledger.write_sanitized_record_file(
+            self.project, file_id="event_export", kind="export",
+            record=json.loads(self.connection.execute(
+                "SELECT content FROM records WHERE record_id='exported'").fetchone()[0]))
+        self.assertEqual(1, self.ledger.sweep_event_retention(now_ms=now + 8 * DAY))
+        self.assertIsNotNone(self.expiry("exported"))
+        self.assertIsNone(self.expiry("plain"))
+        self.assertTrue(path.exists())
+        self.assertEqual(1, self.connection.execute(
+            "SELECT COUNT(*) FROM stored_files WHERE file_id='event_export'").fetchone()[0])
+
+    def test_a_malformed_group_does_not_hold_back_the_others(self):
+        now = 1_000_000_000_000
+        self.append(event("good", "tool_started", observed_at_ms=now, run_id="run_good"), now_ms=now)
+        self.append(event("bad", "tool_started", observed_at_ms=now + 1, run_id="run_bad"), now_ms=now + 1)
+        real = learning_store.LearningLedger._append_checked_locked
+
+        def refuse_bad(ledger, project_id, checked, **options):
+            if checked.get("run_id") == "run_bad":
+                raise ContractError("summary refused")
+            return real(ledger, project_id, checked, **options)
+
+        with mock.patch.object(learning_store.LearningLedger, "_append_checked_locked", autospec=True,
+                               side_effect=refuse_bad):
+            self.assertEqual(1, self.ledger.sweep_event_retention(now_ms=now + 8 * DAY))
+        self.assertIsNone(self.expiry("good"))
+        self.assertIsNotNone(self.expiry("bad"))
 
     def test_a_summary_record_is_closed_and_consistent(self):
         summary = {"schema_version": 1, "record_type": "event_summary", "record_id": "evsum-" + "a" * 32,

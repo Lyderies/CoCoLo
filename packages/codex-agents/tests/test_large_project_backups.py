@@ -12,6 +12,7 @@ import json
 import time
 import tracemalloc
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from tests import test_learning_source_image_legacy as legacy
@@ -118,3 +119,43 @@ class LargeProjectBackupTests(unittest.TestCase):
         self.assertEqual([], [path.name for path in partition.iterdir() if "stopped" in path.name])
         self.assertIsNone(self.source._connection.execute(
             "SELECT 1 FROM stored_files WHERE file_id='stopped'").fetchone())
+
+
+class BackupPlanTests(unittest.TestCase):
+    setUp = legacy.LearningSourceImageLegacyTests.setUp
+
+    def test_the_plan_is_never_smaller_than_the_file(self):
+        add_events(self.source, self.project, 3000)
+        for number in range(2000):  # Key-heavy rows: indexes copy their keys.
+            self.source._connection.execute("INSERT INTO record_links VALUES(?,?,?,?)", (
+                self.project, f"bulk-{number:06d}", f"bulk-{number + 1:06d}", "evidence")).close()
+        for number in range(500):  # Text whose bytes outnumber its characters.
+            self.source._connection.execute("INSERT INTO sessions VALUES(?,?,?,?)", (
+                self.project, f"{number:04d}" + "\u00e9" * 200, "hook", 1)).close()
+        planned = learning_store.project_backup_bytes(
+            self.source._connection, self.project, learning_store.LEDGER_SCHEMA_VERSION)
+        path = self.source.create_sanitized_backup(
+            self.project, file_id="planned", expires_at_ms=time.time_ns() // 1_000_000 + 3_600_000)
+        self.assertGreaterEqual(planned, path.stat().st_size)
+
+    def test_a_file_over_the_limit_is_refused_and_removed_even_when_the_plan_fitted(self):
+        add_events(self.source, self.project, 500)
+        with unittest.mock.patch.object(learning_store, "project_backup_bytes", return_value=1), \
+                unittest.mock.patch.object(learning_store, "MAX_PROJECT_BACKUP_BYTES", 4096):
+            with self.assertRaises(learning_store.LedgerCapacityError):
+                self.source.create_sanitized_backup(
+                    self.project, file_id="too_big", expires_at_ms=time.time_ns() // 1_000_000 + 3_600_000)
+        partition = Path(self.source.state.backups) / self.project
+        self.assertEqual([], [p.name for p in partition.iterdir() if "too_big" in p.name])
+        self.assertIsNone(self.source._connection.execute(
+            "SELECT 1 FROM stored_files WHERE file_id='too_big'").fetchone())
+
+    def test_a_partial_file_left_by_a_stopped_write_is_cleared_before_the_next(self):
+        partition = Path(self.source.state.backups) / self.project
+        partition.mkdir(mode=0o700, parents=True, exist_ok=True)
+        stale = partition / ".migration_123.partial"
+        stale.write_bytes(b"x" * 1024)
+        stale.chmod(0o600)
+        self.source.create_sanitized_backup(
+            self.project, file_id="after_stop", expires_at_ms=time.time_ns() // 1_000_000 + 3_600_000)
+        self.assertFalse(stale.exists())
