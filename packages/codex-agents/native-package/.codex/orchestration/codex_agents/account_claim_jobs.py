@@ -18,6 +18,11 @@ from .signature_worker_pool import SignatureWorkerLimits, SignatureWorkerPool
 from .sql_read_budget import SQLReadLimits
 
 
+def claim_anchor_ms(context):
+    """A claim's capture anchor: its binding's open time (`created_at_ms`), read at preflight."""
+    return context.run_context[0][5]
+
+
 @dataclass(frozen=True, repr=False)
 class ClaimJobReply:
     context: object
@@ -169,7 +174,10 @@ class AccountClaimJobs:
                 job.result = self._views._claim_commit_denied(context, reason, self._work_limits)
                 job.state = "ready"
             else:
-                job.signature_handle = self._intake.capture_admission(project_id, provider, self._work_limits)
+                # Anchored at the run's open, so the capture keeps the run's own
+                # admission and the identity it cited however late the launch is.
+                job.signature_handle = self._intake.capture_admission(
+                    project_id, provider, self._work_limits, claim_anchor_ms(context))
                 self._signatures[job.signature_handle] = ticket
                 job.state = "pending"
             return ticket

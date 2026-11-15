@@ -93,5 +93,6 @@ def admission_signature_rows(snapshot):
 def same_admission_inputs(before: AdmissionInputSnapshot, after: AdmissionInputSnapshot) -> bool:
     # Capture timestamps differ. Actual rows, policy, public signer and recorded
     # owner generation must match exactly; no mutation counter stands in for them.
-    fields = ("project_id", "provider", "runtime_digest", "project_created_at_ms", "policy", "owner", "signer", "rows")
+    fields = ("project_id", "provider", "runtime_digest", "project_created_at_ms", "policy", "owner", "signer", "rows",
+              "anchor_ms")
     return all(getattr(before, name) == getattr(after, name) for name in fields)

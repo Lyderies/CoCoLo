@@ -89,10 +89,11 @@ def _preflight(snapshot: AdmissionInputSnapshot, limits: AdmissionCaptureLimits)
         _invalid()
     # Capture exact immutable field values once. Origin is intentionally unused.
     project, provider, runtime = snapshot.project_id, snapshot.provider, snapshot.runtime_digest
-    captured, created = snapshot.captured_at_ms, snapshot.project_created_at_ms
+    captured, created, anchor = snapshot.captured_at_ms, snapshot.project_created_at_ms, snapshot.anchor_ms
     policy, owner, signer, rows, retained = snapshot.policy, snapshot.owner, snapshot.signer, snapshot.rows, snapshot.retained_bytes
     if (not _matches(project, _PROJECT) or type(provider) is not str or provider not in {"codex", "claude"}
             or not _matches(runtime, _DIGEST) or not _integer(captured) or not _integer(created)
+            or not _integer(anchor) or anchor > captured
             or type(policy) is not AdmissionInputPolicy or type(rows) is not tuple or not _integer(retained)):
         _invalid()
     if len(rows) > limits.max_rows or retained > limits.max_bytes:

@@ -55,7 +55,7 @@ def _access(history, import_id):
 def _metadata(value, project_id):
     if (type(value) is not dict or set(value) != _FIELDS or type(value["project_id"]) is not str
             or value["project_id"] != project_id
-            or type(value["ledger_schema_version"]) is not int or value["ledger_schema_version"] != 13
+            or type(value["ledger_schema_version"]) is not int or value["ledger_schema_version"] not in {13, 14}
             or not valid_integer(value["total_bytes"], minimum=1, maximum=MAX_BYTES)
             or not all(matches(value[name], _DIGEST) for name in _FIELDS - {
                 "project_id", "ledger_schema_version", "total_bytes"})):

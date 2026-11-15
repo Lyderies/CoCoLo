@@ -33,7 +33,9 @@ class SourceArchive:
     identity: tuple
     size: int
 
-SCHEMA_VERSION = 13
+# The ledger schema the image is taken at. 14 added only the admission evidence
+# index, which is not part of a project's backup, so the image's tables are 13's.
+SCHEMA_VERSION = 14
 # The registered backup is a streamed (format 3) SQLite file, read one batch at a
 # time; this bounds its size, not memory. It matches the ledger's own limit.
 MAX_BACKUP_BYTES = 16 * 1024 ** 3
@@ -157,7 +159,7 @@ def _registry(connection, project_id, file_id):
     return tuple(row)
 
 
-def _drained(connection, now, monotonic_ns=None):
+def _drained(connection, now, monotonic_ns=None, *, ignore_earlier_version=False):
     # A run the project's own service drove settles by releasing its claim; the
     # ledger never consumes its binding. A claim more than the crash grace past
     # its hard deadline belongs to a run whose host is gone (the account already
@@ -167,6 +169,8 @@ def _drained(connection, now, monotonic_ns=None):
 
     monotonic_ns = time.monotonic_ns() if monotonic_ns is None else monotonic_ns
     crashed, parameters = crashed_claim("a", now, monotonic_ns)
+    if ignore_earlier_version:
+        crashed = f"({crashed} OR a.kind='legacy_unknown')"
     if (_one(connection,
             "SELECT 1 FROM host_run_bindings h WHERE h.binding_state='pending' AND NOT EXISTS("
             "SELECT 1 FROM active_run_capacity a WHERE a.project_id=h.project_id "
@@ -192,8 +196,9 @@ def _schema(connection, store):
         cursor.close()
     # Global account metadata stays with its original owner; unknown tables
     # could hide an unrepresented project partition, so refuse this image.
+    # admission_evidence holds only fields derived from the records it indexes.
     if {row[0] for row in names} != {*_KEYS, "projects", "additive_migrations",
-                                   "owner_key_history", "sqlite_sequence"}:
+                                   "owner_key_history", "sqlite_sequence", "admission_evidence"}:
         raise HistoryError("history_incompatible")
     for table in ("projects", *_KEYS):
         row = _one(connection, "SELECT type FROM sqlite_master WHERE name=?", (table,))

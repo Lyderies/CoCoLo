@@ -21,8 +21,8 @@ from .account_api import (
     decode_account_request, decode_account_response, encode_account_request, integer, matches,
 )
 from .admission_inputs import (
-    ADMISSION_CAPTURE_RECORD_TYPES, AdmissionCaptureError, AdmissionCaptureLimits,
-    AdmissionInputPolicy, AdmissionInputSnapshot, admission_input_size,
+    ADMISSION_CAPTURE_PUBLIC_REASONS, ADMISSION_CAPTURE_RECORD_TYPES, AdmissionCaptureError, AdmissionCaptureLimits,
+    AdmissionInputPolicy, AdmissionInputSnapshot, admission_input_size, public_capture_reason,
 )
 from .learning_contracts import MAX_RECORD_BYTES, canonical_json
 from .learning_store import (
@@ -46,17 +46,49 @@ from .observation_failure_contracts import decode_observation_failure
 from .account_observation_failure import record_observation_failure, recheck_observation_failure
 from .billing_probe_contracts import ProbeAdmissionError
 
-# Fixed owner query: do not parse JSON or select variable record values during
-# preliminary quota checks. Foreign-account/provider candidates are charged too.
+# Fixed owner query over the history that can still change an admission decision.
+# `:a` is the capture's anchor: the first capture's own clock, kept in its snapshot
+# and reused by every recapture, which refuses a clock earlier than it. Every
+# decision is evaluated at a recapture's clock, so `now >= :a`, and each rule
+# keeps every row a consumer could read at any such `now` (admission_metadata
+# and its account, claim and probe callers):
+#   identities: observed in the last 30 minutes (or later);
+#   attestations: all, the latest verified one wins at any age;
+#   decisions and probes: the last 5 hours (run cap, probe cooldown, a run's own
+#     decision); and the first passing Claude decision per account, any age (the
+#     one bootstrap run per account);
+#   billing and headroom: the last 24 hours (spend control, paid usage, live
+#     windows without a reset time); headroom whose window resets after :a, any
+#     age; and for Claude, the latest older billing and headroom per account,
+#     keeping ties (a probe may reuse old evidence; a bootstrap needs none).
+# Rows from the future are kept by every time rule. Foreign-account/provider
+# candidates are still charged. Content is never parsed here: the account, a
+# headroom record's latest reset and a passing Claude decision come from the
+# admission_evidence index, which a trigger fills as each record is written.
+_ADMISSION_EVIDENCE = "SELECT 1 FROM admission_evidence e WHERE e.project_id=r.project_id AND e.record_id=r.record_id"
 _ADMISSION_INPUT_SCOPE = (
-    "((r.project_id=? AND r.record_type IN ('provider_identity','billing_attestation','admission_decision')) "
-    "OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom')) "
-    "OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission')))"
+    "((r.project_id=:p AND r.record_type='provider_identity' AND r.observed_at_ms>=:a-1800000)"
+    " OR (r.project_id=:p AND r.record_type='billing_attestation')"
+    " OR (r.project_id=:p AND r.record_type='admission_decision' AND r.source<>'lifecycle')"
+    " OR (r.source='lifecycle' AND r.record_type IN ('admission_decision','probe_admission')"
+    " AND (r.observed_at_ms>=:a-18000000 OR EXISTS(" + _ADMISSION_EVIDENCE + " AND e.claude_pass=1"
+    # The first passing Claude decision of its account, in a fixed order.
+    " AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.claude_pass=1 AND f.source='lifecycle'"
+    " AND f.provider='claude' AND f.account_fingerprint=e.account_fingerprint"
+    " AND (f.observed_at_ms,f.project_id,f.record_id)<(e.observed_at_ms,e.project_id,e.record_id)))))"
+    " OR (r.source='provider' AND r.record_type IN ('provider_billing','provider_headroom')"
+    " AND (r.observed_at_ms>=:a-86400000"
+    " OR (r.record_type='provider_headroom' AND EXISTS(" + _ADMISSION_EVIDENCE + " AND e.live_until_ms>:a))"
+    # Claude's latest older billing or headroom per account, every tie kept.
+    " OR EXISTS(" + _ADMISSION_EVIDENCE + " AND e.provider='claude' AND e.account_fingerprint IS NOT NULL"
+    " AND NOT EXISTS(SELECT 1 FROM admission_evidence f WHERE f.provider='claude' AND f.source='provider'"
+    " AND f.record_type=e.record_type AND f.account_fingerprint=e.account_fingerprint"
+    " AND f.observed_at_ms>e.observed_at_ms AND f.observed_at_ms<:a-86400000)))))"
 )
 _ADMISSION_INPUT_JOIN = (
     " FROM records r LEFT JOIN owner_attestations a "
     "ON a.project_id=r.project_id AND a.subject_record_id=r.record_id WHERE "
-    + _ADMISSION_INPUT_SCOPE + " ORDER BY r.rowid LIMIT ?"
+    + _ADMISSION_INPUT_SCOPE + " ORDER BY r.rowid LIMIT :limit"
 )
 
 
@@ -263,9 +295,12 @@ class AccountOwnerViews:
 
     def capture_admission_inputs(
         self, project_id: str, provider: str, policy: AdmissionInputPolicy,
-        limits: AdmissionCaptureLimits, work_limits: SQLReadLimits,
+        limits: AdmissionCaptureLimits, work_limits: SQLReadLimits, anchor_ms: int | None = None,
     ) -> AdmissionInputSnapshot:
         """Capture raw evidence in one owner-local read snapshot, never admit.
+
+        `anchor_ms` is the earliest time any later evaluation of this capture may
+        use: the ledger clock by default, a claim's open time for a claim.
 
         Policy is explicit trusted owner configuration, not an RPC parameter or
         proof of the installed policy. Public-signer and filesystem observations
@@ -308,7 +343,8 @@ class AccountOwnerViews:
                 if filesystem_failed:
                     raise AdmissionCaptureError("admission_capture_unavailable")
                 return self._ledger._connection.read_call(
-                    work_limits, lambda: self._capture_admission_transaction(project_id, provider, policy, limits, signer),
+                    work_limits, lambda: self._capture_admission_transaction(
+                        project_id, provider, policy, limits, signer, anchor_ms),
                 )
         except (AccountError, AdmissionCaptureError):
             if getattr(self._ledger._connection, "_sql_unusable", False) is not True:
@@ -316,18 +352,18 @@ class AccountOwnerViews:
         except SQLReadError as error:
             if error.reason_code == "sql_read_invalid_limits":
                 reason = "admission_capture_invalid_request"
-            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit", "sql_read_busy"}:
+            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit"}:
                 reason = "admission_capture_work_limit"
         raise AdmissionCaptureError(reason)
 
-    def _capture_admission_transaction(self, project_id, provider, policy, limits, signer):
+    def _capture_admission_transaction(self, project_id, provider, policy, limits, signer, anchor_ms=None):
         connection = self._ledger._connection
         failure = traceback = result = None
         began = False
         try:
             connection.execute("BEGIN")
             began = True
-            result = self._capture_admission_rows_locked(project_id, provider, policy, limits, signer)
+            result = self._capture_admission_rows_locked(project_id, provider, policy, limits, signer, anchor_ms)
         except BaseException as error:
             failure, traceback = error, error.__traceback__
         if began:
@@ -348,7 +384,8 @@ class AccountOwnerViews:
             raise failure.with_traceback(traceback)
         return result
 
-    def _capture_admission_rows_locked(self, project_id, provider, policy, limits, signer):
+    def _capture_admission_rows_locked(self, project_id, provider, policy, limits, signer, anchor_ms=None):
+        """Capture at the ledger clock; a recapture passes its snapshot's `anchor_ms`."""
         connection = self._ledger._connection
         project = connection.execute(
             "SELECT CASE status WHEN 'active' THEN 1 ELSE 0 END,"
@@ -363,6 +400,12 @@ class AccountOwnerViews:
         timestamp = self._ledger._clock_ms()
         if type(timestamp) is not int or not 0 <= timestamp < 2 ** 63:
             raise AdmissionCaptureError("admission_capture_unavailable")
+        if anchor_ms is None:
+            anchor_ms = timestamp
+        elif type(anchor_ms) is not int or not 0 <= anchor_ms <= timestamp:
+            # A clock earlier than the anchor could need history the scope left out.
+            raise AdmissionCaptureError("admission_capture_unavailable")
+        scope = {"p": project_id, "a": anchor_ms, "limit": limits.max_rows + 1}
         owner_header = connection.execute(
             "SELECT CASE WHEN typeof(sequence)='integer' THEN sequence END,"
             "typeof(signer_line),length(signer_line),"
@@ -391,7 +434,7 @@ class AccountOwnerViews:
             "CASE WHEN typeof(r.observed_at_ms)='integer' THEN r.observed_at_ms END,"
             "CASE WHEN typeof(r.ingested_at_ms)='integer' THEN r.ingested_at_ms END,"
             "typeof(a.signature),length(a.signature)" + _ADMISSION_INPUT_JOIN,
-            (project_id, limits.max_rows + 1),
+            scope,
         ).fetchall()
         if len(headers) > limits.max_rows:
             raise AdmissionCaptureError("admission_capture_limit")
@@ -430,7 +473,7 @@ class AccountOwnerViews:
         raw = connection.execute(
             "SELECT r.rowid,r.project_id,r.record_id,r.source_sequence,r.record_type,r.content,"
             "r.content_digest,r.source,r.observed_at_ms,r.ingested_at_ms,a.signature" + _ADMISSION_INPUT_JOIN,
-            (project_id, limits.max_rows + 1),
+            scope,
         ).fetchall()
         if len(raw) != len(headers):
             raise AdmissionCaptureError("admission_capture_incompatible")
@@ -458,7 +501,7 @@ class AccountOwnerViews:
             raise AdmissionCaptureError("admission_capture_incompatible")
         return AdmissionInputSnapshot(
             self._admission_capture_origin, project_id, provider, COLLECTOR_RUNTIME_DIGEST, timestamp,
-            created_at_ms, policy, owner, signer, rows, retained,
+            created_at_ms, policy, owner, signer, rows, retained, anchor_ms,
         )
 
     def capture_signature_inputs(
@@ -775,7 +818,8 @@ class AccountService:
             if reply.reason is not None:
                 return self._reply(labels, reason=reply.reason if reply.reason in {
                     'probe_invalid_request', 'probe_not_authorized', 'probe_unavailable', 'probe_conflict',
-                    'probe_full', 'probe_busy', 'probe_not_ready'} else 'probe_unavailable')
+                    'probe_full', 'probe_busy', 'probe_not_ready', *ADMISSION_CAPTURE_PUBLIC_REASONS}
+                    else 'probe_unavailable')
             return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish)
         if (self._observation_jobs is not None and type(ticket) is object
                 and ticket in self._observation_jobs._jobs):
@@ -1175,6 +1219,8 @@ class AccountService:
             reason = exc.reason_code
         except ProbeAdmissionError as exc:
             reason = exc.reason_code
+        except AdmissionCaptureError as exc:
+            reason = public_capture_reason(exc)
         except Exception:
             reason = "account_unavailable"
         return self._reply(labels, reason=reason)

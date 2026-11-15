@@ -209,7 +209,7 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         path = self.ledger.create_sanitized_backup(self.fixture.project_id, file_id='original_probe',
             expires_at_ms=time.time_ns()//1_000_000+60_000)
         body = backup_body(path, self.fixture.project_id)
-        self.assertEqual(13, body['ledger_schema_version'])
+        self.assertEqual(14, body['ledger_schema_version'])
         self.assertTrue(self.ledger.verify_sanitized_backup(self.fixture.project_id, file_id='original_probe')['verified'])
         tool = runpy.run_path(str(REPOSITORY_ROOT/'scripts/backup_installed_project.py'))
         tool['_verify_relational_restore'](self.ledger._connection, body,

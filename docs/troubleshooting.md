@@ -174,6 +174,24 @@ busy machine or when it cannot start at all. It keeps starting by itself: run th
 keeps failing, run `./setup.sh` and choose "Update the install and walk through every step"; step 5
 (Collector) says what is wrong.
 
+## `probe_busy`
+
+The Claude billing probe needs one of its account's two run slots, and none was free, or another probe
+for the account was running. Nothing was admitted. Try again when a run has finished. Right after an
+upgrade from 0.2.x, runs that version recorded count as running for a day after they started (it
+never recorded when one finished), so they can hold both slots until then; see `claim_busy`. Release 0.3.1
+and earlier reported this as `probe_unavailable`.
+
+## `admission_capture_limit` or `admission_capture_work_limit`
+
+Before admitting a child or a billing probe, the account service reads the provider readings and earlier
+decisions that can still change the decision: about the last day of them, plus older ones still in force.
+These reasons mean even that did not fit in one bounded check, so nothing was admitted. It happens only
+under very heavy use. Readings stop counting after a day, and usage windows when they reset (up to a
+week), so try again later; if it keeps happening, report it with the reason. Release
+0.3.1 and earlier read the whole history, so a project with long use refused every run and reported
+`account_unavailable` instead. Update to 0.3.2 or later.
+
 ## `claim_busy`
 
 Usually two children are already running on this machine, or on the same provider account, which is this
@@ -197,8 +215,10 @@ The project's learning history moves to its own store the first time the project
 update, but only while no child is running anywhere. Use the project again when things are quiet, or
 run `cli.py learning-migrate-project --project-root <root>`; it says what is in the way.
 
-After an upgrade from 0.2.x, runs that version recorded count as running for a day after they
-started, because 0.2.x never recorded when one finished. `learning-status` and
+After an upgrade from 0.2.x, the runs that version recorded count as running for a day after they
+started. 0.2.x never recorded when one finished, and it enforced no deadline on a native Claude child,
+so a day is a cautious rule. They do not hold back an update of COCOLO itself: they never ran under its
+collector. `learning-status` and
 `learning-migrate-project --status` show them as `earlier_version_runs`: `holding` is how many still
 count, and `finished_by_ms` is when the last stops counting (milliseconds since 1970). From then on, the
 move can start and their slots are free. Nothing has to be done.

@@ -7,11 +7,43 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - Tests are sorted into stages: `unit`, `integration` and `e2e` (`scripts/test-stages.json`).
   `scripts/parallel_tests.py --stage unit` runs only the unit tests; a unit test that starts a
   process, opens a socket or sleeps fails. `scripts/measure_test_behaviour.py` measures each module.
+- CI runs by stage: pull requests run unit tests on Linux and macOS and integration tests on Linux;
+  `main`, tags and a nightly run add the rest on both systems. Each job uses every core.
+
+## 0.3.2: admission on a project with history (Codex package 0.8.16)
+
+- From a busy project after upgrading to 0.3.1: no child could be opened and no Claude billing probe
+  run. Before admitting anything, the account service reads the provider readings and earlier
+  decisions it decides on. It read every one ever recorded and refused once more than 512 matched,
+  and the project had over 2,000. The open then reported `account_unavailable` and the probe
+  `probe_unavailable`, which pointed at the service rather than at the cause. Admission now reads only
+  the history that can still change a decision:
+  - identities from the last 30 minutes, decisions from the last 5 hours, and billing and headroom
+    from the last day;
+  - every billing attestation;
+  - headroom whose window has not reset yet, at any age;
+  - the first admitted Claude run of each account, and Claude's latest older billing and headroom
+    per account.
+
+  Every restriction that still applies still denies, and decisions and their cited evidence are
+  unchanged. Those last rules select records by a field inside them (the account, a reset time, a
+  Claude admission), which the account service never parses. So a new table, `admission_evidence`,
+  holds those fields: the ledger fills it as each record is written (schema 14), and the upgrade
+  fills it once for existing records. If even the bounded history cannot be read in one check, the
+  open or probe now says so with `admission_capture_limit` (or `admission_capture_work_limit`), and
+  nothing is admitted. A launch claimed hours after its open reads history from its open on, so it
+  still finds the decision and identity it was admitted on. A damaged old record that no rule keeps no
+  longer blocks admission; every record admission reads is still checked in full.
+- A Claude billing probe refused because every run slot of its account was in use reported
+  `probe_unavailable`; it now reports `probe_busy`.
+- Runs that 0.2.x recorded still count as running for a day after they started (a cautious rule: 0.2.x
+  enforced no deadline on a native Claude child), but they no longer hold back updating COCOLO or
+  replacing a project service: an update said "a child run is active" while none was. They never ran
+  under the collector or a project service. This applies once 0.3.2's collector is running; updating to
+  0.3.2 itself, the earlier collector still waits for them. Found in an owner's live test of 0.3.2.
 - After an upgrade from 0.2.x, `learning-status` and `learning-migrate-project --status` say how many
   runs the earlier version left still hold a slot, and when the last stops counting
   (`earlier_version_runs`); a learning move refused with `migration_not_drained` says the same.
-- CI runs by stage: pull requests run unit tests on Linux and macOS and integration tests on Linux;
-  `main`, tags and a nightly run add the rest on both systems. Each job uses every core.
 
 ## 0.3.1: upgrading busy projects (Codex package 0.8.14)
 

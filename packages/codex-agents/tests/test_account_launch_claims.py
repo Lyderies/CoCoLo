@@ -16,7 +16,14 @@ from codex_agents.learning_store import DEFAULT_RETENTION_MS, LearningLedger, Le
 from tests.learning_support import backup_body
 
 
+def drop_admission_evidence_for_legacy_fixture(connection):
+    """Leave a ledger as schema 13 wrote it: without the admission evidence index (derived data)."""
+    connection.execute("DROP TRIGGER IF EXISTS admission_evidence_insert")
+    connection.execute("DROP TABLE IF EXISTS admission_evidence")
+
+
 def drop_account_observations_for_legacy_fixture(ledger):
+    drop_admission_evidence_for_legacy_fixture(ledger._connection)
     for table in ('account_billing_probe_requests', 'account_billing_probe_origins',
                   'account_observation_requests', 'account_observation_origins'):
         if ledger._connection.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0]:
