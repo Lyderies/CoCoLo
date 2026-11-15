@@ -14,6 +14,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # A full run takes 13-20 minutes; a stuck one should not hold a (costly) runner for hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7.0.1
         with:
