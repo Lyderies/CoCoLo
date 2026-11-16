@@ -10,6 +10,7 @@ the timed rule (an hour past the hard deadline on both clocks) frees it.
 The crash tests SIGKILL a real project host process (`tests/crash_host_fixture.py`);
 the stop tests stop an in-process host the way SIGTERM does.
 """
+import contextlib
 import json
 import os
 import signal
@@ -267,7 +268,7 @@ class LostRunAfterStopTests(LostRunHarness):
         self.assertEqual('result', self.next_run(orchestration, 'after')['bridge_report']['outcome'])
         return orchestration, run_handle
 
-    def leave_a_refused_claim_unfenced(self, count=1):
+    def leave_a_refused_claim_unfenced(self, count=1, stop=None):
         """Runs whose claims were refused and whose every fence was refused, as on 0.8.22 (C2), up to
         the moment their service stopped: only the next service can close them. The last is returned."""
         from codex_agents import signature_job_intake
@@ -291,7 +292,7 @@ class LostRunAfterStopTests(LostRunHarness):
                 stuck = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
                                  '--reason', 'recovery_unavailable', expected=2)
                 self.assertEqual('history_conflict', stuck['reason_code'], stuck)
-            self.stop_host()
+            (stop or self.stop_host)()
         self.assertEqual(['pending'] * count, self.bindings())
         return orchestration, run_handle
 
@@ -413,6 +414,28 @@ class LostRunAfterStopTests(LostRunHarness):
         connection.close()
         self.start_host()
         self.wait_for(lambda: self.bindings() == ['pending', 'abandoned'], seconds=60)
+
+    def test_C3f_a_lease_an_earlier_version_left_is_closed_by_the_next_version(self):
+        # The owner's read-only check, 2026-11-16: local-routing's lease was readable and the only
+        # pending one, yet it stayed open. It named 0.8.22's runtime; the account takes requests only
+        # under its own, so every fence was refused. Here the first services run as an earlier
+        # version (another runtime digest throughout), and the next ones as this version.
+        import importlib
+        earlier = 'e' * 64
+        modules = [importlib.import_module('codex_agents.' + name) for name in (
+            'account_host', 'account_service', 'client_runtime', 'collector_client', 'collector_runtime',
+            'learning_store', 'project_driver', 'project_host_client', 'project_runtime', 'project_service',
+            'service_host')] + [sys.modules[name] for name in ('cli', 'tests.test_bridge') if name in sys.modules
+                                and hasattr(sys.modules[name], 'COLLECTOR_RUNTIME_DIGEST')]
+        self.stop_services()
+        with contextlib.ExitStack() as stack:
+            for module in modules:
+                if hasattr(module, 'COLLECTOR_RUNTIME_DIGEST'):
+                    stack.enter_context(mock.patch.object(module, 'COLLECTOR_RUNTIME_DIGEST', earlier))
+            self.start_services()
+            orchestration, run_handle = self.leave_a_refused_claim_unfenced(stop=self.stop_services)
+        self.start_services()
+        self.closes_after_restart(run_handle, orchestration)
 
     def test_C3c_an_unreachable_account_does_not_use_up_the_refusal_retries(self):
         from codex_agents.account_api import AccountError
