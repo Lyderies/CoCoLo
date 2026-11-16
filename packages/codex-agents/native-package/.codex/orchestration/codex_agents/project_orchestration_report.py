@@ -101,7 +101,10 @@ def orchestration_report(history, orchestration_id):
     for run_id, opened_at in runs.items():
         outcome = outcomes.get(run_id)
         if outcome is None and run_id in expired:
-            continue  # Closed without a result: counted as abandoned below.
+            # Closed without a result: counted as abandoned below, and its usage is not known.
+            for field in usage_fields:
+                unknown[field] += 1
+            continue
         if outcome is None:
             statuses["pending"] = statuses.get("pending", 0) + 1
             pending += 1

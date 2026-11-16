@@ -25,10 +25,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   `host run orchestration is unavailable`, and a temporary error or an unreachable account never stops
   it trying.
 
-- An update now stops an earlier version's project service that would not stop when asked (one that
-  held such a stuck run never did), with SIGTERM and only when no child can be running, instead of
-  needing it killed by hand. And the orchestration report counts a run that closed without a result as
-  abandoned, not pending.
+- The orchestration report counts a run that closed without a result as abandoned, not pending.
+- A 0.3.2 project service that holds a stuck run never stops when an update asks it to; the update then
+  reports `project_service_other_version`. docs/troubleshooting.md says how to stop it by hand.
 - Setup no longer fails its collector step while the collector is still starting: after registering
   restarts it, setup waits (up to 90 seconds, showing the time) while its status says it is starting,
   instead of checking once after five seconds. Every 0.3.3 install hit this.

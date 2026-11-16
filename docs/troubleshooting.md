@@ -248,9 +248,25 @@ that run's deadline. After an upgrade from 0.2.x, runs that version left can hol
 
 ## `project_service_other_version`
 
-The project was updated while its service was still running from before the update, and a child is
-still active somewhere, so the old service was left alone. Try again when no child is running; the old
-service is then replaced by itself.
+The project was updated while its service was still running from before the update, and the old
+service was left alone. Usually a child is still active somewhere, on any project of this account: try
+again when no child is running, and the old service is then replaced by itself.
+
+If it keeps happening with nothing running, the old service may be one that cannot stop by itself: a
+0.3.2 service (Codex package 0.8.22) that holds a dispatch refused at its claim never stops when asked.
+Stop it yourself, then use the project again; its new service closes that run.
+
+1. Find it. Its command line runs `project_host.py` from the earlier version's protected copy, with
+   `--project-root` and this project's path:
+
+   ```
+   ps -axo pid,etime,command | grep project_host.py | grep -- "--project-root $HOME/path/to/project"
+   ```
+
+2. Stop it with a plain `kill <pid>`, which sends SIGTERM: the service stops and settles what it holds.
+   Never use `kill -9`.
+3. Run `learning-orchestration-report` for one of the project's orchestrations, which starts this
+   version's service, then check the run with `learning-classify-host-run-abandoned`.
 
 ## `learning_migration` stays `pending`
 
