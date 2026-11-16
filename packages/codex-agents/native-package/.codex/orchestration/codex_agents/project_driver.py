@@ -80,7 +80,7 @@ DISPATCH_SLOTS = 64  # Lifetime dispatch slots of one host, the dispatch service
 RECORD_GRACE_SECONDS = 3_600
 # Runs this host may have prepared at once: as many as the project may run at once, so one run
 # waiting for its record (or one that failed) never turns the next away.
-PREPARATION_SLOTS = 4  # project_service.MAX_ACTIVE_ATTEMPTS
+PREPARATION_SLOTS = 3  # project_service.MAX_ACTIVE_ATTEMPTS
 MAX_REQUEST_BYTES = 4_096
 WAIT_SECONDS = 5.0
 ACCOUNT_TIMEOUT_SECONDS = 60

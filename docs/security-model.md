@@ -1,6 +1,6 @@
 # Security model
 
-This page explains what COCOLO release 0.3.3 (Codex package 0.8.25) protects, how, and
+This page explains what COCOLO release 0.3.3 (Codex package 0.8.26) protects, how, and
 what it does not protect against. It is the exact version of the README's "Safety, in short". It is for users deciding whether to run it and for
 contributors changing it. To report a vulnerability, follow [SECURITY.md](../SECURITY.md).
 
@@ -73,8 +73,8 @@ and tools installed under your home folder, which the rule then runs.
   Every child is bridged, from either primary; none runs inside the primary's session. Each is watched
   by its project's service and stopped on silence, at its deadline, on a prohibited tool or on a paid or
   rejected rate-limit event ([run health](how-it-works.md#run-health)).
-- **Capacity limits.** At most two children run at once on the machine and per provider account, and
-  no request can raise those installed limits ([capacity](how-it-works.md#capacity)).
+- **Capacity limits.** At most six children run at once on the machine and per provider account, and
+  at most three in one project; no request can raise those installed limits ([capacity](how-it-works.md#capacity)).
 - **Your terminal cannot start work.** Commands from your own terminal, outside a Codex or Claude Code
   session, may read status and observe providers, but cannot start work or spend usage.
 - **Results bound in the ledger.** `dispatch` fences an invalid result and binds a digest of the one it

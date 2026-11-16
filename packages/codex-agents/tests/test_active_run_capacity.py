@@ -114,13 +114,14 @@ class ActiveRunCapacityTests(unittest.TestCase):
             self.assertEqual(6, self.ledger._connection.execute("SELECT COUNT(*) FROM " + table).fetchone()[0])
 
     def test_explicit_larger_installed_fixture_policy_still_counts_every_claim(self):
-        with mock.patch.object(learning_store, "INSTALLED_ACTIVE_RUN_LIMITS", ActiveRunLimits(4, 4)):
+        # Larger than the installed six (C8), so its claims fill past what the installed limit allows.
+        with mock.patch.object(learning_store, "INSTALLED_ACTIVE_RUN_LIMITS", ActiveRunLimits(8, 8)):
             self.case.claim()
-            for number in range(3):
+            for number in range(7):
                 self.assertEqual("claimed", self.claim(self.new_attempt(), "larger-" + str(number))["state"])
             with self.assertRaisesRegex(ClaimError, "claim_busy"):
                 self.claim(self.new_attempt(), "larger-full")
-        self.assertEqual(4, len(self.rows()))
+        self.assertEqual(8, len(self.rows()))
         self.assertTrue(all(row["released_at_ms"] is None for row in self.rows()))
         with self.ledger._account_transaction(), self.assertRaisesRegex(ClaimError, "claim_busy"):
             self.ledger._check_active_capacity_locked("codex", self.rows()[0]["account_fingerprint"])

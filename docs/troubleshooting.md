@@ -212,10 +212,10 @@ The probe names the step that stopped it before launching anything:
 
 ## `probe_busy`
 
-The Claude billing probe needs one of its account's two run slots, and none was free, or another probe
+The Claude billing probe needs one of its account's six run slots, and none was free, or another probe
 for the account was running. Nothing was admitted. Try again when a run has finished. Right after an
 upgrade from 0.2.x, runs that version recorded count as running for a day after they started (it
-never recorded when one finished), so they can hold both slots until then; see `claim_busy`. Release 0.3.1
+never recorded when one finished), so they can hold slots until then; see `claim_busy`. Release 0.3.1
 and earlier reported this as `probe_unavailable`.
 
 ## `admission_capture_limit` or `admission_capture_work_limit`
@@ -237,8 +237,8 @@ instead. Update to 0.3.3 or later.
 
 ## `claim_busy`
 
-Usually two children are already running on this machine, or on the same provider account, which is this
-release's limit. Wait for one to finish (or ask the primary to stop one), then ask
+Usually six children are already running on this machine, or on the same provider account, which is this
+release's limit (a project may run three of them; a fourth from one project is `preparation_full`). Wait for one to finish (or ask the primary to stop one), then ask
 again. A place held by a run whose project service stopped or crashed is freed by that project's next
 service, which starts with the project's next command, as soon as nothing of the run is still running;
 `learning-run-status` then reports that run as `run_lost` (abandoned, outcome unknown). Only when the

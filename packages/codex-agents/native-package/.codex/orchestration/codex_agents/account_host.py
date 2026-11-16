@@ -68,7 +68,9 @@ GENERATION = 1
 # records COCOLO writes (over 500 bytes each) the 2 MiB is reached first. The workers' protocol
 # budget fits two such jobs.
 ACCOUNT_READ_LIMITS = SQLReadLimits(100_000, 1_000, 2 * 1_048_576)
-ACCOUNT_INTAKE_LIMITS = SignatureIntakeLimits(8, 2, 4096, 2 * 1_048_576, 4)
+# Up to eight projects, each preparing three claims or opens at once, so a project's three dispatches
+# started together are all claimed (0.3.3, C8).
+ACCOUNT_INTAKE_LIMITS = SignatureIntakeLimits(8, 3, 4096, 2 * 1_048_576, 4)
 ACCOUNT_WORKER_LIMITS = SignatureWorkerLimits(2, 32 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000)
 
 
@@ -96,7 +98,7 @@ class AccountServiceHost:
             self._claims = AccountClaimJobs(self._views, ACCOUNT_INTAKE_LIMITS, ACCOUNT_WORKER_LIMITS, limits,
                 open_limits=OpenOwnerLimits(4, 256, MAX_ACCOUNT_OPEN_CONTEXT_BYTES))
             self._observations = AccountObservationJobs(AccountObservationOwner(self._views, limits),
-                                                        ObservationJobLimits(16, 2, 2, 2))
+                                                        ObservationJobLimits(8, 3, 3, 3))
             self._workers = BillingProbeWorkers(OwnedExecutionRegistry(), ProbeWorkerLimits(1, PROBE_SLOT_BYTES))
             self._billing = AccountBillingJobs(self._claims, self._observations, self._workers,
                                                BillingJobLimits(16, 2, 4))

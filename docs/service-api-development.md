@@ -3631,8 +3631,8 @@ reviewed installed D8 and all four liveness/release paths remain mandatory.
 The account owner reserves active capacity in the same transaction as the unique
 launch marker and intent. The service claim and direct claim reference also commit
 their keyed claim receipt there. The legacy bridge intent path has no service
-claim receipt. All three paths enforce the installed candidate policy: two machine-wide slots
-and two slots per eligible provider account. Requests and model output cannot
+claim receipt. All three paths enforce the installed candidate policy: six machine-wide slots
+and six slots per eligible provider account (0.3.3; two before). Requests and model output cannot
 raise these limits. Indexed counts stop at the policy limit; a full lane returns
 retryable `claim_busy` without a new receipt, marker or reservation. Known receipt
 lookup precedes capacity checks and never repeats a launch.

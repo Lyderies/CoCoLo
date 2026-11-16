@@ -125,10 +125,11 @@ child is never retried automatically.
 
 ## Capacity
 
-- **On the machine:** at most two children run at once, and at most two per provider account. These
-  installed limits are deliberately conservative for this release; no request can raise them. A child
+- **On the machine:** at most six children run at once, shared first come first served by every
+  project, and at most six per provider account. No request can raise these installed limits. A child
   that cannot get a place is refused with `claim_busy`.
-- **Per project:** a project's service prepares up to four children. A refused run frees its share.
+- **Per project:** a project runs at most three of them at once; its service prepares up to three, and a
+  fourth is refused with `preparation_full`. A refused run frees its share.
   A child's place is given back only once every process it started has stopped, including one that
   detached from its tree: each child carries a run marker in its environment, and the place is held
   while any process still carries it or is still in the child's session.

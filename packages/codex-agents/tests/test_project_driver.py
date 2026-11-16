@@ -234,24 +234,29 @@ class ProjectDriverTests(DriverHarness):
         with mock.patch.object(ledger, '_clock_ms', return_value=expires + 1):
             self.assertTrue(ledger.drained())                                            # D2, after expiry
 
-    def test_C8_six_children_of_one_project_run_at_once_and_a_seventh_is_refused(self):
-        # 0.3.3 requirement C8 (owner: "2 is too restrictive"): one project's six dispatches,
-        # started together, are all claimed and launched; a seventh is refused claim_busy.
-        runs = [self.open_run() for _ in range(7)]
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'one-of-six'}, {'sleep': 30},
+    def test_C8_three_children_of_one_project_run_at_once_a_fourth_is_refused_and_each_can_be_cancelled(self):
+        # 0.3.3 requirement C8 (owner): a pool of six, at most three per project. One project's three
+        # dispatches, started together, are all claimed and launched; a fourth of the same project is
+        # refused by that project's own limit; and cancelling each of the three works (with four or
+        # more a cancellation was not always carried out).
+        runs = [self.open_run() for _ in range(4)]
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'one-of-three'}, {'sleep': 40},
                               {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        processes = [self.separate_dispatch(run[0], run[1], run[3]) for run in runs[:6]]
+        processes = [self.separate_dispatch(run[0], run[1], run[3]) for run in runs[:3]]
         launched = lambda: len([i for i in self.invocations('codex') if 'exec' in i['argv']])  # noqa: E731
-        self.wait_for(lambda: launched() == 6, seconds=90)
-        seventh = runs[6]
-        refused = self.cli('dispatch', *seventh[0], '--route', seventh[1], '--run-handle', seventh[3], expected=2)
-        self.assertEqual('claim_busy', refused['reason_code'], refused)
-        self.assertEqual(6, launched())
+        self.wait_for(lambda: launched() == 3, seconds=90)
+        fourth = runs[3]
+        refused = self.cli('dispatch', *fourth[0], '--route', fourth[1], '--run-handle', fourth[3], expected=2)
+        self.assertEqual('preparation_full', refused['reason_code'], refused)
+        self.assertEqual(3, launched())
         for run, process in zip(runs, processes):
+            started = time.monotonic()
             self.cli('learning-cancel-run', '--orchestration-handle', run[2], '--run-handle', run[3])
             output, errors = process.communicate(timeout=60)
             self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+            self.assertEqual('cancelled', json.loads(output)['bridge_report']['terminal_state'])
+            self.assertLess(time.monotonic() - started, 30)
 
     def busy_day(self, kind, count):
         """Add `count` copies of the account's latest `kind` reading from the last few hours, as a

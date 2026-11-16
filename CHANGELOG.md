@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.3: dispatch on a busy account (Codex package 0.8.25)
+## 0.3.3: dispatch on a busy account (Codex package 0.8.26)
 
 - On a busy account, a child's open was admitted but its dispatch was refused with
   `admission_capture_limit`. Before admitting an open, and again at its dispatch, the account service
@@ -25,6 +25,10 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   `host run orchestration is unavailable`, and a temporary error or an unreachable account never stops
   it trying.
 
+- Up to six children now run at once on the machine, shared by every project, and six per provider
+  account (it was two); one project runs at most three. Testing found that with four or more children
+  in one project a cancellation was not always carried out, so the per-project limit is three until
+  that is fixed.
 - The orchestration report counts a run that closed without a result as abandoned, not pending.
 - A 0.3.2 project service that holds a stuck run never stops when an update asks it to; the update then
   reports `project_service_other_version`. docs/troubleshooting.md says how to stop it by hand.
