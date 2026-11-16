@@ -171,6 +171,15 @@ class UpgradePhaseTests(LegacyRunsFixture, unittest.TestCase):
         # Fixed text only: never a path, identifier or value.
         self.assertTrue(all(line.startswith("cocolo-phase: ") and "/" not in line for line in lines if "phase" in line))
 
+    def test_S3_P4_a_failing_standard_error_never_stops_the_upgrade(self):
+        # S3-P4: the review found a failed phase write deleted this run's backups and stopped the upgrade.
+        from tests.test_phase_report import FailingStream
+        with mock.patch.dict("os.environ", {"COCOLO_PHASES": "1"}, clear=False), \
+                mock.patch("sys.stderr", FailingStream()):
+            ledger = self.upgrade_with_runs(30 * 24 * HOUR)
+        version = ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+        self.assertEqual(version, learning_store.LEDGER_SCHEMA_VERSION)
+
     def test_S3_P3a_nothing_extra_is_written_unless_asked(self):
         self.assertNotIn("cocolo-phase:", self.upgrade_output({"COCOLO_PHASES": ""}))
 
