@@ -398,6 +398,22 @@ class LostRunAfterStopTests(LostRunHarness):
             self.start_host()
             self.wait_for(lambda: self.bindings() == ['abandoned', 'abandoned'], seconds=60)
 
+    def test_C3e_a_lease_the_sweep_cannot_read_never_stops_the_others(self):
+        # local-routing on 0.8.23: one earlier lease whose orchestration could not be read failed the
+        # whole listing, and no run was closed. Two runs in two orchestrations; one record removed.
+        import sqlite3
+        self.leave_a_refused_claim_unfenced(count=2)
+        history = self.state.root / 'projects' / self.project_id / 'history.sqlite3'
+        connection = sqlite3.connect(history, timeout=30)
+        with connection:
+            first = connection.execute("SELECT orchestration_handle FROM project_orchestrations "
+                                       "ORDER BY rowid LIMIT 1").fetchone()[0]
+            connection.execute("DELETE FROM project_orchestration_checkpoints WHERE orchestration_handle=?", (first,))
+            connection.execute("DELETE FROM project_orchestrations WHERE orchestration_handle=?", (first,))
+        connection.close()
+        self.start_host()
+        self.wait_for(lambda: self.bindings() == ['pending', 'abandoned'], seconds=60)
+
     def test_C3c_an_unreachable_account_does_not_use_up_the_refusal_retries(self):
         from codex_agents.account_api import AccountError
         orchestration, run_handle = self.leave_a_refused_claim_unfenced()
