@@ -7,7 +7,9 @@ can take a few minutes.
 """
 
 import re
+import shlex
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -22,15 +24,24 @@ def function(name):
     return match.group(0)
 
 
-def run_step(seconds, *, slow_after=None):
+def run_step(seconds, *, slow_after=None, command=None):
     script = "\n".join([
         "C_CYAN=''; C_RESET=''; CMD_N=0; LOGDIR=$(mktemp -d); RUN_QUIET=0",
         "hide_cursor() { :; }; show_cursor() { :; }; log_step() { :; }",
         *([f"RUN_SLOW_SECONDS={slow_after}"] if slow_after is not None else []),
         function("run_cmd"),
-        f'run_cmd "Installing" sleep {seconds}',
+        f'run_cmd "Installing" {command or f"sleep {seconds}"}',
     ])
     return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30, check=True).stdout
+
+
+def emitter(phases):
+    """A command that reports each phase on standard error, 1.2 s apart, as the CLI does."""
+    code = ("import sys, time\n"
+            f"for phase in {phases!r}:\n"
+            "    print('cocolo-phase: ' + phase, file=sys.stderr, flush=True)\n"
+            "    time.sleep(1.2)\n")
+    return f"{sys.executable} -c {shlex.quote(code)}"
 
 
 class SetupProgressTests(unittest.TestCase):
@@ -44,6 +55,18 @@ class SetupProgressTests(unittest.TestCase):
         self.assertIn("can take a few minutes", output)
         self.assertNotIn("can take a few minutes", run_step(0.3))
 
+    def test_S3_P1_a_step_shows_the_phase_its_command_reports(self):
+        # S3-P1: setup shows the latest `cocolo-phase: <text>` line the command writes to stderr.
+        output = run_step(0, command=emitter(["backing up project 2 of 5", "upgrading the records"]))
+        self.assertIn("backing up project 2 of 5", output)
+        self.assertIn("upgrading the records", output)
+
+    def test_S3_P2_only_plain_phase_text_is_shown(self):
+        # S3-P2: letters, digits, spaces and ,.'- only, at most 60 characters; nothing else shown.
+        output = run_step(0, command=emitter(["x\x1b[31m$(whoami)/path"]))
+        self.assertNotIn("\x1b[31m", output)
+        self.assertNotIn("$(whoami)", output)
+        self.assertNotIn("/path", output)
 
 if __name__ == "__main__":
     unittest.main()
