@@ -328,7 +328,11 @@ class LostRunAfterStopTests(LostRunHarness):
         # never recorded here, so it alone is pending.
         status = self.cli('learning-orchestration-status', '--orchestration-handle', orchestration)
         report = self.cli('learning-orchestration-report', '--orchestration-id', status['orchestration_id'])
-        self.assertEqual((1, 1), (report['runs']['abandoned'], report['runs']['pending']), report['runs'])
+        self.assertEqual((1, 1, 1), (report['runs']['abandoned'], report['runs']['pending'],
+                                     report['runs']['current_active']), report['runs'])
+        # Its usage is not known either: abandoned is never counted as fully attributed.
+        self.assertNotEqual('complete', report['usage']['child_attribution'])
+        self.assertEqual(2, report['usage']['unknown_runs']['input_tokens'])
 
     def test_C3_the_next_service_never_fences_a_claim_request_its_run_was_not_observed_for(self):
         # The account takes the fence's identity from the run's launch observation and checks the
