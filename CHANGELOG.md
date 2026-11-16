@@ -25,6 +25,10 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   `host run orchestration is unavailable`, and a temporary error or an unreachable account never stops
   it trying.
 
+- Setup no longer fails its collector step while the collector is still starting: after registering
+  restarts it, setup waits (up to 90 seconds, showing the time) while its status says it is starting,
+  instead of checking once after five seconds. Every 0.3.3 install hit this.
+
 ## 0.3.2: admission on a project with history (Codex package 0.8.22)
 
 - From a busy project after upgrading to 0.3.1: no child could be opened and no Claude billing probe
