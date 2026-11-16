@@ -193,8 +193,11 @@ class AdmissionHistoryGrowthTests(unittest.TestCase):
         connection.execute("UPDATE admission_evidence SET live_until_ms=NULL WHERE live_until_ms IS NOT NULL")
         self.assertFalse(check_admission_evidence_coverage(connection))
 
-    def late_claim(self, delay_ms):
-        """Open a managed run, wait `delay_ms`, observe the client again and claim its launch."""
+    def late_claim(self, delay_ms, before_claim=None):
+        """Open a managed run, wait `delay_ms`, observe the client again and claim its launch.
+
+        `before_claim(opened)` runs once the open has succeeded and the client is observed.
+        """
         from dataclasses import replace
         from pathlib import Path
         from codex_agents import account_api
@@ -241,6 +244,8 @@ class AdmissionHistoryGrowthTests(unittest.TestCase):
         p.base.store.reserve_result_lease(scope, p.base.assignment)
         p.base.store.arm_result_lease(scope)
         state.update(scope=scope, evidence=p.base.store.attest_pending_result_lease(scope))
+        if before_claim is not None:
+            before_claim(opened)
         return client.claim_launch(launch.run_handle, launch.identity_digest, request_id=claim.request_id)
 
     def test_a_launch_claimed_long_after_its_open_still_finds_its_admission(self):
@@ -276,15 +281,16 @@ class AdmissionCaptureLimitTests(unittest.TestCase):
     outcome = AdmissionHistoryGrowthTests.outcome
     late_claim = AdmissionHistoryGrowthTests.late_claim
 
-    def charged(self):
-        """(rows, bytes) the open's job counts against its limits, from the account's own capture."""
+    def charged(self, anchor_ms=None):
+        """(rows, bytes) an open's job (or, with its anchor, a claim's) counts against its limits."""
         from codex_agents.admission_inputs import MAX_ADMISSION_CAPTURE_BYTES, MAX_ADMISSION_CAPTURE_ROWS
         from codex_agents.claim_admission import admission_signature_rows
         from codex_agents.signature_inputs import signature_input_size
         views, project = self.jobs._views, self.open.reference.base.scope.project_id
         snapshot = views.capture_admission_inputs(
             project, "codex", views._claim_policy("codex"),
-            AdmissionCaptureLimits(MAX_ADMISSION_CAPTURE_ROWS, MAX_ADMISSION_CAPTURE_BYTES), self.open.reference.work)
+            AdmissionCaptureLimits(MAX_ADMISSION_CAPTURE_ROWS, MAX_ADMISSION_CAPTURE_BYTES), self.open.reference.work,
+            anchor_ms)
         rows = admission_signature_rows(snapshot)
         return (len(snapshot.rows) + len(rows),
                 snapshot.retained_bytes + signature_input_size(project, "codex", snapshot.owner, snapshot.signer, rows))
@@ -315,20 +321,23 @@ class AdmissionCaptureLimitTests(unittest.TestCase):
         connection.commit()
         return start + count
 
-    def fill_to_the_limit(self):
+    def fill_to_the_limit(self, anchor_ms=None, start=0):
         """Readings until the job's bytes are at most one byte under the limit; the next index."""
-        _, before = self.charged()
-        index = self.add(1)
-        _, after = self.charged()
+        _, before = self.charged(anchor_ms)
+        index = self.add(1, start=start)
+        _, after = self.charged(anchor_ms)
         each = after - before
         self.assertGreater(each, 500)
-        index = self.add(max(0, (self.limit - after) // each - 1), start=index)
-        while self.limit - self.charged()[1] >= each + 157:
-            index = self.add(1, start=index)
-        rest = self.limit - self.charged()[1]
-        if rest >= each:
-            index = self.add(1, pad=(rest - each) // 2, start=index)
-        rows, charged = self.charged()
+        # A record ID padded by n characters charges 2n more (its column and its content), up to 156.
+        whole, rest = divmod(self.limit - after, each)
+        padded = -(-rest // 156)
+        index = self.add(whole - padded, start=index)
+        share = rest // 2
+        for number in range(padded):
+            pad = share // (padded - number)
+            index = self.add(1, pad=pad, start=index)
+            share -= pad
+        rows, charged = self.charged(anchor_ms)
         self.assertLessEqual(charged, self.limit)
         self.assertGreater(charged, self.limit - 2)
         self.assertLess(rows, 4096)  # With real records, the bytes bind first.
@@ -340,75 +349,75 @@ class AdmissionCaptureLimitTests(unittest.TestCase):
         self.setUp()
         index = self.fill_to_the_limit()
         self.add(1, start=index)
-        bindings = "SELECT COUNT(*) FROM host_run_bindings"
-        before = self.ledger._connection.execute(bindings).fetchone()[0]
+        counts = "SELECT (SELECT COUNT(*) FROM host_run_bindings),(SELECT COUNT(*) FROM records)"
+        before = tuple(self.ledger._connection.execute(counts).fetchone())
         # The job refuses as it starts, before any reply: nothing is opened or recorded.
         with self.assertRaisesRegex(AdmissionCaptureError, "^admission_capture_limit$"):
             self.open.submit()
-        self.assertEqual(before, self.ledger._connection.execute(bindings).fetchone()[0])
+        self.assertEqual(before, tuple(self.ledger._connection.execute(counts).fetchone()))
 
-    def test_C1_a_claim_its_own_open_takes_past_the_limit_is_refused_and_claims_nothing(self):
-        # Real growth, not an injected refusal: the open fits, and its own decision and the
-        # before-launch observation take the claim's capture past 2 MiB.
+    def anchor(self, opened):
+        """The claim's anchor: its run's open."""
+        return self.ledger._connection.execute(
+            "SELECT created_at_ms FROM host_run_bindings WHERE run_id=?", (opened["run_id"],)).fetchone()[0]
+
+    def test_C1_a_claim_at_the_byte_limit_is_claimed(self):
+        def at_the_limit(opened):
+            self.fill_to_the_limit(self.anchor(opened), start=10_000)
+        self.assertEqual("claimed", self.late_claim(60_000, at_the_limit)["state"])
+
+    def test_C1_a_claim_one_record_past_the_limit_is_refused_and_claims_nothing(self):
+        # Real growth, not an injected refusal: the open succeeded (the hook runs only after it),
+        # and the claim's own capture is one record past 2 MiB.
         from codex_agents.account_api import AccountError
-        self.fill_to_the_limit()
         counts = ("SELECT (SELECT COUNT(*) FROM launch_claims WHERE kind='claimed'),"
                   "(SELECT COUNT(*) FROM active_run_capacity)")
-        before = tuple(self.ledger._connection.execute(counts).fetchone())
+        seen = {}
+
+        def past_the_limit(opened):
+            index = self.fill_to_the_limit(self.anchor(opened), start=10_000)
+            self.add(1, start=index)
+            seen["before"] = tuple(self.ledger._connection.execute(counts).fetchone())
         with self.assertRaisesRegex(AccountError, "^admission_capture_limit$"):
-            self.late_claim(60_000)
-        self.assertEqual(before, tuple(self.ledger._connection.execute(counts).fetchone()))
+            self.late_claim(60_000, past_the_limit)
+        self.assertIn("before", seen)
+        self.assertEqual(seen["before"], tuple(self.ledger._connection.execute(counts).fetchone()))
 
     def test_C1_a_restriction_in_force_still_denies_at_the_limit(self):
         def exhausted(record, now):
             record["windows"] = [{"resets_at": now + 60 * 60 * 1000, "scope": None, "used_percent": 100.0,
                                   "window_minutes": 10080}]
-        index = self.fill_to_the_limit()
-        connection = self.ledger._connection
-        connection.execute("DELETE FROM records WHERE rowid=(SELECT MAX(rowid) FROM records "
-                           "WHERE record_type='provider_headroom')")
-        connection.commit()
-        self.add(1, start=index, change=exhausted)
+        index = self.add(1, start=50_000, change=exhausted)
+        self.fill_to_the_limit(start=index)
         self.assertEqual("provider_exhausted", self.outcome(self.open.pump(self.open.submit())))
 
     def test_C1_the_row_limit_holds_exactly(self):
-        # Tiny synthetic rows reach 4,096 records long before 2 MiB; only the count is checked here.
-        from codex_agents import account_host
-        from codex_agents.admission_inputs import MAX_ADMISSION_CAPTURE_BYTES, MAX_ADMISSION_CAPTURE_ROWS
-        views, project = self.jobs._views, self.open.reference.base.scope.project_id
-        rows = len(views.capture_admission_inputs(
-            project, "codex", views._claim_policy("codex"),
-            AdmissionCaptureLimits(MAX_ADMISSION_CAPTURE_ROWS, MAX_ADMISSION_CAPTURE_BYTES), self.open.reference.work).rows)
-        connection = self.ledger._connection
-        sequence = connection.execute("SELECT MAX(source_sequence) FROM records").fetchone()[0]
-        now = self.ledger._clock_ms()
-
-        def tiny(count, start):
-            nonlocal sequence
-            for index in range(start, start + count):
-                sequence += 1
-                content = b'{"t":%d}' % index
-                connection.execute(
-                    "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,"
-                    "ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,0)",
-                    (project, f"provider_billing:tiny{index}", "provider_billing", "provider", sequence, now - 1000,
-                     now - 1000, now + DAY_MS, content, hashlib.sha256(content).hexdigest()))
-            connection.commit()
-        limits = AdmissionCaptureLimits(account_host.ACCOUNT_INTAKE_LIMITS.rows_per_job,
-                                        account_host.ACCOUNT_INTAKE_LIMITS.bytes_per_job)
-
-        def reason():
-            try:
-                views.capture_admission_inputs(project, "codex", views._claim_policy("codex"), limits,
-                                               self.open.reference.work)
-            except AdmissionCaptureError as error:
-                return error.reason_code
-            return None
-        tiny(4096 - rows, 0)
-        self.assertNotEqual("admission_capture_limit", reason())
-        tiny(1, 4096 - rows)
-        self.assertEqual("admission_capture_limit", reason())
-
+        # The job counts its capture's rows and its billing attestations again, at most 4,096. Real
+        # records reach 2 MiB long before, so tiny synthetic rows reach the count: at exactly 4,096
+        # the open's job is accepted; one more and it is refused as it starts.
+        for total, refused in ((4096, False), (4097, True)):
+            with self.subTest(total=total):
+                self.setUp()
+                rows, _ = self.charged()
+                connection = self.ledger._connection
+                project = self.open.reference.base.scope.project_id
+                sequence = connection.execute("SELECT MAX(source_sequence) FROM records").fetchone()[0]
+                now = self.ledger._clock_ms()
+                for index in range(total - rows):
+                    sequence += 1
+                    content = b'{"t":%d}' % index
+                    connection.execute(
+                        "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,"
+                        "ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,0)",
+                        (project, f"provider_billing:tiny{index}", "provider_billing", "provider", sequence,
+                         now - 1000, now - 1000, now + DAY_MS, content, hashlib.sha256(content).hexdigest()))
+                connection.commit()
+                self.assertEqual(total, self.charged()[0])
+                if refused:
+                    with self.assertRaisesRegex(AdmissionCaptureError, "^admission_capture_limit$"):
+                        self.open.submit()
+                else:
+                    self.assertIsNotNone(self.open.submit())
 
 if __name__ == "__main__":
     unittest.main()
