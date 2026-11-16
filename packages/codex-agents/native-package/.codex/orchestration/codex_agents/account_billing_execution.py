@@ -98,6 +98,11 @@ class AccountBillingExecutions:
             raise ProbeAdmissionError('probe_conflict')
         return job.identity
 
+    def worker_of(self, handle):
+        """The worker a preparation still owns, or None once it was retired."""
+        job = self._jobs.get(handle) if type(handle) is object else None
+        return None if job is None else job.worker
+
     def ticketed(self, reservation):
         """Whether this reservation's preparation was ever offered an execution ticket."""
         self._guard()

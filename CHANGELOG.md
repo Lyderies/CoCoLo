@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.3: dispatch on a busy account (Codex package 0.8.26)
+## 0.3.3: dispatch on a busy account (Codex package 0.8.27)
 
 - On a busy account, a child's open was admitted but its dispatch was refused with
   `admission_capture_limit`. Before admitting an open, and again at its dispatch, the account service
@@ -29,6 +29,13 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   account (it was two); one project runs at most three. Testing found that with four or more children
   in one project a cancellation was not always carried out, so the per-project limit is three until
   that is fixed.
+- One failed Claude billing probe could stop every later one on the machine. There is one probe worker,
+  and a probe admitted but stopped before its model started (for example when two account calls
+  overlapped) kept that worker until the collector restarted. Every later probe from any project then
+  waited a minute and answered `probe_unavailable`, so no Claude child could start. A probe that has not
+  started now frees its worker and answers `probe_step_failed`. A probe whose model may have started is
+  still kept, so it never runs twice. When no worker can free without a restart, a probe answers
+  `probe_worker_unavailable` at once. Found by local-routing's soak.
 - The orchestration report counts a run that closed without a result as abandoned, not pending.
 - A 0.3.2 project service that holds a stuck run never stops when an update asks it to; the update then
   reports `project_service_other_version`. docs/troubleshooting.md says how to stop it by hand.

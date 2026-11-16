@@ -208,7 +208,11 @@ The probe names the step that stopped it before launching anything:
 - `probe_preparation_failed` or `probe_preparation_unknown`: preparing the probe failed (unknown when
   its cleanup could not be confirmed, which keeps its slot);
 - `probe_worker_failed` or `probe_step_failed`: the probe's worker or another step failed. Report it
-  with the reason.
+  with the reason. A probe that failed this way before its model started frees its worker, so the next
+  probe can run (0.3.3);
+- `probe_worker_unavailable`: the machine's probe worker is held by a probe whose cleanup could not be
+  confirmed, or has stopped, and only a restart frees it. Restart the collector (`setup.sh` repairs it),
+  then probe again.
 
 ## `probe_busy`
 
