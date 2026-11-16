@@ -477,7 +477,8 @@ def _replace_other_version_host(args):
         else:
             ledger = LearningLedger(state)
             try:
-                drained = ledger.drained()
+                # Runs an earlier version left never ran under a project service.
+                drained = ledger.drained(children_only=True)
             finally:
                 ledger.close()
             replaced = drained and withdraw_project_host(args.state_root, args.project_root, directory)
@@ -652,7 +653,8 @@ def _migrate_learning(args):
             # Read from the running services; nothing is stopped for a question.
             with _collector_contact():
                 snapshot = client.learning_migration(args.project_root)
-            return {"ready": True, "can_start_now": snapshot["drained"], "state": _migration_state(snapshot)}
+            return {"ready": True, "can_start_now": snapshot["drained"], "state": _migration_state(snapshot),
+                    "earlier_version_runs": snapshot["earlier_version_runs"]}
 
     def refused(reason):
         return {"ready": False, "reason_code": reason,
@@ -675,7 +677,8 @@ def _migrate_learning(args):
             if error.reason_code != "history_writer_busy" or args.status:
                 raise
             if not ledger.drained():
-                return refused("migration_not_drained")
+                # Say what holds it back when it is runs an earlier version left.
+                return {**refused("migration_not_drained"), "earlier_version_runs": ledger.earlier_version_runs()}
             # No run is active anywhere, so this project's idle service is asked to
             # stop: it exits once its published hint is withdrawn, and the next
             # command starts another. Its journals are durable.
@@ -689,13 +692,19 @@ def _migrate_learning(args):
                     if retry.reason_code != "history_writer_busy" or time.monotonic() >= deadline:
                         raise
         if args.status:
-            report = migration_status(ledger, history, project_id)
+            report = {**migration_status(ledger, history, project_id),
+                      "earlier_version_runs": ledger.earlier_version_runs()}
         elif args.rollback:
             report = rollback_project(ledger, history, project_id)
         else:
             report = migrate_project(ledger, history, project_id, now_ms=time.time_ns() // 1_000_000)
         return {"ready": True, **report}
     except MigrationError as error:
+        if error.reason_code == "migration_not_drained" and ledger is not None:
+            try:
+                return {**refused(error.reason_code), "earlier_version_runs": ledger.earlier_version_runs()}
+            except Exception:  # The refusal stands without the detail.
+                pass
         return refused(error.reason_code)
     except HistoryError as error:
         return refused("migration_project_service_running" if error.reason_code == "history_writer_busy"

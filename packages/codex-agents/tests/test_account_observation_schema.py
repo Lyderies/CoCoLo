@@ -9,6 +9,7 @@ from unittest import mock
 
 from tests import test_account_api as fixtures
 from tests.learning_support import event_record, fake_provider_tools, trusted_tools
+from tests.test_account_launch_claims import drop_admission_evidence_for_legacy_fixture
 from codex_agents import learning_store
 from codex_agents.learning_store import LearningLedger, LedgerError
 
@@ -30,6 +31,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
 
     def eleven(self, *, backups=True):
         db = self.ledger._connection
+        drop_admission_evidence_for_legacy_fixture(db)
         db.execute('DROP TABLE account_billing_probe_requests')
         db.execute('DROP TABLE account_billing_probe_origins')
         db.execute('DROP TABLE account_observation_requests')
@@ -66,14 +68,14 @@ class AccountObservationSchemaTests(unittest.TestCase):
         self.assertEqual(original, hashlib.sha256(self.state.database.read_bytes()).hexdigest())
         upgraded = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = upgraded
-        self.assertEqual(13, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(14, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(upgraded)
         for name in ('account_observation_origins', 'account_observation_requests'):
             self.assertEqual(0, upgraded._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])
         project = self.fixture.projects[0]
         upgraded.create_sanitized_backup(project, file_id='schema13', expires_at_ms=time.time_ns() // 1_000_000 + 600_000)
         verified = upgraded.verify_sanitized_backup(project, file_id='schema13')
-        self.assertEqual(13, verified['ledger_schema_version'])
+        self.assertEqual(14, verified['ledger_schema_version'])
         self.assertEqual(0, verified['counts']['account_observation_requests'])
         self.assertEqual(0, verified['counts']['account_billing_probe_origins'])
         self.assertEqual(0, verified['counts']['account_billing_probe_requests'])
@@ -97,11 +99,12 @@ class AccountObservationSchemaTests(unittest.TestCase):
             Cut(self.state, allow_schema_upgrade=True)
         recovered = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = recovered
-        self.assertEqual(13, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(14, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(recovered)
 
     def twelve(self, *, backups=True):
         db = self.ledger._connection
+        drop_admission_evidence_for_legacy_fixture(db)
         db.execute('DROP TABLE account_billing_probe_requests')
         db.execute('DROP TABLE account_billing_probe_origins')
         db.execute('PRAGMA user_version=12')
@@ -126,7 +129,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
         self.assertEqual(original, self.state.database.read_bytes())
         upgraded = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = upgraded
-        self.assertEqual(13, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(14, upgraded._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(upgraded)
         for name in ('account_billing_probe_origins', 'account_billing_probe_requests'):
             self.assertEqual(0, upgraded._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])
@@ -157,5 +160,5 @@ class AccountObservationSchemaTests(unittest.TestCase):
                 "'billing_probe_active_machine','billing_probe_active_account')").fetchall())
         recovered = LearningLedger(self.state, allow_schema_upgrade=True)
         self.fixture.ledger = recovered
-        self.assertEqual(13, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(14, recovered._connection.execute('PRAGMA user_version').fetchone()[0])
         self.assert_old_rows(recovered)

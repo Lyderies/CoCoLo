@@ -392,7 +392,7 @@ def _fresh_admission(ledger, request, intake, snapshot, work_limits, *, appended
     policy = intake._views._claim_policy(_provider(request))
     limits = intake._limits
     current = ledger._connection.transaction_read_call(work_limits, lambda: intake._views._capture_admission_rows_locked(
-        request.project_id, _provider(request), policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer))
+        request.project_id, _provider(request), policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer, snapshot.anchor_ms))
     expected = snapshot
     if appended is not None:
         originals = [row for row in snapshot.rows if row[1] == request.project_id and row[2] == appended['record_id']]

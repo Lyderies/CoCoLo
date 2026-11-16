@@ -323,10 +323,15 @@ class MigrationCliTests(unittest.TestCase):
         self.assertEqual("complete", self._run("learning-migrate-project")["state"])
 
     def test_first_start_of_the_project_service_moves_the_history_by_itself(self):
-        self.assertEqual("pending", self._run("learning-migrate-project", "--status")["state"])
+        pending = self._run("learning-migrate-project", "--status")
+        self.assertEqual("pending", pending["state"])
+        # No earlier version's run holds a slot here, so nothing holds the move back.
+        self.assertEqual({"holding": 0, "finished_by_ms": None}, pending["earlier_version_runs"])
         opened = self._run("learning-open-orchestration")
         self.assertRegex(opened["orchestration_handle"], "^orc_[0-9a-f]{48}$")
-        self.assertEqual("complete", self._run("learning-status")["learning_migration"])
+        status = self._run("learning-status")
+        self.assertEqual("complete", status["learning_migration"])
+        self.assertEqual({"holding": 0, "finished_by_ms": None}, status["earlier_version_runs"])
         # Its service is running and the history is in its store: the owner's cycle reads it there.
         self.assertTrue(self._run("learning-run-cycle")["ready"])
         ledger_records = self._stopped_ledger_count("records")
@@ -421,14 +426,14 @@ class DrainedRuleTests(unittest.TestCase):
         self.connection = sqlite3.connect(":memory:")
         self.addCleanup(self.connection.close)
         self.connection.executescript(
-            "CREATE TABLE host_run_bindings(project_id,handle_digest,binding_state,abandoned_reason);"
+            "CREATE TABLE host_run_bindings(project_id,handle_digest,binding_state,abandoned_reason,client_version,expires_at_ms);"
             "CREATE TABLE active_run_capacity(project_id,handle_digest,deadline_at_ms,released_at_ms,"
             "clock_reference_ns,execution_deadline_ns,kind,claimed_at_ms);")
         self.now = 10 * learning_store.CRASHED_CLAIM_GRACE_MS
         self.monotonic = self.now * 1_000_000  # Both clocks at the same instant, for simplicity.
 
     def claim(self, name, *, deadline, released=None, binding="pending", monotonic_deadline="same", reason=None):
-        self.connection.execute("INSERT INTO host_run_bindings VALUES('p',?,?,?)", (name, binding, reason))
+        self.connection.execute("INSERT INTO host_run_bindings VALUES('p',?,?,?,'bridge-v1',?)", (name, binding, reason, 2**62))
         if monotonic_deadline == "same":
             monotonic_deadline = None if deadline is None else deadline * 1_000_000
         self.connection.execute("INSERT INTO active_run_capacity VALUES('p',?,?,?,?,?,'claimed',?)", (

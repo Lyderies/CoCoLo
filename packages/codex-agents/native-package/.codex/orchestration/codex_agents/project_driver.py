@@ -44,6 +44,7 @@ import time
 from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountClient, AccountError, AccountRequest, account_request_digest
 from .account_claim_contracts import CLAIM_DENIAL_CODES, LaunchClaimInput
 from .claim_denial import CloseDeniedInput, FenceClaimInput
+from .preparation_reasons import PREPARATION_STAGE_REASONS
 from .codex_preparation import (
     MAX_PREPARATION_BYTES, MAX_PREPARATION_EXPORT_BYTES, PreparationContext, PreparationError, PreparationLimits,
     preparation_payload,
@@ -114,13 +115,20 @@ MAX_FORGET_ATTEMPTS = 12
 # one settlement request may take.
 SWEEP_SECONDS = 1.0
 SETTLE_TIMEOUT_SECONDS = 10
+# The runtime this code runs from, as for preparation: the client capabilities a
+# result is admitted against come from here, as the CLI reads them from its runtime.
+RUNTIME_ROOT = Path(__file__).resolve().parents[3]
 REASON_CODES = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable', 'run_abandoned',
     'run_closed',
+    # The client the account observed before launch is not the one prepared.
+    'run_client_changed',
+    # An account or collector call for the run failed without a reason of its own.
+    'run_account_call_failed',
     # A run of an earlier, stopped service: settled (abandoned, outcome unknown, capacity no
     # longer counted), or not yet, because something of it may still run.
     'run_lost', 'run_lost_held',
-})
+}) | PREPARATION_STAGE_REASONS
 _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 'assignment', 'task', 'route',
                     'parent_grant'}
 _PREPARE_FIELDS = {'purpose', 'expected_export_commit'}
@@ -531,8 +539,9 @@ class RunDriver:
             {'PATH': os.defpath}, expected_export_commit=run.commit, worker_result=worker_result))
         try:
             run.prepared = self._preparation.submit(run.preparation)
-        except PreparationError:
-            self._fail(run, 'run_unavailable')
+        except PreparationError as error:
+            # Say why the submission was refused: no room, busy, not authorized, invalid.
+            self._fail(run, error.reason_code if error.reason_code in PREPARATION_STAGE_REASONS else 'run_unavailable')
             return
         run.state = 'preparing'
 
@@ -740,7 +749,7 @@ class RunDriver:
             return None
         run = self._runs[(binding.run_handle, binding.attempt)]
         capability = load_client_capabilities(
-            self._bundle / '.codex' / 'orchestration' / 'config' / 'learning-clients.json')['bridge-v1']
+            RUNTIME_ROOT / '.codex' / 'orchestration' / 'config' / 'learning-clients.json')['bridge-v1']
         original = run.prospective
         return HostResultContext(run.binding, original.assignment, original.task, original.route, capability)
 
@@ -812,7 +821,8 @@ class RunDriver:
                 return None
             self._fail(run, error.reason_code)
         except Exception:
-            self._fail(run, 'run_unavailable')
+            # An account or collector call failed without a fixed reason of its own.
+            self._fail(run, 'run_account_call_failed')
         return None
 
     def _advance(self, run):
@@ -826,10 +836,12 @@ class RunDriver:
             if worker_result is not None:
                 self._start_preparation(run, worker_result)
         elif run.state == 'preparing':
-            state = prep.snapshot(run.prepared)['state']
-            if state in {'failed', 'unknown', 'cleaned'}:
-                self._fail(run, 'run_unavailable')
-            elif state == 'ready':
+            snapshot = prep.snapshot(run.prepared)
+            if snapshot['state'] in {'failed', 'unknown', 'cleaned'}:
+                # Say which stage of preparation stopped it, when it is one.
+                reason = snapshot.get('reason_code')
+                self._fail(run, reason if reason in PREPARATION_STAGE_REASONS else 'run_unavailable')
+            elif snapshot['state'] == 'ready':
                 run.prepared_inputs = prep.prepared(run.prepared)
                 run.state = 'observing'
                 self._account_call(run, 'account', 'observe_provider', run.prospective.route['provider'],
@@ -843,7 +855,7 @@ class RunDriver:
             # The client the account just observed must be the one prepared for launch.
             if (len(identity) != 1 or (identity[0].get('client_path'), identity[0].get('client_sha256'))
                     != tuple(run.prepared_inputs.client_identity)):
-                self._fail(run, 'run_unavailable')
+                self._fail(run, 'run_client_changed')
                 return
             run.identity_digest = content_digest(identity[0])
             run.claim_request_id = 'claim-' + self._id(run)

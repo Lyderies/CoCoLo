@@ -174,6 +174,60 @@ busy machine or when it cannot start at all. It keeps starting by itself: run th
 keeps failing, run `./setup.sh` and choose "Update the install and walk through every step"; step 5
 (Collector) says what is wrong.
 
+## A dispatch refused with `preparation_...` or `run_client_changed`
+
+The project's service prepares a child before launching it, and says which step stopped it:
+
+- `preparation_managed_configuration`: managed (enterprise or MDM) settings for the provider's client
+  are present on this machine, which COCOLO does not run children under;
+- `preparation_client_missing` or `preparation_client_unsupported`: the provider's client was not found,
+  or lacks an option a child needs; update or reinstall the client;
+- `preparation_client_changed` or `run_client_changed`: the client changed while the child was being
+  prepared (an update, say); dispatch a fresh run;
+- `preparation_export_failed`: the committed files the child reads could not be exported; check that
+  every path the assignment reads is committed;
+- `preparation_backend_refused`: the client is set to a metered (API) backend;
+- `preparation_invalid_input` or `preparation_not_authorized`: the run's inputs were refused; open a
+  fresh run;
+- `preparation_full` or `preparation_busy`: the project's service had no free preparation slot; wait for
+  a run to finish, or run `./setup.sh` to restart the service, then open a fresh run;
+- `preparation_failed_at_<step>` or `preparation_unavailable`: an unexpected error at that step of
+  preparing (for example `preparation_failed_at_workspace`); report it with the reason;
+- `preparation_worker_busy` or `preparation_worker_failed`: the prepared run could not be handed to its
+  worker; run `./setup.sh` to restart the project's service, then open a fresh run;
+- `run_account_call_failed`: a call to the account service failed; run `learning-status`, then open a
+  fresh run.
+
+Release 0.3.1 and earlier said only `run_unavailable` for all of these.
+
+## A billing probe refused with `observation_unavailable` or `probe_..._failed`
+
+The probe names the step that stopped it before launching anything:
+- `observation_unavailable` (after one automatic retry): the Claude client could not be read; check it
+  is installed and signed in, then try again;
+- `probe_preparation_failed` or `probe_preparation_unknown`: preparing the probe failed (unknown when
+  its cleanup could not be confirmed, which keeps its slot);
+- `probe_worker_failed` or `probe_step_failed`: the probe's worker or another step failed. Report it
+  with the reason.
+
+## `probe_busy`
+
+The Claude billing probe needs one of its account's two run slots, and none was free, or another probe
+for the account was running. Nothing was admitted. Try again when a run has finished. Right after an
+upgrade from 0.2.x, runs that version recorded count as running for a day after they started (it
+never recorded when one finished), so they can hold both slots until then; see `claim_busy`. Release 0.3.1
+and earlier reported this as `probe_unavailable`.
+
+## `admission_capture_limit` or `admission_capture_work_limit`
+
+Before admitting a child or a billing probe, the account service reads the provider readings and earlier
+decisions that can still change the decision: about the last day of them, plus older ones still in force.
+These reasons mean even that did not fit in one bounded check, so nothing was admitted. It happens only
+under very heavy use. Readings stop counting after a day, and usage windows when they reset (up to a
+week), so try again later; if it keeps happening, report it with the reason. Release
+0.3.1 and earlier read the whole history, so a project with long use refused every run and reported
+`account_unavailable` instead. Update to 0.3.2 or later.
+
 ## `claim_busy`
 
 Usually two children are already running on this machine, or on the same provider account, which is this
@@ -182,7 +236,8 @@ again. A place held by a run whose project service stopped or crashed is freed b
 service, which starts with the project's next command, as soon as nothing of the run is still running;
 `learning-run-status` then reports that run as `run_lost` (abandoned, outcome unknown). Only when the
 service cannot tell (its records of the run are missing or damaged) is the place freed one hour after
-that run's deadline.
+that run's deadline. After an upgrade from 0.2.x, runs that version left can hold slots for a day; see
+`earlier_version_runs` under `learning_migration` stays `pending`, below.
 
 ## `project_service_other_version`
 
@@ -195,6 +250,14 @@ service is then replaced by itself.
 The project's learning history moves to its own store the first time the project is used after an
 update, but only while no child is running anywhere. Use the project again when things are quiet, or
 run `cli.py learning-migrate-project --project-root <root>`; it says what is in the way.
+
+After an upgrade from 0.2.x, the runs that version recorded count as running for a day after they
+started. 0.2.x never recorded when one finished, and it enforced no deadline on a native Claude child,
+so a day is a cautious rule. They do not hold back an update of COCOLO itself: they never ran under its
+collector. `learning-status` and
+`learning-migrate-project --status` show them as `earlier_version_runs`: `holding` is how many still
+count, and `finished_by_ms` is when the last stops counting (milliseconds since 1970). From then on, the
+move can start and their slots are free. Nothing has to be done.
 
 ## A verifier is refused for a result recorded earlier
 

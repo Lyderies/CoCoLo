@@ -9,6 +9,7 @@ import hmac
 import os
 import time
 
+from .account_claim_contracts import ClaimError
 from .admission_inputs import AdmissionCaptureLimits
 from .admission_metadata import API_KEY_VARIABLES, evaluate_admission
 from .account_observation import ObservationContext
@@ -256,7 +257,8 @@ class AccountBillingAdmission:
         signer = self._ledger._current_signer_bytes()
         policy = self._intake._views._claim_policy('claude')
         current = self._read(lambda: self._intake._views._capture_admission_rows_locked(reservation.project,
-            'claude', policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer))
+            'claude', policy, AdmissionCaptureLimits(limits.rows_per_job, limits.bytes_per_job), signer,
+            snapshot.anchor_ms))
         expected = snapshot
         if appended is not None:
             rows = [r for r in current.rows if r[1] == reservation.project and r[2] == appended['record_id']]
@@ -331,7 +333,13 @@ class AccountBillingAdmission:
                         cited_digests=prepared['cited_digests'], probe=True,
                         prior_run_admissions=[(f, t) for f, t in prepared['prior_admissions'] if t >= now-18_000_000]))
                 if decision['decision'] == 'pass':
-                    self._read(lambda: self._ledger._check_active_capacity_locked('claude', fingerprint))
+                    try:
+                        self._read(lambda: self._ledger._check_active_capacity_locked('claude', fingerprint))
+                    except ClaimError as error:
+                        if error.reason_code != 'claim_busy':
+                            raise
+                        # Every slot is held: a probe reason, so it is not reported as unavailable.
+                        raise ProbeAdmissionError('probe_busy') from None
                     if self._one("SELECT 1 FROM account_billing_probe_requests INDEXED BY billing_probe_active_account "
                             "WHERE state='admitted' AND account_fingerprint=? LIMIT 1", (fingerprint,)) is not None:
                         raise ProbeAdmissionError('probe_busy')

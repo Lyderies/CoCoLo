@@ -22,6 +22,19 @@ ADMISSION_CAPTURE_REASONS = frozenset({
     "admission_capture_invalid_request", "admission_capture_limit",
     "admission_capture_incompatible", "admission_capture_unavailable", "admission_capture_work_limit",
 })
+# What a client is told: the history admission must read did not fit in one bounded
+# check. It is not an account or client problem, and nothing was admitted.
+ADMISSION_CAPTURE_PUBLIC_REASONS = frozenset({"admission_capture_limit", "admission_capture_work_limit"})
+
+
+def public_capture_reason(error: BaseException) -> str:
+    """The reason a client may see for a failed admission capture."""
+    reason = getattr(error, "reason_code", None)
+    if reason in ADMISSION_CAPTURE_PUBLIC_REASONS:
+        return reason
+    if reason == "admission_capture_incompatible":
+        return "account_incompatible"
+    return "account_unavailable"
 
 
 class AdmissionCaptureError(RuntimeError):
@@ -95,8 +108,8 @@ def admission_input_size(
 class AdmissionInputSnapshot:
     """Immutable raw capture; its brand and labels authenticate no caller.
 
-    History includes every candidate account/provider, conservatively charged
-    before filtering. Consumers must decode bounded closed records and retain
+    History includes every candidate account/provider that can still change a
+    decision at or after `anchor_ms`, conservatively charged before filtering. Consumers must decode bounded closed records and retain
     legacy family-specific ordering and local-digest citation semantics.
     """
 
@@ -111,3 +124,5 @@ class AdmissionInputSnapshot:
     signer: bytes | None
     rows: tuple[AdmissionInputRow, ...]
     retained_bytes: int
+    # The first capture's clock: what history the scope keeps. Recaptures reuse it.
+    anchor_ms: int

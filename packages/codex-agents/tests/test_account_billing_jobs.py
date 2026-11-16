@@ -207,6 +207,68 @@ class AccountBillingJobTests(unittest.TestCase):
         self.assertEqual(1, len(self.launches()))
         self.assertEqual(0, self.workers._charged)
 
+    def refuse_observations(self, times, reason='observation_unavailable'):
+        """The probe's identity observation is refused `times` times, then runs as normal."""
+        from codex_agents.account_observation_jobs import ObservationJobReply
+        take, refused = self.observations.take, []
+
+        def flaky(ticket, **options):
+            reply = take(ticket, **options)
+            if reply is not None and len(refused) < times:
+                refused.append(ticket)
+                return ObservationJobReply(reply.key, reply.request, None, reason, reply.before_publish)
+            return reply
+        self.enterContext(mock.patch.object(self.observations, 'take', side_effect=flaky))
+        return refused
+
+    def test_P1_a_probe_whose_identity_observation_is_refused_names_that_reason(self):
+        # 0.3.2 requirement P1: a probe that fails before launching names the failing
+        # step; an identity observation refused twice reports the observation's reason.
+        refused = self.refuse_observations(2)
+        with self.assertRaisesRegex(AccountError, '^observation_unavailable$'):
+            self.take(self.begin())
+        self.assertEqual(2, len(refused))
+        self.assertEqual([], self.launches())
+
+    def test_P2_a_probe_tries_its_identity_observation_once_more_before_failing(self):
+        # 0.3.2 requirement P2: right after the services restart, a first observation can
+        # be refused; the probe observes once more (it spends nothing) and then completes.
+        refused = self.refuse_observations(1)
+        self.assertEqual('completed', self.take(self.begin())['probe'])
+        self.assertEqual(1, len(refused))
+        self.assertEqual(1, len(self.launches()))
+
+    def test_P1_a_probe_whose_preparation_fails_names_it(self):
+        from codex_agents import bridge
+        # Preparing the probe fails for real: it cannot create its private workspace.
+        self.enterContext(mock.patch.object(bridge, 'private_workspace', side_effect=RuntimeError('unexpected')))
+        # P1, refined: a failed preparation names itself, as unknown when its cleanup cannot
+        # be confirmed (a workspace failure part-way): its slot is then kept, not recycled.
+        with self.assertRaisesRegex(AccountError, '^probe_preparation_(failed|unknown)$'):
+            self.take(self.begin())
+        self.assertEqual([], self.launches())
+
+    def test_a_probe_when_every_slot_is_taken_says_busy_and_launches_nothing(self):
+        # Both of the account's slots are held (for example by runs an earlier version
+        # left): the probe is refused as busy, not as unavailable.
+        from codex_agents.account_claim_contracts import ClaimError
+        with mock.patch.object(self.ledger, '_check_active_capacity_locked', side_effect=ClaimError('claim_busy')), \
+                self.assertRaisesRegex(AccountError, '^probe_busy$'):
+            self.take(self.begin())
+        self.assertEqual([], self.launches())
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM account_billing_probe_requests WHERE state='admitted'").fetchone()[0])
+
+    def test_a_probe_whose_admission_history_does_not_fit_says_so_and_launches_nothing(self):
+        from codex_agents.admission_inputs import AdmissionCaptureError
+        with mock.patch.object(self.claims._intake._views, 'capture_admission_inputs',
+                               side_effect=AdmissionCaptureError('admission_capture_limit')), \
+                self.assertRaisesRegex(AccountError, '^admission_capture_limit$'):
+            self.take(self.begin())
+        self.assertEqual([], self.launches())
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM account_billing_probe_requests WHERE state='admitted'").fetchone()[0])
+
     def test_cancel_while_signature_intake_is_full_retires_unadmitted_preparation(self):
         intake = self.claims._intake
         occupied = [intake._reserve(self.fixture.project_id, 'claude') for _ in range(2)]
@@ -272,7 +334,8 @@ class AccountBillingJobTests(unittest.TestCase):
         ticket = self.begin()
         with mock.patch.object(self.workers._registry, 'acknowledge_release',
                                side_effect=RuntimeError('PRIVATE-POST-COMMIT-FAULT')):
-            with self.assertRaisesRegex(AccountError, 'probe_unavailable'):
+            # Requirement P1 (0.3.2): an unexpected fault in a probe step is named.
+            with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
                 self.take(ticket)
         self.assertEqual('committed', self.ledger._connection.execute(
             'SELECT state FROM account_billing_probe_requests').fetchone()[0])
