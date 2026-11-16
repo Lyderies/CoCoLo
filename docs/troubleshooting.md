@@ -222,11 +222,16 @@ and earlier reported this as `probe_unavailable`.
 
 Before admitting a child or a billing probe, the account service reads the provider readings and earlier
 decisions that can still change the decision: about the last day of them, plus older ones still in force.
-These reasons mean even that did not fit in one bounded check, so nothing was admitted. It happens only
-under very heavy use. Readings stop counting after a day, and usage windows when they reset (up to a
-week), so try again later; if it keeps happening, report it with the reason. Release
-0.3.1 and earlier read the whole history, so a project with long use refused every run and reported
-`account_unavailable` instead. Update to 0.3.2 or later.
+These reasons mean even that did not fit in one bounded check (4,096 records and 2 MiB), so nothing was
+admitted. It happens only under very heavy use: about ten times the readings of a busy day. Readings stop
+counting after a day, and usage windows when they reset (up to a week), so try again later; if it keeps
+happening, report it with the reason. A dispatch refused this way never launched and holds no slot; it
+closes by itself, and `learning-classify-host-run-abandoned` then answers `already_closed`.
+
+Release 0.3.2 held a quarter of a megabyte, about one busy day of readings, so a dispatch on a busy
+account could be refused with this reason even though its open was admitted. Release 0.3.1 and earlier
+read the whole history, so a project with long use refused every run and reported `account_unavailable`
+instead. Update to 0.3.3 or later.
 
 ## `claim_busy`
 

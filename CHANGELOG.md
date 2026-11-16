@@ -2,6 +2,17 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
+## 0.3.3: dispatch on a busy account (Codex package 0.8.23)
+
+- On a busy account, a child's open was admitted but its dispatch was refused with
+  `admission_capture_limit`. Before admitting an open, and again at its dispatch, the account service
+  reads the provider readings and decisions that can still change the decision, in one check of at most
+  512 records and 256 KiB. One ordinary busy day of readings (about 180 headroom and 70 billing readings,
+  40 recent decisions) filled about that much. The dispatch reads a little more than its open, since the
+  open adds its own decision and the dispatch observes the provider again first. The check now holds
+  4,096 records and 2 MiB, about ten times that day; past it, an open or dispatch still refuses plainly
+  and changes nothing. What is read and how admission decides are unchanged. Found by local-routing.
+
 ## 0.3.2: admission on a project with history (Codex package 0.8.22)
 
 - From a busy project after upgrading to 0.3.1: no child could be opened and no Claude billing probe

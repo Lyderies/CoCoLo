@@ -84,8 +84,10 @@ class AccountServiceHost:
         try:
             self._views = AccountOwnerViews(ledger)
             limits = SQLReadLimits(100_000, 1_000, 2 * 1_048_576)
-            self._claims = AccountClaimJobs(self._views, SignatureIntakeLimits(8, 2, 512, 262_144, 4),
-                SignatureWorkerLimits(2, 4 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000), limits,
+            # One open's or claim's admission history: 4,096 records and 2 MiB, about ten times a busy
+            # day's provider readings (0.3.3, C1); the workers' protocol budget fits two such jobs.
+            self._claims = AccountClaimJobs(self._views, SignatureIntakeLimits(8, 2, 4096, 2 * 1_048_576, 4),
+                SignatureWorkerLimits(2, 32 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000), limits,
                 open_limits=OpenOwnerLimits(4, 256, MAX_ACCOUNT_OPEN_CONTEXT_BYTES))
             self._observations = AccountObservationJobs(AccountObservationOwner(self._views, limits),
                                                         ObservationJobLimits(16, 2, 2, 2))
