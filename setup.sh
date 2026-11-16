@@ -1184,7 +1184,7 @@ RUN_QUIET=0
 # checks every project's records first), so a long wait never looks like a hang.
 RUN_SLOW_SECONDS=${RUN_SLOW_SECONDS:-10}
 run_cmd() {
-  local label=$1 pid i=0 frames='|/-\' started=$SECONDS waited hint
+  local label=$1 pid i=0 frames='|/-\' started=$SECONDS waited hint phase
   shift
   CMD_N=$((CMD_N + 1))
   if [ "$RUN_QUIET" -eq 1 ]; then
@@ -1203,7 +1203,16 @@ run_cmd() {
   while kill -0 "$pid" 2>/dev/null; do
     waited=$((SECONDS - started)); hint=""
     if [ "$waited" -ge "$RUN_SLOW_SECONDS" ]; then hint="  (still working: this can take a few minutes)"; fi
-    printf '\r  %s%s%s %s  %ss%s ' "$C_CYAN" "${frames:$((i % 4)):1}" "$C_RESET" "$label" "$waited" "$hint"
+    # The command's own fixed phase line, if it reports one: plain characters only (S3-P1, S3-P2).
+    phase=""
+    if [ "$RUN_QUIET" -ne 1 ]; then
+      phase=$(grep -a '^cocolo-phase: ' "$LAST_ERR" 2>/dev/null | tail -n 1)
+      phase=${phase#cocolo-phase: }
+      phase=${phase//[^A-Za-z0-9 ,.\'-]/}
+      phase=${phase:0:60}
+    fi
+    printf '\r\033[K  %s%s%s %s  %ss%s%s ' "$C_CYAN" "${frames:$((i % 4)):1}" "$C_RESET" "$label" "$waited" \
+      "${phase:+  $phase}" "$hint"
     i=$((i + 1))
     sleep 0.15
   done
