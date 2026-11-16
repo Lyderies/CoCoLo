@@ -296,8 +296,15 @@ class LostRunAfterStopTests(LostRunHarness):
         return orchestration, run_handle
 
     def bindings(self):
-        return [row[0] for row in self.ledger._connection.execute(
-            "SELECT binding_state FROM host_run_bindings ORDER BY created_at_ms")]
+        """Binding states, oldest first, read through a second connection: polled while the
+        collector's own thread uses its connection, which only that thread may read."""
+        import sqlite3
+        connection = sqlite3.connect(f"file:{self.state.root / 'learning.sqlite3'}?mode=ro", uri=True, timeout=30)
+        try:
+            return [row[0] for row in connection.execute(
+                "SELECT binding_state FROM host_run_bindings ORDER BY created_at_ms")]
+        finally:
+            connection.close()
 
     def test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next(self):
         # 0.3.3 requirement C3 (owner, 2026-11-16): on 0.8.22, local-routing's refused claim could
@@ -340,10 +347,14 @@ class LostRunAfterStopTests(LostRunHarness):
             self.start_host()
             self.wait_for(lambda: answers, seconds=30)
         self.assertEqual('claim_denial_invalid', answers[0])
-        binding = "SELECT binding_state FROM host_run_bindings ORDER BY created_at_ms LIMIT 1"
-        self.assertEqual('pending', self.ledger._connection.execute(binding).fetchone()[0])
-        self.assertEqual(0, self.ledger._connection.execute(
-            "SELECT COUNT(*) FROM records WHERE record_type='claim_denial_settlement'").fetchone()[0])
+        self.assertEqual(['pending'], self.bindings())
+        import sqlite3
+        connection = sqlite3.connect(f"file:{self.state.root / 'learning.sqlite3'}?mode=ro", uri=True, timeout=30)
+        try:
+            self.assertEqual(0, connection.execute(
+                "SELECT COUNT(*) FROM records WHERE record_type='claim_denial_settlement'").fetchone()[0])
+        finally:
+            connection.close()
 
     def closes_after_restart(self, run_handle, orchestration):
         """The next service closes the run: abandoned, already_closed, and its result place free."""
