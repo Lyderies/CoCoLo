@@ -52,6 +52,8 @@ BRIDGE_PROVIDERS = frozenset({"codex", "claude"})  # Read-only children the proj
 START_REASONS = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable',
     'run_abandoned', 'run_closed', 'run_lost', 'run_lost_held', 'run_client_changed', 'run_account_call_failed',
+    # An earlier service's run the project's service is still closing (0.3.3, C3d).
+    'run_settling',
 }) | ACCOUNT_REASON_CODES | CLAIM_DENIAL_CODES | PREPARATION_STAGE_REASONS
 # A run whose project service stopped or crashed: ended abandoned with an unknown outcome.
 # Its capacity is released once the next service saw nothing of it still running.
