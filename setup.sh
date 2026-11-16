@@ -1183,12 +1183,24 @@ RUN_QUIET=0
 # A step running longer than this says it can take a few minutes (an upgrade backs up and
 # checks every project's records first), so a long wait never looks like a hang.
 RUN_SLOW_SECONDS=${RUN_SLOW_SECONDS:-10}
+# terminal_width : COLUMNS, else the width of setup's terminal (stty on standard input, then tput),
+# else 80, as a plain decimal number from 0 to 9999.
+terminal_width() {
+  local width=${COLUMNS:-} size
+  if [ -z "$width" ]; then
+    size=$(stty size 2>/dev/null || true)
+    width=${size##* }
+  fi
+  [ -n "$width" ] || width=$(tput cols 2>/dev/null || true)
+  case $width in ''|*[!0-9]*) width=80 ;; esac
+  width=${width#"${width%%[!0]*}"}
+  if [ -z "$width" ]; then width=0; elif [ "${#width}" -gt 4 ]; then width=9999; fi
+  printf '%s' "$width"
+}
+
 run_cmd() {
   local label=$1 pid i=0 frames='|/-\' started=$SECONDS waited hint phase text width
   shift
-  # The progress line is cut to the terminal's width, so it never wraps (S3-P5).
-  width=${COLUMNS:-$(tput cols 2>/dev/null || true)}
-  case $width in ''|*[!0-9]*) width=80 ;; esac
   CMD_N=$((CMD_N + 1))
   if [ "$RUN_QUIET" -eq 1 ]; then
     LAST_OUT=/dev/null; LAST_ERR=/dev/null
@@ -1213,18 +1225,23 @@ run_cmd() {
     if [ "$RUN_QUIET" -ne 1 ]; then
       # A subshell, so the C locale (ASCII letters only) never reaches the commands setup runs.
       phase=$(
-        LC_ALL=C
-        line=$(tail -c 4096 "$LAST_ERR" 2>/dev/null | tr -d '\000' | grep -a '^cocolo-phase: ' | tail -n 1)
+        export LC_ALL=C
+        line=$(tail -c 4096 "$LAST_ERR" 2>/dev/null | tr -d '\000' 2>/dev/null |
+          grep -a '^cocolo-phase: ' 2>/dev/null | tail -n 1 2>/dev/null)
         line=${line#cocolo-phase: }
         line=${line:0:200}
         line=${line//[^A-Za-z0-9 ,.\'-]/}
         printf '%s' "${line:0:60}"
       )
     fi
-    text="$label  ${waited}s${phase:+  $phase}$hint"
-    # Five columns of spinner and spaces, and the last column left free so the cursor never wraps.
-    text=${text:0:$((width > 6 ? width - 6 : 0))}
-    printf '\r\033[K  %s%s%s %s ' "$C_CYAN" "${frames:$((i % 4)):1}" "$C_RESET" "$text"
+    # Cut to the terminal's width, read again each redraw, so the line never wraps (S3-P5). Five
+    # columns of spinner and spaces, and the last column left free so the cursor never wraps; a
+    # terminal too narrow for that gets no frame.
+    width=$(terminal_width)
+    if [ "$width" -gt 6 ]; then
+      text="$label  ${waited}s${phase:+  $phase}$hint"
+      printf '\r\033[K  %s%s%s %s ' "$C_CYAN" "${frames:$((i % 4)):1}" "$C_RESET" "${text:0:$((width - 6))}"
+    fi
     i=$((i + 1))
     sleep 0.15
   done

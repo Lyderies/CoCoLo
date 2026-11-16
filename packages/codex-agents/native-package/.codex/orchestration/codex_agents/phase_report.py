@@ -8,6 +8,7 @@ Reporting never changes what the command does (S3-P4): a line that cannot be
 written is dropped, and nothing is written where a write could block.
 """
 
+import io
 import os
 import stat
 import sys
@@ -20,14 +21,20 @@ def report_phase(text: str) -> None:
     stream = sys.stderr
     if stream is None:
         return
+    line = "cocolo-phase: " + text + "\n"
     try:
+        if isinstance(stream, io.StringIO):
+            stream.write(line)
+            return
         try:
-            mode = os.fstat(stream.fileno()).st_mode
-        except (OSError, ValueError):
-            mode = None  # an in-memory stream, which cannot block
-        if mode is not None and not stat.S_ISREG(mode):
+            descriptor = stream.fileno()
+            mode = os.fstat(descriptor).st_mode
+        except Exception:
+            return  # a stream whose kind cannot be told may forward to anything
+        if not stat.S_ISREG(mode):
             return  # a pipe, socket or terminal, where a write can block
-        stream.write("cocolo-phase: " + text + "\n")
-        stream.flush()
-    except (OSError, ValueError):
-        pass
+        # Straight to the file, bypassing the stream's buffer: a failed write leaves nothing
+        # for Python's flush at exit to fail on, so the exit status never changes.
+        os.write(descriptor, line.encode("ascii", "replace"))
+    except Exception:
+        pass  # a phase line is never worth changing what the command does
