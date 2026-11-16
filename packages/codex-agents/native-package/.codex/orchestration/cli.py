@@ -133,7 +133,7 @@ from codex_agents.client_runtime import (  # noqa: E402
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.history_contracts import HistoryError  # noqa: E402
 from codex_agents.project_host_client import (  # noqa: E402
-    ensure_project_host, other_version_host, project_host_serving, withdraw_project_host,
+    ensure_project_host, other_version_host, project_host_serving, stop_earlier_host, withdraw_project_host,
 )
 from codex_agents.admission_metadata import api_keys_present  # noqa: E402
 from codex_agents.host_paths import PYTHON_ISOLATION_FLAGS  # noqa: E402
@@ -482,6 +482,10 @@ def _replace_other_version_host(args):
             finally:
                 ledger.close()
             replaced = drained and withdraw_project_host(args.state_root, args.project_root, directory)
+            if drained and not replaced:
+                # One that holds an earlier version's lease never stops when asked (0.3.3, C4):
+                # with no child able to run, it is stopped as a signal stops it.
+                replaced = stop_earlier_host(args.project_root, directory)
     except (LedgerError, StateError, OSError):
         replaced = False
     except BaseException:
