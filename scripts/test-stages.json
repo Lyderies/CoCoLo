@@ -116,6 +116,7 @@
  "codex:tests.test_owner_record_payload": "integration",
  "codex:tests.test_owner_terminal_flow": "integration",
  "codex:tests.test_phase_report": "unit",
+ "codex:tests.test_phase_report_exit": "integration",
  "codex:tests.test_prepared_dispatch": "integration",
  "codex:tests.test_project_cleanup": "unit",
  "codex:tests.test_project_driver": "integration",

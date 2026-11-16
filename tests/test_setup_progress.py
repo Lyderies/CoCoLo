@@ -6,10 +6,15 @@ label; it now also shows the seconds so far and, after a short while, that the s
 can take a few minutes.
 """
 
+import fcntl
+import os
+import pty
 import re
 import shlex
+import struct
 import subprocess
 import sys
+import termios
 import unittest
 from pathlib import Path
 
@@ -34,6 +39,7 @@ def run_step(seconds, *, slow_after=None, command=None, columns=None, both=False
         *([f"COLUMNS={columns}"] if columns is not None else []),
         "hide_cursor() { :; }; show_cursor() { :; }; log_step() { :; }",
         f"RUN_SLOW_SECONDS={10 if slow_after is None else slow_after}",  # setup.sh's own default is 10
+        function("terminal_width"),
         function("run_cmd"),
         f'run_cmd "Installing" {command or f"sleep {seconds}"}; echo "status=$?"',
     ])
@@ -140,6 +146,29 @@ class SetupProgressTests(unittest.TestCase):
     def test_S3_P5_a_step_returns_its_exit_status(self):
         stdout, _ = run_step(0, columns="08", command="sh -c 'sleep 0.5; exit 3'", status=True)
         self.assertIn("status=3", stdout)
+
+    def test_S3_P5_the_width_comes_from_the_terminal_itself(self):
+        # The verifier noted tput inside $( ) may answer 80 from the pipe. Setup's own terminal, here
+        # a pseudo-terminal 30 columns wide on its standard input, decides the width.
+        primary, secondary = pty.openpty()
+        try:
+            fcntl.ioctl(secondary, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 30, 0, 0))
+            script = "\n".join([
+                "unset COLUMNS",
+                "C_CYAN=''; C_RESET=''; CMD_N=0; LOGDIR=$(mktemp -d); RUN_QUIET=0; RUN_SLOW_SECONDS=10",
+                "hide_cursor() { :; }; show_cursor() { :; }; log_step() { :; }",
+                function("terminal_width"), function("run_cmd"),
+                f'run_cmd "Installing" {emitter(["p" * 60])}',
+            ])
+            environ = {key: value for key, value in os.environ.items() if key != "COLUMNS"}
+            done = subprocess.run(["bash", "-c", script], stdin=secondary, capture_output=True, text=True,
+                                  timeout=30, check=True, env=environ)
+        finally:
+            os.close(primary)
+            os.close(secondary)
+        frames = [frame.replace("\x1b[K", "") for frame in done.stdout.splitlines() if frame.strip()]
+        self.assertTrue(frames)
+        self.assertTrue(all(len(frame) < 30 for frame in frames), max(map(len, frames)))
 
     def test_S3_P5_a_resized_terminal_is_followed(self):
         # tput answers 80 for the first redraws, then 30, as a terminal resized during a step.
