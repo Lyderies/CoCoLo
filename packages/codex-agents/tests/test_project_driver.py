@@ -240,7 +240,8 @@ class ProjectDriverTests(DriverHarness):
         # refused by that project's own limit; and cancelling each of the three works (with four or
         # more a cancellation was not always carried out).
         runs = [self.open_run() for _ in range(4)]
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'one-of-three'}, {'sleep': 40},
+        # Far longer than the test: each child ends only because it is cancelled.
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'one-of-three'}, {'sleep': 600},
                               {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         processes = [self.separate_dispatch(run[0], run[1], run[3]) for run in runs[:3]]
@@ -250,6 +251,9 @@ class ProjectDriverTests(DriverHarness):
         refused = self.cli('dispatch', *fourth[0], '--route', fourth[1], '--run-handle', fourth[3], expected=2)
         self.assertEqual('preparation_full', refused['reason_code'], refused)
         self.assertEqual(3, launched())
+        children = [i for i in self.invocations('codex') if 'exec' in i['argv']]
+        for child in children:
+            os.killpg(child['pgid'], 0)  # All three are alive together.
         for run, process in zip(runs, processes):
             started = time.monotonic()
             self.cli('learning-cancel-run', '--orchestration-handle', run[2], '--run-handle', run[3])
@@ -257,6 +261,9 @@ class ProjectDriverTests(DriverHarness):
             self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
             self.assertEqual('cancelled', json.loads(output)['bridge_report']['terminal_state'])
             self.assertLess(time.monotonic() - started, 30)
+        for child in children:
+            with self.assertRaises(ProcessLookupError):  # Every child's process group is gone.
+                os.killpg(child['pgid'], 0)
 
     def busy_day(self, kind, count):
         """Add `count` copies of the account's latest `kind` reading from the last few hours, as a
@@ -1715,6 +1722,52 @@ class SilenceCutoffTests(DriverHarness):
 ManyRunsTests.worker_once = HostVerificationTests.worker
 ManyRunsTests.verifier = HostVerificationTests.verifier
 ManyRunsTests.verified = HostVerificationTests.verified
+
+
+class SharedPoolTests(DriverHarness):
+    """0.3.3 requirement C8 end to end: three projects share the machine's pool of six."""
+
+    def admit(self, provider):
+        fingerprint = super().admit(provider)
+        self.others = []
+        for name in ('second', 'third'):
+            root = Path(self.temporary.name) / name
+            root.mkdir()
+            (root / 'source.txt').write_text(name + ' marker\n')
+            git(root, 'init', '-q')
+            git(root, 'config', 'user.email', 'tests@example.invalid')
+            git(root, 'config', 'user.name', 'Bridge Tests')
+            git(root, 'add', '.')
+            git(root, 'commit', '-qm', name)
+            project = self.ledger.register_project(root, now_ms=1)
+            identity = self.ledger.observe_provider(project, provider, project_root=self.tools, environ=CLEAN)[0]
+            attest_provider(self.ledger, project, self.owner_key, provider, identity['account_fingerprint'])
+            self.others.append(root)
+        return fingerprint
+
+    def test_C8_six_children_across_projects_run_at_once_and_a_seventh_is_claim_busy(self):
+        second, third = self.others
+        self.start_project_host(second)
+        self.start_project_host(third)
+        runs = [(self.project, self.open_run(self.project)) for _ in range(3)]
+        runs += [(second, self.open_run(second)) for _ in range(3)]
+        seventh = self.open_run(third)
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'one-of-six'}, {'sleep': 600},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        processes = [self.separate_dispatch(run[0], run[1], run[3], project) for project, run in runs]
+        launched = lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']]  # noqa: E731
+        self.wait_for(lambda: len(launched()) == 6, seconds=120)
+        for child in launched():
+            os.killpg(child['pgid'], 0)  # All six are alive together.
+        refused = self.cli_for(third, 'dispatch', *seventh[0], '--route', seventh[1], '--run-handle', seventh[3],
+                               expected=2)
+        self.assertEqual('claim_busy', refused['reason_code'], refused)
+        self.assertEqual(6, len(launched()))
+        for (project, run), process in zip(runs, processes):
+            self.cli_for(project, 'learning-cancel-run', '--orchestration-handle', run[2], '--run-handle', run[3])
+            output, errors = process.communicate(timeout=60)
+            self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
 
 
 class TwoProjectTests(DriverHarness):
