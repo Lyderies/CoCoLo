@@ -614,6 +614,21 @@ assert "codex_agents.learning_store" not in sys.modules
         )
         self.assertEqual(before.st_ino, (copy / CLI_RELATIVE).stat().st_ino)
 
+    def test_a_service_started_from_the_copy_prepares_children_from_its_bound_project(self) -> None:
+        # A child's role is the project's agent file, checked against the digest its
+        # route recorded: the copy holds no agent files, so a service the copy started
+        # found none (local-routing's 0.3.2 test: preparation_failed_at_role_prompt).
+        from codex_agents import project_service
+        self.install()
+        copy = expected_copy(self.codex_home, self.project)
+        self.assertEqual(self.project.resolve(), project_service.service_bundle_root(
+            copy / ".codex" / "orchestration", self.project))
+        self.assertEqual(self.project.resolve(), project_service.service_bundle_root(
+            self.project / ".codex" / "orchestration", self.project))
+        # A copy serves only the project it is bound to.
+        with self.assertRaises(project_service.HistoryError):
+            project_service.service_bundle_root(copy / ".codex" / "orchestration", self.project.parent)
+
     def test_status_is_stale_unless_rule_copy_and_project_all_match(self) -> None:
         self.install()
         copy = expected_copy(self.codex_home, self.project)

@@ -6,7 +6,11 @@ from .learning_contracts import ADMISSION_REASON_CODES, canonical_json, content_
 
 MAX_BILLING_REPLY_BYTES = 12_288
 BILLING_PROBE_REASONS = frozenset({'probe_invalid_request', 'probe_invalid_response', 'probe_not_authorized',
-    'probe_unavailable', 'probe_conflict', 'probe_full', 'probe_busy', 'probe_not_ready'})
+    'probe_unavailable', 'probe_conflict', 'probe_full', 'probe_busy', 'probe_not_ready',
+    # Which step stopped a probe before it launched (0.3.2): preparing it, its worker, another step.
+    'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed', 'probe_step_failed'})
+PROBE_STEP_REASONS = frozenset({'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed',
+    'probe_step_failed'})
 PROBE_COMPLETION_REASONS = frozenset({'probe_incomplete', 'probe_invalid_events', 'probe_no_events'})
 
 

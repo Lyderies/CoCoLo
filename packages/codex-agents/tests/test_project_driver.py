@@ -6,6 +6,7 @@ they resolve. Everything else is the product path: the in-process CLI, the
 hosts' enrollment, the run driver and the original owners.
 """
 import base64
+import dataclasses
 import io
 import contextlib
 import sqlite3
@@ -28,7 +29,7 @@ from tests.test_bridge import (
     CLEAN, PARENT_GRANT, RATE_LIMIT, CliTestCase, cli, git, init_frame, null_filled, result, result_frame,
 )
 
-from codex_agents import codex_worker, learning_store, project_driver
+from codex_agents import codex_preparation, codex_worker, learning_store, project_driver
 from codex_agents.account_api import AccountClient, AccountError
 from codex_agents.rate_limit_contracts import RateLimitError
 from codex_agents.liveness_clock import LivenessLimits
@@ -178,6 +179,61 @@ class ProjectDriverTests(DriverHarness):
             self.assertTrue(self.cli('result-preflight', *other)['ready'])
         self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
         process.communicate(timeout=30)
+
+    def test_a_run_whose_preparation_fails_says_which_stage_stopped_it(self):
+        context, route_path, _, run_handle = self.open_run()
+        with mock.patch.object(codex_preparation.bridge, 'codex_managed_configuration_present', return_value=True):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('preparation_managed_configuration', refused['reason_code'], refused)
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
+
+    def test_a_run_refused_before_or_inside_preparation_names_the_refusal(self):
+        # local-routing's 0.8.17 test still saw only run_unavailable, 0.3 s after dispatch.
+        cases = (
+            ('submit', codex_preparation.PreparationError('preparation_full'), 'preparation_full'),
+            ('submit', codex_preparation.PreparationError('preparation_not_authorized'), 'preparation_not_authorized'),
+            ('build', RuntimeError('unexpected'), 'preparation_failed_at_read_paths'),
+        )
+        for where, error, reason in cases:
+            with self.subTest(reason=reason, where=where):
+                context, route_path, _, run_handle = self.open_run()
+                patch = (mock.patch.object(codex_preparation.CodexPreparationLane, 'submit', side_effect=error)
+                         if where == 'submit' else mock.patch.object(
+                             codex_preparation.bridge, 'assignment_read_paths', side_effect=error))
+                with patch:
+                    refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle,
+                                       expected=2)
+                self.assertEqual(reason, refused['reason_code'], refused)
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
+
+    def test_D1_D2_a_run_refused_before_its_claim_never_holds_an_update_back(self):
+        # 0.3.2 requirements (local-routing: project_service_other_version after an update,
+        # from runs admitted that morning whose dispatch failed before they claimed a slot).
+        # D1: a child launches only after its claim, so replacing the collector or a project
+        # service of another version never waits for an unclaimed run.
+        # D2: the learning move counts it until its binding expires; then it can never be claimed.
+        context, route_path, _, run_handle = self.open_run()
+        with mock.patch.object(codex_preparation.bridge, 'codex_managed_configuration_present', return_value=True):
+            self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        ledger = self.collector_ledger
+        self.assertEqual(0, ledger._connection.execute("SELECT COUNT(*) FROM active_run_capacity").fetchone()[0])
+        self.assertTrue(ledger.drained(children_only=True))                              # D1
+        self.assertFalse(ledger.drained())                                               # D2, before expiry
+        expires = ledger._connection.execute("SELECT MAX(expires_at_ms) FROM host_run_bindings").fetchone()[0]
+        with mock.patch.object(ledger, '_clock_ms', return_value=expires + 1):
+            self.assertTrue(ledger.drained())                                            # D2, after expiry
+
+    def test_a_run_whose_client_changed_after_preparation_says_so(self):
+        context, route_path, _, run_handle = self.open_run()
+        original = codex_preparation.CodexPreparationLane.prepared
+
+        def changed(lane, handle):
+            value = original(lane, handle)
+            return dataclasses.replace(value, client_identity=('/srv/other/codex', 'f' * 64))
+        with mock.patch.object(codex_preparation.CodexPreparationLane, 'prepared', autospec=True, side_effect=changed):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('run_client_changed', refused['reason_code'], refused)
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
     def test_only_the_opening_host_class_can_prepare_and_dispatch_its_run(self):
         context, route_path, orchestration, run_handle = self.open_run()

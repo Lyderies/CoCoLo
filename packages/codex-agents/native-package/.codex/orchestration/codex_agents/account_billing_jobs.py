@@ -15,9 +15,13 @@ from .account_observation_jobs import AccountObservationJobs
 from .admission_inputs import AdmissionCaptureError, public_capture_reason
 from .billing_probe_worker import BillingProbeWorkers, ProbeWorkerError
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches
-from .provider_observation_contracts import ObservationInput
+from .provider_observation_contracts import OBSERVATION_REASONS, ObservationInput
 from .signature_job_intake import SignatureJobError
 
+
+# An identity observation refused for one of these is tried once more before the probe fails:
+# the account's services, or the client, may not have been ready yet (just after a restart).
+RETRIED_OBSERVATION_REASONS = frozenset({'observation_unavailable', 'account_unavailable'})
 
 @dataclass(frozen=True)
 class BillingJobLimits:
@@ -49,6 +53,7 @@ class _Job:
     result: dict | None = None
     reason: str | None = None
     cancelled: bool = False
+    observed_again: bool = False
 
 
 @dataclass(frozen=True, repr=False)
@@ -208,8 +213,17 @@ class AccountBillingJobs:
             if reply is None:
                 return
             job.observation = None
-            if reply.reason is not None:
-                self._discard(job)
+            if reply.reason in RETRIED_OBSERVATION_REASONS and not job.observed_again:
+                # Right after the services restart a first observation can be refused.
+                # Observing spends nothing and nothing is launched yet: try once more.
+                job.observed_again = True
+                project, runtime, caller = job.key[0], job.key[1], job.key[2]
+                job.observation = self._observations.submit(project, runtime, caller,
+                    'billing-ident-'+job.reservation.key+'-again', ObservationInput('claude'), job.context,
+                    job.before_publish, _ingress=self._ingress_owner, _billing_parent=(self, ticket))
+            elif reply.reason is not None:
+                # Say why: the observation's own fixed reason.
+                self._discard(job, reply.reason if reply.reason in OBSERVATION_REASONS else 'probe_unavailable')
             else:
                 job.identity = next(r for r in reply.result['records'] if r['record_type'] == 'provider_identity')
                 job.state = 'prepare'
@@ -240,9 +254,9 @@ class AccountBillingJobs:
                     raise
                 self._signatures[job.signature], job.state = ticket, 'signature'
             elif state == 'failed':
-                self._discard(job)
+                self._discard(job, 'probe_preparation_failed')
             elif state == 'unknown':
-                job.state, job.reason = 'unknown', 'probe_unavailable'
+                job.state, job.reason = 'unknown', 'probe_preparation_unknown'
         if job.state == 'offered':
             state = self._executions.snapshot(job.preparation)['worker_state']
             if state == 'returned':
@@ -250,7 +264,7 @@ class AccountBillingJobs:
                 job.preparation = None
                 self._ready(ticket, job, result=result)
             elif state == 'unknown':
-                job.state, job.reason = 'unknown', 'probe_unavailable'
+                job.state, job.reason = 'unknown', 'probe_worker_failed'
         if job.state == 'discarding':
             if job.observation is not None:
                 if job.observation in self._observations._jobs:
@@ -281,7 +295,7 @@ class AccountBillingJobs:
                 self._step(ticket, job)
             except Exception:
                 # Keep every original handle/reservation after ambiguity.
-                job.state, job.reason = 'unknown', 'probe_unavailable'
+                job.state, job.reason = 'unknown', 'probe_step_failed'
         if self._closing and not self._jobs:
             self._workers.close()
 

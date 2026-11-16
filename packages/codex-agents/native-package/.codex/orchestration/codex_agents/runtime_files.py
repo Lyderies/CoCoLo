@@ -121,6 +121,7 @@ RUNTIME_FILES = (
     "codex_agents/owned_execution.py",
     "codex_agents/owner_key_contracts.py",
     "codex_agents/owner_record_payload.py",
+    "codex_agents/preparation_reasons.py",
     "codex_agents/prepared_dispatch.py",
     "codex_agents/process_tree.py",
     "codex_agents/project_backup.py",

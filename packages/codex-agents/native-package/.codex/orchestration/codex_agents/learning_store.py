@@ -3544,12 +3544,13 @@ class LearningLedger:
                 "SELECT 1 FROM operational_qa WHERE project_id=? LIMIT 1", (project_id,)
             ).fetchone() is not None
 
-    def drained(self, *, ignore_earlier_version: bool = False) -> bool:
+    def drained(self, *, children_only: bool = False) -> bool:
         """No run is active or unsettled anywhere (long-crashed claims aside).
 
-        `ignore_earlier_version` leaves out runs a 0.2.x version left: they ran
-        inside their own commands, never under a collector or a project service,
-        so stopping the collector cannot affect them.
+        `children_only`: no child may be running, which is all that replacing the
+        collector or a project service needs. A run admitted but never claimed has no
+        child (a child launches only after its claim), and runs a 0.2.x version left
+        never ran under a collector or a project service.
         """
 
         from .history_contracts import HistoryError
@@ -3557,7 +3558,7 @@ class LearningLedger:
 
         with self._lock:
             try:
-                _drained(self._connection, self._clock_ms(), ignore_earlier_version=ignore_earlier_version)
+                _drained(self._connection, self._clock_ms(), children_only=children_only)
             except HistoryError:
                 return False
             return True
@@ -11927,7 +11928,7 @@ class CollectorServer:
             if request.get("op") == "shutdown_if_drained" and set(request) == {"protocol", "op"}:
                 # For a migration tool: never taken away from under an active run. Runs an
                 # earlier version left never ran under a collector, so they do not count.
-                if not self.ledger.drained(ignore_earlier_version=True):
+                if not self.ledger.drained(children_only=True):
                     return {"ok": False, "code": "collector_busy"}
                 self._stop.set()
                 return {"ok": True}

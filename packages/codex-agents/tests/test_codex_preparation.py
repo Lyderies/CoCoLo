@@ -167,6 +167,53 @@ class CodexPreparationTests(unittest.TestCase):
             self.assertEqual({}, self.runtime.pool._jobs)
             self.lane.retire(handle)
 
+    def test_a_failed_preparation_keeps_the_fixed_reason_of_its_stage(self):
+        # Every failure used to read preparation_unavailable, so a refused run could not
+        # say what stopped it (local-routing's 0.3.2 test: dispatch said only run_unavailable).
+        cases = {
+            'preparation_managed_configuration': mock.patch.object(
+                bridge, 'codex_managed_configuration_present', return_value=True),
+            'preparation_client_missing': mock.patch.object(
+                codex_preparation, 'resolve_client', return_value=(None, None)),
+            'preparation_export_failed': None,
+        }
+        for reason, patch in cases.items():
+            with self.subTest(reason=reason):
+                self.context = PreparationContext(preparation_payload(
+                    self.prospective, self.fixture.project, self.fixture.bundle, fixtures.CLEAN,
+                    expected_export_commit='f' * 40 if patch is None else None))
+                with patch or mock.patch.object(self, 'allowed', True):
+                    handle = self.lane.submit(self.context)
+                    self.until(lambda: self.lane.snapshot(handle)['state'] in {'failed', 'unknown'})
+                snapshot = self.lane.snapshot(handle)
+                self.lane.retire(handle)
+                self.assertEqual({'state': 'failed', 'reason_code': reason}, snapshot)
+
+    def test_an_unexpected_error_names_the_step_it_happened_in(self):
+        # local-routing's 0.8.18 test: dispatch said preparation_unavailable and nothing more.
+        for target, name, reason in (
+                (bridge, 'assignment_read_paths', 'preparation_failed_at_read_paths'),
+                (codex_preparation, '_worker_input', 'preparation_failed_at_worker_input'),
+                (bridge, '_codex_role_prompt', 'preparation_failed_at_role_prompt')):
+            with self.subTest(step=name):
+                with mock.patch.object(target, name, side_effect=RuntimeError('unexpected')):
+                    handle = self.lane.submit(self.context)
+                    self.until(lambda: self.lane.snapshot(handle)['state'] in {'failed', 'unknown'})
+                snapshot = self.lane.snapshot(handle)
+                self.lane.retire(handle)
+                self.assertEqual({'state': 'failed', 'reason_code': reason}, snapshot)
+
+    def test_a_refused_worker_handoff_says_so(self):
+        for error, reason in ((codex_worker.CodexWorkerError('worker_busy'), 'preparation_worker_busy'),
+                              (RuntimeError('unexpected'), 'preparation_worker_failed')):
+            with self.subTest(reason=reason):
+                with mock.patch.object(self.runtime.pool, 'prepare', side_effect=error):
+                    handle = self.lane.submit(self.context)
+                    self.until(lambda: self.lane.snapshot(handle)['state'] in {'failed', 'unknown', 'cleaned'})
+                snapshot = self.lane.snapshot(handle)
+                self.lane.retire(handle)
+                self.assertEqual(reason, snapshot['reason_code'], snapshot)
+
     def test_revocation_after_export_drops_original_scratch_without_worker_handoff(self):
         handle = self.lane.submit(self.context)
         end = time.monotonic()+8
@@ -319,7 +366,16 @@ class CodexPreparationTests(unittest.TestCase):
         self.discard(handle)
         self.assertFalse(prepared.workspace.exists())
 
+    def test_the_result_schema_comes_from_the_running_runtime_never_the_project(self):
+        # Unlike a role, the schema is bound to no digest, so like the CLI (which reads it
+        # from ORCHESTRATION_ROOT) preparation reads it from the runtime it runs from: a
+        # session that can write the project cannot change what a child is told to return.
+        (self.fixture.bundle/'.codex/orchestration/schemas/result.schema.json').write_text('not json')
+        handle, prepared = self.prepare()
+        self.discard(handle)
+
     def test_oversized_installed_schema_is_refused_before_account_readiness(self):
+        self.enterContext(mock.patch.object(codex_preparation, 'RUNTIME_ROOT', self.fixture.bundle))
         schema = self.fixture.bundle/'.codex/orchestration/schemas/result.schema.json'
         schema.write_bytes(b' '*(MAX_RESULT_BODY_BYTES+1))
         handle = self.lane.submit(self.context)
@@ -360,6 +416,7 @@ class CodexPreparationTests(unittest.TestCase):
         self.assertEqual('cleaned', lane.snapshot(handle)['state'])
 
     def test_fifo_installed_schema_refuses_without_waiting_for_a_writer(self):
+        self.enterContext(mock.patch.object(codex_preparation, 'RUNTIME_ROOT', self.fixture.bundle))
         schema = self.fixture.bundle/'.codex/orchestration/schemas/result.schema.json'
         schema.unlink()
         os.mkfifo(schema, 0o600)
@@ -387,6 +444,7 @@ class CodexPreparationTests(unittest.TestCase):
                     os.close(writer)  # Release only the old buggy fixture read, if blocked.
 
     def test_malformed_and_nonobject_schema_refuse_before_account_readiness(self):
+        self.enterContext(mock.patch.object(codex_preparation, 'RUNTIME_ROOT', self.fixture.bundle))
         schema = self.fixture.bundle/'.codex/orchestration/schemas/result.schema.json'
         for contents in (b'{', b'[]'):
             with self.subTest(contents=contents):

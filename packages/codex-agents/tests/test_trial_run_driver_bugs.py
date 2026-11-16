@@ -256,7 +256,7 @@ class TrialRunDriverTests(DriverHarness):
         self.assertIn(('claiming', 'claim_storage_expired'), self.stopped_runs)
         self.assertEqual('claim_storage_expired', report.get('reason_code'), report)
 
-    def test_dispatch_reports_run_unavailable_when_the_host_has_no_preparation_room(self):
+    def test_dispatch_reports_preparation_full_when_the_host_has_no_preparation_room(self):
         self.forced_refusal_at_claim()
         context, route_path, _, run_handle, _, _ = self.opened(
             'next', task_changes={'id': 'task-next'}, assignment_changes={'assignment_id': 'next', 'task_id': 'task-next'})
@@ -264,7 +264,7 @@ class TrialRunDriverTests(DriverHarness):
         code, report = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
         if code == 0:
             self.skipTest('the second run launched; bug 2 is fixed, so there is no refusal to report')
-        self.assertEqual('run_unavailable', report.get('reason_code'), report)
+        self.assertEqual('preparation_full', report.get('reason_code'), report)
 
     # 4. A run that can never launch closes by itself; the primary runs no command for it.
     def watched_runs(self):

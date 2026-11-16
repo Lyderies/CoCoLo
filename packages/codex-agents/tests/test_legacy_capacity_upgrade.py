@@ -100,7 +100,7 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         # project service, so stopping the collector cannot affect them.
         ledger = self.upgrade_with_runs(HOUR)
         self.assertFalse(ledger.drained())
-        self.assertTrue(ledger.drained(ignore_earlier_version=True))
+        self.assertTrue(ledger.drained(children_only=True))
         server = learning_store.CollectorServer.__new__(learning_store.CollectorServer)
         server.ledger = ledger
         server._stop = mock.Mock()

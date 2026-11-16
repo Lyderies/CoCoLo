@@ -15,6 +15,7 @@ from .collector_contracts import CollectorError
 from .collector_paths import CollectorPaths, StateError, _assert_no_symlink_components, _canonical_project_root, _check_owner_mode
 from .control_loop import ControlLoopLimits
 from .history_contracts import HistoryError
+from .host_commands import HostCommandError, bound_project_root
 from .learning_contracts import keyed_digest
 from .liveness_clock import LivenessLimits
 from .orchestration_api import OrchestrationLimits, OrchestrationScope
@@ -99,6 +100,26 @@ def open_offline_history(state, project_id):
                           result_capacity=_result_capacity(), allow_schema_upgrade=True)
 
 
+def service_bundle_root(orchestration_root, project_root):
+    """The bundle children are prepared from: the project, as for the CLI.
+
+    A child's role is the project's agent file, checked against the digest its
+    route recorded. A service started from the owner's protected runtime copy
+    sits in the copy, which holds only runtime code, so it uses the project the
+    copy is bound to, exactly as the CLI does (`cli.BUNDLE_ROOT`); a copy serves
+    no other project. Elsewhere it is the install this service runs from.
+    """
+    try:
+        bound = bound_project_root(Path(orchestration_root))
+    except HostCommandError:
+        raise HistoryError('history_not_authorized') from None
+    if bound is None:
+        return Path(orchestration_root).resolve().parents[1]
+    if bound != Path(project_root).resolve():
+        raise HistoryError('history_not_authorized')
+    return bound
+
+
 def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None,
                   liveness=LIVENESS, retaining_idle_stop_ns=RETAINING_IDLE_STOP_NS):
     """Run the host until a signal, idleness or withdrawal; return a closed report."""
@@ -124,10 +145,11 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
                               result_capacity=_result_capacity())
 
     try:
-        # The installed package this host runs from is the bundle a child is prepared from.
+        # Children are prepared from the project's installed package (see service_bundle_root).
         host = ProjectServiceHost(state, root, supervisor_scope(state, project_id), open_history,
                                   runtime_limits(liveness), host_limits(),
-                                  bundle_root=Path(__file__).resolve().parents[3] if bundle_root is None else Path(bundle_root))
+                                  bundle_root=service_bundle_root(Path(__file__).resolve().parent.parent, root)
+                                  if bundle_root is None else Path(bundle_root))
     except HistoryError as error:
         return {'ready': False, 'reason_code': error.reason_code}
     stopping, checked = [], [0.0]

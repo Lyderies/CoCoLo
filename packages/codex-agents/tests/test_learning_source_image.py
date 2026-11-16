@@ -143,7 +143,7 @@ class LearningSourceImageTests(unittest.TestCase):
             'assignment_digest,task_digest,route_digest,configuration_digest,client_version,'
             'created_at_ms,expires_at_ms,binding_state) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
             (self.fixture.project_b_id, 'a' * 64, 'pending', 'b' * 64, 'c' * 64, 'd' * 64,
-             'e' * 64, 'fixture', 1, 2, 'pending')).close()
+             'e' * 64, 'fixture', 1, 2 ** 62, 'pending')).close()  # Unexpired: it can still be claimed (D2).
         with mock.patch.object(self.source.state, 'digest_key', side_effect=AssertionError('key read')):
             self.refuse('history_unavailable')
 

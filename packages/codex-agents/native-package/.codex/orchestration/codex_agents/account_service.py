@@ -41,10 +41,10 @@ from .run_provenance import decode_run_provenance_input
 from .host_open_contracts import decode_open_provenance_input
 from .account_open_contracts import AccountOpenContext, OpenError, decode_account_open_input
 from .account_observation import ObservationContext
-from .provider_observation_contracts import ObservationError, decode_observation_input
+from .provider_observation_contracts import OBSERVATION_REASONS, ObservationError, decode_observation_input
 from .observation_failure_contracts import decode_observation_failure
 from .account_observation_failure import record_observation_failure, recheck_observation_failure
-from .billing_probe_contracts import ProbeAdmissionError
+from .billing_probe_contracts import PROBE_STEP_REASONS, ProbeAdmissionError
 
 # Fixed owner query over the history that can still change an admission decision.
 # `:a` is the capture's anchor: the first capture's own clock, kept in its snapshot
@@ -818,7 +818,8 @@ class AccountService:
             if reply.reason is not None:
                 return self._reply(labels, reason=reply.reason if reply.reason in {
                     'probe_invalid_request', 'probe_not_authorized', 'probe_unavailable', 'probe_conflict',
-                    'probe_full', 'probe_busy', 'probe_not_ready', *ADMISSION_CAPTURE_PUBLIC_REASONS}
+                    'probe_full', 'probe_busy', 'probe_not_ready', *ADMISSION_CAPTURE_PUBLIC_REASONS,
+                    *PROBE_STEP_REASONS, *OBSERVATION_REASONS}
                     else 'probe_unavailable')
             return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish)
         if (self._observation_jobs is not None and type(ticket) is object

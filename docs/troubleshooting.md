@@ -174,6 +174,42 @@ busy machine or when it cannot start at all. It keeps starting by itself: run th
 keeps failing, run `./setup.sh` and choose "Update the install and walk through every step"; step 5
 (Collector) says what is wrong.
 
+## A dispatch refused with `preparation_...` or `run_client_changed`
+
+The project's service prepares a child before launching it, and says which step stopped it:
+
+- `preparation_managed_configuration`: managed (enterprise or MDM) settings for the provider's client
+  are present on this machine, which COCOLO does not run children under;
+- `preparation_client_missing` or `preparation_client_unsupported`: the provider's client was not found,
+  or lacks an option a child needs; update or reinstall the client;
+- `preparation_client_changed` or `run_client_changed`: the client changed while the child was being
+  prepared (an update, say); dispatch a fresh run;
+- `preparation_export_failed`: the committed files the child reads could not be exported; check that
+  every path the assignment reads is committed;
+- `preparation_backend_refused`: the client is set to a metered (API) backend;
+- `preparation_invalid_input` or `preparation_not_authorized`: the run's inputs were refused; open a
+  fresh run;
+- `preparation_full` or `preparation_busy`: the project's service had no free preparation slot; wait for
+  a run to finish, or run `./setup.sh` to restart the service, then open a fresh run;
+- `preparation_failed_at_<step>` or `preparation_unavailable`: an unexpected error at that step of
+  preparing (for example `preparation_failed_at_workspace`); report it with the reason;
+- `preparation_worker_busy` or `preparation_worker_failed`: the prepared run could not be handed to its
+  worker; run `./setup.sh` to restart the project's service, then open a fresh run;
+- `run_account_call_failed`: a call to the account service failed; run `learning-status`, then open a
+  fresh run.
+
+Release 0.3.1 and earlier said only `run_unavailable` for all of these.
+
+## A billing probe refused with `observation_unavailable` or `probe_..._failed`
+
+The probe names the step that stopped it before launching anything:
+- `observation_unavailable` (after one automatic retry): the Claude client could not be read; check it
+  is installed and signed in, then try again;
+- `probe_preparation_failed` or `probe_preparation_unknown`: preparing the probe failed (unknown when
+  its cleanup could not be confirmed, which keeps its slot);
+- `probe_worker_failed` or `probe_step_failed`: the probe's worker or another step failed. Report it
+  with the reason.
+
 ## `probe_busy`
 
 The Claude billing probe needs one of its account's two run slots, and none was free, or another probe

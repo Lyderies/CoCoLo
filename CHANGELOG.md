@@ -12,7 +12,7 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - CI runs by stage: pull requests run unit tests on Linux and macOS and integration tests on Linux;
   `main`, tags and a nightly run add the rest on both systems. Each job uses every core.
 
-## 0.3.2: admission on a project with history (Codex package 0.8.16)
+## 0.3.2: admission on a project with history (Codex package 0.8.22)
 
 - From a busy project after upgrading to 0.3.1: no child could be opened and no Claude billing probe
   run. Before admitting anything, the account service reads the provider readings and earlier
@@ -37,7 +37,33 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   still finds the decision and identity it was admitted on. A damaged old record that no rule keeps no
   longer blocks admission; every record admission reads is still checked in full.
 - A Claude billing probe refused because every run slot of its account was in use reported
-  `probe_unavailable`; it now reports `probe_busy`.
+  `probe_unavailable`; it now reports `probe_busy`. A probe stopped before it launched now names the
+  step: its identity observation's own reason (such as `observation_unavailable`),
+  `probe_preparation_failed`, `probe_preparation_unknown`, `probe_worker_failed` or `probe_step_failed`.
+  A refused identity observation is tried once more first: straight after setup restarts the services,
+  the first one could be refused, and observing spends nothing. Found in an owner's live tests.
+- Under the owner's protected command rule, no bridged child could start, Codex or Claude. The project
+  service runs from the protected runtime copy there, and prepared children from the copy, which holds
+  only runtime code and none of the agent files a child's role comes from. It now prepares them from
+  the project the copy is bound to, exactly as the CLI does; a copy serves no other project. Only the
+  agent files, which the run's route binds by digest, come from the project: the result schema and
+  client capabilities still come from the runtime the service runs from, as for the CLI. Found in an
+  owner's live test of 0.3.2, which ended `preparation_failed_at_role_prompt`.
+- A run that could not start said only `run_unavailable`. It now says which stage stopped it:
+  `preparation_managed_configuration` (managed client settings are present), `preparation_client_missing`,
+  `preparation_client_unsupported`, `preparation_client_changed`, `preparation_export_failed` (the
+  committed files the child reads could not be exported), `preparation_backend_refused`,
+  `preparation_invalid_input`, `preparation_not_authorized`, `preparation_full` or `preparation_busy`
+  (the run was refused before preparing), `preparation_failed_at_<step>` (an unexpected error at
+  that step of preparing), `preparation_worker_busy` or `preparation_worker_failed` (the prepared run
+  could not be handed to its worker), `run_client_changed` (the client observed just before launch is not the one prepared) or
+  `run_account_call_failed`. Fixed names only; no paths or messages. Found
+  in an owner's live test of 0.3.2.
+- A run admitted but refused before it claimed a slot (its preparation failed, say) stayed pending at
+  the account for ever and counted as possibly running: after an update every open was refused with
+  `project_service_other_version`, and the collector could not be replaced. A child launches only after
+  its claim, so replacing the collector or a project service now waits only for children that may run;
+  the learning move counts such a run until its binding expires. Found in an owner's live test.
 - Runs that 0.2.x recorded still count as running for a day after they started (a cautious rule: 0.2.x
   enforced no deadline on a native Claude child), but they no longer hold back updating COCOLO or
   replacing a project service: an update said "a child run is active" while none was. They never ran
