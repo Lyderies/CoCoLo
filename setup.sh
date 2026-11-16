@@ -1184,8 +1184,11 @@ RUN_QUIET=0
 # checks every project's records first), so a long wait never looks like a hang.
 RUN_SLOW_SECONDS=${RUN_SLOW_SECONDS:-10}
 run_cmd() {
-  local label=$1 pid i=0 frames='|/-\' started=$SECONDS waited hint phase
+  local label=$1 pid i=0 frames='|/-\' started=$SECONDS waited hint phase text width
   shift
+  # The progress line is cut to the terminal's width, so it never wraps (S3-P5).
+  width=${COLUMNS:-$(tput cols 2>/dev/null || true)}
+  case $width in ''|*[!0-9]*) width=80 ;; esac
   CMD_N=$((CMD_N + 1))
   if [ "$RUN_QUIET" -eq 1 ]; then
     LAST_OUT=/dev/null; LAST_ERR=/dev/null
@@ -1204,16 +1207,24 @@ run_cmd() {
   while kill -0 "$pid" 2>/dev/null; do
     waited=$((SECONDS - started)); hint=""
     if [ "$waited" -ge "$RUN_SLOW_SECONDS" ]; then hint="  (still working: this can take a few minutes)"; fi
-    # The command's own fixed phase line, if it reports one: plain characters only (S3-P1, S3-P2).
+    # The command's own fixed phase line, if it reports one: plain ASCII only (S3-P1, S3-P2), read
+    # from the last 4 KiB of its log (S3-P6).
     phase=""
     if [ "$RUN_QUIET" -ne 1 ]; then
-      phase=$(grep -a '^cocolo-phase: ' "$LAST_ERR" 2>/dev/null | tail -n 1)
-      phase=${phase#cocolo-phase: }
-      phase=${phase//[^A-Za-z0-9 ,.\'-]/}
-      phase=${phase:0:60}
+      # A subshell, so the C locale (ASCII letters only) never reaches the commands setup runs.
+      phase=$(
+        LC_ALL=C
+        line=$(tail -c 4096 "$LAST_ERR" 2>/dev/null | tr -d '\000' | grep -a '^cocolo-phase: ' | tail -n 1)
+        line=${line#cocolo-phase: }
+        line=${line:0:200}
+        line=${line//[^A-Za-z0-9 ,.\'-]/}
+        printf '%s' "${line:0:60}"
+      )
     fi
-    printf '\r\033[K  %s%s%s %s  %ss%s%s ' "$C_CYAN" "${frames:$((i % 4)):1}" "$C_RESET" "$label" "$waited" \
-      "${phase:+  $phase}" "$hint"
+    text="$label  ${waited}s${phase:+  $phase}$hint"
+    # Five columns of spinner and spaces, and the last column left free so the cursor never wraps.
+    text=${text:0:$((width > 6 ? width - 6 : 0))}
+    printf '\r\033[K  %s%s%s %s ' "$C_CYAN" "${frames:$((i % 4)):1}" "$C_RESET" "$text"
     i=$((i + 1))
     sleep 0.15
   done

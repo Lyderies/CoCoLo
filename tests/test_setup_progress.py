@@ -81,7 +81,8 @@ class SetupProgressTests(unittest.TestCase):
     def test_S3_P5_the_progress_line_never_wraps(self):
         # S3-P5: the review found a 60-character phase made an 81-column line on an 80-column terminal.
         output = run_step(2.2, slow_after=1, columns=40, command=emitter(["p" * 60, "q" * 60]))
-        frames = [frame.replace("\x1b[K", "") for frame in output.split("\r") if frame.strip()]
+        # Text mode reads each carriage return as a line break, so every frame is one line.
+        frames = [frame.replace("\x1b[K", "") for frame in output.splitlines() if frame.strip()]
         self.assertTrue(frames)
         self.assertTrue(all(len(frame) < 40 for frame in frames), max(map(len, frames)))
 
