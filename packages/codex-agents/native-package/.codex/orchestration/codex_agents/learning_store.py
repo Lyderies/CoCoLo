@@ -66,6 +66,7 @@ from .account_cleanup_schema import RELEASE_COLUMN, RELEASE_COLUMNS, RELEASE_SCH
 from .account_observation_schema import (OBSERVATION_COLUMNS, OBSERVATION_SCHEMA, assert_observation_schema,
                                          OBSERVATION_ORIGIN_COLUMNS, OBSERVATION_ORIGIN_SCHEMA,
                                          check_observation_coverage, install_observation_schema)
+from .phase_report import report_phase
 from .admission_evidence_schema import (
     assert_admission_evidence_schema, check_admission_evidence_coverage, install_admission_evidence_schema,
 )
@@ -2382,7 +2383,8 @@ class LearningLedger:
             taken_at_ms = time.time_ns() // 1_000_000
             written = []
             try:
-                for project_id in projects:
+                for number, project_id in enumerate(projects, 1):
+                    report_phase(f"backing up project {number} of {len(projects)}")
                     written.append(self._write_upgrade_backup(project_id, schema_version, taken_at_ms))
             except BaseException:
                 # The upgrade stops before it changes anything: take back this run's copies too.
@@ -2429,6 +2431,7 @@ class LearningLedger:
                     f"schema {target_version} migration requires a registered verified schema {schema_version} "
                     "project backup"
                 )
+        report_phase("upgrading the records")
 
     def _legacy_backup_matches(self, path: Path, registration, project_id: str, schema_version: int) -> bool:
         """A format-2 (JSON) backup an earlier release made, read and compared whole."""

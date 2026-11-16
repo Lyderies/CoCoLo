@@ -1195,7 +1195,8 @@ run_cmd() {
     ( umask 077; : >"$LAST_OUT"; : >"$LAST_ERR" )
   fi
   set -m
-  "$@" >"$LAST_OUT" 2>"$LAST_ERR" </dev/null &
+  # Commands report fixed phase lines on standard error when asked (S3-P3c).
+  COCOLO_PHASES=1 "$@" >"$LAST_OUT" 2>"$LAST_ERR" </dev/null &
   pid=$!
   set +m
   ACTIVE_PID=$pid

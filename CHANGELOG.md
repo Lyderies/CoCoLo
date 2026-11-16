@@ -9,6 +9,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   process, opens a socket or sleeps fails. `scripts/measure_test_behaviour.py` measures each module.
 - A setup step that runs a while shows how many seconds it has run, and after ten seconds says it can
   take a few minutes, so an upgrade backing up large records no longer looks stuck.
+- That step also shows what it is doing, such as `backing up project 2 of 5` and then `upgrading the
+  records`. Setup asks the commands it runs for these lines (`COCOLO_PHASES=1`); they are fixed text
+  with counts only, never paths or names. Codex package 0.8.23.
 - CI runs by stage: pull requests run unit tests on Linux and macOS and integration tests on Linux;
   `main`, tags and a nightly run add the rest on both systems. Each job uses every core.
 
