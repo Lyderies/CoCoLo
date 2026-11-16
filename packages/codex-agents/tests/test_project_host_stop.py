@@ -5,9 +5,7 @@ counted as holding a run, never stopped when its hint was withdrawn, and never w
 replacement gave up after 5 s, and only `kill` (SIGTERM) ended it. With the owner's approval the
 replacement now stops exactly that process, as a signal does, when no child can be running.
 """
-import fcntl
 import os
-import signal
 import subprocess
 import sys
 import tempfile
