@@ -293,6 +293,65 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual('admission_capture_limit', refused['reason_code'], refused)
         self.assertEqual(before, self.collector_ledger._connection.execute(bindings).fetchone()[0])
 
+    def legacy_history(self, count, content_bytes):
+        """Earlier dispatch results of this project as 0.2.x recorded them, through a second connection."""
+        import hashlib
+        connection = sqlite3.connect(self.state.root / 'learning.sqlite3', timeout=30)
+        try:
+            project, = connection.execute(
+                "SELECT project_id FROM records WHERE record_type='provider_identity' LIMIT 1").fetchone()
+            sequence = connection.execute("SELECT MAX(source_sequence) FROM records").fetchone()[0]
+            now = int(time.time() * 1000)
+            with connection:
+                for index in range(count):
+                    run_id = 'run:' + hashlib.sha256(f'legacy-{index}'.encode()).hexdigest()
+                    content = json.dumps({'record_type': 'dispatch_result', 'run_id': run_id,
+                                          'summary': 'x' * content_bytes}, separators=(',', ':')).encode()
+                    sequence += 1
+                    observed = now - 40 * 86_400_000 + index
+                    connection.execute(
+                        "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,"
+                        "ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,0)",
+                        (project, 'dispatch_result:' + hashlib.sha256(content).hexdigest(), 'dispatch_result',
+                         'lifecycle', sequence, observed, observed, observed + 90 * 86_400_000, content,
+                         hashlib.sha256(content).hexdigest()))
+        finally:
+            connection.close()
+
+    def test_C2_a_refused_claim_settles_by_itself_whatever_the_projects_earlier_history(self):
+        # 0.3.3 requirement C2 (local-routing, 2026-11-16; COCOLO-run investigation): the fence
+        # looked for the run among every earlier dispatch record of the project, within 2,000
+        # progress callbacks, 50 ms and 16 KiB per value, and answered claim_busy when that ran out;
+        # after ten refusals the run kept its lease for good. Neither a large earlier record nor many
+        # of them stop a refused claim from closing.
+        for count, size in ((1, 20_000), (40_000, 64)):
+            with self.subTest(count=count, size=size):
+                self.legacy_history(count, size)
+                self.assert_refused_claim_closes()
+
+    def assert_refused_claim_closes(self):
+        from codex_agents import signature_job_intake
+        from codex_agents.admission_inputs import AdmissionCaptureError
+        context, route_path, _, run_handle = self.open_run()
+        original = signature_job_intake.SignatureJobIntake.capture_admission
+
+        def claim_over_limit(intake, project_id, provider, work_limits, anchor_ms=None):
+            if anchor_ms is not None:
+                raise AdmissionCaptureError("admission_capture_limit")
+            return original(intake, project_id, provider, work_limits, anchor_ms)
+        with mock.patch.object(signature_job_intake.SignatureJobIntake, 'capture_admission', autospec=True,
+                               side_effect=claim_over_limit):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('admission_capture_limit', refused['reason_code'], refused)
+        deadline = time.monotonic() + 20
+        while True:
+            closed = self.cli_any('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                                  '--reason', 'recovery_unavailable')
+            if closed.get('ready') or time.monotonic() > deadline:
+                break
+            time.sleep(0.5)
+        self.assertEqual((True, 'already_closed'), (closed.get('ready'), closed.get('classification')), closed)
+
     def test_C2_a_claim_refused_without_a_receipt_settles_by_itself(self):
         # 0.3.3 requirement C2 (local-routing, 2026-11-16): the open was admitted, its one
         # dispatch was refused at the claim with admission_capture_limit and no receipt, and two
