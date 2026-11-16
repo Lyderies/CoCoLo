@@ -229,11 +229,17 @@ class LostRunAfterStopTests(LostRunHarness):
         super().stop_services()
 
     def restart_host(self):
+        self.stop_host()
+        self.start_host()
+
+    def stop_host(self):
         host = [t for t in self.threads if t.name.startswith('test-project-host-')][0]
         self._host_stop.set()
         host.join(30)
         self.assertFalse(host.is_alive())
         self.threads.remove(host)
+
+    def start_host(self):
         self._host_stop = threading.Event()
         DriverHarness.start_project_host(self, self.project, self._host_stop)
 
@@ -261,12 +267,12 @@ class LostRunAfterStopTests(LostRunHarness):
         self.assertEqual('result', self.next_run(orchestration, 'after')['bridge_report']['outcome'])
         return orchestration, run_handle
 
-    def leave_a_refused_claim_unfenced(self):
-        """A run whose claim was refused and whose fences were all refused, as on 0.8.22 (C2)."""
+    def leave_a_refused_claim_unfenced(self, count=1):
+        """Runs whose claims were refused and whose every fence was refused, as on 0.8.22 (C2), up to
+        the moment their service stopped: only the next service can close them. The last is returned."""
         from codex_agents import signature_job_intake
         from codex_agents.account_claim_contracts import ClaimError
         from codex_agents.admission_inputs import AdmissionCaptureError
-        context, route_path, orchestration, run_handle = self.open_run()
         original = signature_job_intake.SignatureJobIntake.capture_admission
 
         def claim_over_limit(intake, project_id, provider, work_limits, anchor_ms=None):
@@ -277,12 +283,21 @@ class LostRunAfterStopTests(LostRunHarness):
                                side_effect=claim_over_limit), \
                 mock.patch.object(learning_store.LearningLedger, '_fence_claim',
                                   side_effect=ClaimError('claim_busy')):
-            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
-            self.assertEqual('admission_capture_limit', refused['reason_code'], refused)
-            stuck = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
-                             '--reason', 'recovery_unavailable', expected=2)
-            self.assertEqual('history_conflict', stuck['reason_code'], stuck)
+            for _ in range(count):
+                context, route_path, orchestration, run_handle = self.open_run()
+                refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle,
+                                   expected=2)
+                self.assertEqual('admission_capture_limit', refused['reason_code'], refused)
+                stuck = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                                 '--reason', 'recovery_unavailable', expected=2)
+                self.assertEqual('history_conflict', stuck['reason_code'], stuck)
+            self.stop_host()
+        self.assertEqual(['pending'] * count, self.bindings())
         return orchestration, run_handle
+
+    def bindings(self):
+        return [row[0] for row in self.ledger._connection.execute(
+            "SELECT binding_state FROM host_run_bindings ORDER BY created_at_ms")]
 
     def test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next(self):
         # 0.3.3 requirement C3 (owner, 2026-11-16): on 0.8.22, local-routing's refused claim could
@@ -295,9 +310,8 @@ class LostRunAfterStopTests(LostRunHarness):
         # The next service has room for one unfinished result only: the next run can start only once
         # the earlier lease no longer holds it.
         with mock.patch.object(project_service, 'MAX_ACTIVE_ATTEMPTS', 1):
-            self.restart_host()
-            binding = "SELECT binding_state FROM host_run_bindings ORDER BY created_at_ms LIMIT 1"
-            self.wait_for(lambda: self.ledger._connection.execute(binding).fetchone()[0] == 'abandoned', seconds=30)
+            self.start_host()
+            self.wait_for(lambda: self.bindings() == ['abandoned'], seconds=30)
             closed = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
                               '--reason', 'recovery_unavailable')
             self.assertEqual(('already_closed', 'never_claimed'), (closed['classification'], closed['capacity_state']))
@@ -323,13 +337,95 @@ class LostRunAfterStopTests(LostRunHarness):
             answers.append(reply)
             return reply
         with mock.patch.object(AccountClient, 'fence_claim', autospec=True, side_effect=answered):
-            self.restart_host()
+            self.start_host()
             self.wait_for(lambda: answers, seconds=30)
         self.assertEqual('claim_denial_invalid', answers[0])
         binding = "SELECT binding_state FROM host_run_bindings ORDER BY created_at_ms LIMIT 1"
         self.assertEqual('pending', self.ledger._connection.execute(binding).fetchone()[0])
         self.assertEqual(0, self.ledger._connection.execute(
             "SELECT COUNT(*) FROM records WHERE record_type='claim_denial_settlement'").fetchone()[0])
+
+    def closes_after_restart(self, run_handle, orchestration):
+        """The next service closes the run: abandoned, already_closed, and its result place free."""
+        self.wait_for(lambda: self.bindings()[0] == 'abandoned', seconds=60)
+        closed = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                          '--reason', 'recovery_unavailable')
+        self.assertEqual(('already_closed', 'never_claimed'), (closed['classification'], closed['capacity_state']))
+
+    def test_C3a_a_failed_history_request_is_asked_again(self):
+        from codex_agents import result_persistence
+        orchestration, run_handle = self.leave_a_refused_claim_unfenced()
+        original, failed = result_persistence.ResultPersistenceLane._earlier, {'list': 0, 'settle': 0}
+
+        def once(lane, request):
+            if failed[request.kind] == 0:
+                failed[request.kind] += 1
+                with lane._lock:
+                    request.state, request.reason = 'failed', 'history_unavailable'
+                return
+            return original(lane, request)
+        with mock.patch.object(result_persistence.ResultPersistenceLane, '_earlier', autospec=True, side_effect=once):
+            self.start_host()
+            self.closes_after_restart(run_handle, orchestration)
+        self.assertEqual({'list': 1, 'settle': 1}, failed)
+
+    def test_C3b_every_earlier_lease_is_found_whatever_the_next_services_capacity(self):
+        # The review: the listing refused outright when there were more earlier leases than the
+        # next service may hold entries, and the sweep stopped. Two leases, a service of one entry.
+        from codex_agents import project_service
+        from codex_agents.result_contracts import ResultCapacity
+        self.leave_a_refused_claim_unfenced(count=2)
+        small = project_service._result_capacity()
+        with mock.patch.object(project_service, '_result_capacity', return_value=ResultCapacity(
+                1, small.max_reserved_bytes, small.reservation_ms, small.retention_ms)):
+            self.start_host()
+            self.wait_for(lambda: self.bindings() == ['abandoned', 'abandoned'], seconds=60)
+
+    def test_C3c_an_unreachable_account_does_not_use_up_the_refusal_retries(self):
+        from codex_agents.account_api import AccountError
+        orchestration, run_handle = self.leave_a_refused_claim_unfenced()
+        original, calls = AccountClient.fence_claim, []
+
+        def flaky(client, fence, **options):
+            calls.append(1)
+            if len(calls) <= project_driver.MAX_FENCE_ATTEMPTS + 1:
+                raise AccountError('account_unavailable')
+            if len(calls) == project_driver.MAX_FENCE_ATTEMPTS + 2:
+                raise AccountError('claim_busy')
+            return original(client, fence, **options)
+        with mock.patch.object(project_driver, 'FENCE_RETRY_SECONDS', 0.01), \
+                mock.patch.object(project_driver, 'FENCE_RETRY_MAX_SECONDS', 0.05), \
+                mock.patch.object(AccountClient, 'fence_claim', autospec=True, side_effect=flaky):
+            self.start_host()
+            self.closes_after_restart(run_handle, orchestration)
+
+    def test_C3d_a_run_still_being_closed_says_so(self):
+        import threading as threads
+        orchestration, run_handle = self.leave_a_refused_claim_unfenced()
+        original, release = AccountClient.fence_claim, threads.Event()
+
+        def held(client, fence, **options):
+            release.wait(30)
+            return original(client, fence, **options)
+        with mock.patch.object(AccountClient, 'fence_claim', autospec=True, side_effect=held):
+            self.start_host()
+            self.wait_for(lambda: self.cli_reply('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                                                 '--reason', 'recovery_unavailable').get('reason_code')
+                          == 'run_settling', seconds=30)
+            release.set()
+            self.closes_after_restart(run_handle, orchestration)
+
+    def cli_reply(self, command, *arguments):
+        import contextlib
+        import io
+        from tests.test_bridge import cli as cli_module
+        stdout = io.StringIO()
+        argv = ["cli.py", command, "--state-root", str(self.state.root), "--project-root", str(self.project),
+                *arguments]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(cli_module, "BUNDLE_ROOT", self.bundle), \
+                contextlib.redirect_stdout(stdout):
+            cli_module.main()
+        return json.loads(stdout.getvalue())
 
     def test_a_run_preparing_when_its_host_stops_holds_nothing_afterwards(self):
         self.stopped_in('preparing', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}], settled=False)

@@ -318,18 +318,27 @@ class ProjectDriverTests(DriverHarness):
         finally:
             connection.close()
 
-    def test_C2_a_refused_claim_settles_by_itself_whatever_the_projects_earlier_history(self):
+    def test_C2_a_refused_claim_closes_whatever_the_size_of_an_earlier_record(self):
         # 0.3.3 requirement C2 (local-routing, 2026-11-16; COCOLO-run investigation): the fence
         # looked for the run among every earlier dispatch record of the project, within 2,000
         # progress callbacks, 50 ms and 16 KiB per value, and answered claim_busy when that ran out;
         # after ten refusals the run kept its lease for good. Neither a large earlier record nor many
         # of them stop a refused claim from closing.
-        for count, size in ((1, 20_000), (40_000, 64)):
-            with self.subTest(count=count, size=size):
-                self.legacy_history(count, size)
-                self.assert_refused_claim_closes()
+        self.legacy_history(1, 20_000)
+        self.assert_refused_claim_closes()
 
-    def assert_refused_claim_closes(self):
+    def test_C2_a_refused_claim_closes_whatever_the_number_of_earlier_records(self):
+        # 150,000 small earlier records (local-routing has 195,121), each well under 16 KiB: only the
+        # callback budget is at stake.
+        # With the earlier budget the run does not close; that is what this case proves fixed.
+        from codex_agents import claim_denial
+        self.legacy_history(150_000, 64)
+        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', (2000, 50, 2 * 1_048_576)):
+            with self.assertRaises(AssertionError):
+                self.assert_refused_claim_closes(seconds=5)
+        self.assert_refused_claim_closes()
+
+    def assert_refused_claim_closes(self, seconds=20):
         from codex_agents import signature_job_intake
         from codex_agents.admission_inputs import AdmissionCaptureError
         context, route_path, _, run_handle = self.open_run()
@@ -343,7 +352,7 @@ class ProjectDriverTests(DriverHarness):
                                side_effect=claim_over_limit):
             refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
         self.assertEqual('admission_capture_limit', refused['reason_code'], refused)
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + seconds
         while True:
             closed = self.cli_any('learning-classify-host-run-abandoned', '--run-handle', run_handle,
                                   '--reason', 'recovery_unavailable')
