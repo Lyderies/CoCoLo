@@ -261,6 +261,42 @@ class LostRunAfterStopTests(LostRunHarness):
         self.assertEqual('result', self.next_run(orchestration, 'after')['bridge_report']['outcome'])
         return orchestration, run_handle
 
+    def test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next(self):
+        # 0.3.3 requirement C3 (owner, 2026-11-16): on 0.8.22, local-routing's refused claim could
+        # not be fenced (C2), so its run kept its lease, and with it one of the project's places for
+        # unfinished results, for good; no command settled it. The next project service fences every
+        # such lease of an earlier instance by itself: the run's binding ends abandoned, its result
+        # place is free again, and the abandonment command says the run is already closed.
+        from codex_agents import project_service, signature_job_intake
+        from codex_agents.account_claim_contracts import ClaimError
+        from codex_agents.admission_inputs import AdmissionCaptureError
+        context, route_path, orchestration, run_handle = self.open_run()
+        original = signature_job_intake.SignatureJobIntake.capture_admission
+
+        def claim_over_limit(intake, project_id, provider, work_limits, anchor_ms=None):
+            if anchor_ms is not None:
+                raise AdmissionCaptureError("admission_capture_limit")
+            return original(intake, project_id, provider, work_limits, anchor_ms)
+        with mock.patch.object(signature_job_intake.SignatureJobIntake, 'capture_admission', autospec=True,
+                               side_effect=claim_over_limit), \
+                mock.patch.object(learning_store.LearningLedger, '_fence_claim',
+                                  side_effect=ClaimError('claim_busy')):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+            self.assertEqual('admission_capture_limit', refused['reason_code'], refused)
+            stuck = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                             '--reason', 'recovery_unavailable', expected=2)
+            self.assertEqual('history_conflict', stuck['reason_code'], stuck)
+        # The next service has room for one unfinished result only: the next run can start only once
+        # the earlier lease no longer holds it.
+        with mock.patch.object(project_service, 'MAX_ACTIVE_ATTEMPTS', 1):
+            self.restart_host()
+            binding = "SELECT binding_state FROM host_run_bindings ORDER BY created_at_ms LIMIT 1"
+            self.wait_for(lambda: self.ledger._connection.execute(binding).fetchone()[0] == 'abandoned', seconds=30)
+            closed = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                              '--reason', 'recovery_unavailable')
+            self.assertEqual(('already_closed', 'never_claimed'), (closed['classification'], closed['capacity_state']))
+            self.assertEqual('result', self.next_run(orchestration, 'after')['bridge_report']['outcome'])
+
     def test_a_run_preparing_when_its_host_stops_holds_nothing_afterwards(self):
         self.stopped_in('preparing', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}], settled=False)
         self.assertEqual(1, len(self.launches()))
