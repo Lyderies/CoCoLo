@@ -1088,7 +1088,14 @@ class WizardTerminalTests(unittest.TestCase):
             ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;; esac; fi\n'
             'if [ -n "$FAKE_REGISTER" ]; then case "$*" in *"cli.py learning-register "*)'
             f' printf "%s\\n" "$*" >> "{self.base / "register.log"}"; echo "$FAKE_REGISTER"; exit 0;;'
+            # FAKE_STATUS_STARTING=N: the collector answers with a start-up reason N times first,
+            # as a collector just restarted by registering does (C6); FAKE_STATUS_REASON names it.
             ' *"cli.py learning-status "*)'
+            f' n=$(cat "{self.base / "status.count"}" 2>/dev/null || echo 0); n=$((n+1));'
+            f' echo $n > "{self.base / "status.count"}";'
+            ' if [ "$n" -le "${FAKE_STATUS_STARTING:-0}" ]; then'
+            ' echo "{\\"ready\\": false, \\"reason_code\\": \\"${FAKE_STATUS_REASON:-status_collector_transport_unavailable}\\"}";'
+            ' exit 2; fi;'
             ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;; esac; fi\n'
             'case "$*" in *"attest.py scratch setup-"*)'
             f' out=$("{TRUSTED_PY}" "$@"); rc=$?; printf "%s\\n" "$out" >> "{self.scratch_log}";'
@@ -1603,6 +1610,34 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\r")
         self.expect("Collector status: ready")
         self.assertNotIn("Moved your orchestrator records", self.screen)
+
+    def test_C6_setup_waits_for_a_collector_that_is_still_starting(self) -> None:
+        # Every 0.3.3 install failed step 5: one status check 5 s after registering restarted the
+        # collector, which takes 20 s or more to answer ready.
+        project, checks = self.make_project()
+        self.drive_to_commit_menu(project, checks, {"FAKE_REGISTER": '{"ready": true, "state_moved": null}',
+                                                    "FAKE_STATUS_STARTING": "3"})
+        self.send("\r")
+        self.expect("Continue")
+        self.send("\r")
+        self.expect("Register now")
+        self.send("\r")
+        self.expect("Collector status: ready")
+        self.assertEqual("4", (self.base / "status.count").read_text().strip())
+        self.assertNotIn("not ready", self.screen)
+
+    def test_C6_any_other_reason_still_fails_at_once(self) -> None:
+        project, checks = self.make_project()
+        self.drive_to_commit_menu(project, checks, {"FAKE_REGISTER": '{"ready": true, "state_moved": null}',
+                                                    "FAKE_STATUS_STARTING": "3",
+                                                    "FAKE_STATUS_REASON": "status_owner_key_missing"})
+        self.send("\r")
+        self.expect("Continue")
+        self.send("\r")
+        self.expect("Register now")
+        self.send("\r")
+        self.expect("not ready")
+        self.assertEqual("1", (self.base / "status.count").read_text().strip())
 
     def test_quit_on_the_first_screen_changes_nothing(self) -> None:
         self.start(self.base)
