@@ -289,10 +289,14 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
             raise AccountError('account_invalid_response') from None
     elif request.operation == 'account.fence_claim':
         try:
-            checked = checked_fence_reply(result, decode_fence_claim(request.payload))
+            fence = decode_fence_claim(request.payload)
+            checked = checked_fence_reply(result, fence)
+            # A sweep's fence (no identity) closes an earlier version's request under that version's
+            # runtime (0.3.3, C3f); the history checks the closure against the lease itself.
             if checked['closure'] is not None and (
                     checked['closure']['binding']['project_id'] != request.project_id
-                    or checked['closure']['binding']['runtime_digest'] != request.runtime_digest):
+                    or (checked['closure']['binding']['runtime_digest'] != request.runtime_digest
+                        and fence.identity_digest is not None)):
                 raise ClaimError('claim_denial_invalid')
             return checked
         except ClaimError:

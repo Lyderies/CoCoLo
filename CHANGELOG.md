@@ -20,6 +20,7 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   Runs already left stuck this way are closed by the project's next service by itself, after the
   update: it asks the account to close each claim request an earlier service left open, and the
   account checks the whole original request before doing so. Found by local-routing.
+  This works for a run an earlier version left, whose claim request names that version.
   While it is still closing such a run, `learning-classify-host-run-abandoned` says so instead of
   `host run orchestration is unavailable`, and a temporary error or an unreachable account never stops
   it trying.

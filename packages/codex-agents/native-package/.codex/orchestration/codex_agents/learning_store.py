@@ -6366,11 +6366,16 @@ class LearningLedger:
     def _claim_preflight(
         self, project_id: str, *, runtime_digest: str, caller_scope: str,
         request_id: str, launch: LaunchClaimInput, work_limits=None,
-        storage_required=False, storage_binding=None, storage_evidence=None,
+        storage_required=False, storage_binding=None, storage_evidence=None, earlier_runtime=False,
     ):
-        """Capture a request and current state; perform no signature work."""
+        """Capture a request and current state; perform no signature work.
+
+        `earlier_runtime`: only for fencing an earlier version's claim request (0.3.3, C3f), whose
+        runtime is not this account's; nothing can be admitted for such a request.
+        """
         if (not claim_matches(project_id, _CLAIM_PROJECT) or not claim_matches(runtime_digest, _CLAIM_DIGEST)
-                or runtime_digest != COLLECTOR_RUNTIME_DIGEST or not claim_matches(caller_scope, _CLAIM_DIGEST)
+                or (runtime_digest != COLLECTOR_RUNTIME_DIGEST) != (earlier_runtime is True)
+                or not claim_matches(caller_scope, _CLAIM_DIGEST)
                 or not claim_matches(request_id, _CLAIM_REQUEST_ID) or type(launch) is not LaunchClaimInput):
             raise ClaimError("claim_invalid_request")
         launch = LaunchClaimInput(launch.run_handle, launch.identity_digest)
@@ -6546,9 +6551,15 @@ class LearningLedger:
         expected, raw = capture_storage_evidence(storage_binding, storage_evidence)
         if expected is None:
             raise ClaimError('claim_storage_required')
+        # The sweep of a lease an earlier service left armed (0.3.3, C3) names no identity. Such a
+        # lease is usually an earlier version's, under that version's runtime (C3f): the request
+        # comes under this account's runtime, and the claim request it closes is checked whole
+        # under the lease's own runtime, so the denial is stored for exactly that request.
+        sweep = closure.identity_digest is None
+        original_runtime = expected.runtime_digest if sweep and runtime_digest == COLLECTOR_RUNTIME_DIGEST else runtime_digest
         if closure.identity_digest is None:
-            # A lease an earlier service left armed (0.3.3, C3): the identity this run was
-            # observed with before launch, checked below against the whole claim request.
+            # The identity this run was observed with before launch, checked below against the
+            # whole claim request.
             if not fence:
                 raise ClaimError('claim_denial_invalid')
             with self._lock:
@@ -6560,13 +6571,14 @@ class LearningLedger:
             closure = replace(closure, identity_digest=observed[0])
         launch = LaunchClaimInput(closure.run_handle, closure.identity_digest)
         original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', closure.claim_request_id,
-                                  project_id, runtime_digest, launch.payload())
-        if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                                  project_id, original_runtime, launch.payload())
+        if (expected.project_id != project_id or expected.runtime_digest != original_runtime
                 or expected.run_handle != closure.run_handle or expected.claim_request_id != closure.claim_request_id
                 or expected.claim_request_digest != account_request_digest(original)):
             raise ClaimError('claim_denial_invalid')
-        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
-                                                    request_id=closure.claim_request_id, launch=launch, storage_binding=expected)
+        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=original_runtime, caller_scope=caller_scope,
+                                                    request_id=closure.claim_request_id, launch=launch, storage_binding=expected,
+                                                    earlier_runtime=original_runtime != COLLECTOR_RUNTIME_DIGEST)
         if fence and known is not None and known['state'] == 'claimed':
             return {'receipt': known, 'closure': None}  # Admitted: nothing here is closed.
         if not fence and (known is None or known['state'] != 'denied'
