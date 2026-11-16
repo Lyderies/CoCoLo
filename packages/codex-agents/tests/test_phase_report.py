@@ -124,6 +124,48 @@ class PhaseReportTests(unittest.TestCase):
             os.close(read_end)
             os.close(write_end)
 
+    # S3-P7 and P8, from the third COCOLO-run review (2026-11-17).
+
+    def test_S3_P7_an_in_memory_buffer_subclass_gets_nothing(self):
+        class Forwarding(io.StringIO):
+            def __init__(self):
+                super().__init__()
+                self.forwarded = []
+
+            def write(self, text):
+                self.forwarded.append(text)  # could be forwarding to a full pipe
+                return len(text)
+        stream = Forwarding()
+        self.report(stream)
+        self.assertEqual(stream.forwarded, [])
+
+    def test_S3_P8_an_error_from_the_real_write_drops_the_line(self):
+        # The write that really runs (to the descriptor) fails, with an ordinary error and with
+        # SystemExit: the command carries on either way.
+        for error in (OSError(errno.ENOSPC, "no space"), RuntimeError("unexpected"), SystemExit(3)):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryFile("w+") as file, \
+                    mock.patch("codex_agents.phase_report.os.write", side_effect=error) as write:
+                self.report(file)
+                self.assertEqual(1, write.call_count)  # The real write was reached.
+
+    def test_S3_P8_a_stream_raising_systemexit_from_fileno_is_dropped(self):
+        class Exiting:
+            def fileno(self):
+                raise SystemExit(3)
+        self.report(Exiting())
+
+    def test_S3_P8_a_bad_text_argument_is_dropped(self):
+        with mock.patch.dict(os.environ, ASKED, clear=False), tempfile.TemporaryFile("w+") as file, \
+                mock.patch("sys.stderr", file):
+            report_phase(None)
+            report_phase(b"bytes")
+
+    def test_S3_P8_an_interrupt_still_stops_the_command(self):
+        with tempfile.TemporaryFile("w+") as file, \
+                mock.patch("codex_agents.phase_report.os.write", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.report(file)
+
 
 if __name__ == "__main__":
     unittest.main()

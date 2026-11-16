@@ -16,14 +16,15 @@ import sys
 
 def report_phase(text: str) -> None:
     """Write `cocolo-phase: <text>` to standard error when setup asked for phases."""
-    if os.environ.get("COCOLO_PHASES") != "1":
-        return
-    stream = sys.stderr
-    if stream is None:
-        return
-    line = "cocolo-phase: " + text + "\n"
     try:
-        if isinstance(stream, io.StringIO):
+        if os.environ.get("COCOLO_PHASES") != "1":
+            return
+        stream = sys.stderr
+        if stream is None:
+            return
+        line = "cocolo-phase: " + text + "\n"
+        if type(stream) is io.StringIO:
+            # Exactly the standard buffer: a subclass may forward anywhere (S3-P7).
             stream.write(line)
             return
         try:
@@ -36,5 +37,7 @@ def report_phase(text: str) -> None:
         # Straight to the file, bypassing the stream's buffer: a failed write leaves nothing
         # for Python's flush at exit to fail on, so the exit status never changes.
         os.write(descriptor, line.encode("ascii", "replace"))
-    except Exception:
-        pass  # a phase line is never worth changing what the command does
+    except KeyboardInterrupt:
+        raise  # Ctrl-C still stops the command, exactly as without phases (S3-P8)
+    except BaseException:
+        pass  # a phase line is never worth changing what the command does (S3-P4, S3-P8)

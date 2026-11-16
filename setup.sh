@@ -1184,12 +1184,14 @@ RUN_QUIET=0
 # checks every project's records first), so a long wait never looks like a hang.
 RUN_SLOW_SECONDS=${RUN_SLOW_SECONDS:-10}
 # terminal_width : COLUMNS, else the width of setup's terminal (stty on standard input, then tput),
-# else 80, as a plain decimal number from 0 to 9999.
+# else 80, as a plain decimal number from 0 to 9999. A terminal reporting 0 columns does not know
+# its size, so tput is asked instead (S3-P9a).
 terminal_width() {
   local width=${COLUMNS:-} size
   if [ -z "$width" ]; then
     size=$(stty size 2>/dev/null || true)
     width=${size##* }
+    case $width in *[!0]*) ;; *) width="" ;; esac
   fi
   [ -n "$width" ] || width=$(tput cols 2>/dev/null || true)
   case $width in ''|*[!0-9]*) width=80 ;; esac
@@ -1241,6 +1243,8 @@ run_cmd() {
     if [ "$width" -gt 6 ]; then
       text="$label  ${waited}s${phase:+  $phase}$hint"
       printf '\r\033[K  %s%s%s %s ' "$C_CYAN" "${frames:$((i % 4)):1}" "$C_RESET" "${text:0:$((width - 6))}"
+    else
+      printf '\r\033[K'  # Too narrow for a frame: still erase the last one (S3-P9b).
     fi
     i=$((i + 1))
     sleep 0.15

@@ -43,7 +43,9 @@ def run_step(seconds, *, slow_after=None, command=None, columns=None, both=False
         function("run_cmd"),
         f'run_cmd "Installing" {command or f"sleep {seconds}"}; echo "status=$?"',
     ])
-    done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30, check=True)
+    # Never the standard input of whatever runs the tests, which may be a terminal (S3-P9c).
+    done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30, check=True,
+                          stdin=subprocess.DEVNULL)
     if status:
         return done.stdout, done.stderr
     stdout = done.stdout.replace("status=0\n", "")
@@ -179,6 +181,27 @@ class SetupProgressTests(unittest.TestCase):
         frames = [frame.replace("\x1b[K", "") for frame in output.splitlines() if frame.strip()]
         self.assertTrue(any(len(frame) > 30 for frame in frames[:3]), frames[:3])
         self.assertTrue(all(len(frame) < 30 for frame in frames[-3:]), frames[-3:])
+
+    # S3-P9, from the third COCOLO-run review and its verifier (2026-11-17).
+
+    def test_S3_P9a_a_terminal_reporting_size_0_still_gets_a_frame(self):
+        # stty answers "0 0" (a terminal that does not know its size): tput's 50 is used instead.
+        prelude = ['stty() { echo "0 0"; }', 'tput() { echo 50; }']
+        output = run_step(1.2, prelude=prelude, command=emitter(["p" * 60]))
+        frames = [frame.replace("\x1b[K", "") for frame in output.splitlines() if frame.strip()]
+        self.assertTrue(frames)
+        self.assertTrue(all(len(frame) < 50 for frame in frames), max(map(len, frames)))
+        self.assertTrue(any(len(frame) > 40 for frame in frames))
+
+    def test_S3_P9b_each_redraw_erases_the_last_frame_even_when_too_narrow(self):
+        # A frame is drawn at 80 columns; then the terminal becomes 4 columns wide, too narrow for
+        # a frame: each redraw still erases the line, so the earlier frame does not stay.
+        prelude = ['SIZE=$(mktemp); echo "24 80" >"$SIZE"', 'stty() { cat "$SIZE"; }']
+        command = "sh -c 'sleep 0.6; echo \"24 4\" >\"$SIZE\"; sleep 0.9'"
+        output = run_step(0, prelude=["export SIZE", *prelude], command=command)
+        last_frame = output.rindex("Installing")
+        # Text mode reads each carriage return as a line break, so count the erase codes alone.
+        self.assertGreaterEqual(output[last_frame:].count("\x1b[K"), 3)
 
 
 if __name__ == "__main__":
