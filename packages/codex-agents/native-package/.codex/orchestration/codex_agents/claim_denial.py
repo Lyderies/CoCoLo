@@ -14,8 +14,11 @@ from .result_contracts import ResultLeaseBinding
 
 MAX_DENIAL_RECEIPT_BYTES = 16_384
 DENIAL_RECORD_TYPE = 'claim_denial_settlement'
-# Trusted cooperative SQL limits; actual OS-I/O and installed cadence remain gates.
-DENIAL_LEGACY_READ_LIMITS = (2000, 50, 16_384)
+# Trusted cooperative SQL limits; actual OS-I/O and installed cadence remain gates. The check for an
+# earlier dispatch record of the run reads every record of the project, so it has the account's
+# ordinary read budget (0.3.3, C2): 2,000 callbacks and 16 KiB values refused every fence on a project
+# with about 200,000 records (4,573 callbacks) or one record over 16 KiB (records reach 64 KiB).
+DENIAL_LEGACY_READ_LIMITS = (100_000, 1_000, 2 * 1_048_576)
 
 
 @dataclass(frozen=True)
