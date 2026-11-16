@@ -324,6 +324,11 @@ class LostRunAfterStopTests(LostRunHarness):
                               '--reason', 'recovery_unavailable')
             self.assertEqual(('already_closed', 'never_claimed'), (closed['classification'], closed['capacity_state']))
             self.assertEqual('result', self.next_run(orchestration, 'after')['bridge_report']['outcome'])
+        # C7: the report counts the closed run as abandoned, not pending; the next run's result was
+        # never recorded here, so it alone is pending.
+        status = self.cli('learning-orchestration-status', '--orchestration-handle', orchestration)
+        report = self.cli('learning-orchestration-report', '--orchestration-id', status['orchestration_id'])
+        self.assertEqual((1, 1), (report['runs']['abandoned'], report['runs']['pending']), report['runs'])
 
     def test_C3_the_next_service_never_fences_a_claim_request_its_run_was_not_observed_for(self):
         # The account takes the fence's identity from the run's launch observation and checks the
