@@ -22,15 +22,17 @@ from codex_agents.signature_job_intake import (
 
 class SignatureIntakeLimitTests(unittest.TestCase):
     def test_exact_integer_limits_and_aggregate_boundaries(self):
-        valid = (2, 2, 2048, MAX_SIGNATURE_JOB_BYTES // 4, 2)
+        # 0.3.3 (C1): the ceilings fit sixteen job slots of 4,096 records each, the account host's
+        # eight projects of two jobs, exactly.
+        valid = (4, 4, 4096, MAX_SIGNATURE_JOB_BYTES // 16, 2)
         limits = SignatureIntakeLimits(*valid)
         self.assertEqual(MAX_SIGNATURE_JOB_ROWS, limits.max_projects * limits.max_jobs_per_project * limits.rows_per_job)
         self.assertEqual(MAX_SIGNATURE_JOB_BYTES, limits.max_projects * limits.max_jobs_per_project * limits.bytes_per_job)
         with self.assertRaises(FrozenInstanceError):
             limits.max_selected = 1
-        for values in ((True, *valid[1:]), (2, False, *valid[2:]), (2, 2, 0, valid[3], 2),
-                       (2, 2, 2049, valid[3], 2), (2, 2, 2048, valid[3] + 1, 2),
-                       (2, 2, 2048, valid[3], 3), (257, 1, 1, 1, 1), (256, 17, 1, 1, 1),
+        for values in ((True, *valid[1:]), (4, False, *valid[2:]), (4, 4, 0, valid[3], 2),
+                       (4, 4, 4097, valid[3], 2), (5, 4, 4096, 1, 2), (4, 4, 4096, valid[3] + 1, 2),
+                       (4, 4, 4096, valid[3], 5), (257, 1, 1, 1, 1), (256, 17, 1, 1, 1),
                        (2, 2, 1.0, 1, 1), (2, 2, 1, "CANARY", 1), (2, 2, 1, 1, True)):
             with self.subTest(values=values), self.assertRaises(SignatureJobError) as caught:
                 SignatureIntakeLimits(*values)
