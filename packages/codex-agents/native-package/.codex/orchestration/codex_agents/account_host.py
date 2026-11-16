@@ -63,6 +63,15 @@ OWNER_OPERATIONS = frozenset({
 GENERATION = 1
 
 
+# The account's own reads and its open and claim jobs. One open's or claim's admission history:
+# 4,096 records and 2 MiB, about ten times a busy day's provider readings (0.3.3, C1); with the
+# records COCOLO writes (over 500 bytes each) the 2 MiB is reached first. The workers' protocol
+# budget fits two such jobs.
+ACCOUNT_READ_LIMITS = SQLReadLimits(100_000, 1_000, 2 * 1_048_576)
+ACCOUNT_INTAKE_LIMITS = SignatureIntakeLimits(8, 2, 4096, 2 * 1_048_576, 4)
+ACCOUNT_WORKER_LIMITS = SignatureWorkerLimits(2, 32 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000)
+
+
 def account_endpoint(state):
     return account_endpoint_path(state)
 
@@ -83,11 +92,8 @@ class AccountServiceHost:
         self._service = self._ingress = self._frontend = None
         try:
             self._views = AccountOwnerViews(ledger)
-            limits = SQLReadLimits(100_000, 1_000, 2 * 1_048_576)
-            # One open's or claim's admission history: 4,096 records and 2 MiB, about ten times a busy
-            # day's provider readings (0.3.3, C1); the workers' protocol budget fits two such jobs.
-            self._claims = AccountClaimJobs(self._views, SignatureIntakeLimits(8, 2, 4096, 2 * 1_048_576, 4),
-                SignatureWorkerLimits(2, 32 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000), limits,
+            limits = ACCOUNT_READ_LIMITS
+            self._claims = AccountClaimJobs(self._views, ACCOUNT_INTAKE_LIMITS, ACCOUNT_WORKER_LIMITS, limits,
                 open_limits=OpenOwnerLimits(4, 256, MAX_ACCOUNT_OPEN_CONTEXT_BYTES))
             self._observations = AccountObservationJobs(AccountObservationOwner(self._views, limits),
                                                         ObservationJobLimits(16, 2, 2, 2))
