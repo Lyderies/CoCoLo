@@ -66,7 +66,9 @@ def orchestration_report(history, orchestration_id):
         if len(opens) > MAX_RUNS:
             raise HistoryError("history_learning_capacity")
         runs = {run_id: opened_at for run_id, opened_at, _, _ in opens if type(run_id) is str}
-        expired = {run_id for run_id, _, _, state in opens if type(run_id) is str and state == 'expired'}
+        # Every attempt's lease expired: one still open could yet record a result.
+        expired = {run_id for run_id, _, _, _ in opens if type(run_id) is str} - {
+            run_id for run_id, _, _, state in opens if state != 'expired'}
         outcomes, recorded_at, reviewed = {}, {}, {}
         if runs:
             names = ",".join("?" for _ in runs)
