@@ -348,9 +348,15 @@ class LostRunAfterStopTests(LostRunHarness):
     def closes_after_restart(self, run_handle, orchestration):
         """The next service closes the run: abandoned, already_closed, and its result place free."""
         self.wait_for(lambda: self.bindings()[0] == 'abandoned', seconds=60)
-        closed = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
-                          '--reason', 'recovery_unavailable')
-        self.assertEqual(('already_closed', 'never_claimed'), (closed['classification'], closed['capacity_state']))
+        # The account's fence comes first and the lease's expiry after: until then the run is still
+        # being closed (C3d), and the command says so.
+        replies = []
+        self.wait_for(lambda: replies.append(self.cli_reply(
+            'learning-classify-host-run-abandoned', '--run-handle', run_handle, '--reason', 'recovery_unavailable'))
+            or replies[-1].get('ready'), seconds=60)
+        self.assertEqual(('already_closed', 'never_claimed'),
+                         (replies[-1]['classification'], replies[-1]['capacity_state']))
+        self.assertTrue(all(reply.get('ready') or reply.get('reason_code') == 'run_settling' for reply in replies))
 
     def test_C3a_a_failed_history_request_is_asked_again(self):
         from codex_agents import result_persistence

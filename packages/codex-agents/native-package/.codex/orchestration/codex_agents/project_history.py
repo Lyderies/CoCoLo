@@ -1003,19 +1003,21 @@ class ProjectHistory:
         return encode_storage_evidence(self._result_key, self._lease_row(binding))
 
     @_operation
-    def pending_claim_leases(self) -> list[ResultLeaseBinding]:
-        """Every lease armed for a claim and never bound or settled, each checked (0.3.3, C3).
+    def pending_claim_leases(self, *, after: int = 0) -> tuple[list[ResultLeaseBinding], int]:
+        """One page of leases armed for a claim and never bound or settled, each checked (0.3.3, C3).
 
-        The next service of the project fences each one an earlier service left this way.
+        The next service of the project fences each one an earlier service left this way, however
+        many there are and whatever its own capacity now (C3b): pass the returned position as
+        `after` for the next page; an empty page is the end.
         """
-        if self._result_key is None or self._result_capacity is None:
+        if self._result_key is None:
             raise HistoryError('history_result_unavailable')
+        if not valid_integer(after, minimum=0, maximum=2 ** 63 - 1):
+            raise HistoryError('history_invalid_input')
         rows = self._connection.execute(
-            "SELECT * FROM result_leases WHERE project_id=? AND state='claim_pending' ORDER BY rowid LIMIT ?",
-            (self.project_id, self._result_capacity.max_entries + 1)).fetchall()
-        if len(rows) > self._result_capacity.max_entries:
-            raise HistoryError('history_result_capacity')
-        return [self._lease(row).binding for row in rows]
+            "SELECT rowid AS position,* FROM result_leases WHERE project_id=? AND state='claim_pending' "
+            "AND rowid>? ORDER BY rowid LIMIT 64", (self.project_id, after)).fetchall()
+        return [self._lease(row).binding for row in rows], (rows[-1]['position'] if rows else after)
 
     @_operation
     def settle_denied_result_lease(self, binding: ResultLeaseBinding, raw: bytes) -> ResultLease:

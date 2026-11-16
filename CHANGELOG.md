@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.3: dispatch on a busy account (Codex package 0.8.23)
+## 0.3.3: dispatch on a busy account (Codex package 0.8.24)
 
 - On a busy account, a child's open was admitted but its dispatch was refused with
   `admission_capture_limit`. Before admitting an open, and again at its dispatch, the account service
@@ -20,6 +20,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   Runs already left stuck this way are closed by the project's next service by itself, after the
   update: it asks the account to close each claim request an earlier service left open, and the
   account checks the whole original request before doing so. Found by local-routing.
+  While it is still closing such a run, `learning-classify-host-run-abandoned` says so instead of
+  `host run orchestration is unavailable`, and a temporary error or an unreachable account never stops
+  it trying.
 
 ## 0.3.2: admission on a project with history (Codex package 0.8.22)
 

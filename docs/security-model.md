@@ -1,6 +1,6 @@
 # Security model
 
-This page explains what COCOLO release 0.3.3 (Codex package 0.8.23) protects, how, and
+This page explains what COCOLO release 0.3.3 (Codex package 0.8.24) protects, how, and
 what it does not protect against. It is the exact version of the README's "Safety, in short". It is for users deciding whether to run it and for
 contributors changing it. To report a vulnerability, follow [SECURITY.md](../SECURITY.md).
 

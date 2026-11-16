@@ -1000,12 +1000,16 @@ class ResultPersistenceLane:
             if request.kind == 'list':
                 with self._lock:
                     held = {pending.lease_binding for pending in self._jobs.values() if pending.lease_binding is not None}
-                found = []
-                for binding in history.pending_claim_leases():
-                    if binding in held:
-                        continue
-                    client = history._orchestration_owner().metadata_for(binding)['snapshot']['client_version']
-                    found.append((binding, history.attest_pending_result_lease(binding), client))
+                found, after = [], 0
+                while True:
+                    page, after = history.pending_claim_leases(after=after)
+                    if not page:
+                        break
+                    for binding in page:
+                        if binding in held:
+                            continue
+                        client = history._orchestration_owner().metadata_for(binding)['snapshot']['client_version']
+                        found.append((binding, history.attest_pending_result_lease(binding), client))
                 result = found
             else:
                 result = history.settle_denied_result_lease(request.binding, request.raw)

@@ -825,6 +825,10 @@ def abandon_bridged_run(state_root, project_root, run_handle, reason, *, host_cl
     if reply['reason_code'] == 'run_closed':
         return {'ready': True, 'run_handle': run_handle, 'classification': 'already_closed', 'reason': reason,
                 'settled_by': 'project_host', 'capacity_state': 'never_claimed'}
+    if reply['reason_code'] == 'run_settling':
+        # An earlier service's run that this one is still closing (0.3.3, C3d).
+        return {'ready': False, 'reason_code': 'run_settling',
+                'error': "the project's service is still closing this run; try again in a minute"}
     if reply['reason_code'] in LOST_CAPACITY:
         # Its stopped service's run is settled by the next service on its own, never by this command.
         return {'ready': True, 'run_handle': run_handle, 'classification': 'already_closed', 'reason': reason,
