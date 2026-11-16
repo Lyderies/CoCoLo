@@ -68,5 +68,13 @@ class SetupProgressTests(unittest.TestCase):
         self.assertNotIn("$(whoami)", output)
         self.assertNotIn("/path", output)
 
+    def test_S3_P3c_setup_asks_the_commands_it_runs_for_their_phases(self):
+        command = f"{sys.executable} -c " + shlex.quote(
+            "import os, sys, time; print('cocolo-phase: ' + ('asked' if os.environ.get('COCOLO_PHASES') == '1' "
+            "else 'not asked'), file=sys.stderr, flush=True); time.sleep(1.2)")
+        self.assertIn("asked", run_step(0, command=command))
+        self.assertNotIn("not asked", run_step(0, command=command))
+
+
 if __name__ == "__main__":
     unittest.main()

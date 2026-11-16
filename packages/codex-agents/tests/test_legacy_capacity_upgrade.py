@@ -118,7 +118,6 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         server._stop.set.assert_called_once()
 
 
-
 class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
     """Status says how many slots runs from an earlier version hold, and until when (F2)."""
 
@@ -152,34 +151,29 @@ class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
                 client.learning_migration(Path("/srv/project"))
 
 
+class UpgradePhaseTests(LegacyRunsFixture, unittest.TestCase):
+    """S3-P3: an upgrade says what it is doing, as fixed phase lines, only when setup asks."""
+
+    def upgrade_output(self, environ):
+        import contextlib
+        import io
+        stream = io.StringIO()
+        with mock.patch.dict("os.environ", environ, clear=False), contextlib.redirect_stderr(stream):
+            self.upgrade_with_runs(30 * 24 * HOUR)
+        return stream.getvalue()
+
+    def test_S3_P3a_P3b_an_upgrade_reports_each_backup_and_the_upgrade(self):
+        lines = self.upgrade_output({"COCOLO_PHASES": "1"}).splitlines()
+        projects = len([line for line in lines if line.startswith("cocolo-phase: backing up project ")])
+        self.assertGreaterEqual(projects, 1)
+        self.assertIn(f"cocolo-phase: backing up project 1 of {projects}", lines)
+        self.assertIn("cocolo-phase: upgrading the records", lines)
+        # Fixed text only: never a path, identifier or value.
+        self.assertTrue(all(line.startswith("cocolo-phase: ") and "/" not in line for line in lines if "phase" in line))
+
+    def test_S3_P3a_nothing_extra_is_written_unless_asked(self):
+        self.assertNotIn("cocolo-phase:", self.upgrade_output({"COCOLO_PHASES": ""}))
+
+
 if __name__ == "__main__":
     unittest.main()
-
-
-class EarlierVersionRunsStatusTests(LegacyRunsFixture, unittest.TestCase):
-    """Status says how many slots runs from an earlier version hold, and until when (F2)."""
-
-    def test_the_ledger_says_how_many_earlier_runs_hold_slots_and_when_the_last_stops(self):
-        ledger = self.upgrade_with_runs(30 * 24 * HOUR, 3 * HOUR, 20 * HOUR)
-        claimed = sorted(row[0] for row in ledger._connection.execute(
-            "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown'"))
-        self.assertEqual({"holding": 2, "finished_by_ms": claimed[-1] + learning_store.LEGACY_RUN_MAX_MS},
-                         ledger.earlier_version_runs())
-
-    def test_with_no_earlier_runs_holding_a_slot_there_is_no_time(self):
-        ledger = self.upgrade_with_runs(30 * 24 * HOUR)
-        self.assertEqual({"holding": 0, "finished_by_ms": None}, ledger.earlier_version_runs())
-
-    def test_the_collector_reports_it_with_the_learning_move_state(self):
-        answer = {"ok": True, "moved": False, "has_learning": True, "drained": False, "activation_pending": False,
-                  "earlier_version_runs": {"holding": 2, "finished_by_ms": 1_800_000_000_000}}
-        client = CollectorClient(Path("/srv/collector.sock"))
-        with mock.patch.object(client, "_request", return_value=answer):
-            self.assertEqual({"holding": 2, "finished_by_ms": 1_800_000_000_000},
-                             client.learning_migration(Path("/srv/project"))["earlier_version_runs"])
-        for bad in ({"holding": -1, "finished_by_ms": None}, {"holding": 1, "finished_by_ms": None},
-                    {"holding": True, "finished_by_ms": None}, {"holding": 0}, "two"):
-            with self.subTest(bad=bad), mock.patch.object(
-                    client, "_request", return_value={**answer, "earlier_version_runs": bad}), \
-                    self.assertRaises(CollectorError):
-                client.learning_migration(Path("/srv/project"))
