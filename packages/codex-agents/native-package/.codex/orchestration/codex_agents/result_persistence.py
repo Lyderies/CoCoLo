@@ -1008,8 +1008,13 @@ class ResultPersistenceLane:
                     for binding in page:
                         if binding in held:
                             continue
-                        client = history._orchestration_owner().metadata_for(binding)['snapshot']['client_version']
-                        found.append((binding, history.attest_pending_result_lease(binding), client))
+                        # Each lease on its own (C3e): one whose orchestration or evidence cannot be
+                        # read is left as it is, and never stops the others from closing.
+                        try:
+                            client = history._orchestration_owner().metadata_for(binding)['snapshot']['client_version']
+                            found.append((binding, history.attest_pending_result_lease(binding), client))
+                        except HistoryError:
+                            continue
                 result = found
             else:
                 result = history.settle_denied_result_lease(request.binding, request.raw)
