@@ -261,13 +261,9 @@ class LostRunAfterStopTests(LostRunHarness):
         self.assertEqual('result', self.next_run(orchestration, 'after')['bridge_report']['outcome'])
         return orchestration, run_handle
 
-    def test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next(self):
-        # 0.3.3 requirement C3 (owner, 2026-11-16): on 0.8.22, local-routing's refused claim could
-        # not be fenced (C2), so its run kept its lease, and with it one of the project's places for
-        # unfinished results, for good; no command settled it. The next project service fences every
-        # such lease of an earlier instance by itself: the run's binding ends abandoned, its result
-        # place is free again, and the abandonment command says the run is already closed.
-        from codex_agents import project_service, signature_job_intake
+    def leave_a_refused_claim_unfenced(self):
+        """A run whose claim was refused and whose fences were all refused, as on 0.8.22 (C2)."""
+        from codex_agents import signature_job_intake
         from codex_agents.account_claim_contracts import ClaimError
         from codex_agents.admission_inputs import AdmissionCaptureError
         context, route_path, orchestration, run_handle = self.open_run()
@@ -286,6 +282,16 @@ class LostRunAfterStopTests(LostRunHarness):
             stuck = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
                              '--reason', 'recovery_unavailable', expected=2)
             self.assertEqual('history_conflict', stuck['reason_code'], stuck)
+        return orchestration, run_handle
+
+    def test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next(self):
+        # 0.3.3 requirement C3 (owner, 2026-11-16): on 0.8.22, local-routing's refused claim could
+        # not be fenced (C2), so its run kept its lease, and with it one of the project's places for
+        # unfinished results, for good; no command settled it. The next project service fences every
+        # such lease of an earlier instance by itself: the run's binding ends abandoned, its result
+        # place is free again, and the abandonment command says the run is already closed.
+        from codex_agents import project_service
+        orchestration, run_handle = self.leave_a_refused_claim_unfenced()
         # The next service has room for one unfinished result only: the next run can start only once
         # the earlier lease no longer holds it.
         with mock.patch.object(project_service, 'MAX_ACTIVE_ATTEMPTS', 1):
@@ -296,6 +302,34 @@ class LostRunAfterStopTests(LostRunHarness):
                               '--reason', 'recovery_unavailable')
             self.assertEqual(('already_closed', 'never_claimed'), (closed['classification'], closed['capacity_state']))
             self.assertEqual('result', self.next_run(orchestration, 'after')['bridge_report']['outcome'])
+
+    def test_C3_the_next_service_never_fences_a_claim_request_its_run_was_not_observed_for(self):
+        # The account takes the fence's identity from the run's launch observation and checks the
+        # whole original claim request against it: if they differ, nothing is fenced or changed.
+        orchestration, run_handle = self.leave_a_refused_claim_unfenced()
+        import sqlite3
+        connection = sqlite3.connect(self.state.root / 'learning.sqlite3', timeout=30)
+        with connection:
+            connection.execute("UPDATE launch_observations SET identity_digest=?", ('e' * 64,))
+        connection.close()
+        original, answers = AccountClient.fence_claim, []
+
+        def answered(client, fence, **options):
+            try:
+                reply = original(client, fence, **options)
+            except AccountError as error:
+                answers.append(error.reason_code)
+                raise
+            answers.append(reply)
+            return reply
+        with mock.patch.object(AccountClient, 'fence_claim', autospec=True, side_effect=answered):
+            self.restart_host()
+            self.wait_for(lambda: answers, seconds=30)
+        self.assertEqual('claim_denial_invalid', answers[0])
+        binding = "SELECT binding_state FROM host_run_bindings ORDER BY created_at_ms LIMIT 1"
+        self.assertEqual('pending', self.ledger._connection.execute(binding).fetchone()[0])
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM records WHERE record_type='claim_denial_settlement'").fetchone()[0])
 
     def test_a_run_preparing_when_its_host_stops_holds_nothing_afterwards(self):
         self.stopped_in('preparing', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}], settled=False)

@@ -289,6 +289,8 @@ class RunDriver:
         runtime.pool._registry.launch_journal = self._journal
         # Runs of earlier service instances, by run handle: (host class, 'released' or 'held').
         self._lost, self._sweep, self._next_sweep = {}, None, 0.0
+        # Leases an earlier service left armed with no admitted claim, fenced here (0.3.3, C3).
+        self._earlier, self._earlier_fences, self._fenced = None, {}, {}
         self._sweeper = ThreadPoolExecutor(max_workers=1, thread_name_prefix='project-driver-sweep')
         self._owner_name = 'project-driver-%d-%d' % (os.getpid(), id(self))
         install_enrollment(self._preamble, owner=self._owner_name)
@@ -388,7 +390,12 @@ class RunDriver:
             # dropping one that never took a lease.
             held = [run for run in self._runs.values() if run.key[0] == request['run_handle']]
             lost = self._lost.get(request['run_handle'])
-            if not held and lost is not None:
+            fenced = self._fenced.get(request['run_handle'])
+            if not held and fenced is not None:
+                # An earlier service's run this one fenced: it never launched and holds nothing.
+                self._reply(connection, {'state': 'refused', 'reason_code': 'history_not_authorized'}
+                            if fenced != enrolled.host_client else {'state': 'failed', 'reason_code': 'run_closed'})
+            elif not held and lost is not None:
                 # A run of an earlier service of this project; it is never started again here.
                 if lost[0] != enrolled.host_client:
                     self._reply(connection, {'state': 'refused', 'reason_code': 'history_not_authorized'})
@@ -778,6 +785,7 @@ class RunDriver:
         self._retire_given_back()
         self._forget_retired()
         self._sweep_lost()
+        self._fence_earlier()
         for run in list(self._runs.values()):
             try:
                 self._advance(run)
@@ -1124,6 +1132,89 @@ class RunDriver:
                             CLEANUP_RETRY_MAX_SECONDS, CLEANUP_RETRY_SECONDS * 2 ** (refusals - 1)))
                     continue
             del self._forgetting[binding]
+
+    # Leases an earlier service left armed: its claim may have been sent and refused, or never sent.
+    def _fence_earlier(self):
+        """Owner step: fence each lease an earlier service of this project left armed (0.3.3, C3).
+
+        Such a run's claim was never admitted here, so nothing of it ran; but its lease held one of
+        the project's result places for good, because only the service that held it could fence it.
+        The account closes its claim request (taking the identity from the run's launch observation)
+        unless it already admitted it, and the closure expires the lease. A claim it admitted is
+        left to the lost-run settlement. A refusal is asked again on the next sweep, at most
+        MAX_FENCE_ATTEMPTS times; an unreachable account, while this service runs.
+        """
+        lane = self._runtime.persistence
+        if self._earlier is None:
+            try:
+                self._earlier = lane.earlier_leases()
+            except HistoryError:
+                self._earlier = False
+            return
+        if self._earlier is False or self._earlier.state == 'queued':
+            return
+        if self._earlier.state == 'failed':
+            self._earlier = False
+            return
+        if self._earlier.result is not None:
+            for binding, evidence, host_client in self._earlier.result:
+                if host_client in HOST_CLIENTS:
+                    self._earlier_fences[binding.claim_request_id] = {
+                        'binding': binding, 'evidence': evidence, 'host_client': host_client,
+                        'future': None, 'settling': None, 'attempts': 0, 'at': 0.0}
+            self._earlier.result = None
+        now = self._clock()
+        for key, entry in list(self._earlier_fences.items()):
+            if entry['settling'] is not None:
+                if entry['settling'].state == 'done':
+                    self._fenced[entry['binding'].run_handle] = entry['host_client']
+                    del self._earlier_fences[key]
+                elif entry['settling'].state == 'failed':
+                    del self._earlier_fences[key]  # Left armed, as before; the next service asks again.
+                continue
+            if entry['future'] is None:
+                if now >= entry['at']:
+                    entry['future'] = self._executor.submit(self._fence_earlier_call, entry)
+                continue
+            if not entry['future'].done():
+                continue
+            future, entry['future'] = entry['future'], None
+            try:
+                reply = future.result()
+            except AccountError as error:
+                entry['attempts'] += 1
+                if error.reason_code != 'account_unavailable' and entry['attempts'] >= MAX_FENCE_ATTEMPTS:
+                    del self._earlier_fences[key]
+                else:
+                    entry['at'] = now + min(FENCE_RETRY_MAX_SECONDS, FENCE_RETRY_SECONDS * 2 ** (entry['attempts'] - 1))
+                continue
+            except Exception:
+                del self._earlier_fences[key]
+                continue
+            if reply['receipt']['state'] == 'claimed':
+                del self._earlier_fences[key]  # Admitted after all: the lost-run settlement's to settle.
+                continue
+            try:
+                entry['settling'] = lane.settle_earlier_lease(entry['binding'], canonical_json(reply['closure']))
+            except HistoryError:
+                del self._earlier_fences[key]
+
+    def _fence_earlier_call(self, entry):
+        """Helper thread: the account's fence for an earlier service's lease, sent with its custody."""
+        binding = entry['binding']
+        fence = FenceClaimInput(binding.run_handle, None, binding.claim_request_id,
+                                parse_bounded_json(entry['evidence'])['lease']['lease_digest'])
+        custody = canonical_json({'purpose': 'run', 'lease': binding.as_data(), 'storage_evidence': entry['evidence'].hex(),
+                                  'terminal_evidence': None, 'cleanup_evidence': None})
+        call = self._call
+        call.role, call.host_client, call.context = 'project', entry['host_client'], custody
+        try:
+            client = AccountClient(self._account, self._scope.project_id, COLLECTOR_RUNTIME_DIGEST,
+                                   timeout=ACCOUNT_TIMEOUT_SECONDS)
+            return client.fence_claim(
+                fence, request_id='earlier-' + hashlib.sha256(binding.claim_request_id.encode()).hexdigest()[:32])
+        finally:
+            call.role = call.host_client = call.context = None
 
     # Runs of earlier service instances of this project.
     def _sweep_lost(self):

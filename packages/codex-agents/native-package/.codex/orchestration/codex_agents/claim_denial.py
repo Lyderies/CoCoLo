@@ -42,14 +42,19 @@ class CloseDeniedInput:
 
 @dataclass(frozen=True)
 class FenceClaimInput:
-    """The run's own fixed claim request, to be closed for good unless the account admitted it."""
+    """The run's own fixed claim request, to be closed for good unless the account admitted it.
+
+    `identity_digest` is None from the next service of the project, which fences a lease an
+    earlier one left armed (0.3.3, C3) and never saw its identity: the account takes it from the
+    run's own launch observation and still checks the whole original claim request against it.
+    """
     run_handle: str
-    identity_digest: str
+    identity_digest: str | None
     claim_request_id: str
     lease_digest: str
 
     def __post_init__(self):
-        LaunchClaimInput(self.run_handle, self.identity_digest)
+        LaunchClaimInput(self.run_handle, '0' * 64 if self.identity_digest is None else self.identity_digest)
         if not matches(self.claim_request_id, _REQUEST_ID) or not matches(self.lease_digest, _DIGEST):
             raise ClaimError('claim_denial_invalid')
 

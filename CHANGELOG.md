@@ -12,6 +12,14 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   open adds its own decision and the dispatch observes the provider again first. The check now holds
   4,096 records and 2 MiB, about ten times that day; past it, an open or dispatch still refuses plainly
   and changes nothing. What is read and how admission decides are unchanged. Found by local-routing.
+- A dispatch refused at its claim could leave its run stuck for good. Before closing such a run, the
+  account checks that no earlier dispatch record names it, and on a project with long history (about
+  200,000 records) that check ran out of its small read budget every time, so the run was never closed:
+  `learning-classify-host-run-abandoned` answered `history_conflict`, and the run held one of the
+  project's four places for unfinished results. The check now has the account's ordinary read budget.
+  Runs already left stuck this way are closed by the project's next service by itself, after the
+  update: it asks the account to close each claim request an earlier service left open, and the
+  account checks the whole original request before doing so. Found by local-routing.
 
 ## 0.3.2: admission on a project with history (Codex package 0.8.22)
 

@@ -6546,6 +6546,18 @@ class LearningLedger:
         expected, raw = capture_storage_evidence(storage_binding, storage_evidence)
         if expected is None:
             raise ClaimError('claim_storage_required')
+        if closure.identity_digest is None:
+            # A lease an earlier service left armed (0.3.3, C3): the identity this run was
+            # observed with before launch, checked below against the whole claim request.
+            if not fence:
+                raise ClaimError('claim_denial_invalid')
+            with self._lock:
+                observed = self._connection.execute(
+                    'SELECT identity_digest FROM launch_observations WHERE project_id=? AND handle_digest=?',
+                    (project_id, keyed_digest(self.state.digest_key(), closure.run_handle))).fetchone()
+            if observed is None:
+                raise ClaimError('claim_denial_unavailable')
+            closure = replace(closure, identity_digest=observed[0])
         launch = LaunchClaimInput(closure.run_handle, closure.identity_digest)
         original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', closure.claim_request_id,
                                   project_id, runtime_digest, launch.payload())

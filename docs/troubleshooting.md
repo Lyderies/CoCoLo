@@ -226,7 +226,9 @@ These reasons mean even that did not fit in one bounded check (4,096 records and
 admitted. It happens only under very heavy use: about ten times the readings of a busy day. Readings stop
 counting after a day, and usage windows when they reset (up to a week), so try again later; if it keeps
 happening, report it with the reason. A dispatch refused this way never launched and holds no slot; it
-closes by itself, and `learning-classify-host-run-abandoned` then answers `already_closed`.
+closes by itself, and `learning-classify-host-run-abandoned` then answers `already_closed`. On 0.3.2 such
+a run could stay open on a project with long history (the command answered `history_conflict`); after
+updating to 0.3.3 the project's next service closes it by itself.
 
 Release 0.3.2 held a quarter of a megabyte, about one busy day of readings, so a dispatch on a busy
 account could be refused with this reason even though its open was admitted. Release 0.3.1 and earlier
