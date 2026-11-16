@@ -18,9 +18,6 @@ from .host_paths import PYTHON_ISOLATION_FLAGS
 START_TIMEOUT_SECONDS = 8.0
 WITHDRAW_TIMEOUT_SECONDS = 5.0
 HOST_ENTRY = 'project_host.py'
-# This runtime's own orchestration folder: a service started from it is never stopped here.
-RUNTIME_ORCHESTRATION = Path(__file__).resolve().parents[1]
-STOP_TIMEOUT_SECONDS = 15.0
 HOST_LOCK = 'host.lock'
 HINT_LOCK = 'hint.lock'  # Taken in turn by a host publishing its hint and a client withdrawing one.
 
@@ -109,56 +106,6 @@ def withdraw_project_host(state_root, project_root, directory, *, timeout=WITHDR
     finally:
         if descriptor is not None:
             os.close(descriptor)
-    while _host_alive(directory) is True:
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(0.05)
-    return True
-
-
-def stop_earlier_host(project_root, directory, *, timeout=STOP_TIMEOUT_SECONDS):
-    """Stop an earlier version's service of this project that did not stop when asked (0.3.3, C4).
-
-    The caller has withdrawn its hint and checked that no child may be running anywhere. The
-    service is found by its command line: one of this user's processes running `project_host.py`
-    with `--project-root` exactly this project, from a runtime folder other than this one. It is
-    sent SIGTERM, which a service handles by stopping and settling what it holds, and this waits,
-    bounded, for its host lock. Whether none is left.
-    """
-    import signal
-    import subprocess
-
-    root = str(_canonical_project_root(Path(project_root)))
-    try:
-        listed = subprocess.run(['/bin/ps', '-axo', 'pid=,uid=,command='], capture_output=True, text=True,
-                                timeout=10, env={'PATH': os.defpath, 'LC_ALL': 'C'}).stdout
-    except (OSError, subprocess.SubprocessError):
-        return False
-    found = []
-    for line in listed.splitlines():
-        fields = line.split(None, 2)
-        if len(fields) != 3 or not fields[0].isdigit() or not fields[1].isdigit():
-            continue
-        pid, uid, command = int(fields[0]), int(fields[1]), fields[2]
-        words = command.split()
-        entries = [word for word in words if word.endswith('/project_host.py')]
-        if (uid != os.getuid() or pid == os.getpid() or len(entries) != 1
-                or '--project-root' not in words or words.index('--project-root') + 1 >= len(words)
-                or words[words.index('--project-root') + 1] != root):
-            continue
-        if Path(entries[0]).parent.resolve() == RUNTIME_ORCHESTRATION:
-            continue  # This version's own service.
-        found.append(pid)
-    if not found:
-        return False
-    for pid in found:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        except OSError:
-            return False
-    deadline = time.monotonic() + timeout
     while _host_alive(directory) is True:
         if time.monotonic() >= deadline:
             return False
