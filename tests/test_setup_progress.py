@@ -24,18 +24,24 @@ def function(name):
     return match.group(0)
 
 
-def run_step(seconds, *, slow_after=None, command=None, columns=None, both=False, locale=None):
+def run_step(seconds, *, slow_after=None, command=None, columns=None, both=False, locale=None, lang=None,
+             prelude=(), status=False):
     script = "\n".join([
         *([f"export LC_ALL={locale}"] if locale else []),
+        *([f"unset LC_ALL; export LANG={lang}"] if lang else []),
+        *prelude,
         "C_CYAN=''; C_RESET=''; CMD_N=0; LOGDIR=$(mktemp -d); RUN_QUIET=0",
         *([f"COLUMNS={columns}"] if columns is not None else []),
         "hide_cursor() { :; }; show_cursor() { :; }; log_step() { :; }",
-        *([f"RUN_SLOW_SECONDS={slow_after}"] if slow_after is not None else []),
+        f"RUN_SLOW_SECONDS={10 if slow_after is None else slow_after}",  # setup.sh's own default is 10
         function("run_cmd"),
-        f'run_cmd "Installing" {command or f"sleep {seconds}"}',
+        f'run_cmd "Installing" {command or f"sleep {seconds}"}; echo "status=$?"',
     ])
     done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30, check=True)
-    return (done.stdout, done.stderr) if both else done.stdout
+    if status:
+        return done.stdout, done.stderr
+    stdout = done.stdout.replace("status=0\n", "")
+    return (stdout, done.stderr) if both else stdout
 
 
 def emitter(phases):
@@ -109,6 +115,41 @@ class SetupProgressTests(unittest.TestCase):
         output = run_step(0, command=emitter(["caf\u00e9 ok"]), locale="en_US.UTF-8")
         self.assertIn("caf ok", output)
         self.assertNotIn("\u00e9", output)
+
+    def test_S3_P2_no_byte_makes_setup_print_a_warning(self):
+        # The re-review found tr warned on invalid UTF-8 and on a character cut at the 4 KiB edge.
+        code = ("import sys, time\n"
+                "out = sys.stderr.buffer\n"
+                "out.write('\u00e9'.encode() + b'x' * 4094 + b'\\ncocolo-phase: \\xff valid\\n'); out.flush()\n"
+                "time.sleep(1.2)\n")
+        output, errors = run_step(0, command=f"{sys.executable} -c {shlex.quote(code)}", both=True,
+                                  lang="en_US.UTF-8")
+        self.assertEqual(errors, "")
+        self.assertIn("valid", output)
+
+    def test_S3_P5_any_width_value_lets_the_step_finish(self):
+        # The re-review found COLUMNS=08 (invalid octal) left run_cmd before it waited for the command.
+        for columns in ("08", "abc", "00080", "4", "0"):
+            stdout, errors = run_step(1.2, columns=columns, status=True)
+            self.assertIn("status=0", stdout, columns)
+            self.assertEqual(errors, "", columns)
+            frames = [frame.replace("\x1b[K", "") for frame in stdout.splitlines()[:-1] if frame.strip()]
+            width = int(columns, 10) if columns.isdigit() else 80
+            self.assertTrue(all(len(frame) < max(width, 1) for frame in frames), (columns, frames[:2]))
+
+    def test_S3_P5_a_step_returns_its_exit_status(self):
+        stdout, _ = run_step(0, columns="08", command="sh -c 'sleep 0.5; exit 3'", status=True)
+        self.assertIn("status=3", stdout)
+
+    def test_S3_P5_a_resized_terminal_is_followed(self):
+        # tput answers 80 for the first redraws, then 30, as a terminal resized during a step.
+        prelude = ['TPUT_N=$(mktemp)',
+                   'tput() { local n; n=$(($(wc -c <"$TPUT_N") + 1)); printf x >>"$TPUT_N"; '
+                   'if [ "$n" -le 3 ]; then echo 80; else echo 30; fi; }']
+        output = run_step(0, prelude=prelude, command=emitter(["p" * 60, "q" * 60]))
+        frames = [frame.replace("\x1b[K", "") for frame in output.splitlines() if frame.strip()]
+        self.assertTrue(any(len(frame) > 30 for frame in frames[:3]), frames[:3])
+        self.assertTrue(all(len(frame) < 30 for frame in frames[-3:]), frames[-3:])
 
 
 if __name__ == "__main__":

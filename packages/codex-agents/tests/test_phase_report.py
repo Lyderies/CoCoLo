@@ -25,6 +25,46 @@ class FailingStream(io.TextIOBase):
         raise OSError(errno.ENOSPC, "no space")
 
 
+class Adapter(io.TextIOBase):
+    """A standard error wrapper whose kind cannot be told: it forwards writes somewhere unknown."""
+
+    def __init__(self):
+        self.written = []
+
+    def write(self, text):
+        self.written.append(text)
+        return len(text)
+
+
+class NoFileno:
+    """A standard error replacement with write and flush only."""
+
+    def __init__(self):
+        self.written = []
+
+    def write(self, text):
+        self.written.append(text)
+
+    def flush(self):
+        pass
+
+
+class RaisingFile:
+    """A regular file whose write raises an unexpected error."""
+
+    def __init__(self, stream):
+        self.stream = stream
+
+    def fileno(self):
+        return self.stream.fileno()
+
+    def write(self, text):
+        raise RuntimeError("unexpected")
+
+    def flush(self):
+        pass
+
+
 class PhaseReportTests(unittest.TestCase):
     def report(self, stream, environ=ASKED):
         with mock.patch.dict(os.environ, environ, clear=False), mock.patch("sys.stderr", stream):
@@ -56,6 +96,21 @@ class PhaseReportTests(unittest.TestCase):
             self.report(None)
             stdout.seek(0)
             self.assertEqual(stdout.read(), "")
+
+    def test_S3_P4_a_stream_of_unknown_kind_gets_nothing(self):
+        # The re-review found an adapter passed as in-memory and forwarded to a full pipe.
+        for stream in (Adapter(), NoFileno()):
+            self.report(stream)
+            self.assertEqual(stream.written, [])
+
+    def test_S3_P4_an_in_memory_buffer_gets_the_line(self):
+        stream = io.StringIO()
+        self.report(stream)
+        self.assertEqual(stream.getvalue(), "cocolo-phase: upgrading the records\n")
+
+    def test_S3_P4_any_error_from_the_stream_drops_the_line(self):
+        with tempfile.TemporaryFile("w+") as file:
+            self.report(RaisingFile(file))
 
     def test_S3_P4_nothing_is_written_to_a_pipe(self):
         read_end, write_end = os.pipe()
