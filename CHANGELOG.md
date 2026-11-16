@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.3: dispatch on a busy account (Codex package 0.8.24)
+## 0.3.3: dispatch on a busy account (Codex package 0.8.25)
 
 - On a busy account, a child's open was admitted but its dispatch was refused with
   `admission_capture_limit`. Before admitting an open, and again at its dispatch, the account service
@@ -25,6 +25,10 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   `host run orchestration is unavailable`, and a temporary error or an unreachable account never stops
   it trying.
 
+- An update now stops an earlier version's project service that would not stop when asked (one that
+  held such a stuck run never did), with SIGTERM and only when no child can be running, instead of
+  needing it killed by hand. And the orchestration report counts a run that closed without a result as
+  abandoned, not pending.
 - Setup no longer fails its collector step while the collector is still starting: after registering
   restarts it, setup waits (up to 90 seconds, showing the time) while its status says it is starting,
   instead of checking once after five seconds. Every 0.3.3 install hit this.
