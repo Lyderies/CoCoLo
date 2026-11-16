@@ -153,6 +153,13 @@
    "checks": []
   },
   {
+   "id": "L8.3",
+   "flow": "L8",
+   "source": "PLAN-0.4.0.md T7 L8b (control project, 2026-11-16)",
+   "statement": "A project service replaced while its dispatch runs (another project's setup restarting the shared collector) leaves no run in limbo: the run ends run_lost with its slot freed, the dispatching CLI says so plainly instead of dispatch_not_authorized, and the orchestration can close.",
+   "checks": []
+  },
+  {
    "id": "L9.1",
    "flow": "L9",
    "source": "PLAN-0.4.0.md T7",
