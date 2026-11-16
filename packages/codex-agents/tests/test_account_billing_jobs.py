@@ -248,6 +248,35 @@ class AccountBillingJobTests(unittest.TestCase):
             self.take(self.begin())
         self.assertEqual([], self.launches())
 
+    def test_C9_a_probe_admitted_but_never_launched_frees_its_worker_and_settles(self):
+        # 0.3.3 requirement C9 (live, 17 November): a probe's admission was committed, then a step
+        # before its launch failed. The job was kept as unknown with the machine's only probe worker,
+        # so every later probe waited out its deadline and answered probe_unavailable. With no
+        # execution ticket nothing can have started: the probe names the failed step, its worker is
+        # retired and its row settled, and the next probe is answered at once (the cooldown may refuse
+        # it, never a held worker).
+        real = self.billing._executions.launch
+        calls = []
+        def failing_once(*args):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError('fault after the admission commit')
+            return real(*args)
+        self.enterContext(mock.patch.object(self.billing._executions, 'launch', side_effect=failing_once))
+        with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
+            self.take(self.begin())
+        self.assertEqual([], self.launches())
+        self.until(lambda: not self.billing._jobs)
+        self.assertEqual([], [s for s in self.workers._slots if s.current is not None])
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM account_billing_probe_requests WHERE state='admitted'").fetchone()[0])
+        started = time.monotonic()
+        try:
+            self.take(self.begin(self.request('probe-after-fault')), self.request('probe-after-fault'))
+        except AccountError as error:
+            self.assertEqual('probe_cooldown', error.reason_code)
+        self.assertLess(time.monotonic()-started, 20)
+
     def test_a_probe_when_every_slot_is_taken_says_busy_and_launches_nothing(self):
         # Both of the account's slots are held (for example by runs an earlier version
         # left): the probe is refused as busy, not as unavailable.

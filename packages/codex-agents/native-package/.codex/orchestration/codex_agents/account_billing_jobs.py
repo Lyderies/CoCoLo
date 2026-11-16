@@ -52,6 +52,7 @@ class _Job:
     supervisor: object = None
     result: dict | None = None
     reason: str | None = None
+    settled: bool = False  # Its admitted row was settled with no launch (0.3.3, C9).
     cancelled: bool = False
     observed_again: bool = False
 
@@ -191,7 +192,16 @@ class AccountBillingJobs:
         except Exception as error:
             row = self._owner._row(job.key[0], job.reservation.key)
             if row is not None and row['state'] == 'admitted':
-                job.state, job.reason = 'unknown', 'probe_unavailable'
+                # Admitted, then a step before the launch failed. With no execution ticket nothing
+                # can have started: settle the row and free the machine's probe worker, rather than
+                # keep both until a restart (0.3.3, C9). Once a ticket exists the run is kept.
+                try:
+                    self._executions.discard(job.preparation)
+                    self._owner.settle_unlaunched(job.reservation, 'probe_step_failed')
+                    job.settled = True
+                    self._discard(job, 'probe_step_failed')
+                except Exception:
+                    job.state, job.reason = 'unknown', 'probe_unavailable'
             else:
                 self._discard(job, getattr(error, 'reason_code', 'probe_unavailable'))
         finally:
@@ -279,7 +289,7 @@ class AccountBillingJobs:
                     return
                 self._executions.retire_discarded(job.preparation)
                 job.preparation = None
-            if job.result is None:
+            if job.result is None and not job.settled:
                 self._owner.abort_reserved(job.reservation)
             self._ready(ticket, job, result=job.result, reason=job.reason)
 

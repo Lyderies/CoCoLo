@@ -98,6 +98,12 @@ class AccountBillingExecutions:
             raise ProbeAdmissionError('probe_conflict')
         return job.identity
 
+    def ticketed(self, reservation):
+        """Whether this reservation's preparation was ever offered an execution ticket."""
+        self._guard()
+        handle = self._reservations.get(reservation)
+        return handle is None or self._job(handle).ticket is not None
+
     def snapshot(self, handle):
         job = self._job(handle)
         actual = self._workers.snapshot(job.worker)

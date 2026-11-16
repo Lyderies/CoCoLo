@@ -381,6 +381,31 @@ class AccountBillingAdmission:
             raise ProbeAdmissionError('probe_conflict')
         return reply
 
+    def settle_unlaunched(self, reservation, reason):
+        """Settle an admitted probe that was never offered for execution (0.3.3, C9).
+
+        Only when the execution owner holds no ticket for it, so no model can have started. The row
+        becomes a committed denial naming the failed step; its stored admission record stays, so the
+        probe cooldown still applies, and a known request reads this reply and never relaunches.
+        """
+        self._guard()
+        permit = self._permits.get(reservation)
+        execution_owner = getattr(self, '_execution_owner', None)
+        if permit is None or execution_owner is None or execution_owner.ticketed(reservation):
+            raise ProbeAdmissionError('probe_conflict')
+        with self._ledger._account_transaction():
+            row = self._original(reservation)
+            if row['state'] != 'admitted':
+                raise ProbeAdmissionError('probe_conflict')
+            final = self._update(row, state='committed', references_json=canonical_json(
+                {'probe': 'denied', 'reason_code': reason, 'records': []}).decode())
+            if self._row(reservation.project, reservation.key) != final:
+                raise ProbeAdmissionError('probe_conflict')
+        self._execution_inputs.pop(self._permits.pop(reservation), None)
+        self._pending.pop((reservation.project, reservation.key), None)
+        self._reserved_inputs.pop(reservation, None)
+        self._signatures.pop(reservation, None)
+
     def known_reply(self, project, runtime, caller, identity, context, *, before_commit):
         """Read a committed original even after a local post-commit fault.
 
