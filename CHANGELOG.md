@@ -57,6 +57,10 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - Setup no longer fails its collector step while the collector is still starting: after registering
   restarts it, setup waits (up to 90 seconds, showing the time) while its status says it is starting,
   instead of checking once after five seconds. Every 0.3.3 install hit this.
+- For contributors: run the tests with `python3 scripts/parallel_tests.py` (about 3.5 minutes on 16
+  cores), or only the modules you changed with `--module`. Test-only fixes removed idle waits from the
+  setup wizard, attest and collector-exit tests and ran 15 primary-independent driver tests once instead
+  of twice. The suite still does about 30 CPU-minutes of work; 0.4.0 cuts that.
 
 ## 0.3.2: admission on a project with history (Codex package 0.8.22)
 
