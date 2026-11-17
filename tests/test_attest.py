@@ -2149,6 +2149,8 @@ class RealTerminalTests(unittest.TestCase):
                 if not chunk:
                     break
                 transcript += chunk
+            if sent and not break_echo and "Press Enter to use" in transcript[answered:]:
+                break  # Answered and asking again: anything echoed would already be here.
             if break_echo and not sent and time.time() - start > 2:
                 try:  # if the program were still reading, this would be echoed back
                     os.write(fd, (secret + "\r").encode())
@@ -2159,6 +2161,7 @@ class RealTerminalTests(unittest.TestCase):
                 time.sleep(0.3)
                 os.write(fd, (secret + "\r").encode())
                 sent = True
+                answered = len(transcript)
         finish()
         self.assertTrue(sent or break_echo, transcript)
         return transcript

@@ -263,12 +263,24 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
             self.assertLess(time.monotonic(), end, 'collector did not stop')
             time.sleep(.05)
 
+    def ready_status(self):
+        """Start a collector through `learning-status` and wait until it is ready. Under load its
+        account service can still be starting when the first status answers (C13g)."""
+        end = time.monotonic() + 20
+        while True:
+            status = self.cli('learning-status', expected=None)
+            if status.get('ready') or status.get('reason_code') != 'status_account_unavailable':
+                self.assertTrue(status.get('ready'), json.dumps(status))
+                return status
+            self.assertLess(time.monotonic(), end, json.dumps(status))
+            time.sleep(.2)
+
     def previous_exit(self):
-        status = self.cli('learning-status')  # Starts a new collector.
+        status = self.ready_status()  # Starts a new collector.
         return status.get('collector_previous_exit'), json.dumps(status)
 
     def test_C10_a_signal_is_recorded(self):
-        self.cli('learning-status')
+        self.ready_status()
         for pid in self.processes('collector_host.py'):
             os.kill(pid, signal.SIGTERM)
         self.wait_gone()
@@ -276,7 +288,7 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         self.assertEqual('signal', record['cause'])
 
     def test_C10_a_shutdown_request_is_recorded(self):
-        self.cli('learning-status')
+        self.ready_status()
         CollectorClient(self.paths.socket, timeout=2).shutdown()
         self.wait_gone()
         record, _ = self.previous_exit()
@@ -321,7 +333,7 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         self.assertEqual(('error', 'Exception'), (record['cause'], record['error']))
 
     def test_C10a_a_removed_socket_is_recorded(self):
-        self.cli('learning-status')
+        self.ready_status()
         self.paths.socket.unlink()
         self.wait_gone()
         record, _ = self.previous_exit()

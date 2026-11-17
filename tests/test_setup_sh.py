@@ -1196,6 +1196,10 @@ class WizardTerminalTests(unittest.TestCase):
             os.kill(self.pid, 9)
         except OSError:
             pass
+        import select
+
+        # A killed process cannot finish closing a terminal that still holds unread output
+        # (macOS), so read and discard it while waiting.
         end = time.monotonic() + 5
         while time.monotonic() < end:
             try:
@@ -1204,7 +1208,11 @@ class WizardTerminalTests(unittest.TestCase):
                 return
             if done:
                 return
-            time.sleep(0.05)
+            try:
+                if select.select([self.fd], [], [], 0.05)[0]:
+                    os.read(self.fd, 65536)
+            except OSError:
+                time.sleep(0.05)
 
     def expect(self, text: str, timeout: float = 25.0) -> None:
         import select
