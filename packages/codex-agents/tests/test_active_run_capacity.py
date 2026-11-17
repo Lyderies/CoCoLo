@@ -70,21 +70,25 @@ class ActiveRunCapacityTests(unittest.TestCase):
         self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
         self.addCleanup(self.case.ledger.close)
 
-    def test_two_projects_share_two_slots_and_third_refuses_without_receipt(self):
+    def test_C8_projects_share_six_slots_and_the_seventh_refuses_without_receipt(self):
+        # 0.3.3 requirement C8 (owner: "2 is too restrictive"): six children at once, shared by every
+        # project; the seventh is refused claim_busy, with no receipt, as the third was.
         first = self.case.claim()
         second = self.claim(self.new_attempt(self.second_project()), "second-project")
-        third = self.new_attempt()
+        others = [self.claim(self.new_attempt(), f"more-{index}") for index in range(4)]
         with self.assertRaisesRegex(ClaimError, "claim_busy"):
-            self.claim(third, "third")
-        self.assertEqual(("claimed", "claimed"), (first["state"], second["state"]))
-        self.assertEqual(2, len(self.rows()))
-        self.assertEqual(2, self.ledger._connection.execute("SELECT COUNT(*) FROM launch_receipts").fetchone()[0])
+            self.claim(self.new_attempt(), "seventh")
+        self.assertEqual(["claimed"] * 6, [item["state"] for item in (first, second, *others)])
+        self.assertEqual(6, len(self.rows()))
+        self.assertEqual(6, self.ledger._connection.execute("SELECT COUNT(*) FROM launch_receipts").fetchone()[0])
         self.assertEqual({**first, "known": True}, self.case.claim())
         self.assertEqual(1, len({row["account_fingerprint"] for row in self.rows()}))
         self.assertEqual(2, len({row["project_id"] for row in self.rows()}))
 
     def test_last_slot_race_has_one_winner_and_no_partial_loser(self):
         self.case.claim()
+        for index in range(4):
+            self.claim(self.new_attempt(), f"before-race-{index}")
         attempts = [self.new_attempt(), self.new_attempt()]
         barrier = threading.Barrier(2)
         results, errors = [], []
@@ -105,18 +109,19 @@ class ActiveRunCapacityTests(unittest.TestCase):
         self.assertEqual(1, len(results))
         self.assertEqual([ClaimError], [type(error) for error in errors])
         self.assertEqual("claim_busy", errors[0].reason_code)
-        self.assertEqual(2, len(self.rows()))
+        self.assertEqual(6, len(self.rows()))
         for table in ("launch_claims", "launch_receipts"):
-            self.assertEqual(2, self.ledger._connection.execute("SELECT COUNT(*) FROM " + table).fetchone()[0])
+            self.assertEqual(6, self.ledger._connection.execute("SELECT COUNT(*) FROM " + table).fetchone()[0])
 
     def test_explicit_larger_installed_fixture_policy_still_counts_every_claim(self):
-        with mock.patch.object(learning_store, "INSTALLED_ACTIVE_RUN_LIMITS", ActiveRunLimits(4, 4)):
+        # Larger than the installed six (C8), so its claims fill past what the installed limit allows.
+        with mock.patch.object(learning_store, "INSTALLED_ACTIVE_RUN_LIMITS", ActiveRunLimits(8, 8)):
             self.case.claim()
-            for number in range(3):
+            for number in range(7):
                 self.assertEqual("claimed", self.claim(self.new_attempt(), "larger-" + str(number))["state"])
             with self.assertRaisesRegex(ClaimError, "claim_busy"):
                 self.claim(self.new_attempt(), "larger-full")
-        self.assertEqual(4, len(self.rows()))
+        self.assertEqual(8, len(self.rows()))
         self.assertTrue(all(row["released_at_ms"] is None for row in self.rows()))
         with self.ledger._account_transaction(), self.assertRaisesRegex(ClaimError, "claim_busy"):
             self.ledger._check_active_capacity_locked("codex", self.rows()[0]["account_fingerprint"])

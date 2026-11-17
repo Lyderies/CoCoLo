@@ -14,8 +14,11 @@ from .result_contracts import ResultLeaseBinding
 
 MAX_DENIAL_RECEIPT_BYTES = 16_384
 DENIAL_RECORD_TYPE = 'claim_denial_settlement'
-# Trusted cooperative SQL limits; actual OS-I/O and installed cadence remain gates.
-DENIAL_LEGACY_READ_LIMITS = (2000, 50, 16_384)
+# Trusted cooperative SQL limits; actual OS-I/O and installed cadence remain gates. The check for an
+# earlier dispatch record of the run reads every record of the project, so it has the account's
+# ordinary read budget (0.3.3, C2): 2,000 callbacks and 16 KiB values refused every fence on a project
+# with about 200,000 records (4,573 callbacks) or one record over 16 KiB (records reach 64 KiB).
+DENIAL_LEGACY_READ_LIMITS = (100_000, 1_000, 2 * 1_048_576)
 
 
 @dataclass(frozen=True)
@@ -39,14 +42,19 @@ class CloseDeniedInput:
 
 @dataclass(frozen=True)
 class FenceClaimInput:
-    """The run's own fixed claim request, to be closed for good unless the account admitted it."""
+    """The run's own fixed claim request, to be closed for good unless the account admitted it.
+
+    `identity_digest` is None from the next service of the project, which fences a lease an
+    earlier one left armed (0.3.3, C3) and never saw its identity: the account takes it from the
+    run's own launch observation and still checks the whole original claim request against it.
+    """
     run_handle: str
-    identity_digest: str
+    identity_digest: str | None
     claim_request_id: str
     lease_digest: str
 
     def __post_init__(self):
-        LaunchClaimInput(self.run_handle, self.identity_digest)
+        LaunchClaimInput(self.run_handle, '0' * 64 if self.identity_digest is None else self.identity_digest)
         if not matches(self.claim_request_id, _REQUEST_ID) or not matches(self.lease_digest, _DIGEST):
             raise ClaimError('claim_denial_invalid')
 

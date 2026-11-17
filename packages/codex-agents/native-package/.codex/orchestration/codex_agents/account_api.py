@@ -61,6 +61,8 @@ ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
     "account_not_authorized", "account_wrong_owner", "account_unavailable",
     "account_incompatible", "account_project_not_found",
+    # The account closed the connection without replying: it may have restarted (0.3.3, C11).
+    "account_closed_without_reply",
 }) | CLAIM_ERROR_CODES | OPEN_REASON_CODES | OBSERVATION_REASONS | BILLING_PROBE_REASONS | ADMISSION_CAPTURE_PUBLIC_REASONS
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}")
 _PROJECT = re.compile(r"prj_[0-9a-f]{32}")
@@ -289,10 +291,14 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
             raise AccountError('account_invalid_response') from None
     elif request.operation == 'account.fence_claim':
         try:
-            checked = checked_fence_reply(result, decode_fence_claim(request.payload))
+            fence = decode_fence_claim(request.payload)
+            checked = checked_fence_reply(result, fence)
+            # A sweep's fence (no identity) closes an earlier version's request under that version's
+            # runtime (0.3.3, C3f); the history checks the closure against the lease itself.
             if checked['closure'] is not None and (
                     checked['closure']['binding']['project_id'] != request.project_id
-                    or checked['closure']['binding']['runtime_digest'] != request.runtime_digest):
+                    or (checked['closure']['binding']['runtime_digest'] != request.runtime_digest
+                        and fence.identity_digest is not None)):
                 raise ClaimError('claim_denial_invalid')
             return checked
         except ClaimError:
@@ -353,6 +359,8 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
 
 
 def decode_account_response(raw: bytes, request: AccountRequest) -> dict:
+    if type(raw) is bytes and raw == b"":
+        raise AccountError("account_closed_without_reply")
     try:
         if type(raw) is not bytes or len(raw) + 1 > MAX_ACCOUNT_FRAME_BYTES:
             raise AccountError("account_invalid_response")

@@ -2312,6 +2312,27 @@ run_owner_cli() {
 # ---------------------------------------------------------------------------
 # Step 5: learning collector
 # ---------------------------------------------------------------------------
+# wait_collector_ready : the collector's status, waiting while it is still starting (C6).
+# Registering restarts the collector, which takes a while to answer: while its status gives a
+# start-up reason, it is asked again, for up to COLLECTOR_READY_SECONDS, with the time shown.
+# Any other reason, or still starting after that, is returned as it is. LAST_OUT holds the reply.
+COLLECTOR_READY_SECONDS=${COLLECTOR_READY_SECONDS:-90}
+wait_collector_ready() {
+  local started=$SECONDS reason label="Checking collector status"
+  while true; do
+    run_owner_cli "$label" learning-status --project-root "$PROJECT"
+    [ "$(pj get "$LAST_OUT" ready)" = true ] && return 0
+    reason=$(pj get "$LAST_OUT" reason_code 2>/dev/null)
+    case $reason in
+      status_collector_transport_unavailable|status_account_unavailable) ;;
+      *) return 1 ;;
+    esac
+    [ $((SECONDS - started)) -ge "$COLLECTOR_READY_SECONDS" ] && return 1
+    label="Waiting for the collector to start ($((SECONDS - started))s)"
+    sleep 1
+  done
+}
+
 version_hint() {
   case "$(pj reason "$LAST_OUT" $REASON_FIXED 2>/dev/null)" in
     *"authorized runtime"*|*newer*|*other_version*|*runtime_mismatch*|*collector_runtime*)
@@ -2469,7 +2490,7 @@ step_collector() {
     list_add info "Moved your orchestrator records once to a protected folder, ~/.local/state/codex-agents. The old copy at $moved can be deleted once you're happy."
   fi
   render
-  run_owner_cli "Checking collector status" learning-status --project-root "$PROJECT"
+  wait_collector_ready
   ready=$(pj get "$LAST_OUT" ready)
   if [ "$ready" = true ]; then
     list_add ok "Collector status: ready (runtime $(pj get "$LAST_OUT" collector_runtime_version))"

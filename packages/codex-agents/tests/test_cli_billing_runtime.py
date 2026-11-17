@@ -183,6 +183,33 @@ class CliBillingRuntimeTests(unittest.TestCase):
         self.assertEqual([], self.launches())
         self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM account_billing_probe_origins').fetchone()[0])
 
+    def test_C9_a_probe_beside_an_observation_of_the_same_provider_leaves_nothing_stuck(self):
+        # 0.3.3 requirement C9: a Claude billing probe and a plain Claude observation of the same project,
+        # at the same time. Each succeeds or refuses with its own reason; then a probe on its own succeeds.
+        for attempt in range(2):
+            with self.subTest(attempt=attempt):
+                probe = self.start(identity=f'overlap-probe-{attempt}')
+                observe = self.start(billing=False)
+                (_, probed), (_, observed) = self.take(probe), self.take(observe)
+                self.assertIn(probed.get('reason_code'), {None, 'probe_conflict', 'probe_busy'}, probed)
+                self.assertIn(observed.get('reason_code'), {None, 'observation_full'}, observed)
+        self.assertEqual([], [job.key for job in self.billing._jobs.values() if job.state == 'unknown'])
+        code, alone = self.take(self.start(identity='probe-alone'))
+        self.assertEqual((0, None), (code, alone.get('reason_code')), alone)
+
+    def test_C9_an_observation_landing_between_capture_and_admit_leaves_the_probe_worker_free(self):
+        # 0.3.3 requirement C9, the control project's order: the probe has captured its admission
+        # history, then an observation of the same provider records, then the probe is admitted.
+        probe = self.start(identity='captured-then-observed')
+        self.wait(lambda: any(j.state == 'signature' for j in self.billing._jobs.values()))
+        code, observed = self.take(self.start(billing=False))
+        self.assertEqual(0, code, observed)
+        code, probed = self.take(probe)
+        self.assertIn(probed.get('reason_code'), {None, 'probe_conflict'}, probed)
+        self.wait(lambda: not self.billing._jobs)  # Nothing is kept, so the one probe worker is free.
+        code, alone = self.take(self.start(identity='probe-after-overlap'))
+        self.assertEqual((0, None), (code, alone.get('reason_code')), alone)
+
     def test_second_project_fresh_cli_observes_while_first_probe_process_is_held(self):
         # The first probe is held well past what a fresh CLI process takes to start on a slow machine.
         self.fixture.frames('claude', [bridge_fixtures.PROBE_INIT, {'sleep': 8},

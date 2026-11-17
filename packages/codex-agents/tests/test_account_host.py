@@ -76,6 +76,8 @@ class AccountHostTests(unittest.TestCase):
         done = subprocess.run([sys.executable, '-I', '-B', '-S', str(ORCHESTRATION_ROOT / 'cli.py'), command,
             '--state-root', str(self.state.root), '--project-root', str(project or self.projects[0][0]), *args],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=40, check=False)
+        if expected is None:  # The caller checks the exit status itself: (status, reply).
+            return done.returncode, json.loads(done.stdout)
         self.assertEqual(expected, done.returncode, (done.stdout + done.stderr).decode(errors='replace'))
         return json.loads(done.stdout)
 

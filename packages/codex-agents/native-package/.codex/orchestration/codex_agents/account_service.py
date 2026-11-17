@@ -878,8 +878,10 @@ class AccountService:
                 reply.before_publish()
                 from .account_original_open import current_open_request
                 self._views._guard()
-                current = self._views._ledger._connection.read_call(self._claim_jobs._work_limits,
-                    lambda: current_open_request(self._views._ledger, context))[1]
+                ledger = self._views._ledger
+                # The read takes the shared lock itself, with a bounded wait (C12a, C12f).
+                current = ledger._connection.read_call(self._claim_jobs._work_limits,
+                    lambda: current_open_request(ledger, context))[1]
                 if current is None or {**current, 'known': reply.result['known']} != reply.result:
                     raise OpenError('open_conflict')
                 self._provenance_live()

@@ -22,19 +22,20 @@ Turn on the repository's hooks once, then run the checks before every pull reque
 git config core.hooksPath .githooks          # identifier guard on every commit
 python3 scripts/check_identifiers.py         # scan tracked files
 ruff check .
-python3 -m unittest discover -s tests -v
-(cd packages/codex-agents && python3 -m unittest discover -s tests)
-(cd packages/claude-agents && PYTHONPATH=src python3 -m unittest discover -s tests)
+python3 scripts/parallel_tests.py            # all three suites, in parallel
 ```
 
 CI runs the identifier guard and Ruff, then the tests by stage: a pull request runs the unit tests on
 Linux and macOS and the integration tests on Linux; `main`, tags and a nightly run add the end-to-end
 tests on both systems and the integration tests on macOS.
 
-`python3 -B scripts/parallel_tests.py` runs all three suites in parallel. Every test module has a
-stage in `scripts/test-stages.json`: `unit` (no process, socket or sleep; a unit test that does one
-fails), `integration` (real services, children, sockets, git, sandboxes) or `e2e` (the setup wizard
-and the installer run as programs). `--stage unit` runs only the unit tests, in seconds. A new
+`python3 -B scripts/parallel_tests.py` runs all three suites in parallel and prints one summary; a
+failed unit's log tail is shown. Never run them one after another except to debug: that takes over half
+an hour. Every test module has a stage in `scripts/test-stages.json`: `unit` (no process, socket or
+sleep; a unit test that does one fails), `integration` (real services, children, sockets, git,
+sandboxes) or `e2e` (the setup wizard and the installer run as programs). `--stage unit` runs only the
+unit tests, in seconds. While working, run only the modules you touched, for example
+`python3 scripts/parallel_tests.py --module codex:tests.test_bridge --module root:test_install`. A new
 module needs a stage; `python3 scripts/measure_test_behaviour.py` measures what each module does and
 proposes one.
 

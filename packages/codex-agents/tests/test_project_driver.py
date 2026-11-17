@@ -67,6 +67,17 @@ class DriverHarness(ServiceHarness, CliTestCase):
                               '--orchestration-handle', orchestration['orchestration_handle'])
         return context, route_path, orchestration['orchestration_handle'], opened['run_handle']
 
+    def cli_any(self, command, *arguments):
+        """The CLI's reply whatever its exit status, for a command polled until it is ready."""
+        from tests.test_bridge import cli as cli_module
+        stdout = io.StringIO()
+        argv = ["cli.py", command, "--state-root", str(self.state.root), "--project-root", str(self.project),
+                *arguments]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(cli_module, "BUNDLE_ROOT", self.bundle), \
+                contextlib.redirect_stdout(stdout):
+            cli_module.main()
+        return json.loads(stdout.getvalue())
+
     def separate_dispatch(self, context, route_path, run_handle, project=None):
         """A second primary process waits on dispatch while this one inspects the run."""
         env = {k: v for k, v in os.environ.items() if not any(m in k.upper() for m in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
@@ -222,6 +233,198 @@ class ProjectDriverTests(DriverHarness):
         expires = ledger._connection.execute("SELECT MAX(expires_at_ms) FROM host_run_bindings").fetchone()[0]
         with mock.patch.object(ledger, '_clock_ms', return_value=expires + 1):
             self.assertTrue(ledger.drained())                                            # D2, after expiry
+
+    def test_C8_three_children_of_one_project_run_at_once_a_fourth_is_refused_and_each_can_be_cancelled(self):
+        # 0.3.3 requirement C8 (owner): a pool of six, at most three per project. One project's three
+        # dispatches, started together, are all claimed and launched; a fourth of the same project is
+        # refused by that project's own limit; and cancelling each of the three works (with four or
+        # more a cancellation was not always carried out).
+        runs = [self.open_run() for _ in range(4)]
+        # Far longer than the test: each child ends only because it is cancelled.
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'one-of-three'}, {'sleep': 600},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        processes = [self.separate_dispatch(run[0], run[1], run[3]) for run in runs[:3]]
+        launched = lambda: len([i for i in self.invocations('codex') if 'exec' in i['argv']])  # noqa: E731
+        self.wait_for(lambda: launched() == 3, seconds=90)
+        fourth = runs[3]
+        refused = self.cli('dispatch', *fourth[0], '--route', fourth[1], '--run-handle', fourth[3], expected=2)
+        self.assertEqual('preparation_full', refused['reason_code'], refused)
+        self.assertEqual(3, launched())
+        children = [i for i in self.invocations('codex') if 'exec' in i['argv']]
+        for child in children:
+            os.killpg(child['pgid'], 0)  # All three are alive together.
+        for run, process in zip(runs, processes):
+            started = time.monotonic()
+            self.cli('learning-cancel-run', '--orchestration-handle', run[2], '--run-handle', run[3])
+            output, errors = process.communicate(timeout=60)
+            self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+            self.assertEqual('cancelled', json.loads(output)['bridge_report']['terminal_state'])
+            self.assertLess(time.monotonic() - started, 30)
+        for child in children:
+            with self.assertRaises(ProcessLookupError):  # Every child's process group is gone.
+                os.killpg(child['pgid'], 0)
+
+    def busy_day(self, kind, count):
+        """Add `count` copies of the account's latest `kind` reading from the last few hours, as a
+        busy account records them; through a second connection, as the services keep running."""
+        import hashlib
+        from codex_agents.learning_contracts import canonical_json
+        connection = sqlite3.connect(self.state.root / 'learning.sqlite3', timeout=30)
+        connection.row_factory = sqlite3.Row
+        try:
+            template = connection.execute(
+                "SELECT project_id, source, content FROM records WHERE record_type=? "
+                "ORDER BY observed_at_ms DESC LIMIT 1", (kind,)).fetchone()
+            sequence = connection.execute("SELECT MAX(source_sequence) FROM records").fetchone()[0]
+            now = int(time.time() * 1000)
+            with connection:
+                for index in range(count):
+                    record = json.loads(bytes(template['content']))
+                    observed = now - 60_000 - index * 10_000
+                    record.update(record_id=f"{kind}:{hashlib.sha256(f'busy-{kind}-{index}'.encode()).hexdigest()}",
+                                  observed_at_ms=observed)
+                    content = canonical_json(record)
+                    sequence += 1
+                    connection.execute(
+                        "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,"
+                        "ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,0)",
+                        (template['project_id'], record['record_id'], kind, template['source'], sequence, observed,
+                         observed, observed + 90 * 86_400_000, content, hashlib.sha256(content).hexdigest()))
+        finally:
+            connection.close()
+
+    def test_C1_a_busy_day_of_readings_still_opens_and_dispatches(self):
+        # 0.3.3 requirement C1 (live testing): about 180 headroom and 70 billing readings
+        # from one day, with 40 recent decisions, filled about 260 KiB of the 256 KiB the open and
+        # claim may read, and the claim was refused. 4,096 records and 2 MiB fit, at the open and
+        # at its claim; this is a day with about ten times that project's readings.
+        self.busy_day('provider_headroom', 1800)
+        self.busy_day('provider_billing', 700)
+        context, route_path, _, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+
+    def test_C1_more_than_a_capture_holds_is_refused_plainly_and_changes_nothing(self):
+        # Over 4,096 records the open says so, and records no run.
+        self.busy_day('provider_headroom', 4200)
+        bindings = "SELECT COUNT(*) FROM host_run_bindings"
+        before = self.collector_ledger._connection.execute(bindings).fetchone()[0]
+        name = self.project.name + '-'
+        task = self.write(name + 'task.json', self.task())
+        route = self.cli_for(self.project, 'learning-route', '--task', task)
+        assigned = self.assignment_for(route)
+        context = ('--task', task, '--assignment', self.write(name + 'assignment.json', assigned),
+                   '--parent-grant', self.write(name + 'grant.json', PARENT_GRANT))
+        orchestration = self.cli_for(self.project, 'learning-open-orchestration')
+        refused = self.cli('learning-open-host-run', *context, '--route', self.write(name + 'route.json', route),
+                           '--orchestration-handle', orchestration['orchestration_handle'], expected=2)
+        self.assertEqual('admission_capture_limit', refused['reason_code'], refused)
+        self.assertEqual(before, self.collector_ledger._connection.execute(bindings).fetchone()[0])
+
+    def legacy_history(self, count, content_bytes):
+        """Earlier dispatch results of this project as 0.2.x recorded them, through a second connection."""
+        import hashlib
+        connection = sqlite3.connect(self.state.root / 'learning.sqlite3', timeout=30)
+        try:
+            project, = connection.execute(
+                "SELECT project_id FROM records WHERE record_type='provider_identity' LIMIT 1").fetchone()
+            sequence = connection.execute("SELECT MAX(source_sequence) FROM records").fetchone()[0]
+            now = int(time.time() * 1000)
+            with connection:
+                for index in range(count):
+                    run_id = 'run:' + hashlib.sha256(f'legacy-{index}'.encode()).hexdigest()
+                    content = json.dumps({'record_type': 'dispatch_result', 'run_id': run_id,
+                                          'summary': 'x' * content_bytes}, separators=(',', ':')).encode()
+                    sequence += 1
+                    observed = now - 40 * 86_400_000 + index
+                    connection.execute(
+                        "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,"
+                        "ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,0)",
+                        (project, 'dispatch_result:' + hashlib.sha256(content).hexdigest(), 'dispatch_result',
+                         'lifecycle', sequence, observed, observed, observed + 90 * 86_400_000, content,
+                         hashlib.sha256(content).hexdigest()))
+        finally:
+            connection.close()
+
+    def test_C2_a_refused_claim_closes_whatever_the_size_of_an_earlier_record(self):
+        # 0.3.3 requirement C2 (live testing; COCOLO-run investigation): the fence
+        # looked for the run among every earlier dispatch record of the project, within 2,000
+        # progress callbacks, 50 ms and 16 KiB per value, and answered claim_busy when that ran out;
+        # after ten refusals the run kept its lease for good. Neither a large earlier record nor many
+        # of them stop a refused claim from closing.
+        self.legacy_history(1, 20_000)
+        self.assert_refused_claim_closes()
+
+    def test_C2_a_refused_claim_closes_whatever_the_number_of_earlier_records(self):
+        # 150,000 small earlier records (a long-lived project has about that many), each well under 16 KiB: only the
+        # callback budget is at stake.
+        # With the earlier budget the run does not close; that is what this case proves fixed.
+        from codex_agents import claim_denial
+        self.legacy_history(150_000, 64)
+        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', (2000, 50, 2 * 1_048_576)):
+            with self.assertRaises(AssertionError):
+                self.assert_refused_claim_closes(seconds=5)
+        self.assert_refused_claim_closes()
+
+    def assert_refused_claim_closes(self, seconds=20):
+        from codex_agents import signature_job_intake
+        from codex_agents.admission_inputs import AdmissionCaptureError
+        context, route_path, _, run_handle = self.open_run()
+        original = signature_job_intake.SignatureJobIntake.capture_admission
+
+        def claim_over_limit(intake, project_id, provider, work_limits, anchor_ms=None):
+            if anchor_ms is not None:
+                raise AdmissionCaptureError("admission_capture_limit")
+            return original(intake, project_id, provider, work_limits, anchor_ms)
+        with mock.patch.object(signature_job_intake.SignatureJobIntake, 'capture_admission', autospec=True,
+                               side_effect=claim_over_limit):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('admission_capture_limit', refused['reason_code'], refused)
+        deadline = time.monotonic() + seconds
+        while True:
+            closed = self.cli_any('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                                  '--reason', 'recovery_unavailable')
+            if closed.get('ready') or time.monotonic() > deadline:
+                break
+            time.sleep(0.5)
+        self.assertEqual((True, 'already_closed'), (closed.get('ready'), closed.get('classification')), closed)
+
+    def test_C2_a_claim_refused_without_a_receipt_settles_by_itself(self):
+        # 0.3.3 requirement C2 (live testing): the open was admitted, its one
+        # dispatch was refused at the claim with admission_capture_limit and no receipt, and two
+        # minutes later the abandonment command still answered history_conflict. A claim refused
+        # without a receipt is fenced by the account; the run then closes by itself, holds no
+        # capacity, can never be claimed, and the command says it is already closed.
+        from codex_agents import signature_job_intake
+        from codex_agents.admission_inputs import AdmissionCaptureError
+        context, route_path, _, run_handle = self.open_run()
+        original = signature_job_intake.SignatureJobIntake.capture_admission
+
+        def claim_over_limit(intake, project_id, provider, work_limits, anchor_ms=None):
+            if anchor_ms is not None:  # Only a claim passes its open's anchor.
+                raise AdmissionCaptureError("admission_capture_limit")
+            return original(intake, project_id, provider, work_limits, anchor_ms)
+        with mock.patch.object(signature_job_intake.SignatureJobIntake, 'capture_admission', autospec=True,
+                               side_effect=claim_over_limit):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('admission_capture_limit', refused['reason_code'], refused)
+        deadline = time.monotonic() + 30
+        while True:
+            closed = self.cli_any('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                                  '--reason', 'recovery_unavailable')
+            if closed.get('ready') or time.monotonic() > deadline:
+                break
+            time.sleep(0.5)
+        self.assertEqual((True, 'already_closed', 'never_claimed'),
+                         (closed.get('ready'), closed.get('classification'), closed.get('capacity_state')), closed)
+        ledger = self.collector_ledger
+        self.assertEqual(0, ledger._connection.execute("SELECT COUNT(*) FROM active_run_capacity").fetchone()[0])
+        self.assertEqual(('abandoned',), tuple(ledger._connection.execute(
+            "SELECT binding_state FROM host_run_bindings").fetchone()))
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
     def test_a_run_whose_client_changed_after_preparation_says_so(self):
         context, route_path, _, run_handle = self.open_run()
@@ -1519,6 +1722,52 @@ class SilenceCutoffTests(DriverHarness):
 ManyRunsTests.worker_once = HostVerificationTests.worker
 ManyRunsTests.verifier = HostVerificationTests.verifier
 ManyRunsTests.verified = HostVerificationTests.verified
+
+
+class SharedPoolTests(DriverHarness):
+    """0.3.3 requirement C8 end to end: three projects share the machine's pool of six."""
+
+    def admit(self, provider):
+        fingerprint = super().admit(provider)
+        self.others = []
+        for name in ('second', 'third'):
+            root = Path(self.temporary.name) / name
+            root.mkdir()
+            (root / 'source.txt').write_text(name + ' marker\n')
+            git(root, 'init', '-q')
+            git(root, 'config', 'user.email', 'tests@example.invalid')
+            git(root, 'config', 'user.name', 'Bridge Tests')
+            git(root, 'add', '.')
+            git(root, 'commit', '-qm', name)
+            project = self.ledger.register_project(root, now_ms=1)
+            identity = self.ledger.observe_provider(project, provider, project_root=self.tools, environ=CLEAN)[0]
+            attest_provider(self.ledger, project, self.owner_key, provider, identity['account_fingerprint'])
+            self.others.append(root)
+        return fingerprint
+
+    def test_C8_six_children_across_projects_run_at_once_and_a_seventh_is_claim_busy(self):
+        second, third = self.others
+        self.start_project_host(second)
+        self.start_project_host(third)
+        runs = [(self.project, self.open_run(self.project)) for _ in range(3)]
+        runs += [(second, self.open_run(second)) for _ in range(3)]
+        seventh = self.open_run(third)
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'one-of-six'}, {'sleep': 600},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        processes = [self.separate_dispatch(run[0], run[1], run[3], project) for project, run in runs]
+        launched = lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']]  # noqa: E731
+        self.wait_for(lambda: len(launched()) == 6, seconds=120)
+        for child in launched():
+            os.killpg(child['pgid'], 0)  # All six are alive together.
+        refused = self.cli_for(third, 'dispatch', *seventh[0], '--route', seventh[1], '--run-handle', seventh[3],
+                               expected=2)
+        self.assertEqual('claim_busy', refused['reason_code'], refused)
+        self.assertEqual(6, len(launched()))
+        for (project, run), process in zip(runs, processes):
+            self.cli_for(project, 'learning-cancel-run', '--orchestration-handle', run[2], '--run-handle', run[3])
+            output, errors = process.communicate(timeout=60)
+            self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
 
 
 class TwoProjectTests(DriverHarness):

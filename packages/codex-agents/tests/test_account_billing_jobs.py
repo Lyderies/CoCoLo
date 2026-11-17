@@ -8,6 +8,8 @@ import unittest
 from unittest import mock
 
 from tests import test_bridge as fixtures
+from codex_agents import billing_probe_worker
+from codex_agents.billing_probe_contracts import ProbeAdmissionError
 from codex_agents.account_api import (
     ACCOUNT_OPERATIONS, AccountError, AccountRequest, account_request_digest, decode_account_response, encode_account_request,
 )
@@ -247,6 +249,289 @@ class AccountBillingJobTests(unittest.TestCase):
         with self.assertRaisesRegex(AccountError, '^probe_preparation_(failed|unknown)$'):
             self.take(self.begin())
         self.assertEqual([], self.launches())
+
+    def test_C9_a_probe_admitted_but_never_launched_frees_its_worker_and_settles(self):
+        # 0.3.3 requirement C9 (live, 17 November): a probe's admission was committed, then a step
+        # before its launch failed. The job was kept as unknown with the machine's only probe worker,
+        # so every later probe waited out its deadline and answered probe_unavailable. With no
+        # execution ticket nothing can have started: the probe names the failed step, its worker is
+        # retired and its row settled, and the next probe is answered at once (the cooldown may refuse
+        # it, never a held worker).
+        real = self.billing._executions.launch
+        calls = []
+        def failing_once(*args):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError('fault after the admission commit')
+            return real(*args)
+        self.enterContext(mock.patch.object(self.billing._executions, 'launch', side_effect=failing_once))
+        with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
+            self.take(self.begin())
+        self.assertEqual([], self.launches())
+        self.until(lambda: not self.billing._jobs)
+        self.assertEqual([], [s for s in self.workers._slots if s.current is not None])
+        self.assertEqual([('committed', '{"probe":"denied","reason_code":"probe_step_failed","records":[]}')],
+            [tuple(r) for r in self.ledger._connection.execute(
+                "SELECT state, references_json FROM account_billing_probe_requests").fetchall()])
+        # The admission record stays, so the cooldown still refuses at once: nothing is spent twice.
+        started = time.monotonic()
+        refused = self.take(self.begin(self.request('probe-after-fault')), self.request('probe-after-fault'))
+        self.assertEqual(('denied', 'probe_cooldown'), (refused['probe'], refused['reason_code']))
+        self.assertLess(time.monotonic()-started, 20)
+
+    def _fail_launch_once(self):
+        real, calls = self.billing._executions.launch, []
+        def failing_once(*args):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError('fault after the admission commit')
+            return real(*args)
+        self.enterContext(mock.patch.object(self.billing._executions, 'launch', side_effect=failing_once))
+
+    def _admitted_rows(self):
+        return self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM account_billing_probe_requests WHERE state='admitted'").fetchone()[0]
+
+    def test_C9d_a_recovered_request_for_a_settled_probe_reads_its_denial(self):
+        self._fail_launch_once()
+        with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
+            self.take(self.begin())
+        self.until(lambda: not self.billing._jobs)
+        # The same request again reads its committed denial (the CLI turns it into the error), never
+        # an invalid reply or a relaunch.
+        again = self.take(self.begin())
+        self.assertEqual(('denied', 'probe_step_failed', True), (again['probe'], again['reason_code'], again['known']))
+        self.assertEqual([], self.launches())
+
+    def test_C9d_a_ticket_issued_during_settlement_is_never_settled(self):
+        # The ticket appears after the first checks (as a reentrant callback could issue it): the
+        # check just before the write refuses, and the admitted run is kept.
+        self._fail_launch_once()
+        # Any check made inside the settling write sees a ticket.
+        self.enterContext(mock.patch.object(self.billing._executions, 'ticketed',
+                                            side_effect=lambda r: self.ledger._connection.in_transaction))
+        with self.assertRaisesRegex(AccountError, '^probe_unavailable$'):
+            self.take(self.begin())
+        self.assertEqual(1, self._admitted_rows())
+
+    def test_C9d_settling_runs_no_callback(self):
+        # No reentrant callback can run between the ticket check and the write: settling calls none.
+        self._fail_launch_once()
+        real_settle, real_authorize, during = self.billing._owner.settle_unlaunched, self.billing._owner._authorize, []
+        state = {'settling': False}
+        def settle(*args):
+            state['settling'] = True
+            try:
+                return real_settle(*args)
+            finally:
+                state['settling'] = False
+        def authorize(*args):
+            during.append(state['settling'])
+            return real_authorize(*args)
+        self.enterContext(mock.patch.object(self.billing._owner, 'settle_unlaunched', side_effect=settle))
+        self.enterContext(mock.patch.object(self.billing._owner, '_authorize', side_effect=authorize))
+        with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
+            self.take(self.begin())
+        self.assertNotIn(True, during)
+
+    def test_C9d_settling_needs_no_publication_permission(self):
+        # The launch fails and the caller's permission is gone too: settling publishes nothing, so
+        # it still frees the worker.
+        self._fail_launch_once()
+        real, state = self.billing._owner._authorize, {'revoked': False}
+        def authorize(*args):
+            if state['revoked']:
+                raise ProbeAdmissionError('probe_not_authorized')
+            return real(*args)
+        real_launch = self.billing._executions.launch
+        def launch(*args):
+            state['revoked'] = True
+            return real_launch(*args)
+        self.enterContext(mock.patch.object(self.billing._owner, '_authorize', side_effect=authorize))
+        self.enterContext(mock.patch.object(self.billing._executions, 'launch', side_effect=launch))
+        with self.assertRaises(AccountError):
+            self.take(self.begin())
+        self.assertTrue(state['revoked'])  # The launch was reached, then permission was gone.
+        self.until(lambda: all(s.current is None for s in self.workers._slots))
+        self.assertEqual(0, self._admitted_rows())
+
+    def test_C9d_settling_works_when_the_permit_was_never_installed(self):
+        # A step after the commit but before the permit is installed fails.
+        real, calls = self.billing._owner._pool.discard, []
+        def failing_once(handle):
+            calls.append((self._admitted_rows(), dict(self.billing._owner._permits)))
+            if len(calls) == 1:
+                raise RuntimeError('fault before the permit')
+            return real(handle)
+        self.enterContext(mock.patch.object(self.billing._owner._pool, 'discard', side_effect=failing_once))
+        with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
+            self.take(self.begin())
+        self.assertEqual((1, {}), calls[0])  # Admitted and committed, with no permit yet.
+        self.until(lambda: all(s.current is None for s in self.workers._slots))
+        self.assertEqual(0, self._admitted_rows())
+        self.assertEqual([], self.launches())
+
+    def test_C9d_a_discard_whose_cleanup_fails_still_answers(self):
+        from codex_agents import billing_probe_worker
+        self._fail_launch_once()
+        self.enterContext(mock.patch.object(billing_probe_worker, '_remove', return_value=False))
+        with self.assertRaisesRegex(AccountError, '^probe_preparation_unknown$'):
+            self.take(self.begin())
+        self.assertEqual([], self.launches())
+        self.assertEqual(1, len([s for s in self.workers._slots if s.current is not None]))  # Kept.
+
+    def test_C9d_a_transient_error_while_discarding_is_retried(self):
+        self._fail_launch_once()
+        real, calls = self.billing._executions.retire_discarded, []
+        def failing_once(*args):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError('transient')
+            return real(*args)
+        self.enterContext(mock.patch.object(self.billing._executions, 'retire_discarded', side_effect=failing_once))
+        with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
+            self.take(self.begin())
+        self.until(lambda: not self.billing._jobs)
+        self.assertEqual([], [s for s in self.workers._slots if s.current is not None])
+
+    def test_C9d_a_failed_cleanup_request_is_asked_again(self):
+        self._fail_launch_once()
+        real, calls = self.billing._executions.discard, []
+        def failing_once(*args):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError('cleanup request failed')
+            return real(*args)
+        self.enterContext(mock.patch.object(self.billing._executions, 'discard', side_effect=failing_once))
+        with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
+            self.take(self.begin())
+        self.until(lambda: not self.billing._jobs)
+        self.assertEqual([], [s for s in self.workers._slots if s.current is not None])
+
+    def test_C9d_a_cleanup_request_that_always_fails_still_answers(self):
+        self._fail_launch_once()
+        discard = self.enterContext(mock.patch.object(self.billing._executions, 'discard',
+                                                      side_effect=RuntimeError('cleanup request failed')))
+        with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
+            self.take(self.begin())
+        self.assertEqual([], self.launches())
+        # Asked exactly three times, then kept: the job, its preparation and its worker stay held,
+        # because the cleanup was never confirmed, and nothing asks again.
+        for _ in range(20):
+            self.service.drive_claims()
+        self.assertEqual(3, discard.call_count)
+        kept = list(self.billing._jobs.values())
+        self.assertEqual(['unknown'], [j.state for j in kept])
+        self.assertIsNotNone(kept[0].preparation)
+        self.assertEqual(1, len([s for s in self.workers._slots if s.current is not None]))
+
+    def test_C9d_a_committed_denial_whose_step_then_fails_finishes(self):
+        # A pass, then a second probe inside the cooldown is denied and committed; a step after that
+        # commit fails. The job still finishes and is dropped, holding no project place.
+        self.take(self.begin())
+        real, calls = self.billing._owner._pool.discard, []
+        def failing_once(handle):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError('fault after a committed denial')
+            return real(handle)
+        self.enterContext(mock.patch.object(self.billing._owner._pool, 'discard', side_effect=failing_once))
+        with self.assertRaises(AccountError):
+            self.take(self.begin(self.request('denied')), self.request('denied'))
+        self.until(lambda: not self.billing._jobs)
+        self.assertEqual({}, self.billing._owner._pending)
+        # The second request's row is final: committed as reused (fresh billing) or denied (cooldown),
+        # never admitted and never aborted. Either way it is a committed row that is not admitted.
+        states = [r[0] for r in self.ledger._connection.execute(
+            "SELECT references_json FROM account_billing_probe_requests WHERE state='committed'")]
+        self.assertEqual(2, len(states), states)
+        self.assertTrue(any('"probe":"reused"' in r or '"probe":"denied"' in r for r in states), states)
+        self.assertEqual(0, self._admitted_rows())
+
+    def test_C9d_a_worker_held_by_a_kept_job_counts_as_stuck(self):
+        # A launched probe's completion fails, so its job is kept (its model ran) with its worker; the
+        # other worker slot has faulted. No worker can free: the next probe says so at once.
+        self.enterContext(mock.patch.object(self.billing._executions, 'complete',
+                                            side_effect=RuntimeError('completion failed')))
+        with self.assertRaises(AccountError):
+            self.take(self.begin())
+        self.assertEqual(1, len([s for s in self.workers._slots if s.current is not None]))
+        for slot in self.workers._slots:
+            if slot.current is None:
+                slot.fault = True
+        started = time.monotonic()
+        with self.assertRaisesRegex(AccountError, '^probe_worker_unavailable$'):
+            self.take(self.begin(self.request('after-kept')), self.request('after-kept'))
+        self.assertLess(time.monotonic()-started, 20)
+
+    def test_C9d_a_kept_job_whose_worker_was_retired_does_not_fail_other_probes(self):
+        # The completed probe's reply cannot be authorized after its worker was retired, so its job
+        # is kept with a handle that no longer names a worker. A later probe waiting for a busy
+        # worker is not failed by that stale handle.
+        real = self.billing._executions.complete
+        def complete_then_fail(*args):
+            real(*args)
+            raise RuntimeError('reply could not be authorized')
+        with mock.patch.object(self.billing._executions, 'complete', side_effect=complete_then_fail):
+            with self.assertRaises(AccountError):
+                self.take(self.begin())
+        kept = [j for j in self.billing._jobs.values() if j.state == 'unknown']
+        self.assertEqual(1, len(kept))
+        self.assertNotIn(kept[0].preparation, self.billing._executions._jobs)
+        held = self.enterContext(mock.patch.object(self.workers, 'prepare',
+            side_effect=billing_probe_worker.ProbeWorkerError('probe_worker_full')))
+        _ticket = self.begin(self.request('waits'))  # Held open: the model stays busy.
+        self.until(lambda: held.called)
+        for _ in range(20):
+            self.service.drive_claims()
+        job = next(j for j in self.billing._jobs.values() if j.key[3] == 'waits')
+        self.assertEqual('prepare', job.state)  # Still waiting for a worker, not failed.
+
+    def test_C9b_a_failed_step_before_launch_frees_the_worker(self):
+        # 0.3.3 requirement C9b: a step of an unstarted probe fails (here reading its preparation's
+        # state). It names the failed step and frees its worker; nothing is kept or launched.
+        real = self.billing._executions.snapshot
+        calls = []
+        def failing_once(*args):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError('a step failed')
+            return real(*args)
+        self.enterContext(mock.patch.object(self.billing._executions, 'snapshot', side_effect=failing_once))
+        with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
+            self.take(self.begin())
+        self.assertEqual([], self.launches())
+        self.until(lambda: not self.billing._jobs)
+        self.assertEqual([], [s for s in self.workers._slots if s.current is not None])
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM account_billing_probe_requests WHERE state='admitted'").fetchone()[0])
+        self.take(self.begin(self.request('probe-after-step')), self.request('probe-after-step'))
+
+    def test_C9c_a_probe_with_every_worker_lost_says_so_at_once(self):
+        # 0.3.3 requirement C9c: every worker slot has faulted, so no worker can free without a
+        # restart. The probe says so at once, launches nothing, and does not wait out its deadline.
+        for slot in self.workers._slots:
+            slot.fault = True
+        started = time.monotonic()
+        with self.assertRaisesRegex(AccountError, '^probe_worker_unavailable$'):
+            self.take(self.begin())
+        self.assertLess(time.monotonic()-started, 20)
+        self.assertEqual([], self.launches())
+
+    def test_C9c_a_probe_with_every_worker_held_unknown_says_so_at_once(self):
+        # 0.3.3 requirement C9c: both workers are kept because their workspaces could not be removed
+        # (P1: kept, not recycled). The next probe says no worker is available, at once.
+        from codex_agents import bridge
+        with mock.patch.object(bridge, 'private_workspace', side_effect=RuntimeError('unexpected')):
+            for n in range(len(self.workers._slots)):
+                with self.assertRaisesRegex(AccountError, '^probe_preparation_(failed|unknown)$'):
+                    self.take(self.begin(self.request(f'held-{n}')), self.request(f'held-{n}'))
+        if any(s.current is None for s in self.workers._slots):
+            self.skipTest('preparation failed cleanly here, so no worker is held')
+        started = time.monotonic()
+        with self.assertRaisesRegex(AccountError, '^probe_worker_unavailable$'):
+            self.take(self.begin(self.request('after-held')), self.request('after-held'))
+        self.assertLess(time.monotonic()-started, 20)
 
     def test_a_probe_when_every_slot_is_taken_says_busy_and_launches_nothing(self):
         # Both of the account's slots are held (for example by runs an earlier version

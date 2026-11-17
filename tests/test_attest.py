@@ -2137,6 +2137,8 @@ class RealTerminalTests(unittest.TestCase):
         self.addCleanup(finish)
         transcript = ""
         sent = False
+        answered = 0  # Where the transcript stood when the entry was sent.
+        ended = False
         start = time.time()
         end = start + 30
         while time.time() < end:
@@ -2149,6 +2151,10 @@ class RealTerminalTests(unittest.TestCase):
                 if not chunk:
                     break
                 transcript += chunk
+            if sent and not ended and not break_echo and "Press Enter to use" in transcript[answered:]:
+                # Answered and asking again: end its input, then read everything it prints until it exits.
+                os.write(fd, b"\x04")
+                ended = True
             if break_echo and not sent and time.time() - start > 2:
                 try:  # if the program were still reading, this would be echoed back
                     os.write(fd, (secret + "\r").encode())
@@ -2159,6 +2165,7 @@ class RealTerminalTests(unittest.TestCase):
                 time.sleep(0.3)
                 os.write(fd, (secret + "\r").encode())
                 sent = True
+                answered = len(transcript)
         finish()
         self.assertTrue(sent or break_echo, transcript)
         return transcript

@@ -49,6 +49,21 @@ class ResultPersistenceHandle:
 
 
 @dataclass(repr=False)
+class _EarlierLeases:
+    """One request on the writer for leases an earlier service left armed (0.3.3, C3).
+
+    `list` answers (binding, storage evidence, host client) for each lease armed for a claim and
+    held by no job of this service; `settle` expires one with the account's closure.
+    """
+    kind: str
+    binding: ResultLeaseBinding | None = None
+    raw: bytes | None = None
+    state: str = 'queued'
+    result: object = None
+    reason: str | None = None
+
+
+@dataclass(repr=False)
 class _Pending:
     binding: AttemptBinding | ResultLeaseBinding
     worker_handle: object
@@ -961,6 +976,55 @@ class ResultPersistenceLane:
             pending.lease, pending.state, pending.reason = value, 'withdrawn', None
             pending.storage_evidence = None
 
+    def earlier_leases(self):
+        """Ask the writer for the leases an earlier service left armed; poll its `state`."""
+        return self._queue_earlier(_EarlierLeases('list'))
+
+    def settle_earlier_lease(self, binding, raw):
+        """Expire one such lease with the account's closure for its claim request."""
+        if type(binding) is not ResultLeaseBinding or type(raw) is not bytes or not 0 < len(raw) <= MAX_DENIAL_RECEIPT_BYTES:
+            raise HistoryError('history_invalid_input')
+        return self._queue_earlier(_EarlierLeases('settle', binding, raw))
+
+    def _queue_earlier(self, request):
+        with self._lock:
+            if self._closed or self._fault:
+                raise HistoryError('history_service_unavailable')
+            self._incoming.put_nowait(('earlier', request))
+        return request
+
+    def _earlier(self, request):
+        """Writer step: the history's own checked leases, or one settled with its closure."""
+        try:
+            history = self._history()
+            if request.kind == 'list':
+                with self._lock:
+                    held = {pending.lease_binding for pending in self._jobs.values() if pending.lease_binding is not None}
+                found, after = [], 0
+                while True:
+                    page, after = history.pending_claim_leases(after=after)
+                    if not page:
+                        break
+                    for binding in page:
+                        if binding in held:
+                            continue
+                        # Each lease on its own (C3e): one whose orchestration or evidence cannot be
+                        # read is left as it is, and never stops the others from closing.
+                        try:
+                            client = history._orchestration_owner().metadata_for(binding)['snapshot']['client_version']
+                            found.append((binding, history.attest_pending_result_lease(binding), client))
+                        except HistoryError:
+                            continue
+                result = found
+            else:
+                result = history.settle_denied_result_lease(request.binding, request.raw)
+            reason, state = None, 'done'
+        except Exception as error:
+            result, state = None, 'failed'
+            reason = HistoryError(error.reason_code).reason_code if type(error) is HistoryError else 'history_service_unavailable'
+        with self._lock:
+            request.result, request.reason, request.state = result, reason, state
+
     def _run(self):
         operations = {"prepare": self._prepare, "publish": self._publish,
                       "arm": self._arm, "bind_claim": self._bind_claim,
@@ -992,6 +1056,10 @@ class ResultPersistenceLane:
                 operation, handle = command
                 if operation == "api":
                     self._requests.execute(handle, service)
+                    handle = command = None
+                    continue
+                if operation == "earlier":
+                    self._earlier(handle)
                     handle = command = None
                     continue
                 with self._lock:

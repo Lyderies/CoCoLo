@@ -32,7 +32,9 @@ class ActiveRunLimits:
 
 # Conservative policy for the uninstalled two-project candidate. No request,
 # model result or transport field can replace or raise these installed limits.
-INSTALLED_ACTIVE_RUN_LIMITS = ActiveRunLimits(machine=2, account=2)
+# Up to six children at once: on this machine, shared by every project first come first served, and
+# on one provider account (0.3.3, C8; owner: "2 is too restrictive"). A setting from 0.4.0.
+INSTALLED_ACTIVE_RUN_LIMITS = ActiveRunLimits(machine=6, account=6)
 
 CAPACITY_PARENT_SCHEMA = """
 CREATE UNIQUE INDEX IF NOT EXISTS active_capacity_parent
