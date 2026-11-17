@@ -31,7 +31,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - Up to six children now run at once on the machine, shared by every project, and six per provider
   account (it was two); one project runs at most three. Testing found that with four or more children
   in one project a cancellation was not always carried out, so the per-project limit is three until
-  that is fixed.
+  that is fixed. To match, the account queues provider observations for at most eight projects at a
+  time, three each (it was sixteen projects, two each).
 - One failed Claude billing probe could stop every later one on the machine. There is one probe worker,
   and a probe admitted but stopped before its model started (for example when two account calls
   overlapped) kept that worker until the collector restarted. Every later probe from any project then
@@ -59,7 +60,7 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   reports `project_service_other_version`. docs/troubleshooting.md says how to stop it by hand.
 - Setup no longer fails its collector step while the collector is still starting: after registering
   restarts it, setup waits (up to 90 seconds, showing the time) while its status says it is starting,
-  instead of checking once after five seconds. Every 0.3.3 install hit this.
+  instead of checking once after five seconds.
 - For contributors: run the tests with `python3 scripts/parallel_tests.py` (about 3.5 minutes on 16
   cores), or only the modules you changed with `--module`. Test-only fixes removed idle waits from the
   setup wizard and attest tests, and the collector-exit tests no longer fail under load. The suite still
