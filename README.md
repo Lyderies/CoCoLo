@@ -13,7 +13,7 @@ Codex, whichever is best at that kind of job), keeps an eye on it while it works
 checked, and hands it back. All on your own machine, all on the subscriptions you already pay for.
 No API keys, no surprise bills.
 
-> **Status:** 0.3.2. Made on a Mac; Linux works too, except operational QA, which still needs macOS. Windows, sadly, no.
+> **Status:** 0.3.3. Made on a Mac; Linux works too, except operational QA, which still needs macOS. Windows, sadly, no.
 
 ## How a job travels
 

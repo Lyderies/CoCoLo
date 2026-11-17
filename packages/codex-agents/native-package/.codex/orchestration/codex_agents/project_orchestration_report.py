@@ -55,14 +55,20 @@ def orchestration_report(history, orchestration_id):
     try:
         handle, snapshots, checkpoint_count = _orchestration(history, orchestration_id)
         current = snapshots[-1]
+        # With each run's result lease state: an expired lease with no result is a run that closed
+        # without one (denied at its claim, fenced, or closed by the next service; 0.3.3, C7).
         opens = history._connection.execute(
-            "SELECT json_extract(CAST(binding AS TEXT),'$.run_id'),ingested_at_ms,source_sequence "
-            "FROM project_host_opens WHERE project_id=? "
-            "AND json_extract(CAST(binding AS TEXT),'$.orchestration_handle')=? ORDER BY source_sequence LIMIT ?",
+            "SELECT json_extract(CAST(o.binding AS TEXT),'$.run_id'),o.ingested_at_ms,o.source_sequence,l.state "
+            "FROM project_host_opens o LEFT JOIN result_leases l ON l.project_id=o.project_id "
+            "AND l.run_handle=o.run_handle AND l.attempt=o.attempt WHERE o.project_id=? "
+            "AND json_extract(CAST(o.binding AS TEXT),'$.orchestration_handle')=? ORDER BY o.source_sequence LIMIT ?",
             (history.project_id, handle, MAX_RUNS + 1)).fetchall()
         if len(opens) > MAX_RUNS:
             raise HistoryError("history_learning_capacity")
-        runs = {run_id: opened_at for run_id, opened_at, _ in opens if type(run_id) is str}
+        runs = {run_id: opened_at for run_id, opened_at, _, _ in opens if type(run_id) is str}
+        # Every attempt's lease expired: one still open could yet record a result.
+        expired = {run_id for run_id, _, _, _ in opens if type(run_id) is str} - {
+            run_id for run_id, _, _, state in opens if state != 'expired'}
         outcomes, recorded_at, reviewed = {}, {}, {}
         if runs:
             names = ",".join("?" for _ in runs)
@@ -96,6 +102,11 @@ def orchestration_report(history, orchestration_id):
     durations = []
     for run_id, opened_at in runs.items():
         outcome = outcomes.get(run_id)
+        if outcome is None and run_id in expired:
+            # Closed without a result: counted as abandoned below, and its usage is not known.
+            for field in usage_fields:
+                unknown[field] += 1
+            continue
         if outcome is None:
             statuses["pending"] = statuses.get("pending", 0) + 1
             pending += 1
@@ -126,13 +137,15 @@ def orchestration_report(history, orchestration_id):
                 totals[field] += int(value)
     ended = current["ended_at_ms"]
     recorded = len(outcomes)
+    abandoned = len(expired - set(outcomes))
     goal_known = current["goal_tokens_used"] is not None or current["goal_time_used_seconds"] is not None
     return {
         "orchestration_id": orchestration_id, "status": str(current["status"]),
         "started_at_ms": int(current["started_at_ms"]), "ended_at_ms": ended,
         "duration_ms": None if ended is None else int(ended) - int(current["started_at_ms"]),
-        "runs": {"opened": len(runs), "terminal": recorded, "pending": len(runs) - recorded, "abandoned": 0,
-                 "current_active": len(runs) - recorded if current["status"] == "active" else 0,
+        "runs": {"opened": len(runs), "terminal": recorded, "pending": len(runs) - recorded - abandoned,
+                 "abandoned": abandoned,
+                 "current_active": len(runs) - recorded - abandoned if current["status"] == "active" else 0,
                  "agent_bound": len(runs), "deadlines_observed": 0},
         "checkpoint_count": checkpoint_count,
         "checkpoints": [{"sequence": int(item["sequence"]), "status": str(item["status"]),

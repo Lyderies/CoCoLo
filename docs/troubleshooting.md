@@ -200,6 +200,17 @@ The project's service prepares a child before launching it, and says which step 
 
 Release 0.3.1 and earlier said only `run_unavailable` for all of these.
 
+## `account_closed_without_reply`
+
+The account service closed the connection without answering, usually because the collector stopped
+while the call was in flight; the next command starts it again. Try the command again. Run
+`learning-status`: `collector_previous_exit` says how the last collector stopped (`signal`, `requested`,
+`state_removed`, `thread_ended`, or `error` with the error's type and code locations). Report an
+`error` with those fields. Releases before 0.3.3 said `account_invalid_response` for this.
+
+On 0.8.28, an `error` of `SQLReadError` passing through `bind_session` was an account read colliding
+with a hook's session bind. Codex package 0.8.29 fixes it: update.
+
 ## A billing probe refused with `observation_unavailable` or `probe_..._failed`
 
 The probe names the step that stopped it before launching anything:
@@ -208,30 +219,41 @@ The probe names the step that stopped it before launching anything:
 - `probe_preparation_failed` or `probe_preparation_unknown`: preparing the probe failed (unknown when
   its cleanup could not be confirmed, which keeps its slot);
 - `probe_worker_failed` or `probe_step_failed`: the probe's worker or another step failed. Report it
-  with the reason.
+  with the reason. A probe that failed this way before its model started frees its worker, so the next
+  probe can run (0.3.3);
+- `probe_worker_unavailable`: the machine's probe worker is held by a probe whose cleanup could not be
+  confirmed, or has stopped, and only a restart frees it. Restart the collector (`setup.sh` repairs it),
+  then probe again.
 
 ## `probe_busy`
 
-The Claude billing probe needs one of its account's two run slots, and none was free, or another probe
+The Claude billing probe needs one of its account's six run slots, and none was free, or another probe
 for the account was running. Nothing was admitted. Try again when a run has finished. Right after an
 upgrade from 0.2.x, runs that version recorded count as running for a day after they started (it
-never recorded when one finished), so they can hold both slots until then; see `claim_busy`. Release 0.3.1
+never recorded when one finished), so they can hold slots until then; see `claim_busy`. Release 0.3.1
 and earlier reported this as `probe_unavailable`.
 
 ## `admission_capture_limit` or `admission_capture_work_limit`
 
 Before admitting a child or a billing probe, the account service reads the provider readings and earlier
 decisions that can still change the decision: about the last day of them, plus older ones still in force.
-These reasons mean even that did not fit in one bounded check, so nothing was admitted. It happens only
-under very heavy use. Readings stop counting after a day, and usage windows when they reset (up to a
-week), so try again later; if it keeps happening, report it with the reason. Release
-0.3.1 and earlier read the whole history, so a project with long use refused every run and reported
-`account_unavailable` instead. Update to 0.3.2 or later.
+These reasons mean even that did not fit in one bounded check (4,096 records and 2 MiB), so nothing was
+admitted. It happens only under very heavy use: about ten times the readings of a busy day. Readings stop
+counting after a day, and usage windows when they reset (up to a week), so try again later; if it keeps
+happening, report it with the reason. A dispatch refused this way never launched and holds no slot; it
+closes by itself, and `learning-classify-host-run-abandoned` then answers `already_closed`. On 0.3.2 such
+a run could stay open on a project with long history (the command answered `history_conflict`); after
+updating to 0.3.3 the project's next service closes it by itself.
+
+Release 0.3.2 held a quarter of a megabyte, about one busy day of readings, so a dispatch on a busy
+account could be refused with this reason even though its open was admitted. Release 0.3.1 and earlier
+read the whole history, so a project with long use refused every run and reported `account_unavailable`
+instead. Update to 0.3.3 or later.
 
 ## `claim_busy`
 
-Usually two children are already running on this machine, or on the same provider account, which is this
-release's limit. Wait for one to finish (or ask the primary to stop one), then ask
+Usually six children are already running on this machine, or on the same provider account, which is this
+release's limit (a project may run three of them; a fourth from one project is `preparation_full`). Wait for one to finish (or ask the primary to stop one), then ask
 again. A place held by a run whose project service stopped or crashed is freed by that project's next
 service, which starts with the project's next command, as soon as nothing of the run is still running;
 `learning-run-status` then reports that run as `run_lost` (abandoned, outcome unknown). Only when the
@@ -241,9 +263,25 @@ that run's deadline. After an upgrade from 0.2.x, runs that version left can hol
 
 ## `project_service_other_version`
 
-The project was updated while its service was still running from before the update, and a child is
-still active somewhere, so the old service was left alone. Try again when no child is running; the old
-service is then replaced by itself.
+The project was updated while its service was still running from before the update, and the old
+service was left alone. Usually a child is still active somewhere, on any project of this account: try
+again when no child is running, and the old service is then replaced by itself.
+
+If it keeps happening with nothing running, the old service may be one that cannot stop by itself: a
+0.3.2 service (Codex package 0.8.22) that holds a dispatch refused at its claim never stops when asked.
+Stop it yourself, then use the project again; its new service closes that run.
+
+1. Find it. Its command line runs `project_host.py` from the earlier version's protected copy, with
+   `--project-root` and this project's path:
+
+   ```
+   ps -axo pid,etime,command | grep project_host.py | grep -- "--project-root $HOME/path/to/project"
+   ```
+
+2. Stop it with a plain `kill <pid>`, which sends SIGTERM: the service stops and settles what it holds.
+   Never use `kill -9`.
+3. Run `learning-orchestration-report` for one of the project's orchestrations, which starts this
+   version's service, then check the run with `learning-classify-host-run-abandoned`.
 
 ## `learning_migration` stays `pending`
 

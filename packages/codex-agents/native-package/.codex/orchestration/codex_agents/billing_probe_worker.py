@@ -315,6 +315,15 @@ class BillingProbeWorkers:
         job = self._job(handle)
         return job.state == 'reserved' and job.slot.current is handle and job.slot.thread.is_alive()
 
+    def stuck(self, kept=frozenset()):
+        """True when no worker can free without a restart: every slot has faulted or stopped, or
+        holds a worker whose cleanup is unknown or that a kept job holds (0.3.3, C9c and C9d)."""
+        with self._registry._lock:
+            return all(slot.fault or not slot.thread.is_alive()
+                       or (slot.current is not None and (slot.current in kept
+                                                         or self._jobs[slot.current].state == 'unknown'))
+                       for slot in self._slots)
+
     def prepare(self, payload):
         self._owner()
         if self._closed or type(payload) is not bytes or not 0 < len(payload) <= MAX_PROBE_INPUT_BYTES:

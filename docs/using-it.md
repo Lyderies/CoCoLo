@@ -82,8 +82,8 @@ that starts work or spends usage.
 Each project has its own service, started when needed, that runs that project's children and keeps its
 history. Projects do not wait for each other.
 
-For now, at most two children run at once on the machine, and at most two per provider account; each
-project prepares up to four. A child that cannot get a place is refused with `claim_busy`: wait for a
+At most six children run at once on the machine, shared by every project, and at most six per provider
+account; one project runs at most three. A child that cannot get a place is refused with `claim_busy`: wait for a
 running child to finish, then ask again. If a project's service stops or crashes while one of its
 children holds a place, the project's next service (started by the project's next command) frees that
 place by itself as soon as nothing of that child is still running, and reports the run as `run_lost`

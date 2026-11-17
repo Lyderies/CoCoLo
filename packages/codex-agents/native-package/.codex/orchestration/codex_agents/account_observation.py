@@ -139,9 +139,8 @@ class AccountObservationOwner:
         return keyed_digest(self._key, b'account-observation-v1\0' + canonical_json({name: row[name] for name in _FIELDS}))
 
     def _read(self, operation):
-        connection = self._ledger._connection
-        run = connection.transaction_read_call if connection.in_transaction else connection.read_call
-        return run(self._limits, operation)
+        # The mode is chosen under the lock, with a bounded wait (C12c, C12f).
+        return self._ledger._connection.read_in_current_mode(self._limits, operation)
 
     def _one(self, sql, parameters=()):
         # Only fixed internal owner SELECTs call this helper; no wire SQL/API.

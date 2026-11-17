@@ -26,8 +26,8 @@ from .claim_admission import admission_signature_rows
 
 MAX_SIGNATURE_JOB_PROJECTS = 256
 MAX_SIGNATURE_JOB_SLOTS = 4096
-MAX_SIGNATURE_JOB_ROWS = 8192
-MAX_SIGNATURE_JOB_BYTES = 64 * 1_048_576
+MAX_SIGNATURE_JOB_ROWS = 98_304
+MAX_SIGNATURE_JOB_BYTES = 48 * 1_048_576
 SIGNATURE_JOB_REASONS = frozenset({
     "signature_job_invalid_limits", "signature_job_invalid_request",
     "signature_job_project_limit", "signature_job_project_full", "signature_job_unavailable",

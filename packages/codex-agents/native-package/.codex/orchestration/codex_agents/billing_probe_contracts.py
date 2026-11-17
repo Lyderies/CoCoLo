@@ -8,9 +8,11 @@ MAX_BILLING_REPLY_BYTES = 12_288
 BILLING_PROBE_REASONS = frozenset({'probe_invalid_request', 'probe_invalid_response', 'probe_not_authorized',
     'probe_unavailable', 'probe_conflict', 'probe_full', 'probe_busy', 'probe_not_ready',
     # Which step stopped a probe before it launched (0.3.2): preparing it, its worker, another step.
-    'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed', 'probe_step_failed'})
+    'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed', 'probe_step_failed',
+    # No probe worker can free without a restart (0.3.3, C9c).
+    'probe_worker_unavailable'})
 PROBE_STEP_REASONS = frozenset({'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed',
-    'probe_step_failed'})
+    'probe_step_failed', 'probe_worker_unavailable'})
 PROBE_COMPLETION_REASONS = frozenset({'probe_incomplete', 'probe_invalid_events', 'probe_no_events'})
 
 
@@ -40,7 +42,9 @@ def checked_billing_probe_reply(value):
             raise ValueError()
         state, reason, records = value['probe'], value['reason_code'], value['records']
         if state == 'denied':
-            if records or type(reason) is not str or reason not in ADMISSION_REASON_CODES-{'admitted'}:
+            # A probe settled before its launch is denied with the failed step (0.3.3, C9).
+            if (records or type(reason) is not str
+                    or reason not in (ADMISSION_REASON_CODES-{'admitted'}) | PROBE_STEP_REASONS):
                 raise ValueError()
         else:
             if ((state == 'reused' and reason is not None)

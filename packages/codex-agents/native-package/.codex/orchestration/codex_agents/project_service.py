@@ -34,7 +34,9 @@ PRIMARY_NAMESPACE = 'primary'
 # minutes, quiet after two, stale after five, silence cutoff after ten. They are
 # not yet calibrated against real client cadence.
 LIVENESS = LivenessLimits(180 * SECOND, 120 * SECOND, 300 * SECOND, 600 * SECOND)
-MAX_ACTIVE_ATTEMPTS = 4
+# One project runs at most three of the pool's six children: with four or more, a cancellation was not
+# always carried out (0.3.3, C8; to fix in 0.4.0).
+MAX_ACTIVE_ATTEMPTS = 3
 MAX_ROUTE_TIMEOUT_SECONDS = 21_600  # config/routing-policy.json; a test keeps them equal
 RESULT_RESERVATION_MS = (MAX_ROUTE_TIMEOUT_SECONDS + 1_800) * 1000
 # A host is started on demand, so one with no run and no client for this long

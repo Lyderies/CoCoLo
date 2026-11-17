@@ -2,6 +2,70 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
+## 0.3.3: dispatch on a busy account (Codex package 0.8.29)
+
+- On a busy account, a child's open was admitted but its dispatch was refused with
+  `admission_capture_limit`. Before admitting an open, and again at its dispatch, the account service
+  reads the provider readings and decisions that can still change the decision, in one check of at most
+  512 records and 256 KiB. One ordinary busy day of readings (about 180 headroom and 70 billing readings,
+  40 recent decisions) filled about that much. The dispatch reads a little more than its open, since the
+  open adds its own decision and the dispatch observes the provider again first. The check now holds
+  4,096 records and 2 MiB, about ten times that day; past it, an open or dispatch still refuses plainly
+  and changes nothing. What is read and how admission decides are unchanged. Found in live testing.
+- A dispatch refused at its claim could leave its run stuck for good. Before closing such a run, the
+  account checks that no earlier dispatch record names it, and on a project with long history (about
+  200,000 records) that check ran out of its small read budget every time, so the run was never closed:
+  `learning-classify-host-run-abandoned` answered `history_conflict`, and the run held one of the
+  project's four places for unfinished results. The check now has the account's ordinary read budget.
+  Runs already left stuck this way are closed by the project's next service by itself, after the
+  update: it asks the account to close each claim request an earlier service left open, and the
+  account checks the whole original request before doing so. Found in live testing.
+  This works for a run an earlier version left, whose claim request names that version.
+  While it is still closing such a run, `learning-classify-host-run-abandoned` says so instead of
+  `host run orchestration is unavailable`, and an unreachable account does not stop it trying. Known
+  limit: that service stops trying for one run after ten other refusals (a collector that closes the
+  connection mid-request counts as one), or when one read of that run's history fails while it lists
+  the runs to close. The project's next service tries again (one starts after the current one stops,
+  for example once it has been idle for a while, or at the next update).
+
+- Up to six children now run at once on the machine, shared by every project, and six per provider
+  account (it was two); one project runs at most three. Testing found that with four or more children
+  in one project a cancellation was not always carried out, so the per-project limit is three until
+  that is fixed. To match, the account queues provider observations for at most eight projects at a
+  time, three each (it was sixteen projects, two each).
+- One failed Claude billing probe could stop every later one on the machine. There is one probe worker,
+  and a probe admitted but stopped before its model started (for example when two account calls
+  overlapped) kept that worker until the collector restarted. Every later probe from any project then
+  waited a minute and answered `probe_unavailable`, so no Claude child could start. A probe that has not
+  started now frees its worker and answers `probe_step_failed`. A probe whose model may have started is
+  still kept, so it never runs twice. When no worker can free without a restart, a probe answers
+  `probe_worker_unavailable` at once. Found in a live soak test.
+- When the collector stopped while a call was in flight, the caller got an empty reply and reported
+  `account_invalid_response`, and nothing recorded why the collector had stopped. Such a reply is now
+  `account_closed_without_reply`. The collector now records how it stopped: a signal, a shutdown
+  request, its state removed, its thread ending, or an error (only the error's type and code
+  locations, never its message). `learning-status` shows that as `collector_previous_exit`. Found in a
+  live soak test.
+- The collector stopped by itself now and then, cutting off every call in flight
+  (`account_closed_without_reply`). The first recorded stop showed why. The account service and the
+  collector share one database connection, kept apart by a lock, and some account reads ran without
+  that lock. A session bind from a hook arriving during one of them was refused, and the refusal ended
+  the collector. Every such read now holds the lock, so the bind waits. A read waits for the lock no
+  longer than its own time budget, then is refused as busy. If the database is busy while the
+  collector serves a request, only that request is refused and the collector keeps running. Any other
+  database error still stops the collector, and `collector_previous_exit` says why. Found in a
+  live soak test.
+- The orchestration report counts a run that closed without a result as abandoned, not pending.
+- A 0.3.2 project service that holds a stuck run never stops when an update asks it to; the update then
+  reports `project_service_other_version`. docs/troubleshooting.md says how to stop it by hand.
+- Setup no longer fails its collector step while the collector is still starting: after registering
+  restarts it, setup waits (up to 90 seconds, showing the time) while its status says it is starting,
+  instead of checking once after five seconds.
+- For contributors: run the tests with `python3 scripts/parallel_tests.py` (about 3.5 minutes on 16
+  cores), or only the modules you changed with `--module`. Test-only fixes removed idle waits from the
+  setup wizard and attest tests, and the collector-exit tests no longer fail under load. The suite still
+  does about 30 CPU-minutes of work; 0.4.0 cuts that.
+
 ## 0.3.2: admission on a project with history (Codex package 0.8.22)
 
 - From a busy project after upgrading to 0.3.1: no child could be opened and no Claude billing probe

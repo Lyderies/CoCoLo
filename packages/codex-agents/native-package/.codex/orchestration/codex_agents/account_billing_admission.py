@@ -15,7 +15,7 @@ from .admission_metadata import API_KEY_VARIABLES, evaluate_admission
 from .account_observation import ObservationContext
 from .account_open_admission import open_admission_inputs
 from .billing_probe_schema import assert_billing_probe_schema
-from .billing_probe_contracts import ProbeAdmissionError
+from .billing_probe_contracts import PROBE_STEP_REASONS, ProbeAdmissionError
 from .claim_admission import PreparedClaimAdmission, admission_signature_rows, same_admission_inputs
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches, valid_integer
 from .learning_contracts import canonical_json, content_digest, parse_bounded_json_value, validate_learning_record
@@ -99,9 +99,8 @@ class AccountBillingAdmission:
             raise ProbeAdmissionError('probe_not_authorized')
 
     def _read(self, operation):
-        connection = self._ledger._connection
-        run = connection.transaction_read_call if connection.in_transaction else connection.read_call
-        return run(self._limits, operation)
+        # The mode is chosen under the lock, with a bounded wait (C12c, C12f).
+        return self._ledger._connection.read_in_current_mode(self._limits, operation)
 
     def _one(self, sql, parameters=()):
         return self._read(lambda: self._ledger._connection.execute(sql, parameters).fetchone())
@@ -380,6 +379,57 @@ class AccountBillingAdmission:
         if self._row(reservation.project, reservation.key) != final:
             raise ProbeAdmissionError('probe_conflict')
         return reply
+
+    def settle_unlaunched(self, reservation, reason):
+        """Settle an admitted probe that was never offered for execution (0.3.3, C9).
+
+        Only when the execution owner holds no ticket for it, so no model can have started. The row
+        becomes a committed denial naming the failed step; its stored admission record stays, so the
+        probe cooldown still applies, and a known request reads this reply and never relaunches.
+        Settling publishes nothing, so it needs no publication permission, and it works whether or not
+        the permit was installed (0.3.3, C9d).
+        """
+        self._guard()
+        execution_owner = getattr(self, '_execution_owner', None)
+        if (type(reservation) is not _Reservation or reason not in PROBE_STEP_REASONS or execution_owner is None
+                or self._pending.get((reservation.project, reservation.key)) is not reservation):
+            raise ProbeAdmissionError('probe_conflict')
+        with self._ledger._account_transaction():
+            row = self._row(reservation.project, reservation.key)  # Sealed rows only; no callback runs.
+            if (row is None or row['state'] != 'admitted' or row['parameters_digest'] != reservation.parameters
+                    or row['created_at_ms'] != reservation.created or row['deadline_at_ms'] != reservation.deadline):
+                raise ProbeAdmissionError('probe_conflict')
+            # Checked last, with nothing reentrant between this and the write.
+            if execution_owner.ticketed(reservation):
+                raise ProbeAdmissionError('probe_conflict')
+            final = self._update(row, state='committed', references_json=canonical_json(
+                {'probe': 'denied', 'reason_code': reason, 'records': []}).decode())
+            if self._row(reservation.project, reservation.key) != final:
+                raise ProbeAdmissionError('probe_conflict')
+        permit = self._permits.pop(reservation, None)
+        if permit is not None:
+            self._execution_inputs.pop(permit, None)
+        self._pending.pop((reservation.project, reservation.key), None)
+        self._reserved_inputs.pop(reservation, None)
+        self._signatures.pop(reservation, None)
+
+    def release_committed(self, reservation):
+        """Drop the memory of a reservation whose row is already committed (0.3.3, C9d).
+
+        A step after the commit failed before the pending original was released. The durable row is
+        final and unchanged; only this owner's memory of it goes.
+        """
+        self._guard()
+        if (type(reservation) is not _Reservation
+                or self._pending.get((reservation.project, reservation.key)) is not reservation
+                or reservation in self._permits):
+            raise ProbeAdmissionError('probe_conflict')
+        row = self._row(reservation.project, reservation.key)
+        if row is None or row['state'] != 'committed':
+            raise ProbeAdmissionError('probe_conflict')
+        self._pending.pop((reservation.project, reservation.key))
+        self._reserved_inputs.pop(reservation, None)
+        self._signatures.pop(reservation, None)
 
     def known_reply(self, project, runtime, caller, identity, context, *, before_commit):
         """Read a committed original even after a local post-commit fault.

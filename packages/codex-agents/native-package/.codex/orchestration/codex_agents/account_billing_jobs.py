@@ -52,6 +52,9 @@ class _Job:
     supervisor: object = None
     result: dict | None = None
     reason: str | None = None
+    settled: bool = False  # Its admitted row was settled with no launch (0.3.3, C9).
+    discard_faults: int = 0  # Transient errors while discarding, retried (0.3.3, C9d).
+    cleanup_requested: bool = False  # Its preparation was asked to clean up.
     cancelled: bool = False
     observed_again: bool = False
 
@@ -168,8 +171,23 @@ class AccountBillingJobs:
 
     def _discard(self, job, reason='probe_unavailable'):
         job.reason, job.state = reason, 'discarding'
-        if job.preparation is not None:
+        self._request_cleanup(job)
+
+    def _request_cleanup(self, job):
+        """Ask the preparation to clean up; a failed request is asked again on the next step, and
+        after three failures the job is kept and answered (0.3.3, C9d)."""
+        if job.preparation is None or job.cleanup_requested:
+            return
+        try:
             self._executions.discard(job.preparation)
+            job.cleanup_requested = True
+        except Exception:
+            self._discard_fault(job)
+
+    def _discard_fault(self, job):
+        job.discard_faults += 1
+        if job.discard_faults >= 3:
+            job.state = 'unknown'
 
     def owns_signature(self, handle):
         return handle in self._signatures
@@ -191,7 +209,10 @@ class AccountBillingJobs:
         except Exception as error:
             row = self._owner._row(job.key[0], job.reservation.key)
             if row is not None and row['state'] == 'admitted':
-                job.state, job.reason = 'unknown', 'probe_unavailable'
+                # Admitted, then a step before the launch failed. With no execution ticket nothing
+                # can have started: settle the row and free the machine's probe worker, rather than
+                # keep both until a restart (0.3.3, C9). Once a ticket exists the run is kept.
+                self._settle_failed_step(job, unsure='probe_unavailable')
             else:
                 self._discard(job, getattr(error, 'reason_code', 'probe_unavailable'))
         finally:
@@ -232,6 +253,11 @@ class AccountBillingJobs:
                 job.preparation = self._executions.prepare(job.reservation, job.identity)
             except ProbeWorkerError as error:
                 if error.reason_code == 'probe_worker_full':
+                    kept = frozenset(self._executions.worker_of(j.preparation) for j in self._jobs.values()
+                                     if j.state == 'unknown' and j.preparation is not None) - {None}
+                    if self._workers.stuck(kept):
+                        # Nothing will free a worker before a restart: say so now (0.3.3, C9c).
+                        self._discard(job, 'probe_worker_unavailable')
                     return
                 raise
             job.identity, job.state = None, 'preparing'
@@ -274,14 +300,50 @@ class AccountBillingJobs:
             if job.signature is not None:
                 return
             if job.preparation is not None:
+                self._request_cleanup(job)
+                if job.state != 'discarding' or not job.cleanup_requested:
+                    return
                 state = self._executions.snapshot(job.preparation)['worker_state']
+                if state == 'unknown':
+                    # Its cleanup could not be confirmed: answer, and keep custody (0.3.3, C9d).
+                    job.state, job.reason = 'unknown', 'probe_preparation_unknown'
+                    return
                 if state not in {'cleaned', 'failed'}:
                     return
                 self._executions.retire_discarded(job.preparation)
                 job.preparation = None
-            if job.result is None:
-                self._owner.abort_reserved(job.reservation)
+            # Abort only a reservation still reserved; a committed one is only released from memory (C9d).
+            if (job.result is None and not job.settled and job.reservation is not None
+                    and self._owner._pending.get((job.reservation.project, job.reservation.key)) is job.reservation):
+                row = self._owner._row(job.key[0], job.reservation.key)
+                if row is not None and row['state'] == 'committed':
+                    self._owner.release_committed(job.reservation)
+                else:
+                    self._owner.abort_reserved(job.reservation)
             self._ready(ticket, job, result=job.result, reason=job.reason)
+
+    def _settle_failed_step(self, job, *, unsure='probe_step_failed'):
+        """A step failed. A probe that has not started frees its worker and names the step; one that
+        may have started keeps every original handle (0.3.3, C9 and C9b)."""
+        if job.state == 'discarding':
+            # Discarding is resumed on the next step; a persistent error keeps the job (0.3.3, C9d).
+            self._discard_fault(job)
+            if job.state == 'unknown':
+                job.reason = job.reason or unsure
+            return
+        try:
+            # The execution ticket, issued inside the launch, is what says a probe may have started.
+            if job.state in {'ready', 'unknown'} or job.supervisor is not None or (
+                    job.preparation is not None and self._executions.ticketed(job.reservation)):
+                raise ProbeAdmissionError()
+            if job.reservation is not None:
+                row = self._owner._row(job.key[0], job.reservation.key)
+                if row is not None and row['state'] == 'admitted':
+                    self._owner.settle_unlaunched(job.reservation, 'probe_step_failed')
+                    job.settled = True
+            self._discard(job, 'probe_step_failed')
+        except Exception:
+            job.state, job.reason = 'unknown', unsure
 
     def drive(self):
         self._guard()
@@ -294,8 +356,7 @@ class AccountBillingJobs:
             try:
                 self._step(ticket, job)
             except Exception:
-                # Keep every original handle/reservation after ambiguity.
-                job.state, job.reason = 'unknown', 'probe_step_failed'
+                self._settle_failed_step(job)
         if self._closing and not self._jobs:
             self._workers.close()
 

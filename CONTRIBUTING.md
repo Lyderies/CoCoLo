@@ -22,10 +22,14 @@ Turn on the repository's hooks once, then run the checks before every pull reque
 git config core.hooksPath .githooks          # identifier guard on every commit
 python3 scripts/check_identifiers.py         # scan tracked files
 ruff check .
-python3 -m unittest discover -s tests -v
-(cd packages/codex-agents && python3 -m unittest discover -s tests)
-(cd packages/claude-agents && PYTHONPATH=src python3 -m unittest discover -s tests)
+python3 scripts/parallel_tests.py            # all three suites, in parallel
 ```
+
+`parallel_tests.py` runs the three suites (the repository root, `packages/codex-agents` and
+`packages/claude-agents`) split into units across your cores, and prints one summary; a failed unit's
+log tail is shown. Run them one after another only to debug, since that takes over half an hour.
+While working, run only the modules you touched, for example
+`python3 scripts/parallel_tests.py --module codex:tests.test_bridge --module root:test_install`.
 
 CI runs the identifier guard, Ruff and all three suites on Linux and macOS.
 

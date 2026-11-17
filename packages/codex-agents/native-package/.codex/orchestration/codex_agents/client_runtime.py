@@ -52,6 +52,8 @@ BRIDGE_PROVIDERS = frozenset({"codex", "claude"})  # Read-only children the proj
 START_REASONS = frozenset({
     'run_invalid_request', 'run_not_found', 'run_conflict', 'run_full', 'run_failed', 'run_unavailable',
     'run_abandoned', 'run_closed', 'run_lost', 'run_lost_held', 'run_client_changed', 'run_account_call_failed',
+    # An earlier service's run the project's service is still closing (0.3.3, C3d).
+    'run_settling',
 }) | ACCOUNT_REASON_CODES | CLAIM_DENIAL_CODES | PREPARATION_STAGE_REASONS
 # A run whose project service stopped or crashed: ended abandoned with an unknown outcome.
 # Its capacity is released once the next service saw nothing of it still running.
@@ -277,7 +279,10 @@ def _status_collector_fields(health):
             or any(type(v) is not dict or v.keys() != {'count', 'updated_at_ms'}
                    or any(not account_integer(n) for n in v.values()) for v in counters.values())):
         raise ValueError()
-    return {'collector_schema_version': health['schema_version'],
+    from .collector_exit import checked as checked_exit
+    previous = health.get('previous_exit')
+    return {'collector_previous_exit': None if previous is None else checked_exit(previous),
+            'collector_schema_version': health['schema_version'],
             'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
             'started_at_ms': health['started_at_ms'], 'collector_health': counters,
             'ingestion': ingestion, 'provider_attestations': attestations}
@@ -825,6 +830,10 @@ def abandon_bridged_run(state_root, project_root, run_handle, reason, *, host_cl
     if reply['reason_code'] == 'run_closed':
         return {'ready': True, 'run_handle': run_handle, 'classification': 'already_closed', 'reason': reason,
                 'settled_by': 'project_host', 'capacity_state': 'never_claimed'}
+    if reply['reason_code'] == 'run_settling':
+        # An earlier service's run that this one is still closing (0.3.3, C3d).
+        return {'ready': False, 'reason_code': 'run_settling',
+                'error': "the project's service is still closing this run; try again in a minute"}
     if reply['reason_code'] in LOST_CAPACITY:
         # Its stopped service's run is settled by the next service on its own, never by this command.
         return {'ready': True, 'run_handle': run_handle, 'classification': 'already_closed', 'reason': reason,

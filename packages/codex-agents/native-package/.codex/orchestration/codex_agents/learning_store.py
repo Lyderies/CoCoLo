@@ -137,7 +137,7 @@ from .owner_key_contracts import (
     _ssh_key_parts as _ssh_key_parts,
 )
 from .result_contracts import MAX_RESULT_BODY_BYTES
-from .sql_read_budget import SQLReadConnection
+from .sql_read_budget import SQLReadConnection, SQLReadError
 from .account_claim_contracts import (
     CLAIM_DENIAL_CODES, MAX_CLAIM_INTEGER, ClaimError, LaunchClaimInput,
     _DIGEST as _CLAIM_DIGEST, _REQUEST_ID as _CLAIM_REQUEST_ID, _PROJECT as _CLAIM_PROJECT,
@@ -2027,6 +2027,7 @@ class LearningLedger:
                 raise
         try:
             self._connection = self._connect()
+            self._connection.share_with_lock(self._lock)
             self._migrate()
             self._record_first_owner_key()
             self.state.mark_initialized()
@@ -6366,11 +6367,16 @@ class LearningLedger:
     def _claim_preflight(
         self, project_id: str, *, runtime_digest: str, caller_scope: str,
         request_id: str, launch: LaunchClaimInput, work_limits=None,
-        storage_required=False, storage_binding=None, storage_evidence=None,
+        storage_required=False, storage_binding=None, storage_evidence=None, earlier_runtime=False,
     ):
-        """Capture a request and current state; perform no signature work."""
+        """Capture a request and current state; perform no signature work.
+
+        `earlier_runtime`: only for fencing an earlier version's claim request (0.3.3, C3f), whose
+        runtime is not this account's; nothing can be admitted for such a request.
+        """
         if (not claim_matches(project_id, _CLAIM_PROJECT) or not claim_matches(runtime_digest, _CLAIM_DIGEST)
-                or runtime_digest != COLLECTOR_RUNTIME_DIGEST or not claim_matches(caller_scope, _CLAIM_DIGEST)
+                or (runtime_digest != COLLECTOR_RUNTIME_DIGEST) != (earlier_runtime is True)
+                or not claim_matches(caller_scope, _CLAIM_DIGEST)
                 or not claim_matches(request_id, _CLAIM_REQUEST_ID) or type(launch) is not LaunchClaimInput):
             raise ClaimError("claim_invalid_request")
         launch = LaunchClaimInput(launch.run_handle, launch.identity_digest)
@@ -6546,15 +6552,34 @@ class LearningLedger:
         expected, raw = capture_storage_evidence(storage_binding, storage_evidence)
         if expected is None:
             raise ClaimError('claim_storage_required')
+        # The sweep of a lease an earlier service left armed (0.3.3, C3) names no identity. Such a
+        # lease is usually an earlier version's, under that version's runtime (C3f): the request
+        # comes under this account's runtime, and the claim request it closes is checked whole
+        # under the lease's own runtime, so the denial is stored for exactly that request.
+        sweep = closure.identity_digest is None
+        original_runtime = expected.runtime_digest if sweep and runtime_digest == COLLECTOR_RUNTIME_DIGEST else runtime_digest
+        if closure.identity_digest is None:
+            # The identity this run was observed with before launch, checked below against the
+            # whole claim request.
+            if not fence:
+                raise ClaimError('claim_denial_invalid')
+            with self._lock:
+                observed = self._connection.execute(
+                    'SELECT identity_digest FROM launch_observations WHERE project_id=? AND handle_digest=?',
+                    (project_id, keyed_digest(self.state.digest_key(), closure.run_handle))).fetchone()
+            if observed is None:
+                raise ClaimError('claim_denial_unavailable')
+            closure = replace(closure, identity_digest=observed[0])
         launch = LaunchClaimInput(closure.run_handle, closure.identity_digest)
         original = AccountRequest(ACCOUNT_PROTOCOL_VERSION, 'account.claim_launch', closure.claim_request_id,
-                                  project_id, runtime_digest, launch.payload())
-        if (expected.project_id != project_id or expected.runtime_digest != runtime_digest
+                                  project_id, original_runtime, launch.payload())
+        if (expected.project_id != project_id or expected.runtime_digest != original_runtime
                 or expected.run_handle != closure.run_handle or expected.claim_request_id != closure.claim_request_id
                 or expected.claim_request_digest != account_request_digest(original)):
             raise ClaimError('claim_denial_invalid')
-        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=runtime_digest, caller_scope=caller_scope,
-                                                    request_id=closure.claim_request_id, launch=launch, storage_binding=expected)
+        context, known, _, _ = self._claim_preflight(project_id, runtime_digest=original_runtime, caller_scope=caller_scope,
+                                                    request_id=closure.claim_request_id, launch=launch, storage_binding=expected,
+                                                    earlier_runtime=original_runtime != COLLECTOR_RUNTIME_DIGEST)
         if fence and known is not None and known['state'] == 'claimed':
             return {'receipt': known, 'closure': None}  # Admitted: nothing here is closed.
         if not fence and (known is None or known['state'] != 'denied'
@@ -11626,6 +11651,20 @@ class ProjectRepository:
         return {key: value for key, value in matches[0].items() if not key.startswith("_")}
 
 
+_PASSING_READ_REFUSALS = frozenset({
+    "sql_read_busy", "sql_read_deadline", "sql_read_work_limit", "sql_read_value_limit",
+})
+
+
+def _passing_refusal(error: BaseException) -> bool:
+    """A refusal that leaves the connection healthy: the busy database or a read's own limit."""
+    if isinstance(error, SQLReadError):
+        return error.reason_code in _PASSING_READ_REFUSALS
+    code = getattr(error, "sqlite_errorcode", None)
+    return (isinstance(error, sqlite3.OperationalError) and type(code) is int
+            and code & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED})
+
+
 class CollectorServer:
     """Sequential AF_UNIX collector. Only this loop calls the ledger writer."""
 
@@ -11644,6 +11683,9 @@ class CollectorServer:
         self._socket: socket.socket | None = None
         self._startup_error: OSError | None = None
         self._started_at_ms: int | None = None
+        # How the previous collector stopped, and an error that ended this one's thread (0.3.3, C10).
+        self.previous_exit: dict | None = None
+        self.thread_error: BaseException | None = None
         self._clients = client_capabilities or load_client_capabilities(
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
         )
@@ -11709,6 +11751,9 @@ class CollectorServer:
                     connection.settimeout(1)
                     with contextlib.suppress(OSError):
                         connection.sendall(canonical_json(response) + b"\n")
+        except BaseException as error:
+            self.thread_error = error
+            raise
         finally:
             listener.close()
             self._socket = None
@@ -11891,6 +11936,7 @@ class CollectorServer:
                     "runtime_version": PACKAGE_VERSION,
                     "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
                     "started_at_ms": self._started_at_ms,
+                    "previous_exit": self.previous_exit,
                 }
                 if "project_root" in request:
                     project_root = Path(request["project_root"])
@@ -11939,6 +11985,12 @@ class CollectorServer:
         except ProjectNotRegisteredError:
             return {"ok": False, "code": "project_unregistered"}
         except (LedgerError, StateError, TypeError, ValueError):
+            return {"ok": False, "code": "operation_rejected"}
+        except (SQLReadError, sqlite3.OperationalError) as error:
+            # A passing refusal fails only this request (C12e). Anything else is a defect
+            # or a broken connection: it stops the collector, which records why (C10).
+            if not _passing_refusal(error):
+                raise
             return {"ok": False, "code": "operation_rejected"}
 
     def stop(self) -> None:

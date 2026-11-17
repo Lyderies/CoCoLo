@@ -86,6 +86,19 @@ class ClaimDenialRecoveryTests(unittest.TestCase):
         with self.ledger._account_transaction():
             self.ledger._append_checked_locked(self.fixture.project, data, producer='lifecycle', timestamp=self.fixture.base.stamp)
 
+    def test_C3f_only_a_sweep_fence_takes_an_earlier_runtime(self):
+        # C3f: the account fences an earlier version's claim request under that request's own
+        # runtime only for a fence that names no identity; a claim, or anything else, under
+        # another runtime is refused as before, and so is a fence that claims the exception for
+        # this account's own runtime.
+        from codex_agents.account_claim_contracts import ClaimError, LaunchClaimInput
+        launch = LaunchClaimInput(self.fixture.scope.run_handle, self.fixture.base.launch.identity_digest)
+        for runtime, earlier in (('e' * 64, False), (COLLECTOR_RUNTIME_DIGEST, True)):
+            with self.subTest(runtime=runtime[:4], earlier=earlier), self.assertRaisesRegex(ClaimError, 'claim_invalid_request'):
+                self.ledger._claim_preflight(self.fixture.project, runtime_digest=runtime, caller_scope='a' * 64,
+                                             request_id='claim-other-runtime', launch=launch, earlier_runtime=earlier)
+        self.pending()
+
     def test_legacy_intent_without_launch_marker_is_unknown_not_an_unused_attempt(self):
         self.legacy_intent()
         self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM launch_claims').fetchone()[0])

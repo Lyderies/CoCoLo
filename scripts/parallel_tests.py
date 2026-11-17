@@ -6,7 +6,8 @@ into units: a test module, or for a module that takes long, small groups of its 
 classes. Units run in separate Python processes, at most --jobs at a time, longest first,
 each with its own temporary folder, so no two units share files, sockets or state.
 
-Usage: parallel_tests.py [--jobs N] [--suite root|codex|claude ...] [--save-timings FILE]
+Usage: parallel_tests.py [--jobs N] [--suite root|codex|claude ...] [--module SUITE:MODULE ...]
+                         [--save-timings FILE]
 
 The schedule comes from scripts/test-timings.json ({"suite:unit": seconds} from an earlier
 run). --save-timings writes this run's measurements to FILE (pass that path again to
@@ -77,10 +78,13 @@ def discover(suite: str) -> dict[str, list[str]]:
     return json.loads(output)
 
 
-def units(suite: str, timings: dict[str, float]) -> list[tuple[float, str, list[str]]]:
-    """(expected seconds, unit name, unittest names) for one suite."""
+def units(suite: str, timings: dict[str, float],
+          only: set[str] | None = None) -> list[tuple[float, str, list[str]]]:
+    """(expected seconds, unit name, unittest names) for one suite; with `only`, just those modules."""
     planned = []
     for module, tests in sorted(discover(suite).items()):
+        if only is not None and module not in only:
+            continue
         expected = timings.get(f"{suite}:{module}")
         if expected is not None and expected > SPLIT_SECONDS and len(tests) > 1:
             # Split into groups of whole tests near SPLIT_SECONDS each, slowest packed first.
@@ -102,10 +106,18 @@ def units(suite: str, timings: dict[str, float]) -> list[tuple[float, str, list[
 TIMINGS = ROOT / "scripts" / "test-timings.json"
 
 
-def run(jobs: int, suites: list[str], save: Path | None, keep: bool) -> int:
+def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
+        modules: dict[str, set[str]] | None = None) -> int:
+    """Run the suites; with `modules` ({suite: module names}), only those modules of each."""
     timings = json.loads(TIMINGS.read_text()) if TIMINGS.is_file() else {}
+    if modules is not None:
+        unknown = sorted(f"{suite}:{module}" for suite in suites for module in modules[suite] - set(discover(suite)))
+        if unknown:
+            print(f"no such test module: {', '.join(unknown)}", file=sys.stderr)
+            return 2
     queue = sorted(((seconds, suite, name, names) for suite in suites
-                    for seconds, name, names in units(suite, timings)), reverse=True)
+                    for seconds, name, names in units(suite, timings, None if modules is None else modules[suite])),
+                   reverse=True)
     base = Path(tempfile.mkdtemp(prefix="pt", dir="/private/tmp" if sys.platform == "darwin" else None))
     running, results, started = {}, [], time.monotonic()
     environment = {k: v for k, v in os.environ.items()
@@ -182,8 +194,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--suite", action="append", choices=sorted(SUITES))
     parser.add_argument("--save-timings", type=Path, help="write this run's measurements here")
     parser.add_argument("--keep", action="store_true", help="keep every unit's folder and log")
+    parser.add_argument("--module", action="append", metavar="SUITE:MODULE",
+                        help="run only this test module (repeatable), for example codex:tests.test_bridge")
     args = parser.parse_args(argv)
-    return run(args.jobs, args.suite or sorted(SUITES), args.save_timings, args.keep)
+    suites = args.suite or sorted(SUITES)
+    modules = None
+    if args.module:
+        if args.suite:
+            parser.error("--module names its own suite; do not combine it with --suite")
+        modules = {suite: set() for suite in SUITES}
+        for item in args.module:
+            suite, _, module = item.partition(":")
+            if suite not in SUITES or not module:
+                parser.error(f"--module wants SUITE:MODULE, got {item!r}")
+            modules[suite].add(module)
+        suites = [suite for suite in suites if modules[suite]]
+    return run(args.jobs, suites, args.save_timings, args.keep, modules)
 
 
 if __name__ == "__main__":
