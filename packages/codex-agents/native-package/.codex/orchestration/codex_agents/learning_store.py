@@ -11668,6 +11668,9 @@ class CollectorServer:
         self._socket: socket.socket | None = None
         self._startup_error: OSError | None = None
         self._started_at_ms: int | None = None
+        # How the previous collector stopped, and an error that ended this one's thread (0.3.3, C10).
+        self.previous_exit: dict | None = None
+        self.thread_error: BaseException | None = None
         self._clients = client_capabilities or load_client_capabilities(
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
         )
@@ -11733,6 +11736,9 @@ class CollectorServer:
                     connection.settimeout(1)
                     with contextlib.suppress(OSError):
                         connection.sendall(canonical_json(response) + b"\n")
+        except BaseException as error:
+            self.thread_error = error
+            raise
         finally:
             listener.close()
             self._socket = None
@@ -11915,6 +11921,7 @@ class CollectorServer:
                     "runtime_version": PACKAGE_VERSION,
                     "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
                     "started_at_ms": self._started_at_ms,
+                    "previous_exit": self.previous_exit,
                 }
                 if "project_root" in request:
                     project_root = Path(request["project_root"])

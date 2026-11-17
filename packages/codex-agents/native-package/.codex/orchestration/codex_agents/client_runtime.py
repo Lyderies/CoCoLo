@@ -279,7 +279,10 @@ def _status_collector_fields(health):
             or any(type(v) is not dict or v.keys() != {'count', 'updated_at_ms'}
                    or any(not account_integer(n) for n in v.values()) for v in counters.values())):
         raise ValueError()
-    return {'collector_schema_version': health['schema_version'],
+    from .collector_exit import checked as checked_exit
+    previous = health.get('previous_exit')
+    return {'collector_previous_exit': None if previous is None else checked_exit(previous),
+            'collector_schema_version': health['schema_version'],
             'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
             'started_at_ms': health['started_at_ms'], 'collector_health': counters,
             'ingestion': ingestion, 'provider_attestations': attestations}

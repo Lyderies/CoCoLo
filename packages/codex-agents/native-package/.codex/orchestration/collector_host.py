@@ -22,6 +22,7 @@ ORCHESTRATION_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ORCHESTRATION_ROOT))
 
 from codex_agents.account_host import AccountServiceHost  # noqa: E402
+from codex_agents.collector_exit import read_exit, write_exit  # noqa: E402
 from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.collector_runtime import require_authorized_collector_runtime  # noqa: E402
 from codex_agents.history_contracts import HistoryError  # noqa: E402
@@ -35,16 +36,33 @@ def main(argv: list[str] | None = None) -> int:
     os.chdir("/")  # Hold no working directory open for as long as the collector lives.
     state = LearningState(args.state_root, create=False)
     require_authorized_collector_runtime(state)
+    # Why this collector stops, recorded for the next one to report (0.3.3, C10). Recorded from
+    # the moment it owns the ledger; before that, the command that started it reports a failure.
+    stopping = {"signal": False, "error": None, "removed": False, "requested": False}
+
     def terminate(*_):
         # Raise, so a wait in startup or in an owner step cannot outlive the signal.
+        stopping["signal"] = True
         raise SystemExit(0)
 
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, terminate)
     ledger = LearningLedger(state)
-    server = CollectorServer(ledger)
+    try:
+        server = CollectorServer(ledger)
+    except BaseException as error:
+        # Owning the ledger already: say why it stops even here, close it, and raise as before (C10d).
+        try:
+            write_exit(state.root, started_at_ms=None, cause="signal" if stopping["signal"] else "error",
+                       error=None if stopping["signal"] else error)
+        except BaseException:
+            pass
+        finally:
+            ledger.close()
+        raise
     account = None
     try:
+        server.previous_exit = read_exit(state.root)
         server.start()
         try:
             account = AccountServiceHost(ledger, CollectorPaths(state.root))
@@ -58,9 +76,16 @@ def main(argv: list[str] | None = None) -> int:
                 checked = time.monotonic()
                 # A removed state root or endpoint means nobody can reach or own this collector.
                 if not state.root.is_dir() or not state.socket.exists():
+                    stopping["removed"] = True
                     break
-    except SystemExit:
-        pass
+        # Read before teardown: server.stop() sets the same flag (C10d).
+        stopping["requested"] = server._stop.is_set()
+    except SystemExit as stop:
+        if not stopping["signal"]:
+            stopping["error"] = stop  # Not from a signal: recorded as an error (C10b).
+    except BaseException as error:
+        stopping["error"] = error
+        raise
     finally:
         for signum in (signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, signal.SIG_IGN)  # Finish the shutdown that was asked for.
@@ -79,7 +104,25 @@ def main(argv: list[str] | None = None) -> int:
             server.stop()
         except Exception:
             pass
-        ledger.close()
+        try:
+            # Best effort, and never in the way of closing the ledger or the exit code. Decided
+            # once the collector thread has stopped, so an error it raised late still counts;
+            # written while this process still holds the ledger, so the next collector reads it.
+            error = stopping["error"] if stopping["error"] is not None else server.thread_error
+            if error is not None:
+                cause = "error"
+            elif stopping["signal"]:
+                cause = "signal"
+            elif stopping["removed"]:
+                cause = "state_removed"
+            else:
+                cause = "requested" if stopping["requested"] else "thread_ended"
+            if state.root.is_dir():
+                write_exit(state.root, started_at_ms=server._started_at_ms, cause=cause, error=error)
+        except BaseException:
+            pass
+        finally:
+            ledger.close()
     print(json.dumps({"ready": True, "stopped": True, "account_services": account is not None}, sort_keys=True))
     return 0
 

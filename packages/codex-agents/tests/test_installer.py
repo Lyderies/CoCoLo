@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -451,6 +452,20 @@ class InstallerTests(unittest.TestCase):
                     CollectorClient(state.socket).shutdown()
                 except CollectorError:
                     pass
+                # A shutdown request returns before the collector has stopped. It writes its exit
+                # record (0.3.3 C10) and then releases the ledger, so wait for the release before
+                # this folder is removed.
+                import fcntl
+                end = time.monotonic() + 15
+                with open(state.lock, "a+") as lock:
+                    while True:
+                        try:
+                            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            fcntl.flock(lock, fcntl.LOCK_UN)
+                            break
+                        except OSError:
+                            self.assertLess(time.monotonic(), end, "collector did not release the ledger")
+                            time.sleep(0.05)
 
     def test_remove_preserves_unmanifested_bytecode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -748,7 +748,8 @@ print(json.dumps(observed))
         expected = self.views.owner_public_key(self.projects[0])
         endpoint, process, stop = self._start_view_server("public-owner", mode="drop")
         client = AccountClient(endpoint, self.projects[0], RUNTIME, timeout=.5)
-        with self.assertRaisesRegex(AccountError, "account_invalid_response"):
+        # The server closes without replying (0.3.3 C11: reported as such, not as an invalid reply).
+        with self.assertRaisesRegex(AccountError, "account_closed_without_reply"):
             client.owner_public_key(request_id="public-read")
         self._server_line(process, "seen-1")
         self.assertEqual(expected, client.owner_public_key(request_id="public-read"))
@@ -828,8 +829,10 @@ print(json.dumps(observed))
             endpoint, process, stop = self._start_view_server(mode, mode=mode)
             client = AccountClient(endpoint, self.projects[0], RUNTIME, timeout=.5)
             try:
-                # EOF is passed to the closed codec; empty/truncated JSON is invalid.
-                with self.assertRaisesRegex(AccountError, "account_invalid_response") as caught:
+                # EOF before any byte is a connection closed without a reply (0.3.3 C11); a truncated
+                # reply is invalid.
+                reason = "account_closed_without_reply" if mode == "drop" else "account_invalid_response"
+                with self.assertRaisesRegex(AccountError, reason) as caught:
                     client.project(request_id="same-read")
                 self.assertIsNone(caught.exception.__context__)
                 self._server_line(process, "seen-1")

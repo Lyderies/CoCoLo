@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.3: dispatch on a busy account (Codex package 0.8.27)
+## 0.3.3: dispatch on a busy account (Codex package 0.8.28)
 
 - On a busy account, a child's open was admitted but its dispatch was refused with
   `admission_capture_limit`. Before admitting an open, and again at its dispatch, the account service
@@ -36,6 +36,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   started now frees its worker and answers `probe_step_failed`. A probe whose model may have started is
   still kept, so it never runs twice. When no worker can free without a restart, a probe answers
   `probe_worker_unavailable` at once. Found by local-routing's soak.
+- When the collector stopped while a call was in flight, the caller got an empty reply and reported
+  `account_invalid_response`, and nothing recorded why the collector had stopped. Such a reply is now
+  `account_closed_without_reply`. The collector now records how it stopped: a signal, a shutdown
+  request, its state removed, its thread ending, or an error (only the error's type and code
+  locations, never its message). `learning-status` shows that as `collector_previous_exit`. Found by
+  local-routing's soak.
 - The orchestration report counts a run that closed without a result as abandoned, not pending.
 - A 0.3.2 project service that holds a stuck run never stops when an update asks it to; the update then
   reports `project_service_other_version`. docs/troubleshooting.md says how to stop it by hand.

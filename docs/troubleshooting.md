@@ -200,6 +200,14 @@ The project's service prepares a child before launching it, and says which step 
 
 Release 0.3.1 and earlier said only `run_unavailable` for all of these.
 
+## `account_closed_without_reply`
+
+The account service closed the connection without answering, usually because the collector stopped
+while the call was in flight; the next command starts it again. Try the command again. Run
+`learning-status`: `collector_previous_exit` says how the last collector stopped (`signal`, `requested`,
+`state_removed`, `thread_ended`, or `error` with the error's type and code locations). Report an
+`error` with those fields. Releases before 0.3.3 said `account_invalid_response` for this.
+
 ## A billing probe refused with `observation_unavailable` or `probe_..._failed`
 
 The probe names the step that stopped it before launching anything:

@@ -61,6 +61,8 @@ ACCOUNT_REASON_CODES = frozenset({
     "account_invalid_request", "account_request_too_large", "account_invalid_response",
     "account_not_authorized", "account_wrong_owner", "account_unavailable",
     "account_incompatible", "account_project_not_found",
+    # The account closed the connection without replying: it may have restarted (0.3.3, C11).
+    "account_closed_without_reply",
 }) | CLAIM_ERROR_CODES | OPEN_REASON_CODES | OBSERVATION_REASONS | BILLING_PROBE_REASONS | ADMISSION_CAPTURE_PUBLIC_REASONS
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}")
 _PROJECT = re.compile(r"prj_[0-9a-f]{32}")
@@ -357,6 +359,8 @@ def _checked_result(result: object, request: AccountRequest) -> dict:
 
 
 def decode_account_response(raw: bytes, request: AccountRequest) -> dict:
+    if type(raw) is bytes and raw == b"":
+        raise AccountError("account_closed_without_reply")
     try:
         if type(raw) is not bytes or len(raw) + 1 > MAX_ACCOUNT_FRAME_BYTES:
             raise AccountError("account_invalid_response")

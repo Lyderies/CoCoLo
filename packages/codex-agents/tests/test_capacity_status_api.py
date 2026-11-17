@@ -298,7 +298,8 @@ class CapacityStatusApiTests(unittest.TestCase):
                 endpoint, process, stop = self.start_server(mode)
                 client = AccountClient(endpoint, self.project, COLLECTOR_RUNTIME_DIGEST, timeout=.5)
                 if number == 0:
-                    with self.assertRaisesRegex(AccountError, "account_invalid_response"):
+                    # A server that closes without replying (0.3.3 C11: not an invalid reply).
+                    with self.assertRaisesRegex(AccountError, "account_closed_without_reply"):
                         client.capacity_status(handle, bridge, request_id="read-1")
                     self.server_line(process, "seen-1")
                 self.assertEqual(expected, client.capacity_status(handle, bridge, request_id="read-1"))
