@@ -99,9 +99,8 @@ class AccountBillingAdmission:
             raise ProbeAdmissionError('probe_not_authorized')
 
     def _read(self, operation):
-        connection = self._ledger._connection
-        run = connection.transaction_read_call if connection.in_transaction else connection.read_call
-        return run(self._limits, operation)
+        # The mode is chosen under the lock, with a bounded wait (C12c, C12f).
+        return self._ledger._connection.read_in_current_mode(self._limits, operation)
 
     def _one(self, sql, parameters=()):
         return self._read(lambda: self._ledger._connection.execute(sql, parameters).fetchone())

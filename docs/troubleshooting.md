@@ -208,6 +208,9 @@ while the call was in flight; the next command starts it again. Try the command 
 `state_removed`, `thread_ended`, or `error` with the error's type and code locations). Report an
 `error` with those fields. Releases before 0.3.3 said `account_invalid_response` for this.
 
+On 0.8.28, an `error` of `SQLReadError` passing through `bind_session` was an account read colliding
+with a hook's session bind. Codex package 0.8.29 fixes it: update.
+
 ## A billing probe refused with `observation_unavailable` or `probe_..._failed`
 
 The probe names the step that stopped it before launching anything:

@@ -163,7 +163,17 @@ class SQLReadConnection(sqlite3.Connection):
         self._sql_foreign_progress = False
         self._sql_scope: _ReadScope | None = None
         self._sql_unusable = False
+        # The lock that keeps other threads off this connection (set by its owner).
+        # A scope refuses every other thread's statement, so every scope holds it:
+        # another thread's locked statement then waits instead of being refused.
+        self._sql_owner_lock = None
         super().__init__(*args, **kwargs)
+
+    def share_with_lock(self, lock) -> None:
+        """Every read scope then holds `lock` (reentrant) for its whole length."""
+        if self._sql_owner_lock is not None or type(lock) is not type(threading.RLock()):
+            raise SQLReadError("sql_read_unavailable")
+        self._sql_owner_lock = lock
 
     def _usable(self) -> None:
         if self._sql_unusable:
@@ -306,8 +316,38 @@ class SQLReadConnection(sqlite3.Connection):
         """
         return self._read_call(limits, operation, transaction=True)
 
+    def read_in_current_mode(self, limits, operation):
+        """`read_call`, or `transaction_read_call` inside an open transaction.
+
+        The mode is chosen while holding the owner's lock, so another thread cannot
+        commit between the choice and the read (C12c, C12f).
+        """
+        return self._read_call(limits, operation, transaction=None)
+
     def _read_call(self, limits, operation, *, transaction):
         self._read_owner()
+        # Every existing refusal of an invalid call comes before any wait (C12f).
+        if type(limits) is not SQLReadLimits or not callable(operation):
+            raise SQLReadError("sql_read_invalid_limits")
+        limits.__post_init__()
+        lock = self._sql_owner_lock
+        if lock is None:
+            mode = self.in_transaction if transaction is None else transaction
+            return self._scoped_read(limits, operation, transaction=mode)
+        # Waiting for the lock is bounded by the read's own budget (C12c). Taking it is
+        # inside the try, so an exception once it is held releases exactly this hold.
+        acquired = False
+        try:
+            acquired = lock.acquire(timeout=limits.max_duration_ms / 1000)
+            if not acquired:
+                raise SQLReadError("sql_read_busy")
+            mode = self.in_transaction if transaction is None else transaction
+            return self._scoped_read(limits, operation, transaction=mode)
+        finally:
+            if acquired:
+                lock.release()
+
+    def _scoped_read(self, limits, operation, *, transaction):
         if type(limits) is not SQLReadLimits or not callable(operation):
             raise SQLReadError("sql_read_invalid_limits")
         limits.__post_init__()

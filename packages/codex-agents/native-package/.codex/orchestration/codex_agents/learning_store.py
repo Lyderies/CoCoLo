@@ -137,7 +137,7 @@ from .owner_key_contracts import (
     _ssh_key_parts as _ssh_key_parts,
 )
 from .result_contracts import MAX_RESULT_BODY_BYTES
-from .sql_read_budget import SQLReadConnection
+from .sql_read_budget import SQLReadConnection, SQLReadError
 from .account_claim_contracts import (
     CLAIM_DENIAL_CODES, MAX_CLAIM_INTEGER, ClaimError, LaunchClaimInput,
     _DIGEST as _CLAIM_DIGEST, _REQUEST_ID as _CLAIM_REQUEST_ID, _PROJECT as _CLAIM_PROJECT,
@@ -2027,6 +2027,7 @@ class LearningLedger:
                 raise
         try:
             self._connection = self._connect()
+            self._connection.share_with_lock(self._lock)
             self._migrate()
             self._record_first_owner_key()
             self.state.mark_initialized()
@@ -11650,6 +11651,20 @@ class ProjectRepository:
         return {key: value for key, value in matches[0].items() if not key.startswith("_")}
 
 
+_PASSING_READ_REFUSALS = frozenset({
+    "sql_read_busy", "sql_read_deadline", "sql_read_work_limit", "sql_read_value_limit",
+})
+
+
+def _passing_refusal(error: BaseException) -> bool:
+    """A refusal that leaves the connection healthy: the busy database or a read's own limit."""
+    if isinstance(error, SQLReadError):
+        return error.reason_code in _PASSING_READ_REFUSALS
+    code = getattr(error, "sqlite_errorcode", None)
+    return (isinstance(error, sqlite3.OperationalError) and type(code) is int
+            and code & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED})
+
+
 class CollectorServer:
     """Sequential AF_UNIX collector. Only this loop calls the ledger writer."""
 
@@ -11970,6 +11985,12 @@ class CollectorServer:
         except ProjectNotRegisteredError:
             return {"ok": False, "code": "project_unregistered"}
         except (LedgerError, StateError, TypeError, ValueError):
+            return {"ok": False, "code": "operation_rejected"}
+        except (SQLReadError, sqlite3.OperationalError) as error:
+            # A passing refusal fails only this request (C12e). Anything else is a defect
+            # or a broken connection: it stops the collector, which records why (C10).
+            if not _passing_refusal(error):
+                raise
             return {"ok": False, "code": "operation_rejected"}
 
     def stop(self) -> None:

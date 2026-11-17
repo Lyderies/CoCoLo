@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.3: dispatch on a busy account (Codex package 0.8.28)
+## 0.3.3: dispatch on a busy account (Codex package 0.8.29)
 
 - On a busy account, a child's open was admitted but its dispatch was refused with
   `admission_capture_limit`. Before admitting an open, and again at its dispatch, the account service
@@ -41,6 +41,15 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   `account_closed_without_reply`. The collector now records how it stopped: a signal, a shutdown
   request, its state removed, its thread ending, or an error (only the error's type and code
   locations, never its message). `learning-status` shows that as `collector_previous_exit`. Found by
+  local-routing's soak.
+- The collector stopped by itself now and then, cutting off every call in flight
+  (`account_closed_without_reply`). The first recorded stop showed why. The account service and the
+  collector share one database connection, kept apart by a lock, and some account reads ran without
+  that lock. A session bind from a hook arriving during one of them was refused, and the refusal ended
+  the collector. Every such read now holds the lock, so the bind waits. A read waits for the lock no
+  longer than its own time budget, then is refused as busy. If the database is busy while the
+  collector serves a request, only that request is refused and the collector keeps running. Any other
+  database error still stops the collector, and `collector_previous_exit` says why. Found by
   local-routing's soak.
 - The orchestration report counts a run that closed without a result as abandoned, not pending.
 - A 0.3.2 project service that holds a stuck run never stops when an update asks it to; the update then
