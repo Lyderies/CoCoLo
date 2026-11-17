@@ -110,6 +110,11 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
         modules: dict[str, set[str]] | None = None) -> int:
     """Run the suites; with `modules` ({suite: module names}), only those modules of each."""
     timings = json.loads(TIMINGS.read_text()) if TIMINGS.is_file() else {}
+    if modules is not None:
+        unknown = sorted(f"{suite}:{module}" for suite in suites for module in modules[suite] - set(discover(suite)))
+        if unknown:
+            print(f"no such test module: {', '.join(unknown)}", file=sys.stderr)
+            return 2
     queue = sorted(((seconds, suite, name, names) for suite in suites
                     for seconds, name, names in units(suite, timings, None if modules is None else modules[suite])),
                    reverse=True)
