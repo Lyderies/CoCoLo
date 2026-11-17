@@ -190,7 +190,7 @@ class CliBillingRuntimeTests(unittest.TestCase):
             with self.subTest(attempt=attempt):
                 probe = self.start(identity=f'overlap-probe-{attempt}')
                 observe = self.start(billing=False)
-                (probe_code, probed), (observe_code, observed) = self.take(probe), self.take(observe)
+                (_, probed), (_, observed) = self.take(probe), self.take(observe)
                 self.assertIn(probed.get('reason_code'), {None, 'probe_conflict', 'probe_busy'}, probed)
                 self.assertIn(observed.get('reason_code'), {None, 'observation_full'}, observed)
         self.assertEqual([], [job.key for job in self.billing._jobs.values() if job.state == 'unknown'])

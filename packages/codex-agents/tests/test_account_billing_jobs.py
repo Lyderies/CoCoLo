@@ -480,7 +480,7 @@ class AccountBillingJobTests(unittest.TestCase):
         self.assertNotIn(kept[0].preparation, self.billing._executions._jobs)
         held = self.enterContext(mock.patch.object(self.workers, 'prepare',
             side_effect=billing_probe_worker.ProbeWorkerError('probe_worker_full')))
-        ticket = self.begin(self.request('waits'))
+        _ticket = self.begin(self.request('waits'))  # Held open: the model stays busy.
         self.until(lambda: held.called)
         for _ in range(20):
             self.service.drive_claims()
