@@ -1209,8 +1209,8 @@ class WizardTerminalTests(unittest.TestCase):
             if done:
                 return
             try:
-                if select.select([self.fd], [], [], 0.05)[0]:
-                    os.read(self.fd, 65536)
+                if not (select.select([self.fd], [], [], 0.05)[0] and os.read(self.fd, 65536)):
+                    time.sleep(0.01)  # Nothing read (or end of output): do not spin.
             except OSError:
                 time.sleep(0.05)
 
