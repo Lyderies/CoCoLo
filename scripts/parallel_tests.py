@@ -200,6 +200,8 @@ def main(argv: list[str] | None = None) -> int:
     suites = args.suite or sorted(SUITES)
     modules = None
     if args.module:
+        if args.suite:
+            parser.error("--module names its own suite; do not combine it with --suite")
         modules = {suite: set() for suite in SUITES}
         for item in args.module:
             suite, _, module = item.partition(":")

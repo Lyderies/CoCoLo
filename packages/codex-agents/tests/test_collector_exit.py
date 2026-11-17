@@ -268,11 +268,11 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         account service can still be starting when the first status answers (C13g)."""
         end = time.monotonic() + 20
         while True:
-            status = self.cli('learning-status', expected=None)
-            if status.get('ready') or status.get('reason_code') != 'status_account_unavailable':
-                self.assertTrue(status.get('ready'), json.dumps(status))
+            code, status = self.cli('learning-status', expected=None)
+            if (code, status.get('ready'), status.get('reason_code')) != (1, False, 'status_account_unavailable'):
+                self.assertEqual((0, True), (code, status.get('ready')), json.dumps(status))
                 return status
-            self.assertLess(time.monotonic(), end, json.dumps(status))
+            self.assertLess(time.monotonic(), end, json.dumps(status))  # Retries stop after 20 s.
             time.sleep(.2)
 
     def previous_exit(self):
@@ -345,8 +345,6 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
     del name
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class CollectorMainTests(unittest.TestCase):
@@ -445,3 +443,7 @@ class CollectorMainTests(unittest.TestCase):
                 self.host.main(['--state-root', str(self.root)])
         self.assertEqual(['signal'], [r['cause'] for r in self.records])
         self.assertEqual([True], self.closed)
+
+
+if __name__ == '__main__':
+    unittest.main()

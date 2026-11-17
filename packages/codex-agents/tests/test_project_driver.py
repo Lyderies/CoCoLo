@@ -95,6 +95,83 @@ class DriverHarness(ServiceHarness, CliTestCase):
 
 
 class ProjectDriverTests(DriverHarness):
+    def test_the_host_prepares_claims_dispatches_and_releases_a_bridged_codex_run(self):
+        task = self.write('task.json', self.task())
+        route = self.cli('learning-route', '--task', task)
+        self.assertEqual(('codex', 'bridge'), (route['provider'], route['dispatch']))
+        assigned = self.assignment_for(route)
+        context = ('--task', task, '--assignment', self.write('assignment.json', assigned),
+                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
+        route_path = self.write('route.json', route)
+        orchestration = self.cli('learning-open-orchestration')
+        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
+                          '--orchestration-handle', orchestration['orchestration_handle'])
+        self.assertEqual(('admitted', True), (opened['admission'], opened['project_host_registered']))
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        with mock.patch.object(self, 'assertEqual', side_effect=lambda *a: unittest.TestCase.assertEqual(
+                self, *a[:2], (a[2] if len(a) > 2 else '') + ' driver stopped at %r' % (self.stopped_runs,))):
+            dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        argv = [i for i in self.invocations('codex') if 'exec' in i['argv']][0]['argv']
+        self.assertIn('--ignore-rules', argv)
+        self.assertEqual('read-only', argv[argv.index('-s') + 1])
+        self.assertEqual(1, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
+        self.assertEqual('retained', dispatched['bridge_report']['capacity_state'])
+
+        observation = self.write('observation.json', {'run_handle': opened['run_handle'], 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        made_up = {**dispatched['result'], 'summary': 'A verdict the child never gave.'}
+        refused = self.cli('learning-record-host-result', *context, '--route', route_path,
+                           '--result', self.write('made-up.json', made_up), '--observation', observation, expected=2)
+        self.assertEqual('history_conflict', refused['reason_code'])
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write('result.json', dispatched['result']), '--observation', observation)
+        self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
+        self.assertEqual(route['model'], recorded['outcome']['model'])
+        # Recording lets the host finish: terminal accepted, cleanup confirmed, capacity released.
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
+        self.assertEqual([], [entry for entry in self.stopped_runs if len(entry) == 2 and entry[0] in
+                              {'recording_open', 'claiming', 'registering', 'terminal', 'releasing'}])
+
+    def test_a_running_child_reports_live_status_and_stops_on_cancellation(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        # The child starts, then goes quiet well inside every bound.
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'quiet-child'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+
+        status = self.cli('learning-run-status', *target)
+        self.assertEqual(('attempt', 'running', False), (status['kind'], status['cancellation_state'], status['durable']))
+        self.assertIn(status['health'], {'starting', 'active'})
+        self.assertIsNone(status['stop_reason'])
+        # Another host class cannot inspect or stop this run.
+        with mock.patch.dict(os.environ):
+            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
+                os.environ.pop(name, None)
+            if self.primary == 'claude':
+                os.environ['CODEX_THREAD_ID'] = 'other-primary'
+            else:
+                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
+            foreign = self.cli('learning-cancel-run', *target, expected=2)
+        self.assertEqual('control_not_authorized', foreign['reason_code'])
+
+        started = time.monotonic()
+        cancelled = self.cli('learning-cancel-run', *target)
+        self.assertEqual(('cancel_requested', True), (cancelled['stop_reason'], cancelled['stop_requested']))
+        self.assertIn(cancelled['cancellation_state'], {'stop_requested', 'cleanup_confirmed'})
+        output, errors = process.communicate(timeout=30)
+        self.assertLess(time.monotonic() - started, 20)  # Long before the child's own 30-second sleep ends.
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        dispatched = json.loads(output)
+        self.assertEqual('cancelled', dispatched['bridge_report']['terminal_state'])
+        settled = self.cli('learning-run-status', *target)
+        self.assertTrue(settled['stop_requested'])
+        self.assertEqual('cancel_requested', settled['stop_reason'])
+
     def test_routing_and_preflight_never_open_the_ledger_or_pause_the_collector(self):
         context, route_path, orchestration, run_handle = self.open_run()
         self.frames('codex', [{'type': 'thread.started', 'thread_id': 'running-child'}, {'sleep': 30},
@@ -349,6 +426,37 @@ class ProjectDriverTests(DriverHarness):
             "SELECT binding_state FROM host_run_bindings").fetchone()))
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
+    def test_a_run_whose_client_changed_after_preparation_says_so(self):
+        context, route_path, _, run_handle = self.open_run()
+        original = codex_preparation.CodexPreparationLane.prepared
+
+        def changed(lane, handle):
+            value = original(lane, handle)
+            return dataclasses.replace(value, client_identity=('/srv/other/codex', 'f' * 64))
+        with mock.patch.object(codex_preparation.CodexPreparationLane, 'prepared', autospec=True, side_effect=changed):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('run_client_changed', refused['reason_code'], refused)
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
+
+    def test_only_the_opening_host_class_can_prepare_and_dispatch_its_run(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        with mock.patch.dict(os.environ):
+            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
+                os.environ.pop(name, None)
+            if self.primary == 'claude':
+                os.environ['CODEX_THREAD_ID'] = 'other-primary'
+            else:
+                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
+            foreign = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('host_client_mismatch', foreign['reason_code'])
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
+        # Nothing was claimed for the refused host; the owner can still run it once.
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        self.assertEqual(1, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
+
     def test_a_slow_enrolled_driver_sender_cannot_stall_the_host(self):
         from codex_agents.client_runtime import read_runtime_hint
         from codex_agents.service_enrollment import enrollment_preamble, proof_directory, read_capability
@@ -368,6 +476,24 @@ class ProjectDriverTests(DriverHarness):
             slow.sendall(frame[10:20])
             slow.settimeout(5)
             self.assertEqual(b'', slow.recv(1))  # Dropped at its absolute deadline, unanswered.
+
+    def test_an_undispatched_run_is_abandoned_only_by_its_host_class_and_never_launches(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        with mock.patch.dict(os.environ):
+            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
+                os.environ.pop(name, None)
+            if self.primary == 'claude':
+                os.environ['CODEX_THREAD_ID'] = 'other-primary'
+            else:
+                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
+            foreign = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                               '--reason', 'owner_cancelled', expected=2)
+        self.assertEqual('host_client_mismatch', foreign['reason_code'])
+        abandoned = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
+                             '--reason', 'owner_cancelled')
+        self.assertEqual(('abandoned', 'never_claimed'), (abandoned['classification'], abandoned['capacity_state']))
+        self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
     def test_registering_another_project_during_a_run_does_not_disturb_it(self):
         context, route_path, orchestration, run_handle = self.open_run()
@@ -1241,139 +1367,7 @@ class HostClaudeVerificationTests(HostVerificationTests):
         return digest, recorded['host_outcome_digest'], assigned, dispatched['result']
 
 
-class HostClassDriverTests(DriverHarness):
-    """What depends on the host class that opened the run; each primary runs these (C13b).
-
-    Host-side behaviour that never reads the host class is in ProjectDriverTests, for one primary."""
-
-    def test_the_host_prepares_claims_dispatches_and_releases_a_bridged_codex_run(self):
-        task = self.write('task.json', self.task())
-        route = self.cli('learning-route', '--task', task)
-        self.assertEqual(('codex', 'bridge'), (route['provider'], route['dispatch']))
-        assigned = self.assignment_for(route)
-        context = ('--task', task, '--assignment', self.write('assignment.json', assigned),
-                   '--parent-grant', self.write('grant.json', PARENT_GRANT))
-        route_path = self.write('route.json', route)
-        orchestration = self.cli('learning-open-orchestration')
-        opened = self.cli('learning-open-host-run', *context, '--route', route_path,
-                          '--orchestration-handle', orchestration['orchestration_handle'])
-        self.assertEqual(('admitted', True), (opened['admission'], opened['project_host_registered']))
-        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        with mock.patch.object(self, 'assertEqual', side_effect=lambda *a: unittest.TestCase.assertEqual(
-                self, *a[:2], (a[2] if len(a) > 2 else '') + ' driver stopped at %r' % (self.stopped_runs,))):
-            dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        argv = [i for i in self.invocations('codex') if 'exec' in i['argv']][0]['argv']
-        self.assertIn('--ignore-rules', argv)
-        self.assertEqual('read-only', argv[argv.index('-s') + 1])
-        self.assertEqual(1, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
-        self.assertEqual('retained', dispatched['bridge_report']['capacity_state'])
-
-        observation = self.write('observation.json', {'run_handle': opened['run_handle'], 'result_attempts': [
-            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
-        made_up = {**dispatched['result'], 'summary': 'A verdict the child never gave.'}
-        refused = self.cli('learning-record-host-result', *context, '--route', route_path,
-                           '--result', self.write('made-up.json', made_up), '--observation', observation, expected=2)
-        self.assertEqual('history_conflict', refused['reason_code'])
-        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
-                            '--result', self.write('result.json', dispatched['result']), '--observation', observation)
-        self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
-        self.assertEqual(route['model'], recorded['outcome']['model'])
-        # Recording lets the host finish: terminal accepted, cleanup confirmed, capacity released.
-        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
-        self.assertEqual([], [entry for entry in self.stopped_runs if len(entry) == 2 and entry[0] in
-                              {'recording_open', 'claiming', 'registering', 'terminal', 'releasing'}])
-
-    def test_a_running_child_reports_live_status_and_stops_on_cancellation(self):
-        context, route_path, orchestration, run_handle = self.open_run()
-        # The child starts, then goes quiet well inside every bound.
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'quiet-child'}, {'sleep': 30},
-                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        process = self.separate_dispatch(context, route_path, run_handle)
-        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
-        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
-
-        status = self.cli('learning-run-status', *target)
-        self.assertEqual(('attempt', 'running', False), (status['kind'], status['cancellation_state'], status['durable']))
-        self.assertIn(status['health'], {'starting', 'active'})
-        self.assertIsNone(status['stop_reason'])
-        # Another host class cannot inspect or stop this run.
-        with mock.patch.dict(os.environ):
-            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
-                os.environ.pop(name, None)
-            if self.primary == 'claude':
-                os.environ['CODEX_THREAD_ID'] = 'other-primary'
-            else:
-                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
-            foreign = self.cli('learning-cancel-run', *target, expected=2)
-        self.assertEqual('control_not_authorized', foreign['reason_code'])
-
-        started = time.monotonic()
-        cancelled = self.cli('learning-cancel-run', *target)
-        self.assertEqual(('cancel_requested', True), (cancelled['stop_reason'], cancelled['stop_requested']))
-        self.assertIn(cancelled['cancellation_state'], {'stop_requested', 'cleanup_confirmed'})
-        output, errors = process.communicate(timeout=30)
-        self.assertLess(time.monotonic() - started, 20)  # Long before the child's own 30-second sleep ends.
-        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
-        dispatched = json.loads(output)
-        self.assertEqual('cancelled', dispatched['bridge_report']['terminal_state'])
-        settled = self.cli('learning-run-status', *target)
-        self.assertTrue(settled['stop_requested'])
-        self.assertEqual('cancel_requested', settled['stop_reason'])
-
-    def test_a_run_whose_client_changed_after_preparation_says_so(self):
-        context, route_path, _, run_handle = self.open_run()
-        original = codex_preparation.CodexPreparationLane.prepared
-
-        def changed(lane, handle):
-            value = original(lane, handle)
-            return dataclasses.replace(value, client_identity=('/srv/other/codex', 'f' * 64))
-        with mock.patch.object(codex_preparation.CodexPreparationLane, 'prepared', autospec=True, side_effect=changed):
-            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
-        self.assertEqual('run_client_changed', refused['reason_code'], refused)
-        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
-
-    def test_only_the_opening_host_class_can_prepare_and_dispatch_its_run(self):
-        context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        with mock.patch.dict(os.environ):
-            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
-                os.environ.pop(name, None)
-            if self.primary == 'claude':
-                os.environ['CODEX_THREAD_ID'] = 'other-primary'
-            else:
-                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
-            foreign = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
-        self.assertEqual('host_client_mismatch', foreign['reason_code'])
-        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
-        # Nothing was claimed for the refused host; the owner can still run it once.
-        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        self.assertEqual(1, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
-
-    def test_an_undispatched_run_is_abandoned_only_by_its_host_class_and_never_launches(self):
-        context, route_path, orchestration, run_handle = self.open_run()
-        with mock.patch.dict(os.environ):
-            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
-                os.environ.pop(name, None)
-            if self.primary == 'claude':
-                os.environ['CODEX_THREAD_ID'] = 'other-primary'
-            else:
-                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
-            foreign = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
-                               '--reason', 'owner_cancelled', expected=2)
-        self.assertEqual('host_client_mismatch', foreign['reason_code'])
-        abandoned = self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle,
-                             '--reason', 'owner_cancelled')
-        self.assertEqual(('abandoned', 'never_claimed'), (abandoned['classification'], abandoned['capacity_state']))
-        self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
-        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
-
-
-class ClaudePrimaryDriverTests(HostClassDriverTests):
+class ClaudePrimaryDriverTests(ProjectDriverTests):
     """Path B: a Claude primary bridges the same Codex child through the same host."""
     primary = 'claude'
 
@@ -1409,6 +1403,61 @@ class ClaudeChildHarness(DriverHarness):
 
 
 class ClaudeChildDriverTests(ClaudeChildHarness):
+    def test_the_host_runs_a_claude_child_and_its_rate_limit_reaches_the_account(self):
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        self.frames('claude', [init_frame(), {'type': 'assistant', 'message': {
+            'id': 'msg_1', 'model': 'claude-opus-5-5', 'content': [{'type': 'text', 'text': 'Reading.'}]}},
+            RATE_LIMIT, result_frame()])
+        recorders, original = [], project_driver._RateLimitRecorder.__init__
+
+        def remember(recorder, *args):
+            recorders.append(recorder)
+            return original(recorder, *args)
+
+        with mock.patch.object(project_driver._RateLimitRecorder, '__init__', remember):
+            dispatched = self.dispatch_claude(context, route_path, run_handle)
+        report = dispatched['bridge_report']
+        self.assertEqual(('result', 'claude', 'enforced'), (report['outcome'], report['provider'], report['read_containment']))
+        self.assertEqual({'exit_code', 'result_frame_seen', 'result_subtype', 'error_code'},
+                         set(report['client_diagnostics']))
+        self.assertEqual((1, False), (report['rate_limit_events'], report['rate_limit_record_failed']))
+        self.assertGreaterEqual(report['rate_limit_records_kept'], 1)
+        argv = [i for i in self.invocations('claude') if '-p' in i['argv']]
+        self.assertEqual(1, len(argv))
+        self.assertEqual('Read,Glob,Grep', argv[0]['argv'][argv[0]['argv'].index('--tools') + 1])
+        observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write('result.json', dispatched['result']), '--observation', observation)
+        self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
+        # The run is finished: the account takes no further rate-limit event for it.
+        with self.assertRaises(RateLimitError):
+            recorders[0].record_claude_rate_limit_event(
+                self.project_id, run_handle=run_handle, rate_limit_info=RATE_LIMIT['rate_limit_info'])
+
+    def test_a_running_claude_child_reports_live_status_and_stops_on_cancellation(self):
+        context, route_path, orchestration, run_handle = self.open_claude_run()
+        # The child starts and does some work, then goes quiet well inside every bound.
+        self.frames('claude', [init_frame(), {'type': 'assistant', 'message': {
+            'id': 'msg_1', 'model': 'claude-opus-5-5', 'content': [{'type': 'text', 'text': 'Reading.'}]}},
+            {'sleep': 30}, result_frame()])
+        process = self.separate_dispatch(context, route_path, run_handle)
+        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
+        self.wait_for(lambda: [i for i in self.invocations('claude') if '-p' in i['argv']], seconds=30)
+        self.wait_for(lambda: self.cli('learning-run-status', *target)['health'] in {'active', 'quiet'}, seconds=20)
+        status = self.cli('learning-run-status', *target)
+        self.assertEqual(('attempt', 'running'), (status['kind'], status['cancellation_state']))
+        self.assertIsNone(status['stop_reason'])
+        started = time.monotonic()
+        cancelled = self.cli('learning-cancel-run', *target)
+        self.assertEqual(('cancel_requested', True), (cancelled['stop_reason'], cancelled['stop_requested']))
+        output, errors = process.communicate(timeout=30)
+        self.assertLess(time.monotonic() - started, 20)  # The child never emits another event.
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        self.assertEqual('cancelled', json.loads(output)['bridge_report']['terminal_state'])
+        self.assertEqual('cancel_requested', self.cli('learning-run-status', *target)['stop_reason'])
+
     def test_a_prohibited_tool_stops_the_claude_child_at_once(self):
         context, route_path, orchestration, run_handle = self.open_claude_run()
         # The child asks for a tool outside its read-only set and would then keep going.
@@ -1485,68 +1534,7 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
         self.assertIn('paid', refused['reason_code'])
 
 
-class ClaudeChildHostClassTests(ClaudeChildHarness):
-    """A Claude child's whole run and its status and cancellation; each primary runs these (C13c).
-
-    What depends only on the child's own stream is in ClaudeChildDriverTests, for a Codex primary."""
-
-    def test_the_host_runs_a_claude_child_and_its_rate_limit_reaches_the_account(self):
-        context, route_path, orchestration, run_handle = self.open_claude_run()
-        self.frames('claude', [init_frame(), {'type': 'assistant', 'message': {
-            'id': 'msg_1', 'model': 'claude-opus-5-5', 'content': [{'type': 'text', 'text': 'Reading.'}]}},
-            RATE_LIMIT, result_frame()])
-        recorders, original = [], project_driver._RateLimitRecorder.__init__
-
-        def remember(recorder, *args):
-            recorders.append(recorder)
-            return original(recorder, *args)
-
-        with mock.patch.object(project_driver._RateLimitRecorder, '__init__', remember):
-            dispatched = self.dispatch_claude(context, route_path, run_handle)
-        report = dispatched['bridge_report']
-        self.assertEqual(('result', 'claude', 'enforced'), (report['outcome'], report['provider'], report['read_containment']))
-        self.assertEqual({'exit_code', 'result_frame_seen', 'result_subtype', 'error_code'},
-                         set(report['client_diagnostics']))
-        self.assertEqual((1, False), (report['rate_limit_events'], report['rate_limit_record_failed']))
-        self.assertGreaterEqual(report['rate_limit_records_kept'], 1)
-        argv = [i for i in self.invocations('claude') if '-p' in i['argv']]
-        self.assertEqual(1, len(argv))
-        self.assertEqual('Read,Glob,Grep', argv[0]['argv'][argv[0]['argv'].index('--tools') + 1])
-        observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
-            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
-        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
-                            '--result', self.write('result.json', dispatched['result']), '--observation', observation)
-        self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
-        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
-        # The run is finished: the account takes no further rate-limit event for it.
-        with self.assertRaises(RateLimitError):
-            recorders[0].record_claude_rate_limit_event(
-                self.project_id, run_handle=run_handle, rate_limit_info=RATE_LIMIT['rate_limit_info'])
-
-    def test_a_running_claude_child_reports_live_status_and_stops_on_cancellation(self):
-        context, route_path, orchestration, run_handle = self.open_claude_run()
-        # The child starts and does some work, then goes quiet well inside every bound.
-        self.frames('claude', [init_frame(), {'type': 'assistant', 'message': {
-            'id': 'msg_1', 'model': 'claude-opus-5-5', 'content': [{'type': 'text', 'text': 'Reading.'}]}},
-            {'sleep': 30}, result_frame()])
-        process = self.separate_dispatch(context, route_path, run_handle)
-        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
-        self.wait_for(lambda: [i for i in self.invocations('claude') if '-p' in i['argv']], seconds=30)
-        self.wait_for(lambda: self.cli('learning-run-status', *target)['health'] in {'active', 'quiet'}, seconds=20)
-        status = self.cli('learning-run-status', *target)
-        self.assertEqual(('attempt', 'running'), (status['kind'], status['cancellation_state']))
-        self.assertIsNone(status['stop_reason'])
-        started = time.monotonic()
-        cancelled = self.cli('learning-cancel-run', *target)
-        self.assertEqual(('cancel_requested', True), (cancelled['stop_reason'], cancelled['stop_requested']))
-        output, errors = process.communicate(timeout=30)
-        self.assertLess(time.monotonic() - started, 20)  # The child never emits another event.
-        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
-        self.assertEqual('cancelled', json.loads(output)['bridge_report']['terminal_state'])
-        self.assertEqual('cancel_requested', self.cli('learning-run-status', *target)['stop_reason'])
-
-
-class ClaudePrimaryClaudeChildTests(ClaudeChildHostClassTests):
+class ClaudePrimaryClaudeChildTests(ClaudeChildDriverTests):
     """Path D: a Claude primary's Claude child is a separate `claude -p` process run by the same host."""
     primary = 'claude'
 
