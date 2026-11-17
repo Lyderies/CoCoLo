@@ -2137,6 +2137,7 @@ class RealTerminalTests(unittest.TestCase):
         self.addCleanup(finish)
         transcript = ""
         sent = False
+        answered = 0  # Where the transcript stood when the entry was sent.
         start = time.time()
         end = start + 30
         while time.time() < end:
