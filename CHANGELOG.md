@@ -11,7 +11,7 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   40 recent decisions) filled about that much. The dispatch reads a little more than its open, since the
   open adds its own decision and the dispatch observes the provider again first. The check now holds
   4,096 records and 2 MiB, about ten times that day; past it, an open or dispatch still refuses plainly
-  and changes nothing. What is read and how admission decides are unchanged. Found by local-routing.
+  and changes nothing. What is read and how admission decides are unchanged. Found in live testing.
 - A dispatch refused at its claim could leave its run stuck for good. Before closing such a run, the
   account checks that no earlier dispatch record names it, and on a project with long history (about
   200,000 records) that check ran out of its small read budget every time, so the run was never closed:
@@ -19,7 +19,7 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   project's four places for unfinished results. The check now has the account's ordinary read budget.
   Runs already left stuck this way are closed by the project's next service by itself, after the
   update: it asks the account to close each claim request an earlier service left open, and the
-  account checks the whole original request before doing so. Found by local-routing.
+  account checks the whole original request before doing so. Found in live testing.
   This works for a run an earlier version left, whose claim request names that version.
   While it is still closing such a run, `learning-classify-host-run-abandoned` says so instead of
   `host run orchestration is unavailable`, and a temporary error or an unreachable account never stops
@@ -35,13 +35,13 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   waited a minute and answered `probe_unavailable`, so no Claude child could start. A probe that has not
   started now frees its worker and answers `probe_step_failed`. A probe whose model may have started is
   still kept, so it never runs twice. When no worker can free without a restart, a probe answers
-  `probe_worker_unavailable` at once. Found by local-routing's soak.
+  `probe_worker_unavailable` at once. Found in a live soak test.
 - When the collector stopped while a call was in flight, the caller got an empty reply and reported
   `account_invalid_response`, and nothing recorded why the collector had stopped. Such a reply is now
   `account_closed_without_reply`. The collector now records how it stopped: a signal, a shutdown
   request, its state removed, its thread ending, or an error (only the error's type and code
-  locations, never its message). `learning-status` shows that as `collector_previous_exit`. Found by
-  local-routing's soak.
+  locations, never its message). `learning-status` shows that as `collector_previous_exit`. Found in a
+  live soak test.
 - The collector stopped by itself now and then, cutting off every call in flight
   (`account_closed_without_reply`). The first recorded stop showed why. The account service and the
   collector share one database connection, kept apart by a lock, and some account reads ran without
@@ -49,8 +49,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   the collector. Every such read now holds the lock, so the bind waits. A read waits for the lock no
   longer than its own time budget, then is refused as busy. If the database is busy while the
   collector serves a request, only that request is refused and the collector keeps running. Any other
-  database error still stops the collector, and `collector_previous_exit` says why. Found by
-  local-routing's soak.
+  database error still stops the collector, and `collector_previous_exit` says why. Found in a
+  live soak test.
 - The orchestration report counts a run that closed without a result as abandoned, not pending.
 - A 0.3.2 project service that holds a stuck run never stops when an update asks it to; the update then
   reports `project_service_other_version`. docs/troubleshooting.md says how to stop it by hand.
