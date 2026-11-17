@@ -1,6 +1,6 @@
 """0.3.3 C10 and C11: a collector that stops says why, and an empty account reply says so.
 
-Found in local-routing's soak on 0.8.27 (2026-11-17): the collector restarted by itself,
+Found in a live soak on 0.8.27: the collector restarted by itself,
 calls in flight got an empty reply, the client called it an invalid reply, and nothing
 recorded why the collector stopped.
 """

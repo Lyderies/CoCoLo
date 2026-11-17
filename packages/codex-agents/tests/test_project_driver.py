@@ -295,10 +295,10 @@ class ProjectDriverTests(DriverHarness):
             connection.close()
 
     def test_C1_a_busy_day_of_readings_still_opens_and_dispatches(self):
-        # 0.3.3 requirement C1 (local-routing, 2026-11-16): 181 headroom and 70 billing readings
+        # 0.3.3 requirement C1 (live testing): about 180 headroom and 70 billing readings
         # from one day, with 40 recent decisions, filled about 260 KiB of the 256 KiB the open and
         # claim may read, and the claim was refused. 4,096 records and 2 MiB fit, at the open and
-        # at its claim; this is a day with about ten times local-routing's readings.
+        # at its claim; this is a day with about ten times that project's readings.
         self.busy_day('provider_headroom', 1800)
         self.busy_day('provider_billing', 700)
         context, route_path, _, run_handle = self.open_run()
@@ -350,7 +350,7 @@ class ProjectDriverTests(DriverHarness):
             connection.close()
 
     def test_C2_a_refused_claim_closes_whatever_the_size_of_an_earlier_record(self):
-        # 0.3.3 requirement C2 (local-routing, 2026-11-16; COCOLO-run investigation): the fence
+        # 0.3.3 requirement C2 (live testing; COCOLO-run investigation): the fence
         # looked for the run among every earlier dispatch record of the project, within 2,000
         # progress callbacks, 50 ms and 16 KiB per value, and answered claim_busy when that ran out;
         # after ten refusals the run kept its lease for good. Neither a large earlier record nor many
@@ -359,7 +359,7 @@ class ProjectDriverTests(DriverHarness):
         self.assert_refused_claim_closes()
 
     def test_C2_a_refused_claim_closes_whatever_the_number_of_earlier_records(self):
-        # 150,000 small earlier records (local-routing has 195,121), each well under 16 KiB: only the
+        # 150,000 small earlier records (a long-lived project has about that many), each well under 16 KiB: only the
         # callback budget is at stake.
         # With the earlier budget the run does not close; that is what this case proves fixed.
         from codex_agents import claim_denial
@@ -393,7 +393,7 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual((True, 'already_closed'), (closed.get('ready'), closed.get('classification')), closed)
 
     def test_C2_a_claim_refused_without_a_receipt_settles_by_itself(self):
-        # 0.3.3 requirement C2 (local-routing, 2026-11-16): the open was admitted, its one
+        # 0.3.3 requirement C2 (live testing): the open was admitted, its one
         # dispatch was refused at the claim with admission_capture_limit and no receipt, and two
         # minutes later the abandonment command still answered history_conflict. A claim refused
         # without a receipt is fenced by the account; the run then closes by itself, holds no

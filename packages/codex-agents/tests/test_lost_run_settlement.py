@@ -308,7 +308,7 @@ class LostRunAfterStopTests(LostRunHarness):
             connection.close()
 
     def test_C3_a_refused_claim_an_earlier_host_could_not_fence_is_fenced_by_the_next(self):
-        # 0.3.3 requirement C3 (owner, 2026-11-16): on 0.8.22, local-routing's refused claim could
+        # 0.3.3 requirement C3 (owner): on 0.8.22, a live project's refused claim could
         # not be fenced (C2), so its run kept its lease, and with it one of the project's places for
         # unfinished results, for good; no command settled it. The next project service fences every
         # such lease of an earlier instance by itself: the run's binding ends abandoned, its result
@@ -409,7 +409,7 @@ class LostRunAfterStopTests(LostRunHarness):
             self.wait_for(lambda: self.bindings() == ['abandoned', 'abandoned'], seconds=60)
 
     def test_C3e_a_lease_the_sweep_cannot_read_never_stops_the_others(self):
-        # local-routing on 0.8.23: one earlier lease whose orchestration could not be read failed the
+        # A live project on 0.8.23: one earlier lease whose orchestration could not be read failed the
         # whole listing, and no run was closed. Two runs in two orchestrations; one record removed.
         import sqlite3
         self.leave_a_refused_claim_unfenced(count=2)
@@ -425,7 +425,7 @@ class LostRunAfterStopTests(LostRunHarness):
         self.wait_for(lambda: self.bindings() == ['pending', 'abandoned'], seconds=60)
 
     def test_C3f_a_lease_an_earlier_version_left_is_closed_by_the_next_version(self):
-        # The owner's read-only check, 2026-11-16: local-routing's lease was readable and the only
+        # The owner's read-only check: the live project's lease was readable and the only
         # pending one, yet it stayed open. It named 0.8.22's runtime; the account takes requests only
         # under its own, so every fence was refused. Here the first services run as an earlier
         # version (another runtime digest throughout), and the next ones as this version.

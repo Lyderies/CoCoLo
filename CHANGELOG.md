@@ -22,8 +22,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   account checks the whole original request before doing so. Found in live testing.
   This works for a run an earlier version left, whose claim request names that version.
   While it is still closing such a run, `learning-classify-host-run-abandoned` says so instead of
-  `host run orchestration is unavailable`, and a temporary error or an unreachable account never stops
-  it trying.
+  `host run orchestration is unavailable`, and an unreachable account does not stop it trying. Known
+  limit: that service stops trying for one run after ten other refusals (a collector that closes the
+  connection mid-request counts as one), or when one read of that run's history fails while it lists
+  the runs to close. The project's next service tries again (one starts after the current one stops,
+  for example once it has been idle for a while, or at the next update).
 
 - Up to six children now run at once on the machine, shared by every project, and six per provider
   account (it was two); one project runs at most three. Testing found that with four or more children
