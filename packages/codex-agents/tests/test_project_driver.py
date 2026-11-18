@@ -177,13 +177,27 @@ class ProjectDriverTests(DriverHarness):
         self.assertTrue(settled['stop_requested'])
         self.assertEqual('cancel_requested', settled['stop_reason'])
 
-    def test_routing_and_preflight_never_open_the_ledger_or_pause_the_collector(self):
+    def test_while_a_child_runs_other_commands_leave_it_and_the_shared_services_alone(self):
+        """One live run carries four checks (PLAN T8 driver slice 3): routing and preflight, another
+        project's registration, migration, and an owner ledger command, each while the child runs."""
+        from codex_agents.collector_client import CollectorClient
+        from codex_agents.collector_contracts import CollectorError
+
         context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'running-child'}, {'sleep': 30},
+        gate = self.tools / 'codex-gate'
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'wait_for': str(gate)},
                               {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         process = self.separate_dispatch(context, route_path, run_handle)
+        # Released even when a check fails, so the child never outlives the test.
+        self.addCleanup(lambda: gate.parent.is_dir() and not gate.exists() and gate.write_text('go'))
         self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
+
+        def still_running():
+            status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
+            self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
+
+        # Routing, validation and preflight never open the ledger or pause the collector.
         task = self.write('other-task.json', {**self.task(), 'id': 'task-other'})
         with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')), \
                 mock.patch.object(cli, 'CollectorMaintenance', side_effect=AssertionError('collector paused')):
@@ -193,8 +207,71 @@ class ProjectDriverTests(DriverHarness):
                      '--parent-grant', self.write('grant.json', PARENT_GRANT))
             self.assertEqual(assigned, self.cli('validate-assignment', *other))
             self.assertTrue(self.cli('result-preflight', *other)['ready'])
-        self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
-        process.communicate(timeout=30)
+        still_running()
+
+        # A new project registers, observes and completes the owner's signed billing
+        # attestation while the child runs, without ever pausing the collector.
+        newcomer = Path(self.temporary.name) / 'newcomer'
+        newcomer.mkdir()
+        git(newcomer, 'init', '-q')
+        with mock.patch.object(cli, 'CollectorMaintenance', side_effect=AssertionError('collector paused')), \
+                mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
+            registered = self.cli_for(newcomer, 'learning-register')
+            self.assertRegex(registered['project_id'], '^prj_[0-9a-f]{32}$')
+            observed = self.cli_for(newcomer, 'provider-observe', '--provider', 'codex')
+            identity = observed['records'][0]
+            self.assertEqual('provider_identity', identity['record_type'])
+            grant = self.write('newcomer-grant.json', {
+                'version': 1, 'provider': 'codex', 'account_fingerprint': identity['account_fingerprint'],
+                'no_paid_overage': True, 'no_usage_credits': True, 'issued_at': 2})
+            unsigned = self.cli_for(newcomer, 'learning-record-billing-attestation', '--provider', 'codex',
+                                    '--grant', grant)
+            from tests.learning_support import sign_owner_payload
+            signature = sign_owner_payload(self.owner_key, base64.b64decode(unsigned['signing_payload_b64']),
+                                           'newcomer-attestation')
+            signed = self.cli_for(newcomer, 'learning-record-billing-attestation', '--provider', 'codex',
+                                  '--grant', grant, '--signature', str(signature))
+            self.assertTrue(signed['ready'])
+        still_running()
+
+        # Migration reports and refuses; a drained-only shutdown is refused; nothing opens a store.
+        client = CollectorClient(self.state.socket, timeout=5)
+        self.assertEqual({'moved': False, 'has_learning': False, 'drained': False, 'activation_pending': False,
+                          'earlier_version_runs': {'holding': 0, 'finished_by_ms': None}},
+                         client.learning_migration(self.project))
+        with self.assertRaises(CollectorError) as busy:
+            client.shutdown(only_if_drained=True)
+        self.assertEqual('collector_busy', busy.exception.code)
+        with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
+            self.assertEqual({'ready': True, 'state': 'not_needed', 'can_start_now': False,
+                              'earlier_version_runs': {'holding': 0, 'finished_by_ms': None}},
+                             self.cli('learning-migrate-project', '--status'))
+            refused = self.cli_for(self.project, 'learning-migrate-project', expected=2)
+        self.assertEqual('migration_not_drained', refused['reason_code'])
+        still_running()
+
+        # A command that needs the ledger to itself says why it cannot have it; the
+        # shared services and the child keep running.
+        refused = self.cli_for(self.project, 'learning-backup-project', '--file-id', 'while_running',
+                               '--expires-in-seconds', '3600', expected=2)
+        self.assertIn('a child run is active; nothing was changed', refused['error'])
+        still_running()
+
+        gate.write_text('go')
+        output, errors = process.communicate(timeout=60)
+        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
+        dispatched = json.loads(output)
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        observation = self.write('busy-observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        self.cli('learning-record-host-result', *context, '--route', route_path,
+                 '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
+        # Terminal acceptance and capacity release reached the account services.
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
+        self.assertTrue(client.learning_migration(self.project)['drained'])
+        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
+        self.assertEqual((1, 1, 0), (lifecycle['host_runs_opened'], lifecycle['host_runs_terminal'],
+                                     lifecycle['host_runs_pending']))
 
     def test_a_run_whose_preparation_fails_says_which_stage_stopped_it(self):
         context, route_path, _, run_handle = self.open_run()
@@ -442,89 +519,6 @@ class ProjectDriverTests(DriverHarness):
         self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
-    def test_registering_another_project_during_a_run_does_not_disturb_it(self):
-        context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 3},
-                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        process = self.separate_dispatch(context, route_path, run_handle)
-        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
-        # A new project registers, observes and completes the owner's signed billing
-        # attestation while the child runs, without ever pausing the collector.
-        newcomer = Path(self.temporary.name) / 'newcomer'
-        newcomer.mkdir()
-        git(newcomer, 'init', '-q')
-        with mock.patch.object(cli, 'CollectorMaintenance', side_effect=AssertionError('collector paused')), \
-                mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
-            registered = self.cli_for(newcomer, 'learning-register')
-            self.assertRegex(registered['project_id'], '^prj_[0-9a-f]{32}$')
-            observed = self.cli_for(newcomer, 'provider-observe', '--provider', 'codex')
-            identity = observed['records'][0]
-            self.assertEqual('provider_identity', identity['record_type'])
-            grant = self.write('newcomer-grant.json', {
-                'version': 1, 'provider': 'codex', 'account_fingerprint': identity['account_fingerprint'],
-                'no_paid_overage': True, 'no_usage_credits': True, 'issued_at': 2})
-            unsigned = self.cli_for(newcomer, 'learning-record-billing-attestation', '--provider', 'codex',
-                                    '--grant', grant)
-            from tests.learning_support import sign_owner_payload
-            signature = sign_owner_payload(self.owner_key, base64.b64decode(unsigned['signing_payload_b64']),
-                                           'newcomer-attestation')
-            signed = self.cli_for(newcomer, 'learning-record-billing-attestation', '--provider', 'codex',
-                                  '--grant', grant, '--signature', str(signature))
-            self.assertTrue(signed['ready'])
-        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
-        self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
-        output, errors = process.communicate(timeout=60)
-        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
-        dispatched = json.loads(output)
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        observation = self.write('busy-observation.json', {'run_handle': run_handle, 'result_attempts': [
-            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
-        self.cli('learning-record-host-result', *context, '--route', route_path,
-                 '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
-        # Terminal acceptance and capacity release reached the restarted account services.
-        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
-
-    def test_learning_migration_never_takes_the_collector_from_under_a_run(self):
-        from codex_agents.collector_client import CollectorClient
-        from codex_agents.collector_contracts import CollectorError
-
-        context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 3},
-                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        process = self.separate_dispatch(context, route_path, run_handle)
-        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
-        client = CollectorClient(self.state.socket, timeout=5)
-        self.assertEqual({'moved': False, 'has_learning': False, 'drained': False, 'activation_pending': False,
-                          'earlier_version_runs': {'holding': 0, 'finished_by_ms': None}},
-                         client.learning_migration(self.project))
-        with self.assertRaises(CollectorError) as busy:
-            client.shutdown(only_if_drained=True)
-        self.assertEqual('collector_busy', busy.exception.code)
-        # The owner's command reports and refuses; it stops nothing and opens no store.
-        with mock.patch.object(learning_store.LearningLedger, '__init__', side_effect=AssertionError('ledger opened')):
-            self.assertEqual({'ready': True, 'state': 'not_needed', 'can_start_now': False,
-                              'earlier_version_runs': {'holding': 0, 'finished_by_ms': None}},
-                             self.cli('learning-migrate-project', '--status'))
-            refused = self.cli_for(self.project, 'learning-migrate-project', expected=2)
-        self.assertEqual('migration_not_drained', refused['reason_code'])
-        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
-        self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
-        output, errors = process.communicate(timeout=60)
-        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
-        dispatched = json.loads(output)
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        observation = self.write('busy-observation.json', {'run_handle': run_handle, 'result_attempts': [
-            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
-        self.cli('learning-record-host-result', *context, '--route', route_path,
-                 '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
-        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
-        self.assertTrue(client.learning_migration(self.project)['drained'])
-        lifecycle = self.cli('learning-status')['ingestion']['managed_lifecycle']
-        self.assertEqual((1, 1, 0), (lifecycle['host_runs_opened'], lifecycle['host_runs_terminal'],
-                                     lifecycle['host_runs_pending']))
-
     def test_a_service_left_by_another_version_is_replaced_only_when_no_run_is_active(self):
         from codex_agents.client_runtime import runtime_hint_path
         from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
@@ -619,29 +613,6 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual('result', json.loads(output)['bridge_report']['outcome'])
         self.assertNotIn(('driver', 'stopping', 'cancelled'), self.stopped_runs)
 
-    def test_an_owner_ledger_command_is_refused_while_a_child_runs(self):
-        context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 3},
-                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        process = self.separate_dispatch(context, route_path, run_handle)
-        self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
-        # A command that needs the ledger to itself says why it cannot have it; the
-        # shared services and the child keep running.
-        refused = self.cli_for(self.project, 'learning-backup-project', '--file-id', 'while_running',
-                               '--expires-in-seconds', '3600', expected=2)
-        self.assertIn('a child run is active; nothing was changed', refused['error'])
-        status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle)
-        self.assertEqual(('running', None), (status['cancellation_state'], status['stop_reason']))
-        output, errors = process.communicate(timeout=60)
-        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
-        dispatched = json.loads(output)
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        observation = self.write('busy-observation.json', {'run_handle': run_handle, 'result_attempts': [
-            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
-        self.cli('learning-record-host-result', *context, '--route', route_path,
-                 '--result', self.write('busy-result.json', dispatched['result']), '--observation', observation)
-        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=60)
 
 
 class LifecycleBoundaryTests(DriverHarness):

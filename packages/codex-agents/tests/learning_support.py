@@ -528,6 +528,11 @@ def child(directory, name):
         if "sleep" in frame:
             time.sleep(frame["sleep"])
             continue
+        if "wait_for" in frame:  # Hold until the test creates this file (at most 60 s).
+            deadline = time.monotonic() + 60
+            while not os.path.exists(frame["wait_for"]) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            continue
         print(frame["raw"] if "raw" in frame else json.dumps(frame), flush=True)
     last = os.path.join(directory, name + "-last-message.json")
     if "-o" in sys.argv and os.path.exists(last):
