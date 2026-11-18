@@ -16,7 +16,7 @@ from codex_agents.project_history import ProjectHistory
 class StandIn:
     project_id = 'prj_' + 'a' * 32
 
-    def __init__(self, reservations, leases=()):
+    def __init__(self, reservations, leases=(), loose=()):
         self._connection = sqlite3.connect(':memory:')
         self._connection.execute('CREATE TABLE result_reservations(project_id,claim_id,state,hard_deadline_at_ms)')
         self._connection.execute('CREATE TABLE result_leases(project_id,claim_id,state,reserved_until_ms,run_handle,attempt)')
@@ -25,6 +25,9 @@ class StandIn:
         for claim, run_handle, attempt in leases:
             self._connection.execute("INSERT INTO result_leases VALUES(?,?,'bound',0,?,?)",
                                      (self.project_id, claim, run_handle, attempt))
+        for run_handle in loose:  # Expired leases that never got a reservation (the second loop).
+            self._connection.execute("INSERT INTO result_leases VALUES(?,?,'expired',0,?,1)",
+                                     (self.project_id, 'clm_' + run_handle, run_handle))
         self._purge_cursors = {'reservations': None, 'leases': None}
         self.deleted = []
 
@@ -35,7 +38,8 @@ class StandIn:
                                binding=SimpleNamespace(run_handle='hrn_' + claim, attempt=1, claim_id=claim))
 
     def _lease(self, row):
-        return SimpleNamespace(state='bound', binding=SimpleNamespace(run_handle=row[4], attempt=row[5]))
+        return SimpleNamespace(state=row[2], reserved_until_ms=row[3],
+                               binding=SimpleNamespace(run_handle=row[4], attempt=row[5]))
 
     def _orchestration_owner(self):
         return SimpleNamespace(closed_for=lambda binding: True)
@@ -48,8 +52,9 @@ class StandIn:
         yield
 
     def _delete_attempt_rows(self, run_handle, attempt, claim_id):
-        self.deleted.append(claim_id)
+        self.deleted.append(claim_id or run_handle)
         self._connection.execute('DELETE FROM result_reservations WHERE claim_id=?', (claim_id,))
+        self._connection.execute('DELETE FROM result_leases WHERE run_handle=? AND attempt=?', (run_handle, attempt))
 
 
 def purge(store, limit):
@@ -83,9 +88,23 @@ class ResultPurgeFlowTests(unittest.TestCase):
 
     def test_a_lease_of_another_attempt_never_lets_a_reservation_go(self):
         """Review 034-security-3: the lease found by claim must be the reservation's own attempt."""
-        store = StandIn(['clm_1', 'clm_2'], leases=[('clm_1', 'hrn_other', 1), ('clm_2', 'hrn_clm_2', 1)])
+        store = StandIn(['clm_1', 'clm_2', 'clm_3'],
+                        leases=[('clm_1', 'hrn_other', 1), ('clm_2', 'hrn_clm_2', 2), ('clm_3', 'hrn_clm_3', 1)])
         self.assertEqual(1, purge(store, 10))
-        self.assertEqual(['clm_2'], store.deleted)
+        self.assertEqual(['clm_3'], store.deleted)  # Another run, or another attempt, keeps it.
+
+    def test_the_lease_loop_stopped_by_its_limit_leaves_the_next_lease_for_the_next_pass(self):
+        store = StandIn([], loose=['hrn_a', 'hrn_b', 'hrn_c'])
+        self.assertEqual(1, purge(store, 1))
+        self.assertEqual(1, purge(store, 1))
+        self.assertEqual(['hrn_a', 'hrn_b'], store.deleted)
+
+    def test_a_budget_used_by_reservations_leaves_the_lease_cursor_where_it_was(self):
+        store = StandIn(['clm_1'], loose=['hrn_a'])
+        self.assertEqual(1, purge(store, 1))
+        self.assertIsNone(store._purge_cursors['leases'])
+        self.assertEqual(1, purge(store, 1))
+        self.assertEqual(['clm_1', 'hrn_a'], store.deleted)
 
 
 if __name__ == '__main__':
