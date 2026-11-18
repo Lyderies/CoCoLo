@@ -168,6 +168,26 @@ class ProjectHostResultTests(unittest.TestCase):
         self.assertEqual((self.delivery,), self.fixture.store.pending_terminals())
         self.assert_held()
 
+    def test_034_R1_a_retired_result_no_longer_counts_against_the_entry_limit(self):
+        """0.3.4 R1: the entry limit counts only live entries; a retired result keeps its tombstone
+        (no re-arming) but frees its place. In 0.8.29 every row ever written counted, so each project
+        store could record 64 results in its whole life."""
+        from dataclasses import replace
+        from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
+        self.call()
+        store = self.fixture.store
+        # Past the result's retention: it retires, and its orchestration stays open.
+        later = store.result_reservation(self.binding).expires_at_ms + 1
+        self.enterContext(mock.patch.object(store, '_result_now', return_value=later))
+        self.assertEqual(1, store.expire_results(limit=1))
+        self.assertEqual('expired', store.result_reservation(self.binding).state)
+        # Room for exactly one live entry: the retired one must not take it.
+        store._result_capacity = ResultCapacity(1, MAX_RESULT_BODY_BYTES, store._result_capacity.reservation_ms,
+                                                store._result_capacity.retention_ms)
+        other = replace(self.fixture.scope, run_handle='hrn_' + 'e' * 48, run_id='run:' + 'e' * 64,
+                        claim_request_id='other', claim_request_digest='e' * 64)
+        self.assertEqual('reserved', store.reserve_result_lease(other, self.fixture.assigned).state)
+
     def test_failed_closed_body_deletion_retains_charge_until_actual_retry_cleanup(self):
         owner, closing = self.reference_lifecycle()
         self.call()
