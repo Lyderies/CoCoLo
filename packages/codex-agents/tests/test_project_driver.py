@@ -600,14 +600,17 @@ class ProjectDriverTests(DriverHarness):
         from codex_agents.client_runtime import runtime_hint_path
 
         context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'sleep': 4},
+        gate = self.tools / 'codex-gate'
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'busy-child'}, {'wait_for': str(gate)},
                               {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         process = self.separate_dispatch(context, route_path, run_handle)
+        self.addCleanup(lambda: gate.parent.is_dir() and not gate.exists() and gate.write_text('go'))
         self.wait_for(lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']], seconds=30)
         # Its hint is withdrawn (as a replacement or a migration would) while the child
         # runs: the service is not found by new commands, but it does not drop the run.
         runtime_hint_path(self.paths, self.project).unlink()
+        gate.write_text('go')  # The child finishes only after the hint is gone (PLAN T8 driver slice 4).
         output, errors = process.communicate(timeout=60)
         self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
         self.assertEqual('result', json.loads(output)['bridge_report']['outcome'])
@@ -1400,8 +1403,10 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
                 {'type': 'tool_use', 'id': 'toolu_1', 'name': 'Read', 'input': {'file_path': 'CANARY-PRIVATE-PATH'}}]}},
             {'type': 'user', 'message': {'role': 'user', 'content': [
                 {'type': 'tool_result', 'tool_use_id': 'toolu_1', 'content': 'CANARY-PRIVATE-OUTPUT'}]}},
-            {'sleep': 3}, result_frame()])
+            {'wait_for': str(self.tools / 'claude-gate')}, result_frame()])
         process = self.separate_dispatch(context, route_path, run_handle)
+        gate = self.tools / 'claude-gate'
+        self.addCleanup(lambda: gate.parent.is_dir() and not gate.exists() and gate.write_text('go'))
         target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
         self.wait_for(lambda: [i for i in self.invocations('claude') if '-p' in i['argv']], seconds=30)
         self.wait_for(lambda: self.cli('learning-run-status', *target)['health'] in {'active', 'quiet'}, seconds=20)
@@ -1409,6 +1414,7 @@ class ClaudeChildDriverTests(ClaudeChildHarness):
         # Status is counts and states: bounded, and none of what the child thought, said or read.
         self.assertNotIn('CANARY', json.dumps(status))
         self.assertLess(len(json.dumps(status)), 4096)
+        gate.write_text('go')  # The child finishes only after its live status was read (PLAN T8 driver slice 4).
         output, errors = process.communicate(timeout=60)
         self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
         dispatched = json.loads(output)
