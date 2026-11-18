@@ -87,5 +87,42 @@ class ResultLifetimeTests(DriverHarness):
             self.assertIs(int, type(capacity[name]['live']), name)
 
 
+
+class ResultLimitTests(DriverHarness):
+    """R8 with small limits, set before the services open their stores."""
+
+    def setUp(self):
+        from unittest import mock
+        from codex_agents import project_service
+        from codex_agents.orchestration_api import OrchestrationLimits
+        from codex_agents.result_contracts import ResultCapacity
+        small = project_service._result_capacity()
+        small = ResultCapacity(2, small.max_reserved_bytes, small.reservation_ms, small.retention_ms)
+        for patcher in (mock.patch.object(project_service, 'ORCHESTRATIONS', OrchestrationLimits(2, 4_096)),
+                        mock.patch.object(project_service, '_result_capacity', return_value=small)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def test_034_R8_more_lifecycles_than_every_limit_never_fail_on_history(self):
+        """R8: with the result and orchestration limits set to 2, four complete lifecycles in a row
+        (open, dispatch, record, close) all succeed. Under 0.8.29 the third failed, because the limits
+        counted every row ever written."""
+        for number in range(4):
+            with self.subTest(lifecycle=number):
+                context, route_path, orchestration, run_handle = self.open_run()
+                self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+                (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+                dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+                observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
+                    {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+                self.cli('learning-record-host-result', *context, '--route', route_path,
+                         '--result', self.write('result.json', dispatched['result']), '--observation', observation)
+                self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs[-1:], seconds=30)
+                self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'completed')
+                capacity = self.cli('learning-status')['project_capacity']
+                self.assertEqual((2, 2), (capacity['results']['limit'], capacity['orchestrations']['limit']))
+
+
 if __name__ == '__main__':
     unittest.main()
