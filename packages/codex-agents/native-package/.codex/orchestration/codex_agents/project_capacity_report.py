@@ -25,7 +25,9 @@ def capacity_report(history):
     counts = {
         'results': (results, history._result_capacity.max_entries),
         'orchestrations': (OrchestrationOwner(history)._open_count(), None if limits is None else limits.max_orchestrations),
-        'cleanup_reservations': (db.execute('SELECT COUNT(*) FROM project_cleanup_reservations').fetchone()[0],
+        # Live: the account's release not yet acknowledged (R6).
+        'cleanup_reservations': (db.execute('SELECT COUNT(*) FROM project_cleanup_reservations WHERE project_id=? '
+                                            'AND account_release_digest IS NULL', (project,)).fetchone()[0],
                                  MAX_CLEANUP_RESERVATIONS),
         'operational_qa': (db.execute('SELECT COUNT(*) FROM project_operational_qa WHERE project_id=?',
                                       (project,)).fetchone()[0], MAX_CHECK_RECEIPTS),

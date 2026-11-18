@@ -131,27 +131,37 @@ class OrchestrationOwner:
 
     def purge_closed(self, now, limit):
         """Remove closed orchestrations past ORCHESTRATION_RETENTION_MS, with their checkpoints and
-        requests, once no result row names them (0.3.4 R6). Bounded; returns how many went."""
-        purged = 0
-        for row in self._db.execute('SELECT orchestration_handle,sequence,checkpoint_digest FROM project_orchestrations '
-                                    'WHERE project_id=? ORDER BY rowid', (self._history.project_id,)).fetchall():
-            if purged >= limit:
-                break
+        requests, once no result row names them (0.3.4 R6). Each pass examines a bounded window from where
+        the last one stopped, and reads the leases once (R1g). Returns how many went."""
+        project = self._history.project_id
+        after = self._history._purge_cursors.get('orchestrations')
+        statement = 'SELECT rowid,orchestration_handle,sequence,checkpoint_digest FROM project_orchestrations WHERE project_id=?'
+        rows = self._db.execute(statement + ('' if after is None else ' AND rowid>?') + ' ORDER BY rowid LIMIT ?',
+                                (project, *(() if after is None else (after,)), limit * 16)).fetchall()
+        if not rows and after is not None:
+            self._history._purge_cursors['orchestrations'] = None
+            return self.purge_closed(now, limit)  # Start again from the first.
+        due = []
+        for row in rows:
+            self._history._purge_cursors['orchestrations'] = row['rowid']
             snapshot = self._latest_snapshot(row)
-            if (snapshot is None or snapshot['status'] not in ORCHESTRATION_TERMINAL_STATES
-                    or snapshot['ended_at_ms'] is None or now <= snapshot['ended_at_ms'] + ORCHESTRATION_RETENTION_MS):
-                continue
-            handle, project = row['orchestration_handle'], self._history.project_id
-            if self._db.execute('SELECT 1 FROM result_reservations WHERE project_id=? AND orchestration_handle=? LIMIT 1',
-                                (project, handle)).fetchone() is not None:
-                continue
-            # A lease names its orchestration only inside its sealed binding.
-            leases = self._db.execute('SELECT * FROM result_leases WHERE project_id=?', (project,)).fetchall()
+            if (snapshot is not None and snapshot['status'] in ORCHESTRATION_TERMINAL_STATES
+                    and snapshot['ended_at_ms'] is not None and now > snapshot['ended_at_ms'] + ORCHESTRATION_RETENTION_MS):
+                due.append(row['orchestration_handle'])
+        if not due:
+            return 0
+        # A lease names its orchestration only inside its sealed binding: read them once for the pass.
+        named = set()
+        for lease in self._db.execute('SELECT * FROM result_leases WHERE project_id=?', (project,)).fetchall():
             try:
-                if any(self._history._lease(lease).binding.orchestration_handle == handle for lease in leases):
-                    continue
+                named.add(self._history._lease(lease).binding.orchestration_handle)
             except HistoryError:
-                continue  # Unreadable: keep the orchestration rather than guess.
+                return 0  # Unreadable: keep every orchestration rather than guess.
+        purged = 0
+        for handle in due[:limit]:
+            if handle in named or self._db.execute('SELECT 1 FROM result_reservations WHERE project_id=? '
+                                                   'AND orchestration_handle=? LIMIT 1', (project, handle)).fetchone():
+                continue
             with self._history._transaction():
                 for table in ('project_orchestration_requests', 'project_orchestration_checkpoints',
                               'project_orchestrations'):
@@ -205,8 +215,12 @@ class OrchestrationOwner:
                                (binding.project_id, binding.run_handle, binding.attempt)).fetchone()
         if row is None:
             return False  # A legacy reservation without a lease has no release evidence here.
+        lease = self._history._lease(row)
+        if (lease.claim_id != binding.claim_id or lease.binding.orchestration_handle != binding.orchestration_handle
+                or lease.binding.run_id != binding.run_id):
+            raise HistoryError('history_conflict')  # Not this reservation's lease (review 034-security).
         try:
-            read_account_release(self._history, self._history._lease(row).binding)
+            read_account_release(self._history, lease.binding)
         except HistoryError as exc:
             if exc.reason_code == 'history_result_not_ready':
                 return False

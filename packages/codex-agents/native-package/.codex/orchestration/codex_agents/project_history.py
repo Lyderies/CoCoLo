@@ -65,6 +65,8 @@ RESULT_PURGE_GRACE_MS = 3_600_000
 MAX_LEASE_ROWS = 4_096
 # How many results one reservation may retire before it is refused for capacity (0.3.4 R8).
 RECLAIM_BATCH = 16
+# How many rows one purge pass examines per row it may remove (0.3.4 R1g).
+PURGE_SCAN_FACTOR = 16
 MAX_BINDING_BYTES = 4096
 MAX_HISTORY_ROW_BYTES = 2 * MAX_RECORD_BYTES
 MAX_LEARNING_PAGE_BYTES = 262_144
@@ -244,6 +246,8 @@ class ProjectHistory:
         self._result_capacity = None
         self._result_expiry_cursor: int | None = None
         self._lease_expiry_cursor: int | None = None
+        # Where the finished-row purge goes on from (0.3.4 R1g): scheduling state only, like the above.
+        self._purge_cursors: dict[str, int | None] = {"reservations": None, "leases": None, "orchestrations": None}
         self._result_clock = result_clock_ms if result_clock_ms is not None else (lambda: time.time_ns() // 1_000_000)
         if (
             type(allow_schema_upgrade) is not bool
@@ -1897,17 +1901,18 @@ class ProjectHistory:
             except (sqlite3.Error, OSError):
                 if failure is None:
                     failure = "history_unavailable"
-        try:
-            self._purge_finished_results(now, limit)
-            self._orchestration_owner().purge_closed(now, limit)  # 0.3.4 R6
-            from .project_qa_checks import purge_old_qa
-            purge_old_qa(self, now, limit)  # 0.3.4 R6
-        except HistoryError as exc:
-            if failure is None:
-                failure = exc.reason_code
-        except sqlite3.Error:
-            if failure is None:
-                failure = "history_unavailable"
+        from .project_qa_checks import purge_old_qa
+        # Each removal has its turn whatever another one meets (0.3.4 R1g).
+        for purge in (self._purge_finished_results, self._orchestration_owner().purge_closed,
+                      lambda now, limit: purge_old_qa(self, now, limit)):
+            try:
+                purge(now, limit)
+            except HistoryError as exc:
+                if failure is None:
+                    failure = exc.reason_code
+            except sqlite3.Error:
+                if failure is None:
+                    failure = "history_unavailable"
         if failure is not None:
             # Preserve failure visibility, without chaining private file/SQL
             # details, after other selected rows have had their cleanup turn.
@@ -1915,42 +1920,65 @@ class ProjectHistory:
         return retired
 
     def _purge_finished_results(self, now: int, limit: int) -> int:
-        """Remove finished result rows once nothing can present their attempt again (0.3.4 R1c).
+        """Remove finished result rows once nothing can present their attempt again (0.3.4 R1c, R1f, R1g).
 
         A retired reservation and its lease go together, with the rows that refer to them, once the
         reservation is expired, its hard deadline plus the crash grace has passed (the account then
-        refuses that binding), and its orchestration is closed. A lease that never got a reservation
-        goes on the same terms, from its reserved-until time. The sealed values decide, never the
-        state column alone. Bounded per call; anything not yet provable stays for a later call.
+        refuses that binding), its orchestration is closed, and the account's release of the attempt is
+        verified. A lease that never got a reservation goes on the same terms, from its reserved-until
+        time. The sealed values decide, never the state column alone. Each pass examines a bounded window
+        from where the last one stopped, so rows that cannot go yet never hold back later ones; a row
+        that does not verify is kept and passed over.
         """
         owner = self._orchestration_owner()
         cutoff = now - RESULT_PURGE_GRACE_MS
         purged = 0
-        for (position,) in self._connection.execute(
-                "SELECT rowid FROM result_reservations WHERE project_id=? AND state='expired' "
-                "AND hard_deadline_at_ms<? ORDER BY rowid LIMIT ?", (self.project_id, cutoff, limit)).fetchall():
-            row = self._connection.execute("SELECT * FROM result_reservations WHERE project_id=? AND rowid=?",
-                                           (self.project_id, position)).fetchone()
-            value = self._reservation(row)
-            if value.state != "expired" or not value.hard_deadline_at_ms < cutoff or not owner.closed_for(value.binding):
-                continue
-            lease_row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND claim_id=?",
-                                                 (self.project_id, value.binding.claim_id)).fetchone()
-            if lease_row is not None and (self._lease(lease_row).state not in {"bound", "expired"}
-                                          or not self._attempt_released(self._lease(lease_row))):
-                continue
+
+        def window(name, statement, arguments):
+            after = self._purge_cursors[name]
+            rows = self._connection.execute(statement + ("" if after is None else " AND rowid>?") + " ORDER BY rowid LIMIT ?",
+                                            (*arguments, *(() if after is None else (after,)), limit * PURGE_SCAN_FACTOR)
+                                            ).fetchall()
+            if not rows and after is not None:
+                self._purge_cursors[name] = None
+                return window(name, statement, arguments)
+            return [row[0] for row in rows]
+
+        for position in window("reservations", "SELECT rowid FROM result_reservations WHERE project_id=? "
+                               "AND state='expired' AND hard_deadline_at_ms<?", (self.project_id, cutoff)):
+            self._purge_cursors["reservations"] = position
+            if purged >= limit:
+                break
+            try:
+                row = self._connection.execute("SELECT * FROM result_reservations WHERE project_id=? AND rowid=?",
+                                               (self.project_id, position)).fetchone()
+                value = self._reservation(row)
+                if value.state != "expired" or not value.hard_deadline_at_ms < cutoff or not owner.closed_for(value.binding):
+                    continue
+                lease_row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND claim_id=?",
+                                                     (self.project_id, value.binding.claim_id)).fetchone()
+                lease = None if lease_row is None else self._lease(lease_row)
+                if lease is not None and (lease.state not in {"bound", "expired"} or not self._attempt_released(lease)):
+                    continue
+            except HistoryError:
+                continue  # Kept: it does not verify, so nothing about it is trusted.
             with self._transaction():
                 self._delete_attempt_rows(value.binding.run_handle, value.binding.attempt, value.binding.claim_id)
             purged += 1
-        for (position,) in self._connection.execute(
-                "SELECT rowid FROM result_leases l WHERE project_id=? AND state='expired' AND reserved_until_ms<? "
-                "AND NOT EXISTS(SELECT 1 FROM result_reservations r WHERE r.project_id=l.project_id "
-                "AND r.claim_id=l.claim_id) ORDER BY rowid LIMIT ?", (self.project_id, cutoff, limit)).fetchall():
-            row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND rowid=?",
-                                           (self.project_id, position)).fetchone()
-            lease = self._lease(row)
-            if (lease.state != "expired" or not lease.reserved_until_ms < cutoff or not owner.closed_for(lease.binding)
-                    or not self._attempt_released(lease)):
+        for position in window("leases", "SELECT rowid FROM result_leases l WHERE project_id=? AND state='expired' "
+                               "AND reserved_until_ms<? AND NOT EXISTS(SELECT 1 FROM result_reservations r "
+                               "WHERE r.project_id=l.project_id AND r.claim_id=l.claim_id)", (self.project_id, cutoff)):
+            self._purge_cursors["leases"] = position
+            if purged >= limit:
+                break
+            try:
+                row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND rowid=?",
+                                               (self.project_id, position)).fetchone()
+                lease = self._lease(row)
+                if (lease.state != "expired" or not lease.reserved_until_ms < cutoff or not owner.closed_for(lease.binding)
+                        or not self._attempt_released(lease)):
+                    continue
+            except HistoryError:
                 continue
             with self._transaction():
                 self._delete_attempt_rows(lease.binding.run_handle, lease.binding.attempt, None)

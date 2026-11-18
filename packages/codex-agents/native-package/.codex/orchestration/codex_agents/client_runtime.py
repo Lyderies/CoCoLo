@@ -520,11 +520,11 @@ def capacity_report_client(state_root, project_root, *, host_client):
     try:
         state = CollectorPaths(state_root)
         scope, _, endpoint = read_runtime_hint(state, project_root)
-        history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=10)
+        history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=2)
         enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
         return history.capacity_report()
-    except (HistoryError, DispatchError, StateError, OSError):
-        return None
+    except Exception:
+        return None  # A diagnostic: it never stops learning-status (review 034-security).
 
 
 def orchestration_report_client(state_root, project_root, orchestration_id, *, host_client):

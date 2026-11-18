@@ -11766,7 +11766,7 @@ class CollectorServer:
                     with contextlib.suppress(LedgerError, OSError, sqlite3.Error, ValueError, KeyError):
                         self.ledger.sweep_event_retention()
                     # Finished account rows past their retention go too, so no limit fills for good (0.3.4 R6).
-                    with contextlib.suppress(LedgerError, OSError, sqlite3.Error):
+                    with contextlib.suppress(LedgerError, OSError, sqlite3.Error, ValueError, KeyError):
                         self.ledger.sweep_account_retention()
                 try:
                     connection, _ = listener.accept()

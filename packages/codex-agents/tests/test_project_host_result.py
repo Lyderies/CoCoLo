@@ -229,6 +229,26 @@ class ProjectHostResultTests(unittest.TestCase):
             store.expire_results(limit=10)
         self.assertEqual((1, 1), rows())
 
+    def test_034_R1g_a_row_that_does_not_verify_is_kept_and_passed_over(self):
+        """R1g (review 034-security): one changed row made every pass fail for good, before the other
+        removals ran. It is now kept, untrusted, and the pass goes on."""
+        owner, closing = self.reference_lifecycle()
+        self.call()
+        owner.apply(closing, client_version='codex-host-v1', before_commit=lambda: None)
+        store = self.fixture.store
+        store.expire_results(limit=1)
+        deadline = store.result_reservation(self.binding).hard_deadline_at_ms
+        store._connection.execute('UPDATE result_reservations SET hard_deadline_at_ms=hard_deadline_at_ms-1')
+        with mock.patch.object(store, '_result_now', return_value=deadline + 3_600_001):
+            self.assertEqual(0, store._purge_finished_results(deadline + 3_600_001, 10))
+        self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM result_reservations').fetchone()[0])
+
+    def test_034_the_purge_grace_is_the_accounts_crash_grace(self):
+        """Review 034-security: the project's purge grace is a copy of the account's; they must agree."""
+        from codex_agents.active_run_capacity import CRASHED_CLAIM_GRACE_MS
+        from codex_agents.project_history import RESULT_PURGE_GRACE_MS
+        self.assertGreaterEqual(RESULT_PURGE_GRACE_MS, CRASHED_CLAIM_GRACE_MS)
+
     def test_034_R6_cleanup_reservations_go_with_their_result(self):
         """0.3.4 R6: project cleanup reservations (and the rows under them) counted against 4,096 for the
         store's life. They are removed with their result's lease, so they never outlive it."""
