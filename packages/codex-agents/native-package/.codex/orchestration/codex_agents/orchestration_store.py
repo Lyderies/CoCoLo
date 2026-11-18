@@ -141,27 +141,27 @@ class OrchestrationOwner:
         if not rows and after is not None:
             self._history._purge_cursors['orchestrations'] = None
             return self.purge_closed(now, limit)  # Start again from the first.
-        due = []
+        named, purged = None, 0
         for row in rows:
+            if purged >= limit:
+                break  # The cursor stays on the last row examined; the next pass goes on from there.
             self._history._purge_cursors['orchestrations'] = row['rowid']
             snapshot = self._latest_snapshot(row)
-            if (snapshot is not None and snapshot['status'] in ORCHESTRATION_TERMINAL_STATES
-                    and snapshot['ended_at_ms'] is not None and now > snapshot['ended_at_ms'] + ORCHESTRATION_RETENTION_MS):
-                due.append(row['orchestration_handle'])
-        if not due:
-            return 0
-        # A lease names its orchestration only inside its sealed binding: read them once for the pass.
-        named = set()
-        for lease in self._db.execute('SELECT * FROM result_leases WHERE project_id=?', (project,)).fetchall():
-            try:
-                named.add(self._history._lease(lease).binding.orchestration_handle)
-            except HistoryError:
-                return 0  # Unreadable: keep every orchestration rather than guess.
-        purged = 0
-        for handle in due[:limit]:
+            if (snapshot is None or snapshot['status'] not in ORCHESTRATION_TERMINAL_STATES
+                    or snapshot['ended_at_ms'] is None or now <= snapshot['ended_at_ms'] + ORCHESTRATION_RETENTION_MS):
+                continue
+            if named is None:
+                # A lease names its orchestration only inside its sealed binding: read them once per pass.
+                named = set()
+                for lease in self._db.execute('SELECT * FROM result_leases WHERE project_id=?', (project,)).fetchall():
+                    try:
+                        named.add(self._history._lease(lease).binding.orchestration_handle)
+                    except HistoryError:
+                        return purged  # Unreadable: keep every orchestration rather than guess.
+            handle = row['orchestration_handle']
             if handle in named or self._db.execute('SELECT 1 FROM result_reservations WHERE project_id=? '
                                                    'AND orchestration_handle=? LIMIT 1', (project, handle)).fetchone():
-                continue
+                continue  # Still named; a later one may still go (re-review 034-security-2).
             with self._history._transaction():
                 for table in ('project_orchestration_requests', 'project_orchestration_checkpoints',
                               'project_orchestrations'):

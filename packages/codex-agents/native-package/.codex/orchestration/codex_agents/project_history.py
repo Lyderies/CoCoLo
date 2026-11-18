@@ -1946,9 +1946,9 @@ class ProjectHistory:
 
         for position in window("reservations", "SELECT rowid FROM result_reservations WHERE project_id=? "
                                "AND state='expired' AND hard_deadline_at_ms<?", (self.project_id, cutoff)):
-            self._purge_cursors["reservations"] = position
             if purged >= limit:
-                break
+                break  # The cursor stays on the last row examined; the next pass goes on from there.
+            self._purge_cursors["reservations"] = position
             try:
                 row = self._connection.execute("SELECT * FROM result_reservations WHERE project_id=? AND rowid=?",
                                                (self.project_id, position)).fetchone()
@@ -1958,8 +1958,10 @@ class ProjectHistory:
                 lease_row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND claim_id=?",
                                                      (self.project_id, value.binding.claim_id)).fetchone()
                 lease = None if lease_row is None else self._lease(lease_row)
-                if lease is not None and (lease.state not in {"bound", "expired"} or not self._attempt_released(lease)):
-                    continue
+                if lease is not None and ((lease.binding.run_handle, lease.binding.attempt)
+                                          != (value.binding.run_handle, value.binding.attempt)
+                                          or lease.state not in {"bound", "expired"} or not self._attempt_released(lease)):
+                    continue  # Not this attempt's lease, still live, or not released: kept.
             except HistoryError:
                 continue  # Kept: it does not verify, so nothing about it is trusted.
             with self._transaction():
@@ -1968,9 +1970,9 @@ class ProjectHistory:
         for position in window("leases", "SELECT rowid FROM result_leases l WHERE project_id=? AND state='expired' "
                                "AND reserved_until_ms<? AND NOT EXISTS(SELECT 1 FROM result_reservations r "
                                "WHERE r.project_id=l.project_id AND r.claim_id=l.claim_id)", (self.project_id, cutoff)):
-            self._purge_cursors["leases"] = position
             if purged >= limit:
-                break
+                break  # The cursor stays on the last row examined; the next pass goes on from there.
+            self._purge_cursors["leases"] = position
             try:
                 row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND rowid=?",
                                                (self.project_id, position)).fetchone()
