@@ -155,6 +155,32 @@ class ProjectOrchestrationTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, 'history_orchestration_full'):
             self.call('open', identity='third')
 
+    def test_034_R1g_a_closed_orchestration_still_named_never_holds_back_a_later_one(self):
+        """R1g (re-review 034-security-2): the purge took the first due orchestrations and only then
+        skipped the ones a result row still names, so one named for good starved every later one."""
+        from codex_agents.orchestration_store import ORCHESTRATION_RETENTION_MS
+        self.store._orchestration_limits = OrchestrationLimits(2, 12)
+        handles = []
+        for identity in ('first', 'second'):
+            opened = self.call('open', identity='open-' + identity)['current']['snapshot']
+            self.call('close', self.target(opened, status='completed', goal_tokens_used=None,
+                                           goal_time_used_seconds=None), 'close-' + identity)
+            handles.append(opened['orchestration_handle'])
+        # A result row of the first stays (say, an attempt the account never released).
+        self.store._connection.execute(
+            "INSERT INTO result_reservations(project_id,claim_id,run_handle,attempt,claim_digest,orchestration_handle,"
+            "binding,assignment_digest,created_at_ms,hard_deadline_at_ms,reserved_until_ms,expires_at_ms,state) "
+            "VALUES(?,'clm_x','hrn_x',1,?,?,x'00','a',0,0,0,0,'expired')", (PROJECT_A, 'c' * 64, handles[0]))
+        self.now += ORCHESTRATION_RETENTION_MS + 1
+        owner = self.store._orchestration_owner()
+        for _ in range(3):
+            owner.purge_closed(self.now, 1)
+
+        def kept(handle):
+            return self.store._connection.execute('SELECT COUNT(*) FROM project_orchestrations WHERE orchestration_handle=?',
+                                                  (handle,)).fetchone()[0]
+        self.assertEqual((1, 0), (kept(handles[0]), kept(handles[1])))
+
     def test_034_R6_a_closed_orchestration_is_removed_after_its_retention(self):
         from codex_agents.orchestration_store import ORCHESTRATION_RETENTION_MS
         first = self.opened()

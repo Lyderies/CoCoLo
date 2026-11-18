@@ -160,13 +160,12 @@ class ResultLifetimeTests(DriverHarness):
     def store_rows(self, *tables):
         counts = []
         for table in tables:
-            total = 0
-            for path in self.state.root.rglob('history.sqlite3'):
+            total, stores = 0, list(self.state.root.rglob('history.sqlite3'))
+            self.assertEqual(1, len(stores))  # Re-review 034-security-2: a missing or unreadable store fails.
+            for path in stores:
                 connection = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
                 try:
                     total += connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
-                except sqlite3.Error:
-                    pass
                 finally:
                     connection.close()
             counts.append(total)
