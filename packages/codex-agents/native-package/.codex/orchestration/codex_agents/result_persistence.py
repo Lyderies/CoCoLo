@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 import contextlib
 import os
 import queue
+import sqlite3
 import threading
 import time
 import weakref
@@ -1007,7 +1008,8 @@ class ResultPersistenceLane:
             history = self._history()
             if request.kind == 'expire':
                 # An update leaves the earlier runtime's open orchestrations to this service (0.3.4 R10).
-                with contextlib.suppress(HistoryError):
+                # A failure here never stops the result cleanup below (review 034-r10).
+                with contextlib.suppress(HistoryError, sqlite3.Error):
                     history._orchestration_owner().end_earlier(self._service_scope, 10)
                 result = history.expire_results(limit=10)
             elif request.kind == 'list':

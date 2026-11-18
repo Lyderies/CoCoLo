@@ -139,12 +139,20 @@ class OrchestrationOwner:
             return 0
         same = {name: getattr(current, name) for name in SCOPE_FIELDS if name != 'runtime_digest'}
         own = self._scope_digest(current)
-        ended = 0
-        for row in self._db.execute('SELECT orchestration_handle,sequence,checkpoint_digest,scope_digest '
-                                    'FROM project_orchestrations WHERE project_id=? AND scope_digest!=? ORDER BY rowid',
-                                    (current.project_id, own)).fetchall():
-            if ended >= limit:
+        # A bounded window from where the last pass stopped; every attempt counts (review 034-r10).
+        after = self._history._purge_cursors.get('earlier')
+        rows = self._db.execute('SELECT rowid,orchestration_handle,sequence,checkpoint_digest,scope_digest '
+                                'FROM project_orchestrations WHERE project_id=? AND scope_digest!=?'
+                                + ('' if after is None else ' AND rowid>?') + ' ORDER BY rowid LIMIT ?',
+                                (current.project_id, own, *(() if after is None else (after,)), limit * 16)).fetchall()
+        if not rows and after is not None:
+            self._history._purge_cursors['earlier'] = None
+            return self.end_earlier(current, limit)
+        ended = tried = 0
+        for row in rows:
+            if tried >= limit:
                 break
+            self._history._purge_cursors['earlier'] = row['rowid']
             snapshot = self._latest_snapshot(row)
             if (snapshot is None or snapshot['status'] in ORCHESTRATION_TERMINAL_STATES
                     or any(snapshot['scope'].get(name) != value for name, value in same.items())
@@ -153,7 +161,9 @@ class OrchestrationOwner:
             earlier = OrchestrationScope(**snapshot['scope'])
             if self._scope_digest(earlier) != row['scope_digest']:
                 continue  # The row does not belong to the scope its checkpoint names: left as it is.
-            request = OrchestrationRequest(1, 'orchestration.close', 'end-earlier-' + row['orchestration_handle'], earlier, {
+            tried += 1
+            # A fresh request id each time: no client can have used it before (review 034-r10).
+            request = OrchestrationRequest(1, 'orchestration.close', 'end-earlier-' + secrets.token_hex(16), earlier, {
                 'orchestration_handle': row['orchestration_handle'], 'expected_sequence': snapshot['sequence'],
                 'status': 'interrupted', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
             try:

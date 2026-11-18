@@ -247,7 +247,7 @@ class ProjectHistory:
         self._result_expiry_cursor: int | None = None
         self._lease_expiry_cursor: int | None = None
         # Where the finished-row purge goes on from (0.3.4 R1g): scheduling state only, like the above.
-        self._purge_cursors: dict[str, int | None] = {"reservations": None, "leases": None, "orchestrations": None}
+        self._purge_cursors: dict[str, int | None] = {"reservations": None, "leases": None, "orchestrations": None, "earlier": None}
         self._result_clock = result_clock_ms if result_clock_ms is not None else (lambda: time.time_ns() // 1_000_000)
         if (
             type(allow_schema_upgrade) is not bool
