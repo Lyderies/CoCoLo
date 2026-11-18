@@ -67,6 +67,18 @@ class DriverHarness(ServiceHarness, CliTestCase):
                               '--orchestration-handle', orchestration['orchestration_handle'])
         return context, route_path, orchestration['orchestration_handle'], opened['run_handle']
 
+    def attempt(self, command, *arguments):
+        """Run one command for the project; returns (exit code, report) without asserting either."""
+        stdout = io.StringIO()
+        argv = ['cli.py', command, '--state-root', str(self.state.root), '--project-root', str(self.project), *arguments]
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(cli, 'BUNDLE_ROOT', self.bundle), \
+                contextlib.redirect_stdout(stdout):
+            code = cli.main()
+        return code, json.loads(stdout.getvalue())
+
+    def executions(self):
+        return [i for i in self.invocations('codex') if 'exec' in i['argv']]
+
     def cli_any(self, command, *arguments):
         """The CLI's reply whatever its exit status, for a command polled until it is ready."""
         from tests.test_bridge import cli as cli_module
@@ -177,10 +189,23 @@ class ProjectDriverTests(DriverHarness):
             foreign = self.cli('learning-cancel-run', *target, expected=2)
         self.assertEqual('control_not_authorized', foreign['reason_code'])
 
+        # A handle nobody was given, in this orchestration or a made-up one, shows and stops nothing
+        # (carried here, PLAN T8 driver slice 6).
+        for forged in (('--orchestration-handle', orchestration, '--run-handle', 'hrn_' + 'f' * 48),
+                       ('--orchestration-handle', 'orc_' + 'f' * 48, '--run-handle', run_handle)):
+            for command in ('learning-run-status', 'learning-cancel-run'):
+                with self.subTest(command=command, forged=forged[1][:8] + forged[3][:8]):
+                    code, refused = self.attempt(command, *forged)
+                    self.assertEqual((2, False), (code, refused['ready']))
+                    self.assertNotIn('health', refused)
+        self.assertEqual('running', self.cli('learning-run-status', *target)['cancellation_state'])
+
         started = time.monotonic()
         cancelled = self.cli('learning-cancel-run', *target)
         self.assertEqual(('cancel_requested', True), (cancelled['stop_reason'], cancelled['stop_requested']))
         self.assertIn(cancelled['cancellation_state'], {'stop_requested', 'cleanup_confirmed'})
+        # A second cancel keeps the first decision.
+        self.assertEqual(cancelled['stop_reason'], self.cli('learning-cancel-run', *target)['stop_reason'])
         output, errors = process.communicate(timeout=30)
         self.assertLess(time.monotonic() - started, 20)  # Long before the child's own 30-second sleep ends.
         self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
@@ -189,6 +214,15 @@ class ProjectDriverTests(DriverHarness):
         settled = self.cli('learning-run-status', *target)
         self.assertTrue(settled['stop_requested'])
         self.assertEqual('cancel_requested', settled['stop_reason'])
+        self.assertEqual('cancel_requested', self.cli('learning-cancel-run', *target)['stop_reason'])
+        # Dispatching the same handle again never starts another child.
+        code, repeated = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual(1, len(self.executions()))
+        if code == 0:
+            self.assertEqual(dispatched['bridge_report']['terminal_state'], repeated['bridge_report']['terminal_state'])
+            self.assertEqual(dispatched['result'], repeated['result'])
+        else:
+            self.assertFalse(repeated['ready'])
 
     def test_while_a_child_runs_other_commands_leave_it_and_the_shared_services_alone(self):
         """One live run carries four checks (PLAN T8 driver slice 3): routing and preflight, another
@@ -614,55 +648,6 @@ class ProjectDriverTests(DriverHarness):
 
 class LifecycleBoundaryTests(DriverHarness):
     """End-to-end checks of boundaries that are otherwise only tested below the project service."""
-
-    def attempt(self, command, *arguments):
-        """Run one command for the project; returns (exit code, report) without asserting either."""
-        stdout = io.StringIO()
-        argv = ['cli.py', command, '--state-root', str(self.state.root), '--project-root', str(self.project), *arguments]
-        with mock.patch.object(sys, 'argv', argv), mock.patch.object(cli, 'BUNDLE_ROOT', self.bundle), \
-                contextlib.redirect_stdout(stdout):
-            code = cli.main()
-        return code, json.loads(stdout.getvalue())
-
-    def executions(self):
-        return [i for i in self.invocations('codex') if 'exec' in i['argv']]
-
-    def test_repeated_cancels_keep_one_decision_and_a_finished_run_is_never_launched_again(self):
-        context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'quiet-child'}, {'sleep': 30},
-                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        process = self.separate_dispatch(context, route_path, run_handle)
-        self.wait_for(self.executions, seconds=30)
-        target = ('--orchestration-handle', orchestration, '--run-handle', run_handle)
-        # A handle nobody was given, in this orchestration or a made-up one, shows and stops nothing.
-        for forged in (('--orchestration-handle', orchestration, '--run-handle', 'hrn_' + 'f' * 48),
-                       ('--orchestration-handle', 'orc_' + 'f' * 48, '--run-handle', run_handle)):
-            for command in ('learning-run-status', 'learning-cancel-run'):
-                with self.subTest(command=command, forged=forged[1][:8] + forged[3][:8]):
-                    code, refused = self.attempt(command, *forged)
-                    self.assertEqual((2, False), (code, refused['ready']))
-                    self.assertNotIn('health', refused)
-        self.assertEqual('running', self.cli('learning-run-status', *target)['cancellation_state'])
-        first = self.cli('learning-cancel-run', *target)
-        again = self.cli('learning-cancel-run', *target)
-        self.assertEqual(('cancel_requested', True), (first['stop_reason'], first['stop_requested']))
-        self.assertEqual(first['stop_reason'], again['stop_reason'])
-        # A request is not a confirmed stop: the state says which it is.
-        self.assertIn(first['cancellation_state'], {'stop_requested', 'cleanup_confirmed'})
-        output, errors = process.communicate(timeout=30)
-        self.assertEqual(0, process.returncode, (output + errors).decode(errors='replace'))
-        fenced = json.loads(output)
-        self.assertEqual('cancelled', fenced['bridge_report']['terminal_state'])
-        self.assertEqual('cancel_requested', self.cli('learning-cancel-run', *target)['stop_reason'])
-        # Dispatching the same handle again never starts another child.
-        code, repeated = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
-        self.assertEqual(1, len(self.executions()))
-        if code == 0:
-            self.assertEqual(fenced['bridge_report']['terminal_state'], repeated['bridge_report']['terminal_state'])
-            self.assertEqual(fenced['result'], repeated['result'])
-        else:
-            self.assertFalse(repeated['ready'])
 
     def test_an_invalid_result_is_fenced_with_its_reason_and_recorded_exactly_once(self):
         context, route_path, orchestration, run_handle = self.open_run()
