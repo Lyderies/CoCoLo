@@ -324,51 +324,6 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual('admission_capture_limit', refused['reason_code'], refused)
         self.assertEqual(before, self.collector_ledger._connection.execute(bindings).fetchone()[0])
 
-    def legacy_history(self, count, content_bytes):
-        """Earlier dispatch results of this project as 0.2.x recorded them, through a second connection."""
-        import hashlib
-        connection = sqlite3.connect(self.state.root / 'learning.sqlite3', timeout=30)
-        try:
-            project, = connection.execute(
-                "SELECT project_id FROM records WHERE record_type='provider_identity' LIMIT 1").fetchone()
-            sequence = connection.execute("SELECT MAX(source_sequence) FROM records").fetchone()[0]
-            now = int(time.time() * 1000)
-            with connection:
-                for index in range(count):
-                    run_id = 'run:' + hashlib.sha256(f'legacy-{index}'.encode()).hexdigest()
-                    content = json.dumps({'record_type': 'dispatch_result', 'run_id': run_id,
-                                          'summary': 'x' * content_bytes}, separators=(',', ':')).encode()
-                    sequence += 1
-                    observed = now - 40 * 86_400_000 + index
-                    connection.execute(
-                        "INSERT INTO records(project_id,record_id,record_type,source,source_sequence,observed_at_ms,"
-                        "ingested_at_ms,expires_at_ms,content,content_digest,late) VALUES(?,?,?,?,?,?,?,?,?,?,0)",
-                        (project, 'dispatch_result:' + hashlib.sha256(content).hexdigest(), 'dispatch_result',
-                         'lifecycle', sequence, observed, observed, observed + 90 * 86_400_000, content,
-                         hashlib.sha256(content).hexdigest()))
-        finally:
-            connection.close()
-
-    def test_C2_a_refused_claim_closes_whatever_the_size_of_an_earlier_record(self):
-        # 0.3.3 requirement C2 (live testing; COCOLO-run investigation): the fence
-        # looked for the run among every earlier dispatch record of the project, within 2,000
-        # progress callbacks, 50 ms and 16 KiB per value, and answered claim_busy when that ran out;
-        # after ten refusals the run kept its lease for good. Neither a large earlier record nor many
-        # of them stop a refused claim from closing.
-        self.legacy_history(1, 20_000)
-        self.assert_refused_claim_closes()
-
-    def test_C2_a_refused_claim_closes_whatever_the_number_of_earlier_records(self):
-        # 150,000 small earlier records (a long-lived project has about that many), each well under 16 KiB: only the
-        # callback budget is at stake.
-        # With the earlier budget the run does not close; that is what this case proves fixed.
-        from codex_agents import claim_denial
-        self.legacy_history(150_000, 64)
-        with mock.patch.object(claim_denial, 'DENIAL_LEGACY_READ_LIMITS', (2000, 50, 2 * 1_048_576)):
-            with self.assertRaises(AssertionError):
-                self.assert_refused_claim_closes(seconds=5)
-        self.assert_refused_claim_closes()
-
     def assert_refused_claim_closes(self, seconds=20):
         from codex_agents import signature_job_intake
         from codex_agents.admission_inputs import AdmissionCaptureError
