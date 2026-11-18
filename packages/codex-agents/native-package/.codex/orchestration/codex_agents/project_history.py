@@ -1876,6 +1876,7 @@ class ProjectHistory:
                     failure = "history_unavailable"
         try:
             self._purge_finished_results(now, limit)
+            self._orchestration_owner().purge_closed(now, limit)  # 0.3.4 R6
         except HistoryError as exc:
             if failure is None:
                 failure = exc.reason_code

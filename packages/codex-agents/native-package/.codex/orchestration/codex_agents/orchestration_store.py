@@ -17,6 +17,9 @@ from .orchestration_api import (
 from .project_history import ProjectHistory, _operation
 
 MAX_JOURNAL_EVENTS = 65_536
+# A closed orchestration is kept this long for reports, then removed with its checkpoints (0.3.4 R6):
+# the ledger's own retention (client_runtime.LEARNING_MAX_AGE_MS).
+ORCHESTRATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 
 class OrchestrationOwner:
     def __init__(self, history):
@@ -106,6 +109,56 @@ class OrchestrationOwner:
         if view['snapshot']['scope'] != scope.as_data() or view['checkpoint_digest'] != row['checkpoint_digest']:
             raise HistoryError('history_incompatible')
         return view
+
+    def _latest_snapshot(self, row):
+        """The snapshot of an orchestration's latest checkpoint, verified by its own keyed seal; None
+        when it cannot be verified."""
+        try:
+            view = self._checkpoint(row['orchestration_handle'], row['sequence'])
+        except HistoryError:
+            return None
+        return view['snapshot'] if view['checkpoint_digest'] == row['checkpoint_digest'] else None
+
+    def _open_count(self):
+        """Orchestrations not yet closed. One whose latest checkpoint cannot be verified counts as
+        open, so a changed row never frees a place."""
+        count = 0
+        for row in self._db.execute('SELECT orchestration_handle,sequence,checkpoint_digest FROM project_orchestrations '
+                                    'WHERE project_id=?', (self._history.project_id,)).fetchall():
+            snapshot = self._latest_snapshot(row)
+            count += snapshot is None or snapshot['status'] not in ORCHESTRATION_TERMINAL_STATES
+        return count
+
+    def purge_closed(self, now, limit):
+        """Remove closed orchestrations past ORCHESTRATION_RETENTION_MS, with their checkpoints and
+        requests, once no result row names them (0.3.4 R6). Bounded; returns how many went."""
+        purged = 0
+        for row in self._db.execute('SELECT orchestration_handle,sequence,checkpoint_digest FROM project_orchestrations '
+                                    'WHERE project_id=? ORDER BY rowid', (self._history.project_id,)).fetchall():
+            if purged >= limit:
+                break
+            snapshot = self._latest_snapshot(row)
+            if (snapshot is None or snapshot['status'] not in ORCHESTRATION_TERMINAL_STATES
+                    or snapshot['ended_at_ms'] is None or now <= snapshot['ended_at_ms'] + ORCHESTRATION_RETENTION_MS):
+                continue
+            handle, project = row['orchestration_handle'], self._history.project_id
+            if self._db.execute('SELECT 1 FROM result_reservations WHERE project_id=? AND orchestration_handle=? LIMIT 1',
+                                (project, handle)).fetchone() is not None:
+                continue
+            # A lease names its orchestration only inside its sealed binding.
+            leases = self._db.execute('SELECT * FROM result_leases WHERE project_id=?', (project,)).fetchall()
+            try:
+                if any(self._history._lease(lease).binding.orchestration_handle == handle for lease in leases):
+                    continue
+            except HistoryError:
+                continue  # Unreadable: keep the orchestration rather than guess.
+            with self._history._transaction():
+                for table in ('project_orchestration_requests', 'project_orchestration_checkpoints',
+                              'project_orchestrations'):
+                    self._db.execute(f'DELETE FROM {table} WHERE project_id=? AND orchestration_handle=?',
+                                     (project, handle))
+            purged += 1
+        return purged
 
     @_operation
     def active_for(self, binding):
@@ -233,8 +286,8 @@ class OrchestrationOwner:
         now = self._history._result_now()
         with self._history._transaction():
             if operation == 'orchestration.open':
-                count = self._db.execute('SELECT COUNT(*) FROM project_orchestrations WHERE project_id=?', (scope.project_id,)).fetchone()[0]
-                if count >= limits.max_orchestrations:
+                # Only open or paused ones count (0.3.4 R6); in 0.8.29 every one ever opened did.
+                if self._open_count() >= limits.max_orchestrations:
                     raise HistoryError('history_orchestration_full')
                 handle = 'orc_' + secrets.token_hex(24)
                 snapshot = {'scope': scope.as_data(), 'orchestration_handle': handle,
