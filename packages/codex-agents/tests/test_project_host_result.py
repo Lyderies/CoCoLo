@@ -188,6 +188,22 @@ class ProjectHostResultTests(unittest.TestCase):
                         claim_request_id='other', claim_request_digest='e' * 64)
         self.assertEqual('reserved', store.reserve_result_lease(other, self.fixture.assigned).state)
 
+    def test_034_R4_a_store_left_full_by_0829_recovers_at_the_first_cleanup(self):
+        """0.3.4 R4: a store 0.8.29 left full (results committed, never retired, their orchestration
+        closed) takes new results again after the service's first cleanup, with no owner step."""
+        from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
+        owner, closing = self.reference_lifecycle()
+        self.call()
+        owner.apply(closing, client_version='codex-host-v1', before_commit=lambda: None)
+        store = self.fixture.store
+        self.assertEqual('committed', store.result_reservation(self.binding).state)
+        store._result_capacity = ResultCapacity(1, MAX_RESULT_BODY_BYTES, store._result_capacity.reservation_ms,
+                                                store._result_capacity.retention_ms)
+        with self.assertRaisesRegex(HistoryError, 'history_result_capacity'):
+            store._check_result_capacity()
+        store.expire_results(limit=10)  # The project service's first pass.
+        store._check_result_capacity()
+
     def test_034_R1c_finished_result_rows_are_removed_once_nothing_can_present_them(self):
         """0.3.4 R1b/R1c: lease rows of any state also capped the store, and neither table was ever
         cleaned. A retired result of a closed orchestration is removed, reservation and lease together,
