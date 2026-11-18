@@ -219,6 +219,37 @@ class ResultLifetimeTests(DriverHarness):
             self.wait_for(lambda: self.store_rows('result_reservations') == (1,), seconds=60)
 
 
+    def test_034_R1g_a_pass_goes_past_a_row_that_does_not_verify_to_the_next(self):
+        """R1g (re-review 034-security-2): a changed row is kept, and a valid row after it still goes."""
+        import time
+        from unittest import mock
+        from codex_agents import project_history
+        orchestrations = []
+        for _ in range(2):
+            context, route_path, orchestration, run_handle = self.open_run()
+            self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+            (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+            dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+            self.record(context, route_path, run_handle, dispatched)
+            orchestrations.append(orchestration)
+        self.wait_for(lambda: self.stopped_runs.count(('driver', 'retiring', 'released')) == 2, seconds=60)
+        for orchestration in orchestrations:
+            self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'completed')
+        self.wait_for(lambda: self.result_states() == ['expired', 'expired'], seconds=60)
+        (path,) = list(self.state.root.rglob('history.sqlite3'))
+        connection = sqlite3.connect(path, timeout=5)
+        try:
+            with connection:  # The first row's sealed deadline is changed; its seal no longer verifies.
+                connection.execute('UPDATE result_reservations SET hard_deadline_at_ms=hard_deadline_at_ms-1 '
+                                   'WHERE rowid=(SELECT MIN(rowid) FROM result_reservations)')
+        finally:
+            connection.close()
+        later = time.time_ns() // 1_000_000 + 8 * 86_400_000
+        with mock.patch.object(project_history.ProjectHistory, '_result_now', return_value=later):
+            self.wait_for(lambda: self.store_rows('result_reservations') == (1,), seconds=60)
+        self.assertEqual((1,), self.store_rows('result_reservations'))
+
+
 class ResultLimitTests(DriverHarness):
     """R8 with small limits, set before the services open their stores."""
 
