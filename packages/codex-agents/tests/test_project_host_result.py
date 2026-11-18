@@ -211,6 +211,25 @@ class ProjectHostResultTests(unittest.TestCase):
             store.expire_results(limit=10)
         self.assertEqual((0, 0), rows())
 
+    def test_034_R6_cleanup_reservations_go_with_their_result(self):
+        """0.3.4 R6: project cleanup reservations (and the rows under them) counted against 4,096 for the
+        store's life. They are removed with their result's lease, so they never outlive it."""
+        owner, closing = self.reference_lifecycle()
+        self.call()
+        owner.apply(closing, client_version='codex-host-v1', before_commit=lambda: None)
+        store = self.fixture.store
+        store.expire_results(limit=1)
+
+        def rows():
+            return tuple(store._connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                         for table in ('project_cleanup_reservations', 'project_cleanup_receipts', 'project_host_opens'))
+        before = rows()
+        self.assertEqual(1, before[0])
+        deadline = store.result_reservation(self.binding).hard_deadline_at_ms
+        with mock.patch.object(store, '_result_now', return_value=deadline + 3_600_001):
+            store.expire_results(limit=10)
+        self.assertEqual((0, 0, 0), rows())
+
     def test_failed_closed_body_deletion_retains_charge_until_actual_retry_cleanup(self):
         owner, closing = self.reference_lifecycle()
         self.call()
