@@ -3,28 +3,18 @@
 
 from __future__ import annotations
 
+import argparse
+import base64
+import contextlib
+import json
 import os
+import re
+import sqlite3
 import sys
-
-# First, before any other import: COCOLO's code loads from source only, and the standard library
-# may use its installed bytecode (PLAN T8e-1). The folder is appended, never first: run isolated
-# (-I), the script's folder is not on the path, so a module planted beside this file (a
-# `socket.py`) can never shadow the standard library.
-sys.path.append(os.path.dirname(os.path.realpath(__file__)))
-from codex_agents.source_only import use_installed_stdlib_bytecode  # noqa: E402
-
-use_installed_stdlib_bytecode(sys.path[-1])
-
-import argparse  # noqa: E402
-import base64  # noqa: E402
-import contextlib  # noqa: E402
-import json  # noqa: E402
-import re  # noqa: E402
-import sqlite3  # noqa: E402
-import time  # noqa: E402
-from collections.abc import Iterator  # noqa: E402
-from pathlib import Path  # noqa: E402
-from typing import Any  # noqa: E402
+import time
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
 ORCHESTRATION_ROOT = Path(__file__).resolve().parent
 # The project this CLI serves. A protected runtime copy (the one the owner's Codex
@@ -76,6 +66,10 @@ if os.path.lexists(RUNTIME_BINDING) and not _copy_holds_only_its_runtime():
         "to run ./setup.sh (Codex commands step)",
     }, indent=2, sort_keys=True))
     raise SystemExit(2)
+# Appended, never first: run isolated (-I), the script's folder is not on the path, so a
+# module planted beside this file (a `socket.py`) can never shadow the standard library,
+# in the project's copy (which the hooks' collector runs) as in the protected one.
+sys.path.append(str(ORCHESTRATION_ROOT))
 
 from codex_agents.bridge import BridgeRefused  # noqa: E402
 from codex_agents.bridge import signal_guard as bridge_signal_guard  # noqa: E402

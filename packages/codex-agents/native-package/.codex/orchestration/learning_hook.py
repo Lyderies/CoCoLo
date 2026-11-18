@@ -96,11 +96,6 @@ def _record(args: argparse.Namespace, raw: bytes, checkout_root: Path | None) ->
     # Appended, never first: with -I the script's folder is not on the path, so a module
     # planted beside this file (a `socket.py`) can never shadow the standard library.
     sys.path.append(str(ORCHESTRATION_ROOT))
-    # Before any other runtime import: COCOLO's code loads from source only, and the standard library
-    # may use its installed bytecode (PLAN T8e-1). Not at the top: an event that is not this
-    # checkout's must import no runtime module.
-    from codex_agents.source_only import use_installed_stdlib_bytecode
-    use_installed_stdlib_bytecode(ORCHESTRATION_ROOT)
     from codex_agents.collector_client import CollectorClient
     from codex_agents.collector_contracts import CollectorError
     from codex_agents.contracts import ContractError

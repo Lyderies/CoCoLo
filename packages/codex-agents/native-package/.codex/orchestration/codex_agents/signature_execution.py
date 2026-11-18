@@ -34,16 +34,13 @@ _BOOTSTRAP = '''import sys
 sys.path.insert(0,sys.argv[1])
 allowed={"codex_agents.contracts","codex_agents.learning_contracts","codex_agents.owner_record_payload",
          "codex_agents.owner_key_contracts","codex_agents.signature_inputs","codex_agents.signature_input_wire",
-         "codex_agents.signature_payloads","codex_agents.signature_process","codex_agents.signature_sandbox",
-         "codex_agents.source_only"}
+         "codex_agents.signature_payloads","codex_agents.signature_process","codex_agents.signature_sandbox"}
 class FixedImports:
     def find_spec(self,name,path=None,target=None):
         if (name.partition(".")[0] in {"sqlite3","_sqlite3"}
                 or (name.startswith("codex_agents.") and name not in allowed)):
             raise RuntimeError("signature helper dependency refused")
 sys.meta_path.insert(0,FixedImports())
-from codex_agents.source_only import use_installed_stdlib_bytecode
-use_installed_stdlib_bytecode(sys.argv[1])
 from codex_agents.signature_process import main
 raise SystemExit(main(sys.argv[2:]))
 '''

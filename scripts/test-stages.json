@@ -175,8 +175,6 @@
  "codex:tests.test_signature_payloads": "integration",
  "codex:tests.test_signature_process": "integration",
  "codex:tests.test_signature_worker_pool": "integration",
- "codex:tests.test_source_only_entry": "integration",
- "codex:tests.test_source_only_imports": "unit",
  "codex:tests.test_sql_read_budget": "unit",
  "codex:tests.test_state_location": "integration",
  "codex:tests.test_status_write_frequency": "integration",
