@@ -1936,7 +1936,8 @@ class ProjectHistory:
                 continue
             lease_row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND claim_id=?",
                                                  (self.project_id, value.binding.claim_id)).fetchone()
-            if lease_row is not None and self._lease(lease_row).state not in {"bound", "expired"}:
+            if lease_row is not None and (self._lease(lease_row).state not in {"bound", "expired"}
+                                          or not self._attempt_released(self._lease(lease_row))):
                 continue
             with self._transaction():
                 self._delete_attempt_rows(value.binding.run_handle, value.binding.attempt, value.binding.claim_id)
@@ -1948,17 +1949,33 @@ class ProjectHistory:
             row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND rowid=?",
                                            (self.project_id, position)).fetchone()
             lease = self._lease(row)
-            if lease.state != "expired" or not lease.reserved_until_ms < cutoff or not owner.closed_for(lease.binding):
+            if (lease.state != "expired" or not lease.reserved_until_ms < cutoff or not owner.closed_for(lease.binding)
+                    or not self._attempt_released(lease)):
                 continue
             with self._transaction():
                 self._delete_attempt_rows(lease.binding.run_handle, lease.binding.attempt, None)
             purged += 1
         return purged
 
+    def _attempt_released(self, lease) -> bool:
+        """Whether an attempt may go (0.3.4 R1f): it reserved no cleanup, or the account's release of it
+        is verified here. Otherwise the account could still hold the run while its project record went."""
+        if lease.cleanup_reservation_digest is None:
+            return True
+        from .project_release_ack import read_account_release
+        try:
+            read_account_release(self, lease.binding)
+        except HistoryError as error:
+            if error.reason_code == "history_result_not_ready":
+                return False
+            raise
+        return True
+
     def _delete_attempt_rows(self, run_handle: str, attempt: int, claim_id: str | None) -> None:
         """One finished attempt's rows, children first (foreign keys are on)."""
         attempt_key = (self.project_id, run_handle, attempt)
-        for table in ("project_cleanup_receipts", "project_cleanup_reservations", "project_host_opens"):
+        for table in ("project_cleanup_acknowledgements", "project_cleanup_receipts", "project_cleanup_reservations",
+                      "project_host_opens"):
             self._connection.execute(f"DELETE FROM {table} WHERE project_id=? AND run_handle=? AND attempt=?",
                                      attempt_key)
         if claim_id is not None:

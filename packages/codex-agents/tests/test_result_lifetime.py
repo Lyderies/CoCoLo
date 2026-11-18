@@ -192,6 +192,32 @@ class ResultLifetimeTests(DriverHarness):
             self.wait_for(lambda: self.store_rows(*tables) == (0, 0, 0, 0, 0), seconds=60)
 
 
+    def test_034_R1g_rows_that_cannot_go_yet_never_hold_back_ones_that_can(self):
+        """R1g (review 034-security): the purge took the oldest rows first and only then checked them, so
+        rows of an open orchestration at the head of every batch held back every later one for good."""
+        import time
+        from unittest import mock
+        from codex_agents import project_history
+        runs = []
+        for _ in range(2):
+            context, route_path, orchestration, run_handle = self.open_run()
+            self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+            (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+            dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+            self.record(context, route_path, run_handle, dispatched)
+            runs.append(orchestration)
+        self.wait_for(lambda: self.stopped_runs.count(('driver', 'retiring', 'released')) == 2, seconds=60)
+        self.cli('learning-close-orchestration', '--orchestration-handle', runs[1], '--status', 'completed')
+        original = project_history.ProjectHistory.expire_results
+
+        def one_at_a_time(history, *, limit=100):
+            return original(history, limit=1)
+        later = time.time_ns() // 1_000_000 + 8 * 86_400_000  # Both retire; only the closed one may go.
+        with mock.patch.object(project_history.ProjectHistory, '_result_now', return_value=later), \
+                mock.patch.object(project_history.ProjectHistory, 'expire_results', one_at_a_time):
+            self.wait_for(lambda: self.store_rows('result_reservations') == (1,), seconds=60)
+
+
 class ResultLimitTests(DriverHarness):
     """R8 with small limits, set before the services open their stores."""
 
