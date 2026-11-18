@@ -138,8 +138,42 @@ class ProjectOrchestrationTests(unittest.TestCase):
         closed = self.call('close', self.target(paused, status='cancelled', goal_tokens_used=None, goal_time_used_seconds=None), 'close')
         self.assertEqual('cancelled', closed['current']['snapshot']['status'])
         self.assertTrue(self.call('open', identity='open')['known'])
+        # Corrected for 0.3.4 R6 (owner, 2026-11-18): the limit counts open or paused orchestrations
+        # only, so a new one opens once the only open one is closed. 0.8.29 refused it here, because
+        # every orchestration ever opened counted (a lifetime cap of 256 per project).
+        self.assertEqual('active', self.call('open', identity='new-open')['current']['snapshot']['status'])
+
+    def test_034_R6_the_orchestration_limit_counts_only_open_ones(self):
+        self.store._orchestration_limits = OrchestrationLimits(1, 3)
+        first = self.opened()
         with self.assertRaisesRegex(HistoryError, 'history_orchestration_full'):
-            self.call('open', identity='new-open')
+            self.call('open', identity='second')
+        self.call('close', self.target(first, status='completed', goal_tokens_used=None,
+                                       goal_time_used_seconds=None), 'close')
+        second = self.call('open', identity='second')['current']['snapshot']
+        self.assertEqual('active', second['status'])
+        with self.assertRaisesRegex(HistoryError, 'history_orchestration_full'):
+            self.call('open', identity='third')
+
+    def test_034_R6_a_closed_orchestration_is_removed_after_its_retention(self):
+        from codex_agents.orchestration_store import ORCHESTRATION_RETENTION_MS
+        first = self.opened()
+        self.call('close', self.target(first, status='completed', goal_tokens_used=None,
+                                       goal_time_used_seconds=None), 'close')
+        handle = first['orchestration_handle']
+
+        def kept():
+            return tuple(self.store._connection.execute(f'SELECT COUNT(*) FROM {table} WHERE orchestration_handle=?',
+                                                        (handle,)).fetchone()[0]
+                         for table in ('project_orchestrations', 'project_orchestration_checkpoints'))
+        before = kept()
+        self.assertGreater(before[1], 0)
+        self.now += ORCHESTRATION_RETENTION_MS  # Not yet past it.
+        self.store.expire_results(limit=10)
+        self.assertEqual(before, kept())
+        self.now += 1
+        self.store.expire_results(limit=10)
+        self.assertEqual((0, 0), kept())
 
     def test_transaction_rollback_and_lost_reply_reconcile_one_checkpoint(self):
         original = self.store._transaction
