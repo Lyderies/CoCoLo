@@ -88,11 +88,13 @@ class AccountCleanupReleaseTests(unittest.TestCase):
 
         class PastTheLimit(Exception):
             pass
+        self.ledger._connection.execute('BEGIN')  # reserve_cleanup runs only inside a transaction.
+        self.addCleanup(self.ledger._connection.rollback)
         with mock.patch.object(account_cleanup, 'MAX_RELEASE_RESERVATIONS', 1), \
-                mock.patch.object(account_cleanup, '_parameters', side_effect=PastTheLimit), \
-                self.ledger._connection:
+                mock.patch.object(account_cleanup, '_parameters', side_effect=PastTheLimit):
             with self.assertRaises(PastTheLimit):
                 account_cleanup.reserve_cleanup(self.ledger, self.binding, self.base.grant)
+        self.ledger._connection.rollback()
 
     def test_native_actor_and_original_binding_are_required_outside_json(self):
         for source in ('host', 'owner', 'hook', 'app_server'):

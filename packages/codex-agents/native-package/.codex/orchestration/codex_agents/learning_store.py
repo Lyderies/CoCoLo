@@ -2200,6 +2200,17 @@ class LearningLedger:
             due.append((str(row["project_id"]), str(row["relative_path"])))
         return due
 
+    def sweep_account_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
+        """Remove finished account rows past their retention, a small batch at a time (0.3.4 R6);
+        returns how many went. Skipped while a reader or a transaction is active."""
+        from .account_observation import purge_old_observations
+
+        with self._lock:
+            if self._active_readers or self._connection.in_transaction:
+                return 0
+            now = self._clock_ms() if now_ms is None else now_ms
+            return purge_old_observations(self, now, batch)
+
     def sweep_event_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
         """Summarise, then remove, up to `batch` expired raw events; returns how many were removed.
 
@@ -11742,6 +11753,9 @@ class CollectorServer:
                     # a small batch at a time, without the owner running anything.
                     with contextlib.suppress(LedgerError, OSError, sqlite3.Error, ValueError, KeyError):
                         self.ledger.sweep_event_retention()
+                    # Finished account rows past their retention go too, so no limit fills for good (0.3.4 R6).
+                    with contextlib.suppress(LedgerError, OSError, sqlite3.Error):
+                        self.ledger.sweep_account_retention()
                 try:
                     connection, _ = listener.accept()
                 except TimeoutError:
