@@ -40,6 +40,7 @@ HISTORY_OPERATIONS = frozenset({
     "history.commit_qa", "history.qa_details", "history.open_scope", "history.worker_input",
     "history.learning_cycle", "history.learning_report", "history.routing_evidence",
     "history.learning_feedback", "history.learning_review_case", "history.orchestration_report",
+    "history.capacity_report",
 })
 # Replies that may carry more than the ordinary metadata reply.
 LARGE_REPLY_OPERATIONS = frozenset({"history.read_record", "history.qa_details", "history.worker_input",
@@ -119,6 +120,9 @@ def _validate_request(request: HistoryRequest) -> None:
     elif operation == 'history.worker_input':
         if (not _closed(payload, {'host_outcome_digest'}) or not matches(payload['host_outcome_digest'], _DIGEST)
                 or request.request_id != payload['host_outcome_digest']):
+            raise HistoryError('history_invalid_request')
+    elif operation == 'history.capacity_report':
+        if not _closed(payload, set()) or request.request_id != 'capacity':
             raise HistoryError('history_invalid_request')
     elif operation == 'history.orchestration_report':
         if (not _closed(payload, {'orchestration_id'}) or type(payload['orchestration_id']) is not str
@@ -315,6 +319,14 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
             raise HistoryError('history_invalid_response')
     elif operation == 'history.routing_evidence':
         if not _closed(result, {'trusted'}) or type(result['trusted']) is not bool:
+            raise HistoryError('history_invalid_response')
+    elif operation == 'history.capacity_report':
+        from .project_capacity_report import CAPACITY_NAMES
+        if (type(result) is not dict or set(result) != set(CAPACITY_NAMES)
+                or any(type(value) is not dict or set(value) != {'live', 'limit'}
+                       or not valid_integer(value['live'], maximum=1 << 32)
+                       or (value['limit'] is not None and not valid_integer(value['limit'], minimum=1, maximum=1 << 32))
+                       for value in result.values())):
             raise HistoryError('history_invalid_response')
     elif operation == 'history.orchestration_report':
         if (type(result) is not dict or result.get('orchestration_id') != request.payload['orchestration_id']
@@ -574,6 +586,10 @@ class HistoryClient:
     def learning_report(self, cycle_id: str, offset: int) -> dict:
         """One slice of a finished cycle's full report."""
         return self._call('history.learning_report', cycle_id, {'offset': offset})
+
+    def capacity_report(self) -> dict:
+        """Each limit of this project's store with its live count (0.3.4 R9)."""
+        return self._call('history.capacity_report', 'capacity', {})
 
     def orchestration_report(self, orchestration_id: str) -> dict:
         """Content-free statistics for one orchestration this project's service ran."""

@@ -397,6 +397,10 @@ class HistoryService:
                     result = {'stored': False, 'refused': refusal.owner_reason,
                               'detail': None if refusal.detail is None else refusal.detail[:200],
                               **({'record': None} if review else {})}
+            elif request.operation == 'history.capacity_report':
+                from .project_capacity_report import capacity_report
+                self._history()
+                result = capacity_report(self._store)
             elif request.operation == 'history.orchestration_report':
                 from .project_orchestration_report import orchestration_report
                 self._history()
