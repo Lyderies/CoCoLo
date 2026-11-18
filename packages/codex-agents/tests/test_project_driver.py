@@ -114,6 +114,19 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual(('admitted', True), (opened['admission'], opened['project_host_registered']))
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        # Only the opening host class can prepare and dispatch its run (carried here, PLAN T8 driver
+        # slice 5): the other primary is refused, nothing is launched or claimed for it.
+        with mock.patch.dict(os.environ):
+            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
+                os.environ.pop(name, None)
+            if self.primary == 'claude':
+                os.environ['CODEX_THREAD_ID'] = 'other-primary'
+            else:
+                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
+            foreign = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'],
+                               expected=2)
+        self.assertEqual('host_client_mismatch', foreign['reason_code'])
+        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
         with mock.patch.object(self, 'assertEqual', side_effect=lambda *a: unittest.TestCase.assertEqual(
                 self, *a[:2], (a[2] if len(a) > 2 else '') + ' driver stopped at %r' % (self.stopped_runs,))):
             dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
@@ -461,25 +474,6 @@ class ProjectDriverTests(DriverHarness):
             refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
         self.assertEqual('run_client_changed', refused['reason_code'], refused)
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
-
-    def test_only_the_opening_host_class_can_prepare_and_dispatch_its_run(self):
-        context, route_path, orchestration, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        with mock.patch.dict(os.environ):
-            for name in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID'):
-                os.environ.pop(name, None)
-            if self.primary == 'claude':
-                os.environ['CODEX_THREAD_ID'] = 'other-primary'
-            else:
-                os.environ.update(CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='other-primary')
-            foreign = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
-        self.assertEqual('host_client_mismatch', foreign['reason_code'])
-        self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
-        # Nothing was claimed for the refused host; the owner can still run it once.
-        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        self.assertEqual(1, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
 
     def test_a_slow_enrolled_driver_sender_cannot_stall_the_host(self):
         from codex_agents.client_runtime import read_runtime_hint
