@@ -250,6 +250,24 @@ class ResultLifetimeTests(DriverHarness):
         self.assertEqual((1,), self.store_rows('result_reservations'))
 
 
+    def test_034_R10_the_service_ends_earlier_runtimes_orchestrations_by_itself(self):
+        """R10: the project service's own cleanup asks the store to end an earlier runtime's open
+        orchestrations, with its current scope."""
+        from unittest import mock
+        from codex_agents import orchestration_store
+        from codex_agents.learning_store import COLLECTOR_RUNTIME_DIGEST
+        scopes = []
+        original = orchestration_store.OrchestrationOwner.end_earlier
+
+        def recorded(owner, scope, limit):
+            scopes.append(scope)
+            return original(owner, scope, limit)
+        self.open_run()  # The project service is running.
+        with mock.patch.object(orchestration_store.OrchestrationOwner, 'end_earlier', recorded):
+            self.wait_for(lambda: scopes, seconds=30)
+        self.assertEqual(COLLECTOR_RUNTIME_DIGEST, scopes[0].runtime_digest)
+
+
 class ResultLimitTests(DriverHarness):
     """R8 with small limits, set before the services open their stores."""
 

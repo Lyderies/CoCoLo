@@ -181,6 +181,27 @@ class ProjectOrchestrationTests(unittest.TestCase):
                                                   (handle,)).fetchone()[0]
         self.assertEqual((1, 0), (kept(handles[0]), kept(handles[1])))
 
+    def test_034_R10_an_update_ends_the_earlier_runtimes_open_orchestrations(self):
+        """R10 (live 2026-11-19): after an update, nothing could close an orchestration opened under the
+        earlier runtime, and it counted as open for good."""
+        from dataclasses import replace
+        first = self.opened()
+        paused = self.call('open', identity='second')['current']['snapshot']
+        self.call('pause', self.target(paused), 'pause-second')
+        updated = replace(self.scope, runtime_digest='b' * 64)
+        other_instance = replace(self.scope, supervisor_instance_id='another', runtime_digest='b' * 64)
+        owner = self.store._orchestration_owner()
+        self.assertEqual(2, owner._open_count())
+        self.assertEqual(0, owner.end_earlier(other_instance, 10))  # Not this service's journals.
+        self.assertEqual(0, owner.end_earlier(self.scope, 10))      # Its own scope: nothing earlier.
+        self.assertEqual(2, owner.end_earlier(updated, 10))
+        self.assertEqual(0, owner._open_count())
+        for snapshot in (first, paused):
+            ended = owner._current(self.scope, snapshot['orchestration_handle'])['snapshot']
+            self.assertEqual('interrupted', ended['status'])
+            self.assertIsNotNone(ended['ended_at_ms'])
+        self.assertEqual(0, owner.end_earlier(updated, 10))  # Already ended: once only.
+
     def test_034_R6_a_closed_orchestration_is_removed_after_its_retention(self):
         from codex_agents.orchestration_store import ORCHESTRATION_RETENTION_MS
         first = self.opened()
