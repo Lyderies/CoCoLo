@@ -1877,6 +1877,8 @@ class ProjectHistory:
         try:
             self._purge_finished_results(now, limit)
             self._orchestration_owner().purge_closed(now, limit)  # 0.3.4 R6
+            from .project_qa_checks import purge_old_qa
+            purge_old_qa(self, now, limit)  # 0.3.4 R6
         except HistoryError as exc:
             if failure is None:
                 failure = exc.reason_code
