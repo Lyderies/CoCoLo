@@ -118,6 +118,18 @@ class SourceOnlyTests(ImportStateTestCase):
         source_only.use_installed_stdlib_bytecode(root)
         self.assertEqual("planted", self.value(other, "elsewhere"))
 
+    def test_a_file_under_the_runtime_root_is_left_to_the_usual_path_hooks(self):
+        """T8e1-5: only folders are claimed, so `runpy.run_path(<root>/cli.py)` still works."""
+        import pkgutil
+        import runpy
+        root = self.base / "runtime"
+        root.mkdir()
+        script = root / "entry.py"
+        script.write_text("RESULT = 'ran'\n")
+        source_only.use_installed_stdlib_bytecode(root)
+        self.assertIsNone(pkgutil.get_importer(str(script)))
+        self.assertEqual("ran", runpy.run_path(str(script), run_name="__main__")["RESULT"])
+
     def test_the_switch_clears_the_prefix_and_is_idempotent_without_changing_sys_path(self):
         """T8e1-3, T8e1-5."""
         root = self.base / "runtime"
@@ -181,8 +193,9 @@ class EntryScriptTests(unittest.TestCase):
                 self.assertLess(switch, first)
 
     def test_every_entry_script_switches_before_any_import_but_os_and_sys(self):
-        """T8e1-1 (corrected): its own standard-library imports come after the switch too."""
-        for name in ENTRY_SCRIPTS:
+        """T8e1-1 (corrected): its own standard-library imports come after the switch too. The hook is
+        the exception: it switches inside `_record`, since an unrelated event imports no runtime module."""
+        for name in [n for n in ENTRY_SCRIPTS if n != "learning_hook.py"]:
             with self.subTest(script=name):
                 tree = ast.parse((ORCHESTRATION / name).read_text())
                 switch, _ = self.first_runtime_import_and_switch((ORCHESTRATION / name).read_text())
