@@ -88,6 +88,73 @@ class ResultLifetimeTests(DriverHarness):
 
 
 
+    def live_counts(self):
+        """Live results, open orchestrations and unreleased account slots: all zero when nothing runs."""
+        capacity = self.cli('learning-status')['project_capacity']
+        slots = self.collector_ledger._connection.execute(
+            'SELECT COUNT(*) FROM active_run_capacity WHERE released_at_ms IS NULL').fetchone()[0]
+        return capacity['results']['live'], capacity['orchestrations']['live'], slots
+
+    def record(self, context, route_path, run_handle, dispatched):
+        observation = {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]}
+        terminal = dispatched['bridge_report'].get('terminal_state')
+        if terminal is not None:
+            observation['terminal_state'] = terminal
+        self.cli('learning-record-host-result', *context, '--route', route_path,
+                 '--result', self.write('result.json', dispatched['result']),
+                 '--observation', self.write('observation.json', observation))
+
+    def test_034_R8_every_run_ending_returns_every_live_count_to_where_it_started(self):
+        """R8: after each way a run can end, and its orchestration closes, nothing stays held: no live
+        result, no open orchestration, no account slot. A run with no result needs R7 to close."""
+        import dataclasses
+        from unittest import mock
+        from codex_agents import codex_preparation
+        self.assertEqual((0, 0, 0), self.live_counts())
+
+        def succeeded(context, route_path, orchestration, run_handle):
+            self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+            (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+            self.record(context, route_path, run_handle,
+                        self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle))
+            return 'completed'
+
+        def cancelled(context, route_path, orchestration, run_handle):
+            self.frames('codex', [{'type': 'thread.started', 'thread_id': 'quiet'}, {'sleep': 30},
+                                  {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+            (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+            launched = len([i for i in self.invocations('codex') if 'exec' in i['argv']])
+            process = self.separate_dispatch(context, route_path, run_handle)
+            self.wait_for(lambda: len([i for i in self.invocations('codex') if 'exec' in i['argv']]) > launched,
+                          seconds=30)
+            self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
+            output, _ = process.communicate(timeout=30)
+            self.record(context, route_path, run_handle, json.loads(output))
+            return 'cancelled'
+
+        def refused_in_preparation(context, route_path, orchestration, run_handle):
+            with mock.patch.object(codex_preparation.bridge, 'codex_managed_configuration_present', return_value=True):
+                self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+            return 'failed'
+
+        def client_changed(context, route_path, orchestration, run_handle):
+            original = codex_preparation.CodexPreparationLane.prepared
+
+            def changed(lane, handle):
+                return dataclasses.replace(original(lane, handle), client_identity=('/srv/other/codex', 'f' * 64))
+            with mock.patch.object(codex_preparation.CodexPreparationLane, 'prepared', autospec=True, side_effect=changed):
+                self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+            return 'failed'
+
+        for ending in (succeeded, cancelled, refused_in_preparation, client_changed):
+            with self.subTest(ending=ending.__name__):
+                context, route_path, orchestration, run_handle = self.open_run()
+                status = ending(context, route_path, orchestration, run_handle)
+                self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', status)
+                self.wait_for(lambda: self.live_counts() == (0, 0, 0), seconds=60)
+
+
 class ResultLimitTests(DriverHarness):
     """R8 with small limits, set before the services open their stores."""
 
