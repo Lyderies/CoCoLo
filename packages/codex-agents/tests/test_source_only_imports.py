@@ -180,6 +180,22 @@ class EntryScriptTests(unittest.TestCase):
                 self.assertIsNotNone(first, f"{name} imports no runtime module")
                 self.assertLess(switch, first)
 
+    def test_every_entry_script_switches_before_any_import_but_os_and_sys(self):
+        """T8e1-1 (corrected): its own standard-library imports come after the switch too."""
+        for name in ENTRY_SCRIPTS:
+            with self.subTest(script=name):
+                tree = ast.parse((ORCHESTRATION / name).read_text())
+                switch, _ = self.first_runtime_import_and_switch((ORCHESTRATION / name).read_text())
+                early = []
+                for node in tree.body:
+                    if getattr(node, "lineno", 0) >= switch:
+                        break
+                    if isinstance(node, ast.Import):
+                        early += [alias.name for alias in node.names]
+                    elif isinstance(node, ast.ImportFrom):
+                        early.append(node.module)
+                self.assertTrue(set(early) <= {"__future__", "os", "sys", "codex_agents.source_only"}, early)
+
     def test_the_signature_helper_bootstrap_switches_first_and_may_import_only_the_switch_more(self):
         from codex_agents import signature_execution
         bootstrap = signature_execution._BOOTSTRAP
