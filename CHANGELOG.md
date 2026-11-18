@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.4: no limit fills for good (Codex package 0.8.30)
+## 0.3.4: no limit fills for good (Codex package 0.8.31)
 
 - A project could record only 64 results in its whole life. After that every child ended
   `run_failed` with no named cause, and its orchestration could not be closed. The result limit
