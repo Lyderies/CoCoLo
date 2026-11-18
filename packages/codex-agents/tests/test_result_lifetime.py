@@ -56,5 +56,23 @@ class ResultLifetimeTests(DriverHarness):
         self.assertEqual([], [i for i in self.invocations('codex') if 'exec' in i['argv']])
 
 
+    def test_034_R9_status_shows_each_project_limit_with_its_live_count(self):
+        """R9: learning-status shows, for this project's store, how near each limit is."""
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        capacity = self.cli('learning-status')['project_capacity']
+        self.assertEqual({'results', 'orchestrations', 'cleanup_reservations', 'operational_qa', 'qa_check_receipts'},
+                         set(capacity))
+        for name, limit in (('results', 64), ('orchestrations', 256), ('cleanup_reservations', 4096),
+                            ('operational_qa', 16_384), ('qa_check_receipts', 16_384)):
+            self.assertEqual(limit, capacity[name]['limit'], name)
+        self.assertEqual(1, capacity['results']['live'])
+        self.assertEqual(1, capacity['orchestrations']['live'])
+        self.assertEqual(1, capacity['cleanup_reservations']['live'])
+        self.assertEqual(0, capacity['operational_qa']['live'])
+
+
 if __name__ == '__main__':
     unittest.main()
