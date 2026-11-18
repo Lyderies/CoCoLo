@@ -8,6 +8,7 @@ and normal-client migration remain mandatory before production activation.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import contextlib
 import os
 import queue
 import threading
@@ -141,6 +142,8 @@ class ResultPersistenceLane:
         pool._owner()
         self._owner, self._pool, self._open = owner, pool, open_history
         self._project = owner._monitor.scope().project_id
+        # This service's scope, read here on the owner thread; the writer thread cannot ask (0.3.4 R10).
+        self._service_scope = owner._monitor.scope()
         self._runtime = owner._monitor.scope().runtime_digest
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._maximum = max_entries
@@ -1003,6 +1006,9 @@ class ResultPersistenceLane:
         try:
             history = self._history()
             if request.kind == 'expire':
+                # An update leaves the earlier runtime's open orchestrations to this service (0.3.4 R10).
+                with contextlib.suppress(HistoryError):
+                    history._orchestration_owner().end_earlier(self._service_scope, 10)
                 result = history.expire_results(limit=10)
             elif request.kind == 'list':
                 with self._lock:

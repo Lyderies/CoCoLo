@@ -2,7 +2,7 @@
 
 What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator, Local Orchestrator).
 
-## 0.3.4: no limit fills for good (Codex package 0.8.31)
+## 0.3.4: no limit fills for good (Codex package 0.8.32)
 
 - A project could record only 64 results in its whole life. After that every child ended
   `run_failed` with no named cause, and its orchestration could not be closed. The result limit
@@ -32,6 +32,10 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   now accepts it once the account's release of the run is verified, and counts the run abandoned. While
   the service still runs, dispatching the same handle once more returns the same fenced result to
   record; the skills now say so.
+- An update no longer leaves orchestrations nobody can close. An orchestration is tied to the runtime
+  that opened it, so after an update its project's new service could not even read one left open,
+  and it counted against the 256-open limit for good. The project service now ends those, as
+  `interrupted`, through the ordinary close; a run not yet over still keeps one open. Found live.
 - `learning-status` shows how near each project is to each limit: `project_capacity` (results, open
   orchestrations, cleanup reservations, QA records, check receipts) and `account_capacity`
   (observations, unreleased cleanup receipts), each with its live count and limit.
