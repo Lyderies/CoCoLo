@@ -8,11 +8,21 @@ SIGTERM or SIGINT, and prints one closed status line when it stops.
 
 from __future__ import annotations
 
-import argparse
-import json
 import os
 import sys
-from pathlib import Path
+
+# First, before any other import: COCOLO's code loads from source only, and the standard library
+# may use its installed bytecode (PLAN T8e-1). The folder is appended, never first: run isolated
+# (-I), the script's folder is not on the path, so a module planted beside this file (a
+# `socket.py`) can never shadow the standard library.
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+from codex_agents.source_only import use_installed_stdlib_bytecode  # noqa: E402
+
+use_installed_stdlib_bytecode(sys.path[-1])
+
+import argparse  # noqa: E402
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 ORCHESTRATION_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ORCHESTRATION_ROOT))

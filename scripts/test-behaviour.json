@@ -6,9 +6,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.03,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.02,
   "tests": 15,
   "failed": 0,
+  "cpu_seconds": 0.06,
   "stage": "unit"
  },
  "claude:tests.test_job_read_tool": {
@@ -18,9 +27,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.08,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.07,
   "tests": 20,
   "failed": 0,
+  "cpu_seconds": 0.11,
   "stage": "unit"
  },
  "claude:tests.test_journal": {
@@ -30,9 +48,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.07,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.06,
   "tests": 12,
   "failed": 0,
+  "cpu_seconds": 0.08,
   "stage": "unit"
  },
  "claude:tests.test_native_fixtures": {
@@ -42,9 +69,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.02,
   "tests": 4,
   "failed": 0,
+  "cpu_seconds": 0.06,
   "stage": "unit"
  },
  "claude:tests.test_packaging": {
@@ -52,11 +88,20 @@
   "git": 15,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 0,
+  "sleeps": 1,
   "sleep_seconds": 0.0,
-  "seconds": 0.8,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 2,
+   "git": 15,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.72,
   "tests": 12,
   "failed": 0,
+  "cpu_seconds": 0.7,
   "stage": "integration"
  },
  "claude:tests.test_stream_projection": {
@@ -66,9 +111,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.05,
   "tests": 23,
   "failed": 0,
+  "cpu_seconds": 0.08,
   "stage": "unit"
  },
  "claude:tests.test_subscription_stream": {
@@ -78,9 +132,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.02,
   "tests": 6,
   "failed": 0,
+  "cpu_seconds": 0.05,
   "stage": "unit"
  },
  "claude:tests.test_telemetry": {
@@ -90,9 +153,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.03,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.02,
   "tests": 8,
   "failed": 0,
+  "cpu_seconds": 0.06,
   "stage": "unit"
  },
  "codex:tests.test_account_api": {
@@ -102,9 +174,18 @@
   "sockets": 13,
   "sleeps": 42,
   "sleep_seconds": 0.68,
-  "seconds": 5.17,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 10,
+   "git": 0,
+   "wizard": 0,
+   "other": 40
+  },
+  "seconds": 4.25,
   "tests": 34,
   "failed": 0,
+  "cpu_seconds": 3.48,
   "stage": "integration"
  },
  "codex:tests.test_account_billing_admission": {
@@ -112,11 +193,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 625,
-  "sleep_seconds": 1.26,
-  "seconds": 6.33,
+  "sleeps": 450,
+  "sleep_seconds": 0.91,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 75
+  },
+  "seconds": 5.75,
   "tests": 11,
   "failed": 0,
+  "cpu_seconds": 2.7,
   "stage": "integration"
  },
  "codex:tests.test_account_billing_execution": {
@@ -124,23 +214,41 @@
   "git": 60,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 1218,
-  "sleep_seconds": 3.92,
-  "seconds": 13.61,
+  "sleeps": 953,
+  "sleep_seconds": 3.19,
+  "starts": {
+   "product": 7,
+   "fixture": 0,
+   "python": 0,
+   "git": 60,
+   "wizard": 0,
+   "other": 185
+  },
+  "seconds": 12.19,
   "tests": 12,
   "failed": 0,
+  "cpu_seconds": 8.62,
   "stage": "integration"
  },
  "codex:tests.test_account_billing_jobs": {
-  "processes": 201,
-  "git": 55,
+  "processes": 547,
+  "git": 160,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 1229,
-  "sleep_seconds": 6.51,
-  "seconds": 14.51,
-  "tests": 11,
+  "sleeps": 2165,
+  "sleep_seconds": 11.18,
+  "starts": {
+   "product": 11,
+   "fixture": 0,
+   "python": 0,
+   "git": 160,
+   "wizard": 0,
+   "other": 376
+  },
+  "seconds": 32.68,
+  "tests": 32,
   "failed": 0,
+  "cpu_seconds": 19.0,
   "stage": "integration"
  },
  "codex:tests.test_account_claim_jobs": {
@@ -148,11 +256,20 @@
   "git": 155,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 1839,
-  "sleep_seconds": 3.64,
-  "seconds": 28.45,
+  "sleeps": 1447,
+  "sleep_seconds": 2.84,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 155,
+   "wizard": 0,
+   "other": 369
+  },
+  "seconds": 26.39,
   "tests": 30,
   "failed": 0,
+  "cpu_seconds": 16.56,
   "stage": "integration"
  },
  "codex:tests.test_account_claim_operation": {
@@ -160,11 +277,20 @@
   "git": 125,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 299,
-  "sleep_seconds": 0.59,
-  "seconds": 20.46,
+  "sleeps": 285,
+  "sleep_seconds": 0.54,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 125,
+   "wizard": 0,
+   "other": 275
+  },
+  "seconds": 18.26,
   "tests": 25,
   "failed": 0,
+  "cpu_seconds": 11.13,
   "stage": "integration"
  },
  "codex:tests.test_account_claim_storage": {
@@ -172,11 +298,20 @@
   "git": 40,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 464,
-  "sleep_seconds": 0.96,
-  "seconds": 8.53,
+  "sleeps": 396,
+  "sleep_seconds": 0.81,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 40,
+   "wizard": 0,
+   "other": 152
+  },
+  "seconds": 8.33,
   "tests": 8,
   "failed": 0,
+  "cpu_seconds": 5.29,
   "stage": "integration"
  },
  "codex:tests.test_account_cleanup_release": {
@@ -184,11 +319,20 @@
   "git": 75,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 240,
-  "sleep_seconds": 0.48,
-  "seconds": 14.13,
+  "sleeps": 236,
+  "sleep_seconds": 0.46,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 75,
+   "wizard": 0,
+   "other": 210
+  },
+  "seconds": 12.61,
   "tests": 14,
   "failed": 0,
+  "cpu_seconds": 8.11,
   "stage": "integration"
  },
  "codex:tests.test_account_cleanup_schema": {
@@ -198,21 +342,39 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.4,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.32,
   "tests": 3,
   "failed": 0,
+  "cpu_seconds": 0.35,
   "stage": "unit"
  },
  "codex:tests.test_account_host": {
-  "processes": 50,
+  "processes": 57,
   "git": 0,
   "wizard": 0,
   "sockets": 12,
-  "sleeps": 4,
-  "sleep_seconds": 0.17,
-  "seconds": 12.06,
+  "sleeps": 8,
+  "sleep_seconds": 0.37,
+  "starts": {
+   "product": 12,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 45
+  },
+  "seconds": 11.19,
   "tests": 5,
   "failed": 0,
+  "cpu_seconds": 2.67,
   "stage": "integration"
  },
  "codex:tests.test_account_ingress": {
@@ -220,11 +382,20 @@
   "git": 120,
   "wizard": 0,
   "sockets": 2,
-  "sleeps": 1434,
-  "sleep_seconds": 2.84,
-  "seconds": 23.02,
+  "sleeps": 1205,
+  "sleep_seconds": 2.37,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 120,
+   "wizard": 0,
+   "other": 284
+  },
+  "seconds": 21.03,
   "tests": 25,
   "failed": 0,
+  "cpu_seconds": 12.52,
   "stage": "integration"
  },
  "codex:tests.test_account_launch_claims": {
@@ -234,9 +405,18 @@
   "sockets": 0,
   "sleeps": 129,
   "sleep_seconds": 0.26,
-  "seconds": 12.37,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 80,
+   "wizard": 0,
+   "other": 128
+  },
+  "seconds": 11.35,
   "tests": 16,
   "failed": 0,
+  "cpu_seconds": 6.52,
   "stage": "integration"
  },
  "codex:tests.test_account_observation": {
@@ -244,11 +424,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 13,
+  "sleeps": 12,
   "sleep_seconds": 0.01,
-  "seconds": 5.14,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 39
+  },
+  "seconds": 4.44,
   "tests": 15,
   "failed": 0,
+  "cpu_seconds": 1.69,
   "stage": "integration"
  },
  "codex:tests.test_account_observation_backup": {
@@ -258,9 +447,18 @@
   "sockets": 0,
   "sleeps": 2,
   "sleep_seconds": 0.0,
-  "seconds": 1.4,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 6
+  },
+  "seconds": 1.32,
   "tests": 2,
   "failed": 0,
+  "cpu_seconds": 0.48,
   "stage": "integration"
  },
  "codex:tests.test_account_observation_failure": {
@@ -268,11 +466,20 @@
   "git": 60,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 98,
-  "sleep_seconds": 0.19,
-  "seconds": 9.52,
+  "sleeps": 95,
+  "sleep_seconds": 0.18,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 60,
+   "wizard": 0,
+   "other": 100
+  },
+  "seconds": 8.66,
   "tests": 12,
   "failed": 0,
+  "cpu_seconds": 4.91,
   "stage": "integration"
  },
  "codex:tests.test_account_observation_jobs": {
@@ -280,11 +487,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 2,
-  "sleeps": 911,
-  "sleep_seconds": 1.82,
-  "seconds": 3.29,
+  "sleeps": 930,
+  "sleep_seconds": 1.85,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 23
+  },
+  "seconds": 3.48,
   "tests": 9,
   "failed": 0,
+  "cpu_seconds": 1.26,
   "stage": "integration"
  },
  "codex:tests.test_account_observation_runs": {
@@ -292,11 +508,20 @@
   "git": 20,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 38,
+  "sleeps": 37,
   "sleep_seconds": 0.07,
-  "seconds": 3.32,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 20,
+   "wizard": 0,
+   "other": 44
+  },
+  "seconds": 3.13,
   "tests": 4,
   "failed": 0,
+  "cpu_seconds": 1.98,
   "stage": "integration"
  },
  "codex:tests.test_account_observation_schema": {
@@ -304,11 +529,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 13,
+  "sleeps": 12,
   "sleep_seconds": 0.01,
-  "seconds": 3.09,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 30
+  },
+  "seconds": 3.11,
   "tests": 6,
   "failed": 0,
+  "cpu_seconds": 1.49,
   "stage": "integration"
  },
  "codex:tests.test_account_open_schema": {
@@ -318,9 +552,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.52,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.45,
   "tests": 10,
   "failed": 0,
+  "cpu_seconds": 0.48,
   "stage": "unit"
  },
  "codex:tests.test_account_original_open": {
@@ -328,11 +571,20 @@
   "git": 115,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 1503,
-  "sleep_seconds": 3.0,
-  "seconds": 26.44,
+  "sleeps": 1207,
+  "sleep_seconds": 2.38,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 115,
+   "wizard": 0,
+   "other": 371
+  },
+  "seconds": 23.57,
   "tests": 23,
   "failed": 0,
+  "cpu_seconds": 16.2,
   "stage": "integration"
  },
  "codex:tests.test_account_store_recovery": {
@@ -342,9 +594,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 2.14,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 3,
+   "git": 0,
+   "wizard": 0,
+   "other": 17
+  },
+  "seconds": 1.57,
   "tests": 17,
   "failed": 0,
+  "cpu_seconds": 1.56,
   "stage": "integration"
  },
  "codex:tests.test_account_terminal_delivery": {
@@ -352,23 +613,62 @@
   "git": 75,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 241,
-  "sleep_seconds": 0.48,
-  "seconds": 13.53,
+  "sleeps": 236,
+  "sleep_seconds": 0.46,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 75,
+   "wizard": 0,
+   "other": 210
+  },
+  "seconds": 12.68,
   "tests": 15,
   "failed": 0,
+  "cpu_seconds": 8.16,
   "stage": "integration"
  },
  "codex:tests.test_active_run_capacity": {
-  "processes": 246,
+  "processes": 294,
   "git": 65,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 224,
-  "sleep_seconds": 0.46,
-  "seconds": 11.59,
+  "sleeps": 289,
+  "sleep_seconds": 0.56,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 65,
+   "wizard": 0,
+   "other": 229
+  },
+  "seconds": 11.86,
   "tests": 13,
   "failed": 0,
+  "cpu_seconds": 7.76,
+  "stage": "integration"
+ },
+ "codex:tests.test_admission_history_growth": {
+  "processes": 418,
+  "git": 100,
+  "wizard": 0,
+  "sockets": 0,
+  "sleeps": 1084,
+  "sleep_seconds": 2.14,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 100,
+   "wizard": 0,
+   "other": 318
+  },
+  "seconds": 24.57,
+  "tests": 16,
+  "failed": 0,
+  "cpu_seconds": 17.44,
   "stage": "integration"
  },
  "codex:tests.test_admission_input_decode": {
@@ -376,11 +676,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 21,
+  "sleeps": 20,
   "sleep_seconds": 0.05,
-  "seconds": 0.93,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 21
+  },
+  "seconds": 0.77,
   "tests": 7,
   "failed": 0,
+  "cpu_seconds": 0.74,
   "stage": "integration"
  },
  "codex:tests.test_admission_inputs": {
@@ -388,11 +697,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 78,
-  "sleep_seconds": 0.18,
-  "seconds": 2.82,
+  "sleeps": 74,
+  "sleep_seconds": 0.17,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 77
+  },
+  "seconds": 2.57,
   "tests": 26,
   "failed": 0,
+  "cpu_seconds": 2.34,
   "stage": "integration"
  },
  "codex:tests.test_admission_metadata": {
@@ -402,9 +720,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.1,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.07,
   "tests": 5,
   "failed": 0,
+  "cpu_seconds": 0.1,
   "stage": "integration"
  },
  "codex:tests.test_app_cli_client_boundary": {
@@ -414,9 +741,18 @@
   "sockets": 3,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 1.11,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 3,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.79,
   "tests": 3,
   "failed": 0,
+  "cpu_seconds": 0.71,
   "stage": "integration"
  },
  "codex:tests.test_app_server": {
@@ -426,9 +762,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.04,
   "tests": 4,
   "failed": 0,
+  "cpu_seconds": 0.07,
   "stage": "unit"
  },
  "codex:tests.test_backup_installed_project": {
@@ -436,11 +781,20 @@
   "git": 25,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 64,
-  "sleep_seconds": 0.13,
-  "seconds": 4.62,
+  "sleeps": 63,
+  "sleep_seconds": 0.12,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 25,
+   "wizard": 0,
+   "other": 58
+  },
+  "seconds": 4.11,
   "tests": 6,
   "failed": 0,
+  "cpu_seconds": 2.67,
   "stage": "integration"
  },
  "codex:tests.test_billing_probe_api": {
@@ -450,9 +804,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.08,
   "tests": 8,
   "failed": 0,
+  "cpu_seconds": 0.11,
   "stage": "unit"
  },
  "codex:tests.test_billing_probe_worker": {
@@ -460,23 +823,41 @@
   "git": 95,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 667,
-  "sleep_seconds": 5.77,
-  "seconds": 17.43,
+  "sleeps": 555,
+  "sleep_seconds": 5.07,
+  "starts": {
+   "product": 17,
+   "fixture": 0,
+   "python": 0,
+   "git": 95,
+   "wizard": 0,
+   "other": 151
+  },
+  "seconds": 16.22,
   "tests": 19,
   "failed": 0,
+  "cpu_seconds": 9.62,
   "stage": "integration"
  },
  "codex:tests.test_bridge": {
-  "processes": 6619,
+  "processes": 6617,
   "git": 2348,
   "wizard": 0,
-  "sockets": 438,
-  "sleeps": 9722,
-  "sleep_seconds": 69.13,
-  "seconds": 208.32,
+  "sockets": 432,
+  "sleeps": 8669,
+  "sleep_seconds": 65.6,
+  "starts": {
+   "product": 161,
+   "fixture": 0,
+   "python": 23,
+   "git": 2348,
+   "wizard": 0,
+   "other": 4085
+  },
+  "seconds": 198.5,
   "tests": 138,
   "failed": 0,
+  "cpu_seconds": 115.9,
   "stage": "integration"
  },
  "codex:tests.test_bridge_contract_boundary": {
@@ -486,9 +867,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.2,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.13,
   "tests": 2,
   "failed": 0,
+  "cpu_seconds": 0.17,
   "stage": "integration"
  },
  "codex:tests.test_bridge_deadline_delivery": {
@@ -496,11 +886,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 28,
-  "sleep_seconds": 0.75,
-  "seconds": 1.51,
+  "sleeps": 25,
+  "sleep_seconds": 0.69,
+  "starts": {
+   "product": 3,
+   "fixture": 0,
+   "python": 3,
+   "git": 0,
+   "wizard": 0,
+   "other": 13
+  },
+  "seconds": 1.38,
   "tests": 3,
   "failed": 0,
+  "cpu_seconds": 0.83,
   "stage": "integration"
  },
  "codex:tests.test_bridge_liveness": {
@@ -508,11 +907,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 102,
-  "sleep_seconds": 2.17,
-  "seconds": 5.75,
+  "sleeps": 98,
+  "sleep_seconds": 2.19,
+  "starts": {
+   "product": 12,
+   "fixture": 0,
+   "python": 15,
+   "git": 0,
+   "wizard": 0,
+   "other": 63
+  },
+  "seconds": 5.43,
   "tests": 15,
   "failed": 0,
+  "cpu_seconds": 3.4,
   "stage": "integration"
  },
  "codex:tests.test_capacity_status_api": {
@@ -520,11 +928,20 @@
   "git": 149,
   "wizard": 0,
   "sockets": 3,
-  "sleeps": 161,
-  "sleep_seconds": 0.95,
-  "seconds": 14.46,
+  "sleeps": 153,
+  "sleep_seconds": 0.92,
+  "starts": {
+   "product": 9,
+   "fixture": 0,
+   "python": 3,
+   "git": 149,
+   "wizard": 0,
+   "other": 239
+  },
+  "seconds": 12.81,
   "tests": 19,
   "failed": 0,
+  "cpu_seconds": 10.1,
   "stage": "integration"
  },
  "codex:tests.test_catalog": {
@@ -534,21 +951,39 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.03,
   "tests": 14,
   "failed": 0,
+  "cpu_seconds": 0.06,
   "stage": "unit"
  },
  "codex:tests.test_claim_denial_recovery": {
-  "processes": 271,
-  "git": 75,
+  "processes": 289,
+  "git": 80,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 199,
-  "sleep_seconds": 0.38,
-  "seconds": 13.2,
-  "tests": 15,
+  "sleeps": 209,
+  "sleep_seconds": 0.39,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 80,
+   "wizard": 0,
+   "other": 209
+  },
+  "seconds": 13.11,
+  "tests": 16,
   "failed": 0,
+  "cpu_seconds": 8.37,
   "stage": "integration"
  },
  "codex:tests.test_claude_activity": {
@@ -556,11 +991,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 81,
-  "sleep_seconds": 1.0,
-  "seconds": 2.9,
+  "sleeps": 74,
+  "sleep_seconds": 0.95,
+  "starts": {
+   "product": 6,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 38
+  },
+  "seconds": 2.56,
   "tests": 18,
   "failed": 0,
+  "cpu_seconds": 1.99,
   "stage": "integration"
  },
  "codex:tests.test_cleanup_contracts": {
@@ -568,11 +1012,20 @@
   "git": 25,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 80,
-  "sleep_seconds": 0.16,
-  "seconds": 4.84,
+  "sleeps": 77,
+  "sleep_seconds": 0.15,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 25,
+   "wizard": 0,
+   "other": 70
+  },
+  "seconds": 4.43,
   "tests": 5,
   "failed": 0,
+  "cpu_seconds": 2.96,
   "stage": "integration"
  },
  "codex:tests.test_cleanup_custody": {
@@ -580,23 +1033,41 @@
   "git": 40,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 642,
-  "sleep_seconds": 3.93,
-  "seconds": 6.5,
+  "sleeps": 522,
+  "sleep_seconds": 3.31,
+  "starts": {
+   "product": 10,
+   "fixture": 0,
+   "python": 0,
+   "git": 40,
+   "wizard": 0,
+   "other": 78
+  },
+  "seconds": 5.78,
   "tests": 8,
   "failed": 0,
+  "cpu_seconds": 5.22,
   "stage": "integration"
  },
  "codex:tests.test_cli_billing_runtime": {
-  "processes": 178,
-  "git": 35,
+  "processes": 248,
+  "git": 45,
   "wizard": 0,
-  "sockets": 7,
-  "sleeps": 10332,
-  "sleep_seconds": 21.48,
-  "seconds": 32.46,
-  "tests": 7,
+  "sockets": 9,
+  "sleeps": 11585,
+  "sleep_seconds": 24.08,
+  "starts": {
+   "product": 7,
+   "fixture": 22,
+   "python": 0,
+   "git": 45,
+   "wizard": 0,
+   "other": 174
+  },
+  "seconds": 40.15,
+  "tests": 9,
   "failed": 0,
+  "cpu_seconds": 34.4,
   "stage": "integration"
  },
  "codex:tests.test_cli_ledger_boundary": {
@@ -606,9 +1077,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.09,
   "tests": 3,
   "failed": 0,
+  "cpu_seconds": 0.12,
   "stage": "unit"
  },
  "codex:tests.test_cli_observation_runtime": {
@@ -616,11 +1096,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 7,
-  "sleeps": 12891,
-  "sleep_seconds": 25.78,
-  "seconds": 34.18,
+  "sleeps": 11024,
+  "sleep_seconds": 22.04,
+  "starts": {
+   "product": 0,
+   "fixture": 25,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 30
+  },
+  "seconds": 32.78,
   "tests": 7,
   "failed": 0,
+  "cpu_seconds": 32.16,
   "stage": "integration"
  },
  "codex:tests.test_cli_open_client_runtime": {
@@ -628,11 +1117,20 @@
   "git": 44,
   "wizard": 0,
   "sockets": 32,
-  "sleeps": 8423,
-  "sleep_seconds": 16.92,
-  "seconds": 30.01,
+  "sleeps": 7169,
+  "sleep_seconds": 14.44,
+  "starts": {
+   "product": 0,
+   "fixture": 54,
+   "python": 0,
+   "git": 44,
+   "wizard": 0,
+   "other": 96
+  },
+  "seconds": 28.17,
   "tests": 4,
   "failed": 0,
+  "cpu_seconds": 26.98,
   "stage": "integration"
  },
  "codex:tests.test_cli_reports": {
@@ -642,9 +1140,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.25,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.17,
   "tests": 11,
   "failed": 0,
+  "cpu_seconds": 0.2,
   "stage": "unit"
  },
  "codex:tests.test_cli_status_client_boundary": {
@@ -652,11 +1159,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 20,
-  "sleeps": 816,
-  "sleep_seconds": 1.63,
-  "seconds": 3.18,
+  "sleeps": 472,
+  "sleep_seconds": 0.94,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 9,
+   "git": 0,
+   "wizard": 0,
+   "other": 6
+  },
+  "seconds": 2.24,
   "tests": 6,
   "failed": 0,
+  "cpu_seconds": 1.79,
   "stage": "integration"
  },
  "codex:tests.test_codex_activity": {
@@ -666,9 +1182,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.03,
   "tests": 4,
   "failed": 0,
+  "cpu_seconds": 0.06,
   "stage": "unit"
  },
  "codex:tests.test_codex_activity_execution": {
@@ -676,23 +1201,41 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 98,
-  "sleep_seconds": 1.17,
-  "seconds": 3.48,
+  "sleeps": 101,
+  "sleep_seconds": 1.68,
+  "starts": {
+   "product": 8,
+   "fixture": 0,
+   "python": 2,
+   "git": 0,
+   "wizard": 0,
+   "other": 47
+  },
+  "seconds": 3.69,
   "tests": 6,
   "failed": 0,
+  "cpu_seconds": 2.52,
   "stage": "integration"
  },
  "codex:tests.test_codex_preparation": {
-  "processes": 314,
-  "git": 188,
+  "processes": 385,
+  "git": 230,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 1241,
-  "sleep_seconds": 2.47,
-  "seconds": 10.74,
-  "tests": 19,
+  "sleeps": 1305,
+  "sleep_seconds": 2.6,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 230,
+   "wizard": 0,
+   "other": 155
+  },
+  "seconds": 11.27,
+  "tests": 23,
   "failed": 0,
+  "cpu_seconds": 7.47,
   "stage": "integration"
  },
  "codex:tests.test_codex_verifier_preparation": {
@@ -700,11 +1243,20 @@
   "git": 14,
   "wizard": 0,
   "sockets": 6,
-  "sleeps": 75,
-  "sleep_seconds": 0.15,
-  "seconds": 2.46,
+  "sleeps": 65,
+  "sleep_seconds": 0.13,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 14,
+   "wizard": 0,
+   "other": 33
+  },
+  "seconds": 2.1,
   "tests": 2,
   "failed": 0,
+  "cpu_seconds": 1.52,
   "stage": "integration"
  },
  "codex:tests.test_codex_worker": {
@@ -712,11 +1264,41 @@
   "git": 90,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 645,
-  "sleep_seconds": 3.85,
-  "seconds": 11.15,
+  "sleeps": 509,
+  "sleep_seconds": 3.2,
+  "starts": {
+   "product": 17,
+   "fixture": 0,
+   "python": 0,
+   "git": 90,
+   "wizard": 0,
+   "other": 137
+  },
+  "seconds": 9.21,
   "tests": 18,
   "failed": 0,
+  "cpu_seconds": 9.38,
+  "stage": "integration"
+ },
+ "codex:tests.test_collector_exit": {
+  "processes": 78,
+  "git": 0,
+  "wizard": 0,
+  "sockets": 4,
+  "sleeps": 57,
+  "sleep_seconds": 2.16,
+  "starts": {
+   "product": 9,
+   "fixture": 0,
+   "python": 3,
+   "git": 0,
+   "wizard": 0,
+   "other": 66
+  },
+  "seconds": 15.14,
+  "tests": 29,
+  "failed": 0,
+  "cpu_seconds": 2.96,
   "stage": "integration"
  },
  "codex:tests.test_collector_paths": {
@@ -726,21 +1308,60 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.2,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.1,
   "tests": 14,
   "failed": 0,
+  "cpu_seconds": 0.13,
   "stage": "unit"
+ },
+ "codex:tests.test_collector_read_scope": {
+  "processes": 55,
+  "git": 10,
+  "wizard": 0,
+  "sockets": 29,
+  "sleeps": 128,
+  "sleep_seconds": 0.25,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 10,
+   "wizard": 0,
+   "other": 45
+  },
+  "seconds": 7.2,
+  "tests": 17,
+  "failed": 0,
+  "cpu_seconds": 2.46,
+  "stage": "integration"
  },
  "codex:tests.test_contracts": {
   "processes": 28,
   "git": 18,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 1,
+  "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 1.41,
+  "starts": {
+   "product": 6,
+   "fixture": 0,
+   "python": 0,
+   "git": 18,
+   "wizard": 0,
+   "other": 4
+  },
+  "seconds": 1.26,
   "tests": 51,
   "failed": 0,
+  "cpu_seconds": 1.24,
   "stage": "integration"
  },
  "codex:tests.test_control_api": {
@@ -750,9 +1371,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.19,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 1
+  },
+  "seconds": 0.15,
   "tests": 31,
   "failed": 0,
+  "cpu_seconds": 0.18,
   "stage": "integration"
  },
  "codex:tests.test_control_loop": {
@@ -762,9 +1392,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.12,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.1,
   "tests": 27,
   "failed": 0,
+  "cpu_seconds": 0.12,
   "stage": "unit"
  },
  "codex:tests.test_control_process": {
@@ -774,9 +1413,18 @@
   "sockets": 16,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 1.16,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 6,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 1.08,
   "tests": 2,
   "failed": 0,
+  "cpu_seconds": 0.85,
   "stage": "integration"
  },
  "codex:tests.test_diagnostic_delivery": {
@@ -784,11 +1432,20 @@
   "git": 11,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 16,
+  "sleeps": 14,
   "sleep_seconds": 0.08,
-  "seconds": 1.43,
+  "starts": {
+   "product": 1,
+   "fixture": 0,
+   "python": 0,
+   "git": 11,
+   "wizard": 0,
+   "other": 23
+  },
+  "seconds": 1.34,
   "tests": 1,
   "failed": 0,
+  "cpu_seconds": 1.08,
   "stage": "integration"
  },
  "codex:tests.test_dispatch_client_runtime": {
@@ -796,11 +1453,20 @@
   "git": 26,
   "wizard": 0,
   "sockets": 14,
-  "sleeps": 659,
-  "sleep_seconds": 1.39,
-  "seconds": 11.61,
+  "sleeps": 548,
+  "sleep_seconds": 1.16,
+  "starts": {
+   "product": 0,
+   "fixture": 9,
+   "python": 0,
+   "git": 26,
+   "wizard": 0,
+   "other": 95
+  },
+  "seconds": 10.68,
   "tests": 5,
   "failed": 0,
+  "cpu_seconds": 8.33,
   "stage": "integration"
  },
  "codex:tests.test_dispatch_delivery_cli": {
@@ -810,9 +1476,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.25,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.26,
   "tests": 11,
   "failed": 0,
+  "cpu_seconds": 0.3,
   "stage": "unit"
  },
  "codex:tests.test_dispatch_preflight": {
@@ -822,9 +1497,18 @@
   "sockets": 0,
   "sleeps": 6,
   "sleep_seconds": 0.01,
-  "seconds": 4.35,
+  "starts": {
+   "product": 1,
+   "fixture": 0,
+   "python": 0,
+   "git": 249,
+   "wizard": 0,
+   "other": 136
+  },
+  "seconds": 3.69,
   "tests": 20,
   "failed": 0,
+  "cpu_seconds": 3.3,
   "stage": "integration"
  },
  "codex:tests.test_evaluation": {
@@ -834,9 +1518,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.04,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.03,
   "tests": 4,
   "failed": 0,
+  "cpu_seconds": 0.07,
   "stage": "unit"
  },
  "codex:tests.test_event_retention": {
@@ -844,11 +1537,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 1,
-  "sleeps": 18,
-  "sleep_seconds": 0.18,
-  "seconds": 1.33,
+  "sleeps": 16,
+  "sleep_seconds": 0.16,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 11
+  },
+  "seconds": 1.13,
   "tests": 13,
   "failed": 0,
+  "cpu_seconds": 0.83,
   "stage": "integration"
  },
  "codex:tests.test_event_shapes": {
@@ -858,9 +1560,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.28,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.26,
   "tests": 7,
   "failed": 0,
+  "cpu_seconds": 0.29,
   "stage": "unit"
  },
  "codex:tests.test_execution_activity": {
@@ -870,9 +1581,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.05,
   "tests": 11,
   "failed": 0,
+  "cpu_seconds": 0.08,
   "stage": "unit"
  },
  "codex:tests.test_execution_limits": {
@@ -882,9 +1602,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.02,
   "tests": 6,
   "failed": 0,
+  "cpu_seconds": 0.06,
   "stage": "unit"
  },
  "codex:tests.test_git_plumbing": {
@@ -894,9 +1623,18 @@
   "sockets": 0,
   "sleeps": 4,
   "sleep_seconds": 0.0,
-  "seconds": 8.48,
+  "starts": {
+   "product": 7,
+   "fixture": 0,
+   "python": 0,
+   "git": 129,
+   "wizard": 0,
+   "other": 36
+  },
+  "seconds": 7.69,
   "tests": 11,
   "failed": 0,
+  "cpu_seconds": 6.21,
   "stage": "integration"
  },
  "codex:tests.test_history_api": {
@@ -906,9 +1644,18 @@
   "sockets": 18,
   "sleeps": 2,
   "sleep_seconds": 0.0,
-  "seconds": 1.6,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 7,
+   "git": 0,
+   "wizard": 0,
+   "other": 2
+  },
+  "seconds": 1.47,
   "tests": 31,
   "failed": 0,
+  "cpu_seconds": 0.88,
   "stage": "integration"
  },
  "codex:tests.test_hook_client_boundary": {
@@ -918,9 +1665,18 @@
   "sockets": 4,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.69,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 3,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.63,
   "tests": 3,
   "failed": 0,
+  "cpu_seconds": 0.46,
   "stage": "integration"
  },
  "codex:tests.test_hook_config": {
@@ -930,9 +1686,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 1.74,
+  "starts": {
+   "product": 1,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 4
+  },
+  "seconds": 1.56,
   "tests": 5,
   "failed": 0,
+  "cpu_seconds": 1.57,
   "stage": "integration"
  },
  "codex:tests.test_host_commands": {
@@ -940,11 +1705,20 @@
   "git": 13,
   "wizard": 0,
   "sockets": 7,
-  "sleeps": 40,
-  "sleep_seconds": 0.67,
-  "seconds": 67.2,
-  "tests": 52,
+  "sleeps": 36,
+  "sleep_seconds": 0.66,
+  "starts": {
+   "product": 118,
+   "fixture": 0,
+   "python": 1,
+   "git": 13,
+   "wizard": 0,
+   "other": 416
+  },
+  "seconds": 64.44,
+  "tests": 53,
   "failed": 0,
+  "cpu_seconds": 61.18,
   "stage": "integration"
  },
  "codex:tests.test_host_open_lane": {
@@ -952,11 +1726,20 @@
   "git": 30,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 21,
-  "sleep_seconds": 0.11,
-  "seconds": 2.21,
+  "sleeps": 19,
+  "sleep_seconds": 0.1,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 30,
+   "wizard": 0,
+   "other": 6
+  },
+  "seconds": 1.75,
   "tests": 6,
   "failed": 0,
+  "cpu_seconds": 1.63,
   "stage": "integration"
  },
  "codex:tests.test_host_open_provenance": {
@@ -964,11 +1747,20 @@
   "git": 202,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 188,
+  "sleeps": 184,
   "sleep_seconds": 0.37,
-  "seconds": 14.4,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 202,
+   "wizard": 0,
+   "other": 213
+  },
+  "seconds": 13.28,
   "tests": 14,
   "failed": 0,
+  "cpu_seconds": 8.27,
   "stage": "integration"
  },
  "codex:tests.test_host_paths": {
@@ -978,9 +1770,18 @@
   "sockets": 1,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.31,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 2,
+   "git": 0,
+   "wizard": 0,
+   "other": 9
+  },
+  "seconds": 0.25,
   "tests": 17,
   "failed": 0,
+  "cpu_seconds": 0.28,
   "stage": "integration"
  },
  "codex:tests.test_hosts": {
@@ -990,9 +1791,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.02,
   "tests": 2,
   "failed": 0,
+  "cpu_seconds": 0.05,
   "stage": "unit"
  },
  "codex:tests.test_installer": {
@@ -1000,11 +1810,20 @@
   "git": 662,
   "wizard": 0,
   "sockets": 3,
-  "sleeps": 17,
-  "sleep_seconds": 0.04,
-  "seconds": 20.82,
+  "sleeps": 23,
+  "sleep_seconds": 0.09,
+  "starts": {
+   "product": 7,
+   "fixture": 0,
+   "python": 0,
+   "git": 662,
+   "wizard": 0,
+   "other": 247
+  },
+  "seconds": 19.11,
   "tests": 28,
   "failed": 0,
+  "cpu_seconds": 12.7,
   "stage": "integration"
  },
  "codex:tests.test_large_project_backups": {
@@ -1012,23 +1831,41 @@
   "git": 1,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 160,
-  "sleep_seconds": 0.35,
-  "seconds": 33.27,
+  "sleeps": 156,
+  "sleep_seconds": 0.34,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 1,
+   "wizard": 0,
+   "other": 112
+  },
+  "seconds": 32.61,
   "tests": 8,
   "failed": 0,
+  "cpu_seconds": 30.01,
   "stage": "integration"
  },
  "codex:tests.test_launch_journal": {
-  "processes": 74,
+  "processes": 76,
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 177,
-  "sleep_seconds": 7.86,
-  "seconds": 10.63,
+  "sleeps": 170,
+  "sleep_seconds": 7.61,
+  "starts": {
+   "product": 3,
+   "fixture": 0,
+   "python": 5,
+   "git": 0,
+   "wizard": 0,
+   "other": 68
+  },
+  "seconds": 10.22,
   "tests": 22,
   "failed": 0,
+  "cpu_seconds": 2.23,
   "stage": "integration"
  },
  "codex:tests.test_launch_signature_preparation": {
@@ -1036,11 +1873,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 204,
-  "sleep_seconds": 0.42,
-  "seconds": 9.13,
+  "sleeps": 201,
+  "sleep_seconds": 0.41,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 167
+  },
+  "seconds": 8.63,
   "tests": 17,
   "failed": 0,
+  "cpu_seconds": 3.95,
   "stage": "integration"
  },
  "codex:tests.test_learning_adapters": {
@@ -1050,9 +1896,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.06,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.05,
   "tests": 7,
   "failed": 0,
+  "cpu_seconds": 0.08,
   "stage": "unit"
  },
  "codex:tests.test_learning_analysis": {
@@ -1062,9 +1917,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.12,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.1,
   "tests": 2,
   "failed": 0,
+  "cpu_seconds": 0.13,
   "stage": "integration"
  },
  "codex:tests.test_learning_benchmark": {
@@ -1074,9 +1938,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.07,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.06,
   "tests": 1,
   "failed": 0,
+  "cpu_seconds": 0.09,
   "stage": "unit"
  },
  "codex:tests.test_learning_chunk_membership": {
@@ -1086,9 +1959,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.35,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.3,
   "tests": 13,
   "failed": 0,
+  "cpu_seconds": 0.32,
   "stage": "unit"
  },
  "codex:tests.test_learning_chunk_upgrade": {
@@ -1098,21 +1980,39 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.2,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.16,
   "tests": 5,
   "failed": 0,
+  "cpu_seconds": 0.18,
   "stage": "unit"
  },
  "codex:tests.test_learning_cli": {
   "processes": 353,
   "git": 27,
   "wizard": 0,
-  "sockets": 537,
-  "sleeps": 652,
-  "sleep_seconds": 8.98,
-  "seconds": 69.04,
+  "sockets": 506,
+  "sleeps": 615,
+  "sleep_seconds": 8.32,
+  "starts": {
+   "product": 69,
+   "fixture": 0,
+   "python": 0,
+   "git": 27,
+   "wizard": 0,
+   "other": 257
+  },
+  "seconds": 67.65,
   "tests": 26,
   "failed": 0,
+  "cpu_seconds": 19.91,
   "stage": "integration"
  },
  "codex:tests.test_learning_contracts": {
@@ -1122,9 +2022,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.06,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.05,
   "tests": 15,
   "failed": 0,
+  "cpu_seconds": 0.09,
   "stage": "unit"
  },
  "codex:tests.test_learning_cycle_core": {
@@ -1132,11 +2041,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 46,
-  "sleep_seconds": 0.1,
-  "seconds": 3.24,
+  "sleeps": 45,
+  "sleep_seconds": 0.09,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 24
+  },
+  "seconds": 2.92,
   "tests": 15,
   "failed": 0,
+  "cpu_seconds": 2.49,
   "stage": "integration"
  },
  "codex:tests.test_learning_engine": {
@@ -1144,11 +2062,20 @@
   "git": 137,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 152,
-  "sleep_seconds": 1.26,
-  "seconds": 4.54,
+  "sleeps": 143,
+  "sleep_seconds": 1.14,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 137,
+   "wizard": 0,
+   "other": 86
+  },
+  "seconds": 4.13,
   "tests": 66,
   "failed": 0,
+  "cpu_seconds": 3.04,
   "stage": "integration"
  },
  "codex:tests.test_learning_hook": {
@@ -1158,9 +2085,18 @@
   "sockets": 22,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 2.89,
+  "starts": {
+   "product": 6,
+   "fixture": 0,
+   "python": 21,
+   "git": 16,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 2.59,
   "tests": 10,
   "failed": 0,
+  "cpu_seconds": 2.18,
   "stage": "integration"
  },
  "codex:tests.test_learning_live": {
@@ -1170,9 +2106,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.03,
   "tests": 1,
   "failed": 0,
+  "cpu_seconds": 0.06,
   "stage": "unit"
  },
  "codex:tests.test_learning_migration": {
@@ -1180,11 +2125,20 @@
   "git": 2,
   "wizard": 0,
   "sockets": 8,
-  "sleeps": 239,
-  "sleep_seconds": 0.59,
-  "seconds": 25.57,
+  "sleeps": 235,
+  "sleep_seconds": 0.56,
+  "starts": {
+   "product": 17,
+   "fixture": 0,
+   "python": 0,
+   "git": 2,
+   "wizard": 0,
+   "other": 168
+  },
+  "seconds": 25.1,
   "tests": 17,
   "failed": 0,
+  "cpu_seconds": 9.41,
   "stage": "integration"
  },
  "codex:tests.test_learning_outcome_pages": {
@@ -1194,9 +2148,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.35,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.3,
   "tests": 6,
   "failed": 0,
+  "cpu_seconds": 0.33,
   "stage": "unit"
  },
  "codex:tests.test_learning_qa_upgrade": {
@@ -1206,9 +2169,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.2,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.16,
   "tests": 3,
   "failed": 0,
+  "cpu_seconds": 0.18,
   "stage": "unit"
  },
  "codex:tests.test_learning_source_image": {
@@ -1218,9 +2190,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 2.36,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 30
+  },
+  "seconds": 2.27,
   "tests": 30,
   "failed": 0,
+  "cpu_seconds": 2.24,
   "stage": "integration"
  },
  "codex:tests.test_learning_source_image_legacy": {
@@ -1228,11 +2209,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 143,
-  "sleep_seconds": 0.32,
-  "seconds": 4.41,
+  "sleeps": 141,
+  "sleep_seconds": 0.3,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 99
+  },
+  "seconds": 4.27,
   "tests": 7,
   "failed": 0,
+  "cpu_seconds": 2.23,
   "stage": "integration"
  },
  "codex:tests.test_learning_source_transfer": {
@@ -1240,11 +2230,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 260,
-  "sleep_seconds": 0.57,
-  "seconds": 8.38,
+  "sleeps": 254,
+  "sleep_seconds": 0.55,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 182
+  },
+  "seconds": 8.22,
   "tests": 13,
   "failed": 0,
+  "cpu_seconds": 4.39,
   "stage": "integration"
  },
  "codex:tests.test_learning_store": {
@@ -1252,11 +2251,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 67,
-  "sleeps": 145,
-  "sleep_seconds": 0.32,
-  "seconds": 18.66,
+  "sleeps": 141,
+  "sleep_seconds": 0.3,
+  "starts": {
+   "product": 5,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 195
+  },
+  "seconds": 18.31,
   "tests": 94,
   "failed": 0,
+  "cpu_seconds": 10.19,
   "stage": "integration"
  },
  "codex:tests.test_ledger_startup": {
@@ -1266,21 +2274,39 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.77,
   "tests": 5,
   "failed": 0,
+  "cpu_seconds": 0.78,
   "stage": "unit"
  },
  "codex:tests.test_legacy_capacity_upgrade": {
-  "processes": 3,
+  "processes": 12,
   "git": 0,
   "wizard": 0,
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.54,
-  "tests": 3,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 12
+  },
+  "seconds": 1.18,
+  "tests": 11,
   "failed": 0,
+  "cpu_seconds": 1.19,
   "stage": "integration"
  },
  "codex:tests.test_legacy_history_compatibility": {
@@ -1290,9 +2316,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.21,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.18,
   "tests": 5,
   "failed": 0,
+  "cpu_seconds": 0.22,
   "stage": "unit"
  },
  "codex:tests.test_lifecycle_cli_runtime": {
@@ -1300,11 +2335,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 18,
-  "sleep_seconds": 0.09,
-  "seconds": 4.67,
+  "sleeps": 17,
+  "sleep_seconds": 0.08,
+  "starts": {
+   "product": 0,
+   "fixture": 22,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 4.53,
   "tests": 4,
   "failed": 0,
+  "cpu_seconds": 4.46,
   "stage": "integration"
  },
  "codex:tests.test_liveness_clock": {
@@ -1314,33 +2358,60 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.05,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.04,
   "tests": 24,
   "failed": 0,
+  "cpu_seconds": 0.07,
   "stage": "unit"
  },
  "codex:tests.test_lost_run_settlement": {
-  "processes": 1139,
-  "git": 447,
+  "processes": 1635,
+  "git": 685,
   "wizard": 0,
-  "sockets": 432,
-  "sleeps": 12345,
-  "sleep_seconds": 57.09,
-  "seconds": 61.05,
-  "tests": 16,
+  "sockets": 721,
+  "sleeps": 13230,
+  "sleep_seconds": 58.06,
+  "starts": {
+   "product": 28,
+   "fixture": 0,
+   "python": 3,
+   "git": 685,
+   "wizard": 0,
+   "other": 919
+  },
+  "seconds": 72.48,
+  "tests": 24,
   "failed": 0,
+  "cpu_seconds": 41.82,
   "stage": "integration"
  },
  "codex:tests.test_owned_execution": {
-  "processes": 645,
+  "processes": 657,
   "git": 156,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 329,
-  "sleep_seconds": 3.55,
-  "seconds": 24.16,
+  "sleeps": 325,
+  "sleep_seconds": 3.42,
+  "starts": {
+   "product": 16,
+   "fixture": 0,
+   "python": 18,
+   "git": 156,
+   "wizard": 0,
+   "other": 467
+  },
+  "seconds": 22.9,
   "tests": 61,
   "failed": 0,
+  "cpu_seconds": 15.38,
   "stage": "integration"
  },
  "codex:tests.test_owner_key_contracts": {
@@ -1350,9 +2421,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.02,
   "tests": 5,
   "failed": 0,
+  "cpu_seconds": 0.06,
   "stage": "unit"
  },
  "codex:tests.test_owner_record_payload": {
@@ -1362,9 +2442,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.07,
   "tests": 2,
   "failed": 0,
+  "cpu_seconds": 0.1,
   "stage": "integration"
  },
  "codex:tests.test_owner_terminal_flow": {
@@ -1372,11 +2461,62 @@
   "git": 10,
   "wizard": 0,
   "sockets": 38,
-  "sleeps": 275,
-  "sleep_seconds": 0.68,
-  "seconds": 1.82,
+  "sleeps": 231,
+  "sleep_seconds": 0.55,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 10,
+   "wizard": 0,
+   "other": 12
+  },
+  "seconds": 1.69,
   "tests": 2,
   "failed": 0,
+  "cpu_seconds": 1.07,
+  "stage": "integration"
+ },
+ "codex:tests.test_phase_report": {
+  "processes": 0,
+  "git": 0,
+  "wizard": 0,
+  "sockets": 0,
+  "sleeps": 0,
+  "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.04,
+  "tests": 14,
+  "failed": 0,
+  "cpu_seconds": 0.07,
+  "stage": "unit"
+ },
+ "codex:tests.test_phase_report_exit": {
+  "processes": 1,
+  "git": 0,
+  "wizard": 0,
+  "sockets": 0,
+  "sleeps": 4,
+  "sleep_seconds": 0.01,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.04,
+  "tests": 1,
+  "failed": 0,
+  "cpu_seconds": 0.07,
   "stage": "integration"
  },
  "codex:tests.test_prepared_dispatch": {
@@ -1386,9 +2526,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 2.17,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 50,
+   "wizard": 0,
+   "other": 10
+  },
+  "seconds": 2.11,
   "tests": 10,
   "failed": 0,
+  "cpu_seconds": 2.09,
   "stage": "integration"
  },
  "codex:tests.test_project_cleanup": {
@@ -1398,21 +2547,39 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.29,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.28,
   "tests": 6,
   "failed": 0,
+  "cpu_seconds": 0.31,
   "stage": "unit"
  },
  "codex:tests.test_project_driver": {
-  "processes": 5588,
-  "git": 2428,
+  "processes": 7208,
+  "git": 3161,
   "wizard": 0,
-  "sockets": 3131,
-  "sleeps": 48006,
-  "sleep_seconds": 151.16,
-  "seconds": 217.97,
-  "tests": 65,
+  "sockets": 3624,
+  "sleeps": 61084,
+  "sleep_seconds": 190.97,
+  "starts": {
+   "product": 130,
+   "fixture": 0,
+   "python": 0,
+   "git": 3161,
+   "wizard": 0,
+   "other": 3917
+  },
+  "seconds": 272.26,
+  "tests": 86,
   "failed": 0,
+  "cpu_seconds": 163.59,
   "stage": "integration"
  },
  "codex:tests.test_project_execution_grant": {
@@ -1420,11 +2587,20 @@
   "git": 60,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 192,
-  "sleep_seconds": 0.38,
-  "seconds": 10.29,
+  "sleeps": 189,
+  "sleep_seconds": 0.37,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 60,
+   "wizard": 0,
+   "other": 168
+  },
+  "seconds": 9.78,
   "tests": 12,
   "failed": 0,
+  "cpu_seconds": 6.24,
   "stage": "integration"
  },
  "codex:tests.test_project_execution_processes": {
@@ -1432,11 +2608,20 @@
   "git": 45,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 931,
-  "sleep_seconds": 2.02,
-  "seconds": 17.47,
+  "sleeps": 830,
+  "sleep_seconds": 1.82,
+  "starts": {
+   "product": 0,
+   "fixture": 11,
+   "python": 0,
+   "git": 45,
+   "wizard": 0,
+   "other": 180
+  },
+  "seconds": 16.82,
   "tests": 9,
   "failed": 0,
+  "cpu_seconds": 13.07,
   "stage": "integration"
  },
  "codex:tests.test_project_history": {
@@ -1446,9 +2631,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.61,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 4,
+   "git": 0,
+   "wizard": 0,
+   "other": 1
+  },
+  "seconds": 0.58,
   "tests": 33,
   "failed": 0,
+  "cpu_seconds": 0.6,
   "stage": "integration"
  },
  "codex:tests.test_project_host_open": {
@@ -1456,11 +2650,20 @@
   "git": 149,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 282,
-  "sleep_seconds": 0.55,
-  "seconds": 18.46,
+  "sleeps": 277,
+  "sleep_seconds": 0.53,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 2,
+   "git": 149,
+   "wizard": 0,
+   "other": 284
+  },
+  "seconds": 17.64,
   "tests": 21,
   "failed": 0,
+  "cpu_seconds": 11.12,
   "stage": "integration"
  },
  "codex:tests.test_project_host_result": {
@@ -1468,11 +2671,20 @@
   "git": 120,
   "wizard": 0,
   "sockets": 3,
-  "sleeps": 386,
-  "sleep_seconds": 0.77,
-  "seconds": 21.15,
+  "sleeps": 383,
+  "sleep_seconds": 0.76,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 120,
+   "wizard": 0,
+   "other": 336
+  },
+  "seconds": 19.92,
   "tests": 23,
   "failed": 0,
+  "cpu_seconds": 12.66,
   "stage": "integration"
  },
  "codex:tests.test_project_ingress": {
@@ -1480,11 +2692,20 @@
   "git": 75,
   "wizard": 0,
   "sockets": 2,
-  "sleeps": 81,
-  "sleep_seconds": 0.61,
-  "seconds": 4.14,
+  "sleeps": 68,
+  "sleep_seconds": 0.53,
+  "starts": {
+   "product": 1,
+   "fixture": 0,
+   "python": 0,
+   "git": 75,
+   "wizard": 0,
+   "other": 21
+  },
+  "seconds": 3.72,
   "tests": 16,
   "failed": 0,
+  "cpu_seconds": 3.34,
   "stage": "integration"
  },
  "codex:tests.test_project_learning_corpus": {
@@ -1494,9 +2715,18 @@
   "sockets": 0,
   "sleeps": 38,
   "sleep_seconds": 0.09,
-  "seconds": 0.93,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 23
+  },
+  "seconds": 0.91,
   "tests": 17,
   "failed": 0,
+  "cpu_seconds": 0.6,
   "stage": "integration"
  },
  "codex:tests.test_project_learning_identity": {
@@ -1504,11 +2734,20 @@
   "git": 10,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 32,
+  "sleeps": 31,
   "sleep_seconds": 0.06,
-  "seconds": 2.08,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 10,
+   "wizard": 0,
+   "other": 28
+  },
+  "seconds": 1.91,
   "tests": 12,
   "failed": 0,
+  "cpu_seconds": 1.34,
   "stage": "integration"
  },
  "codex:tests.test_project_learning_live": {
@@ -1518,9 +2757,18 @@
   "sockets": 0,
   "sleeps": 26,
   "sleep_seconds": 0.05,
-  "seconds": 0.42,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.39,
   "tests": 18,
   "failed": 0,
+  "cpu_seconds": 0.34,
   "stage": "integration"
  },
  "codex:tests.test_project_learning_qa": {
@@ -1530,9 +2778,18 @@
   "sockets": 0,
   "sleeps": 20,
   "sleep_seconds": 0.04,
-  "seconds": 0.88,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 14
+  },
+  "seconds": 0.82,
   "tests": 12,
   "failed": 0,
+  "cpu_seconds": 0.56,
   "stage": "integration"
  },
  "codex:tests.test_project_monitor": {
@@ -1542,9 +2799,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.13,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 2,
+   "git": 0,
+   "wizard": 0,
+   "other": 1
+  },
+  "seconds": 0.12,
   "tests": 33,
   "failed": 0,
+  "cpu_seconds": 0.15,
   "stage": "integration"
  },
  "codex:tests.test_project_open_scope": {
@@ -1552,11 +2818,20 @@
   "git": 100,
   "wizard": 0,
   "sockets": 1,
-  "sleeps": 322,
-  "sleep_seconds": 0.64,
-  "seconds": 18.54,
+  "sleeps": 317,
+  "sleep_seconds": 0.63,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 100,
+   "wizard": 0,
+   "other": 280
+  },
+  "seconds": 17.72,
   "tests": 20,
   "failed": 0,
+  "cpu_seconds": 11.7,
   "stage": "integration"
  },
  "codex:tests.test_project_operational_qa": {
@@ -1564,11 +2839,20 @@
   "git": 80,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 375,
-  "sleep_seconds": 0.82,
-  "seconds": 18.73,
+  "sleeps": 372,
+  "sleep_seconds": 0.81,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 2,
+   "git": 80,
+   "wizard": 0,
+   "other": 288
+  },
+  "seconds": 17.71,
   "tests": 17,
   "failed": 0,
+  "cpu_seconds": 12.24,
   "stage": "integration"
  },
  "codex:tests.test_project_orchestration": {
@@ -1578,9 +2862,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.26,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.25,
   "tests": 20,
   "failed": 0,
+  "cpu_seconds": 0.28,
   "stage": "integration"
  },
  "codex:tests.test_project_qa_check_receipts": {
@@ -1588,11 +2881,20 @@
   "git": 110,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 508,
-  "sleep_seconds": 1.04,
-  "seconds": 24.27,
+  "sleeps": 502,
+  "sleep_seconds": 1.01,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 110,
+   "wizard": 0,
+   "other": 396
+  },
+  "seconds": 22.96,
   "tests": 22,
   "failed": 0,
+  "cpu_seconds": 15.87,
   "stage": "integration"
  },
  "codex:tests.test_project_qa_commit": {
@@ -1600,11 +2902,20 @@
   "git": 140,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 653,
-  "sleep_seconds": 1.39,
-  "seconds": 33.48,
+  "sleeps": 643,
+  "sleep_seconds": 1.32,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 2,
+   "git": 140,
+   "wizard": 0,
+   "other": 504
+  },
+  "seconds": 31.79,
   "tests": 29,
   "failed": 0,
+  "cpu_seconds": 22.38,
   "stage": "integration"
  },
  "codex:tests.test_project_release_ack": {
@@ -1614,21 +2925,39 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.27,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.25,
   "tests": 2,
   "failed": 0,
+  "cpu_seconds": 0.28,
   "stage": "unit"
  },
  "codex:tests.test_project_request_queue": {
-  "processes": 78,
+  "processes": 77,
   "git": 45,
   "wizard": 0,
   "sockets": 2,
-  "sleeps": 145,
-  "sleep_seconds": 0.85,
-  "seconds": 3.13,
+  "sleeps": 125,
+  "sleep_seconds": 0.74,
+  "starts": {
+   "product": 3,
+   "fixture": 0,
+   "python": 0,
+   "git": 45,
+   "wizard": 0,
+   "other": 29
+  },
+  "seconds": 2.93,
   "tests": 11,
   "failed": 0,
+  "cpu_seconds": 3.09,
   "stage": "integration"
  },
  "codex:tests.test_project_result_usage": {
@@ -1636,11 +2965,20 @@
   "git": 60,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 194,
-  "sleep_seconds": 0.39,
-  "seconds": 10.94,
+  "sleeps": 190,
+  "sleep_seconds": 0.38,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 60,
+   "wizard": 0,
+   "other": 168
+  },
+  "seconds": 10.34,
   "tests": 12,
   "failed": 0,
+  "cpu_seconds": 6.72,
   "stage": "integration"
  },
  "codex:tests.test_project_results": {
@@ -1650,9 +2988,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 1.07,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 7,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.98,
   "tests": 46,
   "failed": 0,
+  "cpu_seconds": 0.98,
   "stage": "integration"
  },
  "codex:tests.test_project_runtime": {
@@ -1662,9 +3009,18 @@
   "sockets": 0,
   "sleeps": 3,
   "sleep_seconds": 0.01,
-  "seconds": 0.15,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.14,
   "tests": 4,
   "failed": 0,
+  "cpu_seconds": 0.16,
   "stage": "integration"
  },
  "codex:tests.test_project_service": {
@@ -1674,21 +3030,39 @@
   "sockets": 8,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.61,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 2,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.57,
   "tests": 11,
   "failed": 0,
+  "cpu_seconds": 0.39,
   "stage": "integration"
  },
  "codex:tests.test_project_service_startup": {
-  "processes": 41,
+  "processes": 43,
   "git": 0,
   "wizard": 0,
   "sockets": 7,
-  "sleeps": 291,
-  "sleep_seconds": 1.21,
-  "seconds": 7.03,
+  "sleeps": 264,
+  "sleep_seconds": 1.2,
+  "starts": {
+   "product": 7,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 36
+  },
+  "seconds": 6.97,
   "tests": 3,
   "failed": 0,
+  "cpu_seconds": 2.14,
   "stage": "integration"
  },
  "codex:tests.test_project_worker_result": {
@@ -1696,11 +3070,20 @@
   "git": 80,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 258,
-  "sleep_seconds": 0.51,
-  "seconds": 15.0,
+  "sleeps": 253,
+  "sleep_seconds": 0.5,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 80,
+   "wizard": 0,
+   "other": 224
+  },
+  "seconds": 13.78,
   "tests": 16,
   "failed": 0,
+  "cpu_seconds": 8.99,
   "stage": "integration"
  },
  "codex:tests.test_provider_restrictions": {
@@ -1710,9 +3093,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.14,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.13,
   "tests": 4,
   "failed": 0,
+  "cpu_seconds": 0.16,
   "stage": "integration"
  },
  "codex:tests.test_providers": {
@@ -1720,11 +3112,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 1219,
-  "sleep_seconds": 2.69,
-  "seconds": 46.59,
+  "sleeps": 1160,
+  "sleep_seconds": 2.44,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 5,
+   "git": 0,
+   "wizard": 0,
+   "other": 951
+  },
+  "seconds": 45.91,
   "tests": 105,
   "failed": 0,
+  "cpu_seconds": 20.17,
   "stage": "integration"
  },
  "codex:tests.test_qa_tree_scan": {
@@ -1734,9 +3135,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.08,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.06,
   "tests": 14,
   "failed": 0,
+  "cpu_seconds": 0.1,
   "stage": "unit"
  },
  "codex:tests.test_rate_limit_contracts": {
@@ -1746,9 +3156,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.02,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.03,
   "tests": 7,
   "failed": 0,
+  "cpu_seconds": 0.06,
   "stage": "unit"
  },
  "codex:tests.test_required_host_open": {
@@ -1756,11 +3175,20 @@
   "git": 70,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 320,
-  "sleep_seconds": 0.64,
-  "seconds": 12.95,
+  "sleeps": 297,
+  "sleep_seconds": 0.58,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 70,
+   "wizard": 0,
+   "other": 190
+  },
+  "seconds": 12.05,
   "tests": 14,
   "failed": 0,
+  "cpu_seconds": 7.68,
   "stage": "integration"
  },
  "codex:tests.test_result_denial_lane": {
@@ -1768,11 +3196,20 @@
   "git": 10,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 31,
+  "sleeps": 30,
   "sleep_seconds": 0.06,
-  "seconds": 2.01,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 10,
+   "wizard": 0,
+   "other": 26
+  },
+  "seconds": 1.86,
   "tests": 2,
   "failed": 0,
+  "cpu_seconds": 1.29,
   "stage": "integration"
  },
  "codex:tests.test_result_diagnostics": {
@@ -1782,9 +3219,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.11,
   "tests": 18,
   "failed": 0,
+  "cpu_seconds": 0.14,
   "stage": "unit"
  },
  "codex:tests.test_result_lease_lane": {
@@ -1792,11 +3238,20 @@
   "git": 25,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 84,
-  "sleep_seconds": 0.46,
-  "seconds": 2.16,
+  "sleeps": 64,
+  "sleep_seconds": 0.36,
+  "starts": {
+   "product": 1,
+   "fixture": 0,
+   "python": 0,
+   "git": 25,
+   "wizard": 0,
+   "other": 12
+  },
+  "seconds": 1.89,
   "tests": 5,
   "failed": 0,
+  "cpu_seconds": 1.81,
   "stage": "integration"
  },
  "codex:tests.test_result_leases": {
@@ -1804,23 +3259,41 @@
   "git": 5,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 11,
+  "sleeps": 12,
   "sleep_seconds": 0.02,
-  "seconds": 1.76,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 2,
+   "git": 5,
+   "wizard": 0,
+   "other": 11
+  },
+  "seconds": 1.59,
   "tests": 21,
   "failed": 0,
+  "cpu_seconds": 1.32,
   "stage": "integration"
  },
  "codex:tests.test_result_persistence": {
-  "processes": 228,
+  "processes": 227,
   "git": 90,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 945,
-  "sleep_seconds": 5.68,
-  "seconds": 10.85,
+  "sleeps": 776,
+  "sleep_seconds": 4.83,
+  "starts": {
+   "product": 15,
+   "fixture": 0,
+   "python": 0,
+   "git": 90,
+   "wizard": 0,
+   "other": 122
+  },
+  "seconds": 9.69,
   "tests": 18,
   "failed": 0,
+  "cpu_seconds": 9.52,
   "stage": "integration"
  },
  "codex:tests.test_result_publication": {
@@ -1830,9 +3303,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.54,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 3,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.45,
   "tests": 14,
   "failed": 0,
+  "cpu_seconds": 0.47,
   "stage": "integration"
  },
  "codex:tests.test_result_read_api": {
@@ -1842,9 +3324,18 @@
   "sockets": 15,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 1.58,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 5,
+   "git": 0,
+   "wizard": 0,
+   "other": 1
+  },
+  "seconds": 1.56,
   "tests": 31,
   "failed": 0,
+  "cpu_seconds": 1.15,
   "stage": "integration"
  },
  "codex:tests.test_routing": {
@@ -1854,9 +3345,18 @@
   "sockets": 0,
   "sleeps": 3,
   "sleep_seconds": 0.0,
-  "seconds": 2.67,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 227,
+   "wizard": 0,
+   "other": 63
+  },
+  "seconds": 2.57,
   "tests": 58,
   "failed": 0,
+  "cpu_seconds": 2.27,
   "stage": "integration"
  },
  "codex:tests.test_run_driver_retries": {
@@ -1866,9 +3366,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.13,
   "tests": 11,
   "failed": 0,
+  "cpu_seconds": 0.17,
   "stage": "unit"
  },
  "codex:tests.test_run_provenance": {
@@ -1876,11 +3385,20 @@
   "git": 95,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 307,
-  "sleep_seconds": 0.61,
-  "seconds": 17.03,
+  "sleeps": 301,
+  "sleep_seconds": 0.59,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 95,
+   "wizard": 0,
+   "other": 266
+  },
+  "seconds": 15.66,
   "tests": 19,
   "failed": 0,
+  "cpu_seconds": 9.93,
   "stage": "integration"
  },
  "codex:tests.test_runtime_release": {
@@ -1890,9 +3408,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.09,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.08,
   "tests": 3,
   "failed": 0,
+  "cpu_seconds": 0.12,
   "stage": "unit"
  },
  "codex:tests.test_service_host": {
@@ -1900,11 +3427,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 73,
-  "sleeps": 63,
-  "sleep_seconds": 0.37,
-  "seconds": 8.14,
+  "sleeps": 53,
+  "sleep_seconds": 0.21,
+  "starts": {
+   "product": 0,
+   "fixture": 29,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 7.71,
   "tests": 14,
   "failed": 0,
+  "cpu_seconds": 6.04,
   "stage": "integration"
  },
  "codex:tests.test_service_ownership_audit": {
@@ -1914,9 +3450,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 3.05,
+  "starts": {
+   "product": 2,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 2.93,
   "tests": 34,
   "failed": 0,
+  "cpu_seconds": 2.95,
   "stage": "integration"
  },
  "codex:tests.test_service_protocol": {
@@ -1926,9 +3471,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.03,
   "tests": 12,
   "failed": 0,
+  "cpu_seconds": 0.06,
   "stage": "unit"
  },
  "codex:tests.test_service_queue": {
@@ -1938,9 +3492,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.02,
   "tests": 7,
   "failed": 0,
+  "cpu_seconds": 0.06,
   "stage": "unit"
  },
  "codex:tests.test_service_transport": {
@@ -1948,11 +3511,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 2,
-  "sleeps": 6,
-  "sleep_seconds": 0.12,
-  "seconds": 0.28,
+  "sleeps": 5,
+  "sleep_seconds": 0.1,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.25,
   "tests": 10,
   "failed": 0,
+  "cpu_seconds": 0.16,
   "stage": "integration"
  },
  "codex:tests.test_session_guard": {
@@ -1962,9 +3534,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 4.56,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 3.89,
   "tests": 26,
   "failed": 0,
+  "cpu_seconds": 0.33,
   "stage": "unit"
  },
  "codex:tests.test_signature_execution": {
@@ -1972,11 +3553,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 12,
-  "sleep_seconds": 0.03,
-  "seconds": 1.56,
+  "sleeps": 10,
+  "sleep_seconds": 0.02,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 12
+  },
+  "seconds": 1.48,
   "tests": 3,
   "failed": 0,
+  "cpu_seconds": 0.55,
   "stage": "integration"
  },
  "codex:tests.test_signature_input_wire": {
@@ -1986,9 +3576,18 @@
   "sockets": 0,
   "sleeps": 3,
   "sleep_seconds": 0.01,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 3
+  },
   "seconds": 0.29,
   "tests": 11,
   "failed": 0,
+  "cpu_seconds": 0.32,
   "stage": "integration"
  },
  "codex:tests.test_signature_inputs": {
@@ -1996,11 +3595,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 105,
-  "sleep_seconds": 0.25,
-  "seconds": 3.78,
+  "sleeps": 101,
+  "sleep_seconds": 0.23,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 103
+  },
+  "seconds": 3.62,
   "tests": 34,
   "failed": 0,
+  "cpu_seconds": 3.21,
   "stage": "integration"
  },
  "codex:tests.test_signature_job_intake": {
@@ -2008,11 +3616,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 60,
+  "sleeps": 59,
   "sleep_seconds": 0.14,
-  "seconds": 1.9,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 60
+  },
+  "seconds": 1.84,
   "tests": 19,
   "failed": 0,
+  "cpu_seconds": 1.7,
   "stage": "integration"
  },
  "codex:tests.test_signature_payloads": {
@@ -2022,9 +3639,18 @@
   "sockets": 0,
   "sleeps": 6,
   "sleep_seconds": 0.01,
-  "seconds": 0.36,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 4
+  },
+  "seconds": 0.38,
   "tests": 12,
   "failed": 0,
+  "cpu_seconds": 0.4,
   "stage": "integration"
  },
  "codex:tests.test_signature_process": {
@@ -2034,9 +3660,18 @@
   "sockets": 0,
   "sleeps": 27,
   "sleep_seconds": 0.06,
-  "seconds": 1.97,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 38
+  },
+  "seconds": 1.93,
   "tests": 9,
   "failed": 0,
+  "cpu_seconds": 1.83,
   "stage": "integration"
  },
  "codex:tests.test_signature_worker_pool": {
@@ -2044,11 +3679,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 289,
-  "sleep_seconds": 0.59,
-  "seconds": 7.07,
+  "sleeps": 252,
+  "sleep_seconds": 0.51,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 13,
+   "git": 0,
+   "wizard": 0,
+   "other": 38
+  },
+  "seconds": 6.58,
   "tests": 11,
   "failed": 0,
+  "cpu_seconds": 6.33,
   "stage": "integration"
  },
  "codex:tests.test_sql_read_budget": {
@@ -2058,21 +3702,39 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.07,
   "tests": 34,
   "failed": 0,
+  "cpu_seconds": 0.1,
   "stage": "unit"
  },
  "codex:tests.test_state_location": {
   "processes": 31,
   "git": 13,
   "wizard": 0,
-  "sockets": 254,
-  "sleeps": 192,
-  "sleep_seconds": 3.84,
-  "seconds": 6.34,
+  "sockets": 236,
+  "sleeps": 174,
+  "sleep_seconds": 3.48,
+  "starts": {
+   "product": 4,
+   "fixture": 0,
+   "python": 0,
+   "git": 13,
+   "wizard": 0,
+   "other": 14
+  },
+  "seconds": 6.05,
   "tests": 22,
   "failed": 0,
+  "cpu_seconds": 1.7,
   "stage": "integration"
  },
  "codex:tests.test_status_write_frequency": {
@@ -2080,11 +3742,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 291,
-  "sleep_seconds": 2.58,
-  "seconds": 2.94,
+  "sleeps": 257,
+  "sleep_seconds": 2.32,
+  "starts": {
+   "product": 3,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 18
+  },
+  "seconds": 2.85,
   "tests": 3,
   "failed": 0,
+  "cpu_seconds": 1.45,
   "stage": "integration"
  },
  "codex:tests.test_supervision": {
@@ -2094,9 +3765,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.02,
   "tests": 6,
   "failed": 0,
+  "cpu_seconds": 0.05,
   "stage": "unit"
  },
  "codex:tests.test_synchronized_races": {
@@ -2104,23 +3784,41 @@
   "git": 35,
   "wizard": 0,
   "sockets": 111,
-  "sleeps": 1501,
-  "sleep_seconds": 4.28,
-  "seconds": 24.38,
+  "sleeps": 1412,
+  "sleep_seconds": 3.92,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 122,
+   "git": 35,
+   "wizard": 0,
+   "other": 703
+  },
+  "seconds": 23.7,
   "tests": 13,
   "failed": 0,
+  "cpu_seconds": 21.25,
   "stage": "integration"
  },
  "codex:tests.test_trial_run_driver_bugs": {
-  "processes": 1779,
+  "processes": 1791,
   "git": 739,
   "wizard": 0,
-  "sockets": 846,
-  "sleeps": 10156,
-  "sleep_seconds": 32.95,
-  "seconds": 50.26,
+  "sockets": 824,
+  "sleeps": 8903,
+  "sleep_seconds": 29.77,
+  "starts": {
+   "product": 25,
+   "fixture": 0,
+   "python": 0,
+   "git": 739,
+   "wizard": 0,
+   "other": 1027
+  },
+  "seconds": 49.33,
   "tests": 20,
   "failed": 0,
+  "cpu_seconds": 37.37,
   "stage": "integration"
  },
  "codex:tests.test_validation": {
@@ -2128,11 +3826,20 @@
   "git": 43,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 1,
+  "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 2.98,
+  "starts": {
+   "product": 1,
+   "fixture": 0,
+   "python": 1,
+   "git": 43,
+   "wizard": 0,
+   "other": 20
+  },
+  "seconds": 2.63,
   "tests": 13,
   "failed": 0,
+  "cpu_seconds": 2.58,
   "stage": "integration"
  },
  "codex:tests.test_validation_cli_client_boundary": {
@@ -2142,9 +3849,18 @@
   "sockets": 3,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.59,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 2,
+   "git": 2,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.57,
   "tests": 2,
   "failed": 0,
+  "cpu_seconds": 0.59,
   "stage": "integration"
  },
  "codex:tests.test_watchdog_lifetime": {
@@ -2152,11 +3868,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 21,
-  "sleep_seconds": 0.63,
-  "seconds": 1.18,
+  "sleeps": 17,
+  "sleep_seconds": 0.56,
+  "starts": {
+   "product": 2,
+   "fixture": 0,
+   "python": 2,
+   "git": 0,
+   "wizard": 0,
+   "other": 9
+  },
+  "seconds": 1.11,
   "tests": 10,
   "failed": 0,
+  "cpu_seconds": 0.62,
   "stage": "integration"
  },
  "root:test_attest": {
@@ -2164,11 +3889,20 @@
   "git": 0,
   "wizard": 0,
   "sockets": 0,
-  "sleeps": 35,
-  "sleep_seconds": 6.96,
-  "seconds": 48.3,
+  "sleeps": 31,
+  "sleep_seconds": 6.91,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 579
+  },
+  "seconds": 17.97,
   "tests": 129,
   "failed": 0,
+  "cpu_seconds": 8.52,
   "stage": "integration"
  },
  "root:test_check_identifiers": {
@@ -2178,34 +3912,208 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
   "seconds": 0.02,
   "tests": 12,
   "failed": 0,
+  "cpu_seconds": 0.05,
+  "stage": "unit"
+ },
+ "root:test_ci_stages": {
+  "processes": 0,
+  "git": 0,
+  "wizard": 0,
+  "sockets": 0,
+  "sleeps": 0,
+  "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.01,
+  "tests": 4,
+  "failed": 0,
+  "cpu_seconds": 0.05,
+  "stage": "unit"
+ },
+ "root:test_e2e_requirements": {
+  "processes": 0,
+  "git": 0,
+  "wizard": 0,
+  "sockets": 0,
+  "sleeps": 0,
+  "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.02,
+  "tests": 4,
+  "failed": 48,
+  "cpu_seconds": 0.05,
+  "stage": "unit"
+ },
+ "root:test_e2e_strictness": {
+  "processes": 0,
+  "git": 0,
+  "wizard": 0,
+  "sockets": 0,
+  "sleeps": 0,
+  "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.04,
+  "tests": 6,
+  "failed": 0,
+  "cpu_seconds": 0.08,
   "stage": "unit"
  },
  "root:test_install": {
-  "processes": 2865,
-  "git": 1336,
+  "processes": 2873,
+  "git": 1340,
   "wizard": 82,
   "sockets": 0,
-  "sleeps": 10,
+  "sleeps": 5,
   "sleep_seconds": 0.01,
-  "seconds": 65.3,
+  "starts": {
+   "product": 91,
+   "fixture": 0,
+   "python": 2,
+   "git": 1340,
+   "wizard": 82,
+   "other": 1358
+  },
+  "seconds": 63.07,
   "tests": 46,
   "failed": 0,
+  "cpu_seconds": 60.54,
   "stage": "e2e"
  },
+ "root:test_measure_test_behaviour": {
+  "processes": 0,
+  "git": 0,
+  "wizard": 0,
+  "sockets": 0,
+  "sleeps": 0,
+  "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.02,
+  "tests": 10,
+  "failed": 0,
+  "cpu_seconds": 0.06,
+  "stage": "unit"
+ },
+ "root:test_measure_test_behaviour_probe": {
+  "processes": 1,
+  "git": 1,
+  "wizard": 1,
+  "sockets": 0,
+  "sleeps": 0,
+  "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 1,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.2,
+  "tests": 1,
+  "failed": 0,
+  "cpu_seconds": 0.23,
+  "stage": "e2e"
+ },
+ "root:test_setup_progress": {
+  "processes": 22,
+  "git": 0,
+  "wizard": 0,
+  "sockets": 0,
+  "sleeps": 0,
+  "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 0,
+   "git": 0,
+   "wizard": 0,
+   "other": 22
+  },
+  "seconds": 33.64,
+  "tests": 16,
+  "failed": 0,
+  "cpu_seconds": 3.24,
+  "stage": "integration"
+ },
  "root:test_setup_sh": {
-  "processes": 570,
-  "git": 220,
+  "processes": 582,
+  "git": 226,
   "wizard": 157,
   "sockets": 0,
-  "sleeps": 1240,
-  "sleep_seconds": 62.1,
-  "seconds": 488.12,
-  "tests": 100,
+  "sleeps": 28,
+  "sleep_seconds": 0.46,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 68,
+   "git": 222,
+   "wizard": 157,
+   "other": 135
+  },
+  "seconds": 441.63,
+  "tests": 102,
   "failed": 0,
+  "cpu_seconds": 350.72,
   "stage": "e2e"
+ },
+ "root:test_test_stages": {
+  "processes": 7,
+  "git": 0,
+  "wizard": 0,
+  "sockets": 0,
+  "sleeps": 0,
+  "sleep_seconds": 0.0,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 7,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 1.68,
+  "tests": 3,
+  "failed": 0,
+  "cpu_seconds": 1.69,
+  "stage": "integration"
  },
  "root:test_wizard_clock": {
   "processes": 3,
@@ -2214,9 +4122,18 @@
   "sockets": 0,
   "sleeps": 0,
   "sleep_seconds": 0.0,
-  "seconds": 0.3,
+  "starts": {
+   "product": 0,
+   "fixture": 0,
+   "python": 3,
+   "git": 0,
+   "wizard": 0,
+   "other": 0
+  },
+  "seconds": 0.27,
   "tests": 1,
   "failed": 0,
+  "cpu_seconds": 0.3,
   "stage": "integration"
  }
 }
