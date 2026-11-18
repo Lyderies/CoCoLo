@@ -58,6 +58,9 @@ _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outco
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
 MAX_DELIVERY_PAGE_BYTES = 16_384
+# The account's crash grace (active_run_capacity.CRASHED_CLAIM_GRACE_MS): after a result's hard deadline
+# plus this, the account refuses its binding, so nothing can present that attempt again (0.3.4 R1c).
+RESULT_PURGE_GRACE_MS = 3_600_000
 MAX_BINDING_BYTES = 4096
 MAX_HISTORY_ROW_BYTES = 2 * MAX_RECORD_BYTES
 MAX_LEARNING_PAGE_BYTES = 262_144
@@ -874,14 +877,17 @@ class ProjectHistory:
         # A result not yet written may still need the largest body; a written one holds only
         # the bytes it has (kept for its verifier). Charging every kept result the largest
         # body let a project hold only four results at a time.
+        # Only live entries count (0.3.4 R1): an expired result keeps its tombstone, so its attempt can
+        # never be armed again, but no longer takes a place. In 0.8.29 every row ever written counted,
+        # so a project could record only max_entries results in its whole life.
         counts = self._connection.execute(
-            "SELECT COUNT(*),"
+            "SELECT SUM(CASE WHEN state!='expired' THEN 1 ELSE 0 END),"
             "SUM(CASE WHEN state='reserved' OR (state!='expired' AND body_size IS NULL) THEN 1 ELSE 0 END),"
             "SUM(CASE WHEN state IN ('committed','retiring') AND body_size IS NOT NULL "
             "THEN MIN(MAX(body_size,0),?) ELSE 0 END) "
             "FROM result_reservations WHERE project_id=?", (MAX_RESULT_BODY_BYTES, self.project_id),
         ).fetchone()
-        entries, charged, written = counts[0], counts[1] or 0, counts[2] or 0
+        entries, charged, written = counts[0] or 0, counts[1] or 0, counts[2] or 0
         # Verify each bounded lease before trusting mutable state to exclude a
         # tombstone or bound row. SQL labels alone cannot free reserved space.
         positions = self._connection.execute("SELECT rowid FROM result_leases WHERE project_id=? LIMIT ?",
@@ -891,9 +897,9 @@ class ProjectHistory:
         for position in positions:
             row = self._connection.execute("SELECT * FROM result_leases WHERE rowid=?", (position[0],)).fetchone()
             value = self._lease(row)
-            if value.state != "bound":
+            if value.state not in {"bound", "expired"}:
                 entries += 1
-                charged += value.state != "expired"
+                charged += 1
         if (entries >= self._result_capacity.max_entries
                 or (charged + 1) * MAX_RESULT_BODY_BYTES + written > self._result_capacity.max_reserved_bytes):
             raise HistoryError("history_result_capacity")
@@ -1868,11 +1874,75 @@ class ProjectHistory:
             except (sqlite3.Error, OSError):
                 if failure is None:
                     failure = "history_unavailable"
+        try:
+            self._purge_finished_results(now, limit)
+        except HistoryError as exc:
+            if failure is None:
+                failure = exc.reason_code
+        except sqlite3.Error:
+            if failure is None:
+                failure = "history_unavailable"
         if failure is not None:
             # Preserve failure visibility, without chaining private file/SQL
             # details, after other selected rows have had their cleanup turn.
             raise HistoryError(failure)
         return retired
+
+    def _purge_finished_results(self, now: int, limit: int) -> int:
+        """Remove finished result rows once nothing can present their attempt again (0.3.4 R1c).
+
+        A retired reservation and its lease go together, with the rows that refer to them, once the
+        reservation is expired, its hard deadline plus the crash grace has passed (the account then
+        refuses that binding), and its orchestration is closed. A lease that never got a reservation
+        goes on the same terms, from its reserved-until time. The sealed values decide, never the
+        state column alone. Bounded per call; anything not yet provable stays for a later call.
+        """
+        owner = self._orchestration_owner()
+        cutoff = now - RESULT_PURGE_GRACE_MS
+        purged = 0
+        for (position,) in self._connection.execute(
+                "SELECT rowid FROM result_reservations WHERE project_id=? AND state='expired' "
+                "AND hard_deadline_at_ms<? ORDER BY rowid LIMIT ?", (self.project_id, cutoff, limit)).fetchall():
+            row = self._connection.execute("SELECT * FROM result_reservations WHERE project_id=? AND rowid=?",
+                                           (self.project_id, position)).fetchone()
+            value = self._reservation(row)
+            if value.state != "expired" or not value.hard_deadline_at_ms < cutoff or not owner.closed_for(value.binding):
+                continue
+            lease_row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND claim_id=?",
+                                                 (self.project_id, value.binding.claim_id)).fetchone()
+            if lease_row is not None and self._lease(lease_row).state not in {"bound", "expired"}:
+                continue
+            with self._transaction():
+                self._delete_attempt_rows(value.binding.run_handle, value.binding.attempt, value.binding.claim_id)
+            purged += 1
+        for (position,) in self._connection.execute(
+                "SELECT rowid FROM result_leases l WHERE project_id=? AND state='expired' AND reserved_until_ms<? "
+                "AND NOT EXISTS(SELECT 1 FROM result_reservations r WHERE r.project_id=l.project_id "
+                "AND r.claim_id=l.claim_id) ORDER BY rowid LIMIT ?", (self.project_id, cutoff, limit)).fetchall():
+            row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND rowid=?",
+                                           (self.project_id, position)).fetchone()
+            lease = self._lease(row)
+            if lease.state != "expired" or not lease.reserved_until_ms < cutoff or not owner.closed_for(lease.binding):
+                continue
+            with self._transaction():
+                self._delete_attempt_rows(lease.binding.run_handle, lease.binding.attempt, None)
+            purged += 1
+        return purged
+
+    def _delete_attempt_rows(self, run_handle: str, attempt: int, claim_id: str | None) -> None:
+        """One finished attempt's rows, children first (foreign keys are on)."""
+        attempt_key = (self.project_id, run_handle, attempt)
+        for table in ("project_cleanup_receipts", "project_cleanup_reservations", "project_host_opens"):
+            self._connection.execute(f"DELETE FROM {table} WHERE project_id=? AND run_handle=? AND attempt=?",
+                                     attempt_key)
+        if claim_id is not None:
+            self._connection.execute("DELETE FROM project_execution_consumptions WHERE project_id=? AND claim_id=?",
+                                     (self.project_id, claim_id))
+        self._connection.execute("DELETE FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                                 attempt_key)
+        if claim_id is not None:
+            self._connection.execute("DELETE FROM result_reservations WHERE project_id=? AND claim_id=?",
+                                     (self.project_id, claim_id))
 
     @_operation
     def admit_host_result(self, reference: HostResultReference, *, assignment: dict, task: dict,

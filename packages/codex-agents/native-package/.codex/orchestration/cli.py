@@ -3862,7 +3862,11 @@ def main() -> int:
         })
         return 2
     except DispatchError as exc:
-        _print({"ready": False, "error": "dispatch unavailable", "reason_code": exc.reason_code})
+        error = "dispatch unavailable"
+        if exc.reason_code == "result_capacity_full":
+            error = ("the project's result store is full: close finished orchestrations "
+                     "(learning-close-orchestration), or wait for their results to pass their retention")
+        _print({"ready": False, "error": error, "reason_code": exc.reason_code})
         return 2
     except RuntimeOpenError as exc:
         _print({'ready': False, 'error': 'host open unavailable', 'reason_code': exc.reason_code})
