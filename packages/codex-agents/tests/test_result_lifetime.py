@@ -296,8 +296,12 @@ class CollectorSweepTests(DriverHarness):
         self.sweeps = []
         original = learning_store.LearningLedger.sweep_account_retention
 
+        self.later = None
+
         def recorded(ledger, **options):
             self.sweeps.append(options)
+            if self.later is not None:
+                options['now_ms'] = self.later  # The loop's own call, with the clock moved on.
             return original(ledger, **options)
         for patcher in (mock.patch.object(learning_store, 'WORKER_RESULT_SWEEP_SECONDS', 0.2),
                         mock.patch.object(learning_store.LearningLedger, 'sweep_account_retention', recorded)):
@@ -309,6 +313,18 @@ class CollectorSweepTests(DriverHarness):
         """Review 034-security: the earlier test only searched the source. The collector's own loop
         calls the account retention sweep, with no command asking for it."""
         self.wait_for(lambda: len(self.sweeps) >= 2, seconds=30)
+
+    def test_034_R6_the_running_collector_removes_a_finished_observation(self):
+        """Review 034-security-3: the loop's sweep is shown to remove a row, not only to be called."""
+        import time
+
+        def origins():
+            return self.collector_ledger._connection.execute(
+                'SELECT COUNT(*) FROM account_observation_origins').fetchone()[0]
+        self.cli('provider-observe', '--provider', 'codex')
+        self.assertGreaterEqual(origins(), 1)
+        self.later = time.time_ns() // 1_000_000 + 2 * 86_400_000  # Past its deadline and the replay day.
+        self.wait_for(lambda: origins() == 0, seconds=30)
 
 
 if __name__ == '__main__':
