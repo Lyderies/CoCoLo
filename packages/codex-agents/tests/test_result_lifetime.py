@@ -74,5 +74,18 @@ class ResultLifetimeTests(DriverHarness):
         self.assertEqual(0, capacity['operational_qa']['live'])
 
 
+    def test_034_R9_status_shows_each_account_limit_with_its_live_count(self):
+        """R9, account part: observations and unreleased cleanup receipts, with their limits."""
+        context, route_path, _, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        capacity = self.cli('learning-status')['account_capacity']
+        self.assertEqual({'observations', 'cleanup_receipts'}, set(capacity))
+        for name in capacity:
+            self.assertEqual(4096, capacity[name]['limit'], name)
+            self.assertIs(int, type(capacity[name]['live']), name)
+
+
 if __name__ == '__main__':
     unittest.main()
