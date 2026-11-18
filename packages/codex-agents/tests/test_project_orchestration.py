@@ -202,6 +202,39 @@ class ProjectOrchestrationTests(unittest.TestCase):
             self.assertIsNotNone(ended['ended_at_ms'])
         self.assertEqual(0, owner.end_earlier(updated, 10))  # Already ended: once only.
 
+    def test_034_R10_a_used_request_id_never_stops_the_end(self):
+        """Review 034-r10: the end used the predictable request id 'end-earlier-<handle>'; one already
+        used by an old client made every attempt conflict, so the orchestration stayed open for good."""
+        from dataclasses import replace
+        opened = self.opened()
+        handle = opened['orchestration_handle']
+        self.call('checkpoint', self.target(opened, goal_tokens_used=0, goal_time_used_seconds=0),
+                  'end-earlier-' + handle)
+        owner = self.store._orchestration_owner()
+        self.assertEqual(1, owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 10))
+        self.assertEqual('interrupted', owner._current(self.scope, handle)['snapshot']['status'])
+
+    def test_034_R10_each_pass_tries_at_most_its_limit(self):
+        """Review 034-r10: only successful ends counted, so orchestrations kept open by a run not yet
+        over were all retried on every pass."""
+        from dataclasses import replace
+        from unittest import mock
+        from codex_agents import orchestration_store
+        self.store._orchestration_limits = OrchestrationLimits(4, 12)
+        for identity in ('a', 'b', 'c'):
+            self.call('open', identity='open-' + identity)
+        tries = []
+
+        def pending(owner, request, **options):
+            tries.append(request.payload['orchestration_handle'])
+            raise HistoryError('history_orchestration_pending')
+        owner = self.store._orchestration_owner()
+        with mock.patch.object(orchestration_store.OrchestrationOwner, 'apply', pending):
+            for _ in range(3):
+                self.assertEqual(0, owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 1))
+        self.assertEqual(3, len(tries))
+        self.assertEqual(3, len(set(tries)))  # Each pass went on to the next one.
+
     def test_034_R6_a_closed_orchestration_is_removed_after_its_retention(self):
         from codex_agents.orchestration_store import ORCHESTRATION_RETENTION_MS
         first = self.opened()
