@@ -429,15 +429,19 @@ class ProjectResultTests(unittest.TestCase):
             with self.assertRaisesRegex(HistoryError, "history_unavailable"):
                 self.store.retire_result(binding())
         self.assertEqual("retiring", self.store._connection.execute("SELECT state FROM result_reservations").fetchone()[0])
-        with self.assertRaisesRegex(HistoryError, "history_result_capacity"):
-            self.reserve(2)
+        # Corrected for 0.3.4 R8: a reservation now runs the cleanup when the store looks full, so the
+        # delete must still fail during it for the charge to be held, as the test intends.
+        with mock.patch.object(project_history.os, "unlink", side_effect=PermissionError("CANARY-delete")):
+            with self.assertRaisesRegex(HistoryError, "history_result_capacity"):
+                self.reserve(2)
         self.assertEqual(1, self.store.expire_results())
         self.reserve(2)
         with self.assertRaisesRegex(HistoryError, "history_result_expired"):
-            self.reserve()
+            self.reserve()  # The retired attempt's tombstone still refuses it.
         self.store.retire_result(binding(2))
-        with self.assertRaisesRegex(HistoryError, "history_result_capacity"):
-            self.reserve(3)  # Retained replay tombstones are never evicted.
+        # Corrected for 0.3.4 R1 (owner, 2026-11-18): retired tombstones no longer take entries, so the
+        # third fits. 0.8.29 refused it here ("retained replay tombstones are never evicted").
+        self.reserve(3)
 
     def test_expired_orchestration_body_is_deleted_but_terminal_outbox_and_replay_survive(self):
         self.reserve()

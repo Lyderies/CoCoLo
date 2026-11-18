@@ -14,7 +14,7 @@ from .orchestration_api import (
     checked_orchestration_view, decode_orchestration_request, encode_orchestration_request,
     orchestration_request_digest, HOST_CLIENT_VERSIONS, ORCHESTRATION_TERMINAL_STATES, SCOPE_FIELDS,
 )
-from .project_history import ProjectHistory, _operation
+from .project_history import MAX_LEASE_ROWS, ProjectHistory, _operation
 
 MAX_JOURNAL_EVENTS = 65_536
 # A closed orchestration is kept this long for reports, then removed with its checkpoints (0.3.4 R6):
@@ -186,12 +186,13 @@ class OrchestrationOwner:
         # Only fixed owner-selected tables, bounded scalar rows before any blob.
         if table not in {'result_leases', 'result_reservations', 'project_execution_consumptions'}:
             raise HistoryError('history_invalid_input')
-        capacity = self._history._result_capacity
-        if capacity is None:
+        if self._history._result_capacity is None:
             raise HistoryError('history_orchestration_unavailable')
+        # This bounds the verification work, not results (0.3.4 R1e): with the 64-entry limit here, a
+        # store holding more than 64 rows, finished ones included, could close no orchestration.
         positions = self._db.execute('SELECT rowid FROM ' + table + ' WHERE project_id=? LIMIT ?',
-                                     (self._history.project_id, capacity.max_entries + 1)).fetchall()
-        if len(positions) > capacity.max_entries:
+                                     (self._history.project_id, MAX_LEASE_ROWS + 1)).fetchall()
+        if len(positions) > MAX_LEASE_ROWS:
             raise HistoryError('history_orchestration_unavailable')
         return positions
 

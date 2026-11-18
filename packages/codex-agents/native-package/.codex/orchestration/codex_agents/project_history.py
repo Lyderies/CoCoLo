@@ -61,6 +61,10 @@ MAX_DELIVERY_PAGE_BYTES = 16_384
 # The account's crash grace (active_run_capacity.CRASHED_CLAIM_GRACE_MS): after a result's hard deadline
 # plus this, the account refuses its binding, so nothing can present that attempt again (0.3.4 R1c).
 RESULT_PURGE_GRACE_MS = 3_600_000
+# How many lease rows, live or finished, a reservation verifies at most (0.3.4 R1d).
+MAX_LEASE_ROWS = 4_096
+# How many results one reservation may retire before it is refused for capacity (0.3.4 R8).
+RECLAIM_BATCH = 16
 MAX_BINDING_BYTES = 4096
 MAX_HISTORY_ROW_BYTES = 2 * MAX_RECORD_BYTES
 MAX_LEARNING_PAGE_BYTES = 262_144
@@ -873,6 +877,21 @@ class ProjectHistory:
              value.binding.run_handle, value.binding.attempt),
         )
 
+    def _reclaim_if_full(self):
+        """Reclaim on allocation (0.3.4 R8): a store that looks full first retires what it may (results
+        past retention, or of closed orchestrations), a bounded batch, then the check inside the
+        reservation's transaction decides as before. Without this, a result of an orchestration
+        closed seconds ago still held its place until the service's next cleanup."""
+        try:
+            self._check_result_capacity()
+        except HistoryError as error:
+            if error.reason_code != "history_result_capacity":
+                raise
+            try:
+                self.expire_results(limit=RECLAIM_BATCH)
+            except HistoryError:
+                pass  # What could not be retired stays charged; the check below refuses.
+
     def _check_result_capacity(self):
         # A result not yet written may still need the largest body; a written one holds only
         # the bytes it has (kept for its verifier). Charging every kept result the largest
@@ -890,9 +909,11 @@ class ProjectHistory:
         entries, charged, written = counts[0] or 0, counts[1] or 0, counts[2] or 0
         # Verify each bounded lease before trusting mutable state to exclude a
         # tombstone or bound row. SQL labels alone cannot free reserved space.
+        # This bounds the verification work, not results (0.3.4 R1d): finished lease rows stay until their
+        # purge, so the 64-entry limit here refused a 65th run inside about 7.5 hours.
         positions = self._connection.execute("SELECT rowid FROM result_leases WHERE project_id=? LIMIT ?",
-                                             (self.project_id, self._result_capacity.max_entries + 1)).fetchall()
-        if len(positions) > self._result_capacity.max_entries:
+                                             (self.project_id, MAX_LEASE_ROWS + 1)).fetchall()
+        if len(positions) > MAX_LEASE_ROWS:
             raise HistoryError("history_result_capacity")
         for position in positions:
             row = self._connection.execute("SELECT * FROM result_leases WHERE rowid=?", (position[0],)).fetchone()
@@ -925,6 +946,7 @@ class ProjectHistory:
         """
         binding = self._lease_binding(binding)
         encoded = assignment_bytes(assignment, binding)
+        self._reclaim_if_full()
         now = self._result_now()
         digest = keyed_digest(self._result_key, encoded)
         with self._transaction():
@@ -1490,6 +1512,7 @@ class ProjectHistory:
         value = ResultReservation(binding, digest, now, hard_deadline_at_ms,
                                   now + self._result_capacity.reservation_ms,
                                   now + self._result_capacity.reservation_ms, "reserved")
+        self._reclaim_if_full()
         with self._transaction():
             self._orchestration_owner().active_for(binding)
             if self._connection.execute("SELECT 1 FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
