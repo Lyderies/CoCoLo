@@ -155,6 +155,43 @@ class ResultLifetimeTests(DriverHarness):
                 self.wait_for(lambda: self.live_counts() == (0, 0, 0), seconds=60)
 
 
+    def store_rows(self, *tables):
+        counts = []
+        for table in tables:
+            total = 0
+            for path in self.state.root.rglob('history.sqlite3'):
+                connection = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
+                try:
+                    total += connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                except sqlite3.Error:
+                    pass
+                finally:
+                    connection.close()
+            counts.append(total)
+        return tuple(counts)
+
+    def test_034_R1f_a_released_attempt_is_removed_with_its_release_acknowledgement(self):
+        """R1f: a real run, released by the account and recorded, of a closed orchestration: past its hard
+        deadline and the grace, every row of the attempt goes, its release acknowledgement first."""
+        from unittest import mock
+        from codex_agents import project_history
+        tables = ('result_reservations', 'result_leases', 'project_cleanup_reservations',
+                  'project_cleanup_receipts', 'project_cleanup_acknowledgements')
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.record(context, route_path, run_handle, dispatched)
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
+        self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'completed')
+        self.wait_for(lambda: self.result_states() == ['expired'], seconds=60)
+        self.assertEqual((1, 1, 1, 1, 1), self.store_rows(*tables))
+        import time
+        later = time.time_ns() // 1_000_000 + 8 * 86_400_000  # Past the hard deadline and the grace.
+        with mock.patch.object(project_history.ProjectHistory, '_result_now', return_value=later):
+            self.wait_for(lambda: self.store_rows(*tables) == (0, 0, 0, 0, 0), seconds=60)
+
+
 class ResultLimitTests(DriverHarness):
     """R8 with small limits, set before the services open their stores."""
 

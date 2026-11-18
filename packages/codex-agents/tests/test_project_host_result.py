@@ -223,9 +223,11 @@ class ProjectHostResultTests(unittest.TestCase):
         with mock.patch.object(store, '_result_now', return_value=deadline + 3_600_000):
             store.expire_results(limit=10)
         self.assertEqual((1, 1), rows())  # The attempt could still be presented until the grace ends.
+        # Corrected for 0.3.4 R1f (COCOLO review 034-security): this fixture's run has no account release
+        # recorded, so it is kept past the grace too. A released run goes: test_result_lifetime R1f.
         with mock.patch.object(store, '_result_now', return_value=deadline + 3_600_001):
             store.expire_results(limit=10)
-        self.assertEqual((0, 0), rows())
+        self.assertEqual((1, 1), rows())
 
     def test_034_R6_cleanup_reservations_go_with_their_result(self):
         """0.3.4 R6: project cleanup reservations (and the rows under them) counted against 4,096 for the
@@ -244,7 +246,9 @@ class ProjectHostResultTests(unittest.TestCase):
         deadline = store.result_reservation(self.binding).hard_deadline_at_ms
         with mock.patch.object(store, '_result_now', return_value=deadline + 3_600_001):
             store.expire_results(limit=10)
-        self.assertEqual((0, 0, 0), rows())
+        # Corrected for 0.3.4 R1f: no account release is recorded for this run, so its cleanup
+        # reservation stays (it went regardless in 0.8.30).
+        self.assertEqual(before, rows())
 
     def test_failed_closed_body_deletion_retains_charge_until_actual_retry_cleanup(self):
         owner, closing = self.reference_lifecycle()
