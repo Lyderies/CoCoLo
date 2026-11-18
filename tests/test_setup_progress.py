@@ -15,6 +15,7 @@ import struct
 import subprocess
 import sys
 import termios
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -193,10 +194,31 @@ class SetupProgressTests(unittest.TestCase):
         self.assertTrue(all(len(frame) < 50 for frame in frames), max(map(len, frames)))
         self.assertTrue(any(len(frame) > 40 for frame in frames))
 
+    def test_S3_P9a_tput_answering_0_falls_back_to_80_columns(self):
+        # Neither stty nor tput knows the size: setup draws an 80-column frame, not none.
+        prelude = ['stty() { echo "0 0"; }', 'tput() { echo 0; }']
+        output = run_step(1.2, prelude=prelude, command=emitter(["p" * 120]))
+        frames = [frame.replace("\x1b[K", "") for frame in output.splitlines() if frame.strip()]
+        self.assertTrue(frames)
+        self.assertTrue(all(len(frame) < 80 for frame in frames), max(map(len, frames)))
+        self.assertTrue(any(len(frame) > 70 for frame in frames), max(map(len, frames)))
+
+    def test_S3_P9a_tput_failing_falls_back_to_80_columns(self):
+        prelude = ['stty() { echo "0 0"; }', 'tput() { return 1; }']
+        output = run_step(1.2, prelude=prelude, command=emitter(["p" * 120]))
+        frames = [frame.replace("\x1b[K", "") for frame in output.splitlines() if frame.strip()]
+        self.assertTrue(frames)
+        self.assertTrue(all(len(frame) < 80 for frame in frames), max(map(len, frames)))
+        self.assertTrue(any(len(frame) > 70 for frame in frames), max(map(len, frames)))
+
     def test_S3_P9b_each_redraw_erases_the_last_frame_even_when_too_narrow(self):
         # A frame is drawn at 80 columns; then the terminal becomes 4 columns wide, too narrow for
         # a frame: each redraw still erases the line, so the earlier frame does not stay.
-        prelude = ['SIZE=$(mktemp); echo "24 80" >"$SIZE"', 'stty() { cat "$SIZE"; }']
+        # The size file is the test's own, removed when it ends (fixture fix from the fourth review).
+        handle, size = tempfile.mkstemp()
+        os.close(handle)
+        self.addCleanup(os.unlink, size)
+        prelude = [f'SIZE={shlex.quote(size)}; echo "24 80" >"$SIZE"', 'stty() { cat "$SIZE"; }']
         command = "sh -c 'sleep 0.6; echo \"24 4\" >\"$SIZE\"; sleep 0.9'"
         output = run_step(0, prelude=["export SIZE", *prelude], command=command)
         last_frame = output.rindex("Installing")
