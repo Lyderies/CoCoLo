@@ -1193,7 +1193,11 @@ terminal_width() {
     width=${size##* }
     case $width in *[!0]*) ;; *) width="" ;; esac
   fi
-  [ -n "$width" ] || width=$(tput cols 2>/dev/null || true)
+  if [ -z "$width" ]; then
+    width=$(tput cols 2>/dev/null || true)
+    # tput answering 0 does not know the size either (S3-P9a); COLUMNS=0 still means no frame.
+    case $width in *[!0]*) ;; *) width="" ;; esac
+  fi
   case $width in ''|*[!0-9]*) width=80 ;; esac
   width=${width#"${width%%[!0]*}"}
   if [ -z "$width" ]; then width=0; elif [ "${#width}" -gt 4 ]; then width=9999; fi
