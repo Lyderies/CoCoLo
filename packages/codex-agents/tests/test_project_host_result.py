@@ -188,6 +188,29 @@ class ProjectHostResultTests(unittest.TestCase):
                         claim_request_id='other', claim_request_digest='e' * 64)
         self.assertEqual('reserved', store.reserve_result_lease(other, self.fixture.assigned).state)
 
+    def test_034_R1c_finished_result_rows_are_removed_once_nothing_can_present_them(self):
+        """0.3.4 R1b/R1c: lease rows of any state also capped the store, and neither table was ever
+        cleaned. A retired result of a closed orchestration is removed, reservation and lease together,
+        once its hard deadline and the crash grace have passed, and not before."""
+        owner, closing = self.reference_lifecycle()
+        self.call()
+        owner.apply(closing, client_version='codex-host-v1', before_commit=lambda: None)
+        store = self.fixture.store
+        self.assertEqual(1, store.expire_results(limit=1))
+
+        def rows():
+            return tuple(store._connection.execute(f'SELECT COUNT(*) FROM {table} WHERE project_id=?',
+                                                   (store.project_id,)).fetchone()[0]
+                         for table in ('result_reservations', 'result_leases'))
+        self.assertEqual((1, 1), rows())
+        deadline = store.result_reservation(self.binding).hard_deadline_at_ms
+        with mock.patch.object(store, '_result_now', return_value=deadline + 3_600_000):
+            store.expire_results(limit=10)
+        self.assertEqual((1, 1), rows())  # The attempt could still be presented until the grace ends.
+        with mock.patch.object(store, '_result_now', return_value=deadline + 3_600_001):
+            store.expire_results(limit=10)
+        self.assertEqual((0, 0), rows())
+
     def test_failed_closed_body_deletion_retains_charge_until_actual_retry_cleanup(self):
         owner, closing = self.reference_lifecycle()
         self.call()
