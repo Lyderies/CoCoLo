@@ -43,9 +43,14 @@ markers, never set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, and never pass `--ba
    is doing. Do not spawn it with the Agent tool.
    - `dispatch: bridge`: run `dispatch` once with the task,
      route, assignment, parent grant and the exact `--run-handle`, and use its
-     `result`. Never dispatch a handle twice or retry a fenced outcome. A `dispatch`
-     that fails after launch leaves no result to record: pause the orchestration,
-     classify that run abandoned (`host_confirmed_gone`), and resume.
+     `result`. Never dispatch a handle twice or retry a fenced outcome, with one
+     exception: if `dispatch`'s reply was lost or refused after its child finished,
+     dispatch the same handle once more while the project's service still runs; it
+     returns the same fenced result, which you record. If that is no longer possible,
+     close the orchestration anyway once the run is released: the run is counted
+     abandoned. A `dispatch` that fails after launch with no result leaves nothing to
+     record: pause the orchestration, classify that run abandoned
+     (`host_confirmed_gone`), and resume.
      While `dispatch` waits, another command can run
      `learning-run-status --orchestration-handle <orc> --run-handle <handle>` for the
      child's health (`starting`, `active`, `quiet`, `stale`, then `stopping` or
