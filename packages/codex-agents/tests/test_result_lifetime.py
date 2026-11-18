@@ -255,5 +255,30 @@ class ResultLimitTests(DriverHarness):
                 self.assertEqual((2, 2), (capacity['results']['limit'], capacity['orchestrations']['limit']))
 
 
+
+class CollectorSweepTests(DriverHarness):
+    """R2/R6 reaper-runs, account side, set up before the collector starts its loop."""
+
+    def setUp(self):
+        from unittest import mock
+        from codex_agents import learning_store
+        self.sweeps = []
+        original = learning_store.LearningLedger.sweep_account_retention
+
+        def recorded(ledger, **options):
+            self.sweeps.append(options)
+            return original(ledger, **options)
+        for patcher in (mock.patch.object(learning_store, 'WORKER_RESULT_SWEEP_SECONDS', 0.2),
+                        mock.patch.object(learning_store.LearningLedger, 'sweep_account_retention', recorded)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def test_034_R6_the_running_collector_sweeps_finished_account_rows_by_itself(self):
+        """Review 034-security: the earlier test only searched the source. The collector's own loop
+        calls the account retention sweep, with no command asking for it."""
+        self.wait_for(lambda: len(self.sweeps) >= 2, seconds=30)
+
+
 if __name__ == '__main__':
     unittest.main()
