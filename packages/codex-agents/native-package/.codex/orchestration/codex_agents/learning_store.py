@@ -11184,6 +11184,18 @@ class LearningLedger:
                 (project_id, code, timestamp),
             )
 
+    def account_capacity(self, project_id: str) -> dict[str, dict[str, int]]:
+        """How near this project is to each account limit (0.3.4 R9): counts by the rule each limit enforces."""
+        from .account_cleanup import MAX_RELEASE_RESERVATIONS, live_cleanup_receipts
+        from .account_observation import MAX_OBSERVATION_REQUESTS
+
+        with self._lock:
+            observations = self._connection.execute(
+                "SELECT COUNT(*) FROM account_observation_origins WHERE project_id=?", (project_id,)).fetchone()[0]
+            receipts = live_cleanup_receipts(self, project_id)
+        return {"observations": {"live": int(observations), "limit": MAX_OBSERVATION_REQUESTS},
+                "cleanup_receipts": {"live": int(receipts), "limit": MAX_RELEASE_RESERVATIONS}}
+
     def health_snapshot(self, project_id: str) -> dict[str, dict[str, int]]:
         with self._lock:
             rows = self._connection.execute(
@@ -11961,6 +11973,7 @@ class CollectorServer:
                     response["collector_health"] = self.ledger.health_snapshot(
                         project_id
                     )
+                    response["account_capacity"] = self.ledger.account_capacity(project_id)
                     response["ingestion"] = self.ledger.ingestion_snapshot(
                         project_id,
                         client_failures=client_health_snapshot(

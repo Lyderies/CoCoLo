@@ -237,6 +237,16 @@ def _status_ingestion_unavailable():
     return value
 
 
+def _status_account_capacity(value):
+    """Each account limit with its live count (0.3.4 R9); None from a collector that does not report it."""
+    if (type(value) is not dict or set(value) != {'observations', 'cleanup_receipts'}
+            or any(type(item) is not dict or set(item) != {'live', 'limit'}
+                   or not account_integer(item['live']) or not account_integer(item['limit'])
+                   for item in value.values())):
+        return None
+    return {name: {'live': item['live'], 'limit': item['limit']} for name, item in value.items()}
+
+
 def _status_collector_fields(health):
     """Closed display metadata only; a health view grants no execution authority."""
     template = empty_ingestion_snapshot(registered=False)
@@ -300,7 +310,9 @@ def status_client(state_root, project_root):
               # Whether this project's learning history still has to move to its own store.
               'learning_migration': 'unavailable',
               # Runs an earlier version left that still hold a slot, and when the last stops.
-              'earlier_version_runs': None}
+              'earlier_version_runs': None,
+              # How near this project is to each account limit (0.3.4 R9).
+              'account_capacity': None}
     try:
         state = CollectorPaths(state_root)
         report['client_failures'] = client_health_snapshot(state, project_root)
@@ -308,7 +320,9 @@ def status_client(state_root, project_root):
         return report | {'reason_code': 'status_runtime_unavailable', 'error': 'Status services are unavailable.'}
     collector_ready = False
     try:
-        report.update(_status_collector_fields(CollectorClient(state.socket, timeout=1).health(project_root)))
+        health = CollectorClient(state.socket, timeout=1).health(project_root)
+        report.update(_status_collector_fields(health))
+        report['account_capacity'] = _status_account_capacity(health.get('account_capacity'))
         report['active'] = collector_ready = True
         try:
             moved = CollectorClient(state.socket, timeout=1).learning_migration(Path(project_root))
