@@ -885,6 +885,22 @@ class HostRestartTests(DriverHarness):
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+
+        def released():
+            # The account's release, acknowledged in the project store (read without the service).
+            import sqlite3
+            for path in self.state.root.rglob('history.sqlite3'):
+                connection = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
+                try:
+                    if connection.execute('SELECT COUNT(*) FROM project_cleanup_reservations '
+                                          'WHERE account_release_digest IS NOT NULL').fetchone()[0]:
+                        return True
+                except sqlite3.Error:
+                    pass
+                finally:
+                    connection.close()
+            return False
+        self.wait_for(released, seconds=30)
         self.restart_host()
         closed = self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'failed')
         self.assertEqual('failed', closed['status'], closed)

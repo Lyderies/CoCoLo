@@ -196,6 +196,23 @@ class OrchestrationOwner:
             raise HistoryError('history_orchestration_unavailable')
         return positions
 
+    def _account_released(self, binding):
+        """Whether the account's release of this run is verified in the project store (0.3.4 R7): the
+        child is gone and its slot freed, which a timeout, a missing process or a fenced terminal
+        does not prove."""
+        from .project_release_ack import read_account_release
+        row = self._db.execute('SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?',
+                               (binding.project_id, binding.run_handle, binding.attempt)).fetchone()
+        if row is None:
+            return False  # A legacy reservation without a lease has no release evidence here.
+        try:
+            read_account_release(self._history, self._history._lease(row).binding)
+        except HistoryError as exc:
+            if exc.reason_code == 'history_result_not_ready':
+                return False
+            raise
+        return True
+
     def _unfinished(self, scope, handle):
         # A timeout, absent process or accepted terminal does not prove cleanup.
         for position in self._positions('result_leases'):
@@ -238,9 +255,12 @@ class OrchestrationOwner:
             try:
                 entry = self._history.record('host_result_admission:' + digest)
             except HistoryError as exc:
-                if exc.reason_code == 'history_not_found':
+                if exc.reason_code != 'history_not_found':
+                    raise
+                if not self._account_released(binding):
                     return True
-                raise
+                continue  # 0.3.4 R7: over, by the account's verified release; reported unrecorded.
+
             receipt = parse_bounded_json(entry.content)
             if (entry.source != 'host' or receipt.get('record_type') != 'host_result_admission'
                     or receipt.get('binding_digest') != digest or receipt['run_id'] != binding.run_id
