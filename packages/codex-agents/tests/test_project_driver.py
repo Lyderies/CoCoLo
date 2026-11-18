@@ -96,6 +96,11 @@ class DriverHarness(ServiceHarness, CliTestCase):
 
 class ProjectDriverTests(DriverHarness):
     def test_the_host_prepares_claims_dispatches_and_releases_a_bridged_codex_run(self):
+        # 0.3.3 requirement C1, carried here (PLAN T8 driver slice 2): a busy day of readings, about ten
+        # times a live project's, still opens and dispatches. 4,096 records and 2 MiB fit, at the open
+        # and at its claim.
+        self.busy_day('provider_headroom', 1800)
+        self.busy_day('provider_billing', 700)
         task = self.write('task.json', self.task())
         route = self.cli('learning-route', '--task', task)
         self.assertEqual(('codex', 'bridge'), (route['provider'], route['dispatch']))
@@ -293,19 +298,6 @@ class ProjectDriverTests(DriverHarness):
                          observed, observed + 90 * 86_400_000, content, hashlib.sha256(content).hexdigest()))
         finally:
             connection.close()
-
-    def test_C1_a_busy_day_of_readings_still_opens_and_dispatches(self):
-        # 0.3.3 requirement C1 (live testing): about 180 headroom and 70 billing readings
-        # from one day, with 40 recent decisions, filled about 260 KiB of the 256 KiB the open and
-        # claim may read, and the claim was refused. 4,096 records and 2 MiB fit, at the open and
-        # at its claim; this is a day with about ten times that project's readings.
-        self.busy_day('provider_headroom', 1800)
-        self.busy_day('provider_billing', 700)
-        context, route_path, _, run_handle = self.open_run()
-        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
-        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
-        self.assertEqual('result', dispatched['bridge_report']['outcome'])
 
     def test_C1_more_than_a_capture_holds_is_refused_plainly_and_changes_nothing(self):
         # Over 4,096 records the open says so, and records no run.
