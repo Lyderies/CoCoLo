@@ -218,5 +218,51 @@ class RegistrationOutcomeTests(unittest.TestCase):
         self.assertNotIn("Moved your orchestrator records", self.lines({"ready": True}))
 
 
+
+class ProjectChoiceTests(unittest.TestCase):
+    """W3.2 and W3.4: which projects are offered, how the list is kept, and what a bad path says."""
+
+    def test_projects_set_up_before_are_offered_and_this_folder_once(self) -> None:
+        installed = {"/p/first", "/p/second"}
+        lines = ["/p/first", "/p/second", "/p/gone", "relative/is-skipped", "/p/bad\x1bname"]
+        paths, items = steps.project_choices(lines, "/p/second", "/orchestrator",
+                                             installed.__contains__, lambda path: True)
+        self.assertEqual(["/p/first", "/p/second"], paths)
+        self.assertEqual(["/p/first", "/p/second", "Another folder...", "Quit"], items)  # This folder listed already.
+        paths, items = steps.project_choices(["/p/first"], "/p/other", "/orchestrator",
+                                             installed.__contains__, lambda path: True)
+        self.assertEqual(["/p/first", "/p/other"], paths)
+        self.assertEqual("/p/other (this folder)", items[1])
+        self.assertEqual(([], []), steps.project_choices([], "/p/other", "/orchestrator",
+                                                         installed.__contains__, lambda path: True))
+
+    def test_the_orchestrator_and_a_folder_outside_git_are_never_offered_as_this_folder(self) -> None:
+        installed = {"/p/first"}
+        for default, is_git in (("/orchestrator", True), ("/p/plain", False)):
+            with self.subTest(default=default):
+                paths, _ = steps.project_choices(["/p/first"], default, "/orchestrator",
+                                                 installed.__contains__, lambda path, git=is_git: git)
+                self.assertEqual(["/p/first"], paths)
+
+    def test_a_chosen_project_goes_first_and_the_list_keeps_ten(self) -> None:
+        lines = [f"/p/{n}" for n in range(12)]
+        kept = steps.remembered(lines, "/p/5")
+        self.assertEqual("/p/5", kept[0])
+        self.assertEqual(10, len(kept))
+        self.assertEqual(1, kept.count("/p/5"))
+        self.assertIsNone(steps.remembered(lines, "relative"))
+        self.assertIsNone(steps.remembered(lines, "/p/bad\x01"))
+
+    def test_a_path_that_cannot_be_opened_is_reported_exactly(self) -> None:
+        lines = steps.cannot_open("/Code/proj", "/Code/proj", "/Users/<you>/Code/proj")
+        self.assertEqual("Cannot open: [/Code/proj]", lines[0])
+        self.assertNotIn("You typed", " ".join(lines))
+        self.assertIn("Type the full path, for example /Users/<you>/projects/app. Tab completes paths.", lines)
+        self.assertIn("That path does not exist, but this one does: /Users/<you>/Code/proj", lines)
+        lines = steps.cannot_open("/Users/<you>/Code/nowhere", "~/Code/nowhere", None)
+        self.assertIn("You typed: [~/Code/nowhere]", lines)
+        self.assertFalse(any("but this one does" in line for line in lines))
+
+
 if __name__ == "__main__":
     unittest.main()
