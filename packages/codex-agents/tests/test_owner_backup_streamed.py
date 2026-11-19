@@ -420,6 +420,77 @@ class OwnerBackupStreamedTests(unittest.TestCase):
                 mock.patch.object(os, "unlink", unlink), self.assertRaises(Exception) as caught:
             self.owner_backup("stuck")
         self.assertIn("could not be removed", str(caught.exception))
+        self.assertIn(str(self.source.state.backups / self.project / ".stuck.partial"), str(caught.exception))
+        self.assertIsNone(self.registered("stuck"))
+
+
+    # Review 040-f3-owner-backup-3 (F3-15 to F3-17) ---------------------------------------------------
+
+    def test_F3_15_a_stop_held_before_the_backup_ends_it_once_the_child_runs(self):
+        found = signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGTERM])
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)  # held, as _main holds it from its start
+            with self.assertRaisesRegex(RuntimeError, "signal"):
+                self.owner_backup("held_stop")
+            self.assertNotIn(signal.SIGTERM, signal.sigpending())  # taken, not left for later
+            self.assertIn(signal.SIGTERM, signal.pthread_sigmask(signal.SIG_BLOCK, []))  # mask as found
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, found)
+        self.assert_nothing_left("held_stop")
+
+    def test_F3_16_one_ending_keeps_the_backup_and_reports_every_later_error(self):
+        conclude = TOOL["conclude"]
+        report = self.owner_backup("concluded")
+        resumed = []
+
+        def fail(message):
+            def raise_it():
+                raise RuntimeError(message)
+            return raise_it
+        final, code = conclude(report={**report, "collector_quiesced": False}, code=0, error=None,
+                               close=fail("ledger would not close"), resume=lambda: resumed.append(True))
+        self.assertEqual(3, code)
+        self.assertTrue(final["ready"])
+        self.assertIn("ledger would not close", final["close_error"])
+        self.assertEqual([True], resumed)  # restarted although closing failed
+        final, code = conclude(report=None, code=0, error=RuntimeError("preflight refused"),
+                               close=lambda: None, resume=fail("collector would not start"))
+        self.assertEqual(2, code)
+        self.assertFalse(final["ready"])
+        self.assertEqual("preflight refused", final["error"])
+        self.assertIn("collector would not start", final["restart_error"])
+        final, code = conclude(report={**report, "collector_quiesced": True}, code=0, error=None,
+                               close=lambda: None, resume=fail("must not be called"))
+        self.assertEqual((0, None), (code, final.get("restart_error")))  # left stopped as asked
+
+    def test_F3_17_an_authorization_already_quiesced_is_left_as_it_is(self):
+        path = self.authorization()
+        path.write_bytes(b'{"quiesced_for_upgrade":true,"runtime_digest":"' + b"a" * 64
+                         + b'","runtime_version":"0.8.32","schema_version":1}\n')
+        before = os.stat(path)
+        TOOL["_quiesce_collector_authorization"](path)
+        after = os.stat(path)
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+
+    def test_F3_17_a_failed_rollback_reports_left_stopped_and_leaves_no_temporary_file(self):
+        path = self.authorization()
+        real_chmod, real_replace = os.chmod, os.replace
+        calls = []
+
+        def chmod(target, mode, *args, **kwargs):
+            if str(target) == str(path):
+                raise OSError("chmod failed")
+            return real_chmod(target, mode, *args, **kwargs)
+
+        def replace(source, target, *args, **kwargs):
+            calls.append(target)
+            if len(calls) > 1 and str(target) == str(path):
+                raise OSError("restore failed")
+            return real_replace(source, target, *args, **kwargs)
+        with mock.patch.object(os, "chmod", chmod), mock.patch.object(os, "replace", replace), \
+                self.assertRaises(SCRIPT_GLOBALS["QuiesceLeftStopped"]):
+            TOOL["_quiesce_collector_authorization"](path)
+        self.assertEqual([], [p.name for p in path.parent.glob(".collector-authorization.*")])
 
 
 if __name__ == "__main__":
