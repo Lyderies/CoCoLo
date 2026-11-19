@@ -325,9 +325,22 @@ class DirectDriverMixin:
         term = _DirectTerminal(self, out=self.output, read=read, colours=terminal.terminal_colours(),
                                size=lambda: (100, 30))
         update = list(argv or [])[:1] == ["--update"]
-        wizard = flow.Wizard(term, start=argv[1] if update else str(cwd), python=env["COCOLO_PYTHON"],
-                             owner_path=env["COCOLO_OWNER_PATH"], bash_version=env["COCOLO_BASH_VERSION"],
-                             **({"update": True} if update else {}))
+        scripted = list(argv or [])[:1] == ["--answers"]
+        options = {"update": True} if update else {}
+        if scripted:  # As setup-wizard.py: the file is read and checked before the wizard starts.
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("setup_wizard_entry", ROOT / "scripts" / "setup-wizard.py")
+            entry = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(entry)
+            try:
+                options = {"answers": entry.read_answers(argv[1])}
+            except entry.AnswersRefused as refused:
+                self.output.write(f"{refused}\n")
+                self.result, self.thread, self.pid = [2], None, 0
+                return
+        start = argv[1] if update else options["answers"]["project"] if scripted else str(cwd)
+        wizard = flow.Wizard(term, start=start, python=env["COCOLO_PYTHON"],
+                             owner_path=env["COCOLO_OWNER_PATH"], bash_version=env["COCOLO_BASH_VERSION"], **options)
 
         def run_foreground(argv):  # Wizard.run_foreground: attest.py emulated, its output on the terminal
             # The FAKE_ATTEST stub prints only to stdout; a kept terminal run hands over the real terminal.
@@ -394,6 +407,9 @@ class DirectDriverMixin:
         pass  # In-process the editor reads every key itself.
 
     def finish(self, timeout: float = 10.0) -> int:
+        if self.thread is None:  # refused before the wizard started (an answers file)
+            self._pull()
+            return self.result[0]
         self.thread.join(timeout)
         self._pull()
         if self.thread.is_alive():

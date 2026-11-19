@@ -1,4 +1,4 @@
-"""S1: one-step update (PLAN S1-U1, S1-U2, S1-U6; DESIGN-0.4.0-S1-update.md).
+"""S1: one-step update and scripted setup (PLAN S1-U1 to S1-U3, S1-U6; DESIGN-0.4.0-S1-update.md).
 
 `./setup.sh --update PROJECT` updates an installed project with no menu: every earlier answer is reused
 and only attest.py asks, for the owner-key passphrase. It stops plainly, changing nothing, on a real
@@ -6,6 +6,7 @@ problem. Driven in-process like test_setup_wizard_direct, with test_setup_sh's f
 runs only the tests defined here.
 """
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -118,6 +119,73 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         self.assertEqual(0, code, screen[-1500:])
         self.assertEqual(1, self.attested())
         self.assertNotIn("Keep the existing configuration", screen)  # no further question
+
+
+    # S1-U3: ./setup.sh --answers FILE -----------------------------------------------------------
+
+    def answers_for(self, project: Path, checks: Path, **changes) -> Path:
+        answers = {"project": str(project), "operational_checks": str(checks),
+                   "providers": {"codex": "on", "claude": "on", "claude_models": "claude-sonnet-5-5",
+                                 "bridge": "off"},
+                   "commit": True, "commands_rule": False}
+        for key, value in changes.items():
+            if value is None:
+                answers.pop(key, None)
+            else:
+                answers[key] = value
+        path = self.base / "answers.json"
+        path.write_text(json.dumps(answers))
+        return path
+
+    def scripted(self, answers: Path, extra_env: dict | None = None) -> tuple[int, str]:
+        self.attest_count = self.base / "attest.count"
+        env = {**REGISTERED, "FAKE_ATTEST": str(self.attest_count), **(extra_env or {})}
+        self.start(self.base, env, argv=["--answers", str(answers)])
+        code = self.finish(timeout=60)
+        return code, self.plain(self.transcript)
+
+    def test_U3_a_fresh_project_is_installed_from_an_answers_file_with_no_menu(self):
+        project, checks = self.make_project()
+        code, screen = self.scripted(self.answers_for(project, checks))
+        self.assertEqual(0, code, screen[-1500:])
+        self.assertNotIn("Enter select", screen)
+        self.assertTrue((project / ".codex" / "orchestration" / "install-manifest.json").is_file())
+        routing = json.loads((project / ".codex" / "orchestration" / "provider-routing.json").read_text())
+        self.assertIn("claude-sonnet-5-5", json.dumps(routing))
+        self.assertEqual(1, self.attested())
+        self.assertEqual(2, self.commit_count(project))  # the project's own commit, then the install
+
+    def test_U3_commit_false_leaves_the_install_uncommitted(self):
+        project, checks = self.make_project()
+        code, screen = self.scripted(self.answers_for(project, checks, commit=False))
+        self.assertEqual(0, code, screen[-1500:])
+        self.assertEqual(1, self.commit_count(project))
+
+    def test_U3_a_missing_unknown_or_invalid_answer_is_refused_naming_it_before_anything_changes(self):
+        project, checks = self.make_project()
+        cases = {"commit": {"commit": None}, "colour": {"colour": "blue"},
+                 "providers.codex": {"providers": {"codex": "maybe", "claude": "on",
+                                                   "claude_models": "claude-sonnet-5-5", "bridge": "off"}},
+                 "commands_rule": {"commands_rule": "yes"}}
+        for named, changes in cases.items():
+            with self.subTest(named=named):
+                code, screen = self.scripted(self.answers_for(project, checks, **changes))
+                self.assertEqual(2, code)
+                self.assertIn(f"answers file: {named}", screen)
+                self.assertFalse((project / ".codex").exists())
+                self.assertEqual(0, self.attested())
+
+    def test_U3_records_that_need_a_choice_follow_the_answer_and_stop_without_one(self):
+        project, checks = self.make_project()
+        upgrade = {"FAKE_REGISTER": "", "FAKE_UPGRADE": '{"ready": true, "state_moved": null}'}
+        code, screen = self.scripted(self.answers_for(project, checks), upgrade)
+        self.assertEqual(1, code)
+        self.assertIn("answers file: upgrade_records", screen)
+        self._reap()
+        project2, checks2 = self.make_project("second")
+        code, screen = self.scripted(self.answers_for(project2, checks2, upgrade_records=True), upgrade)
+        self.assertEqual(0, code, screen[-1500:])
+        self.assertIn("--upgrade-ledger", (self.base / "register.log").read_text())
 
 
 def load_tests(loader, tests, pattern):
