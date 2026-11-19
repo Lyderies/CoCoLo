@@ -400,5 +400,48 @@ class SessionWarningTests(unittest.TestCase):
                 self.assertEqual([], steps.session_warnings(scan))
 
 
+
+class CommandsRuleTests(unittest.TestCase):
+    """W8.2, W8.4-W8.6: what the commands-rule screen and verify say about the rule."""
+
+    def test_the_screen_says_what_the_rule_does_and_never_root_only(self) -> None:
+        text = " ".join(steps.commands_body("/Users/<you>/.codex/rules/x.rules", "missing"))
+        self.assertIn("Every Codex session on this machine loads this rule from /Users/<you>/.codex/rules/x.rules "
+                      "(mode 0600).", text)
+        self.assertIn("Never open Codex on the orchestrator clone", text)
+        self.assertIn("To undo it later, use the remove command shown at the end of setup.", text)
+        self.assertNotIn("root folder", text)
+        self.assertNotIn("already exists and differs", text)
+        self.assertIn("already exists and differs", " ".join(steps.commands_body("/r", "stale")))
+
+    def test_an_unknown_status_is_no_status(self) -> None:
+        for status in ("installed", "missing", "stale", "unsupported"):
+            self.assertEqual(status, steps.rule_status(status))
+        for status in ("", "weird", None, 3):
+            self.assertEqual("", steps.rule_status(status))
+
+    def test_verify_reports_the_rule_without_writing_it(self) -> None:
+        self.assertEqual(("ok", "installed", ["Codex commands rule: installed"]), steps.verify_rule("installed", ""))
+        mark, note, lines = steps.verify_rule("missing", "")
+        self.assertEqual(("skip", "missing"), (mark, note))
+        self.assertEqual("Codex commands rule: missing", lines[0])
+        self.assertIn("Codex sessions cannot reach the orchestrator without it.", lines[1])
+        self.assertEqual(("skip", "stale"), steps.verify_rule("stale", "")[:2])
+        mark, note, lines = steps.verify_rule("", "")
+        self.assertEqual(("fail", "not checked"), (mark, note))
+        self.assertIn("may be older than this check", " ".join(lines))
+
+    def test_an_unsupported_home_is_explained_with_its_fix_never_may_be_older(self) -> None:
+        mark, note, lines = steps.verify_rule("unsupported", "HOME is not this account's home folder\x1b")
+        text = " ".join(lines)
+        self.assertEqual(("fail", "Codex home unsupported"), (mark, note))
+        self.assertIn("cannot be used with this Codex setup", text)
+        self.assertIn("Reason: HOME is not this account's home folder ", text)
+        self.assertIn("run setup with HOME set to your own home folder", text)
+        self.assertNotIn("may be older", text)
+        self.assertNotIn("\x1b", text)
+        self.assertLessEqual(len(steps.unsupported_home("x" * 500)[1]), len("Reason: ") + 200)
+
+
 if __name__ == "__main__":
     unittest.main()
