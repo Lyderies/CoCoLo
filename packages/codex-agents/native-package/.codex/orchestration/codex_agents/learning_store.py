@@ -11775,6 +11775,8 @@ class CollectorServer:
         self.startup_phases: dict | None = None  # S1-U9a, set by collector_host once started
         # O10 ST1, set by collector_host: 'starting', 'running' or 'unavailable'; None otherwise.
         self.account_services: str | None = None
+        # S1-H1a, set by collector_host: the account lanes' published notes (a no-lock view).
+        self.account_lanes = None
         self.thread_error: BaseException | None = None
         self._clients = client_capabilities or load_client_capabilities(
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
@@ -12033,6 +12035,11 @@ class CollectorServer:
                     "startup_phases": self.startup_phases,
                     "account_services": self.account_services,
                 }
+                if self.account_lanes is not None:
+                    try:
+                        response["account_lanes"] = self.account_lanes()
+                    except Exception:
+                        response["account_lanes"] = {"available": False}
                 if "project_root" in request:
                     project_root = Path(request["project_root"])
                     project_id = self.ledger.project_for_root(project_root)
@@ -12043,6 +12050,7 @@ class CollectorServer:
                         project_id
                     )
                     response["account_capacity"] = self.ledger.account_capacity(project_id)
+                    response["account_slots"] = self.ledger.account_slot_health(project_id)  # S1-H1a
                     response["ingestion"] = self.ledger.ingestion_snapshot(
                         project_id,
                         client_failures=client_health_snapshot(

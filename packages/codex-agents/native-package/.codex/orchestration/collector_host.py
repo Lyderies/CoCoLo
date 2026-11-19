@@ -73,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         phase_start = time.monotonic()
         try:
             account = AccountServiceHost(ledger, CollectorPaths(state.root))
+            server.account_lanes = account.health_notes  # S1-H1a: read without the account owner
             server.account_services = "running"
         except HistoryError:
             account = None  # Hooks keep working; account clients report unavailable.

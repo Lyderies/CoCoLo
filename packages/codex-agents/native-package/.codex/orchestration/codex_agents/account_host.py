@@ -213,6 +213,15 @@ class AccountServiceHost:
         except Exception:
             return None
 
+    def health_notes(self):
+        """S1-H1a: each account lane's published notes, for the collector's health reply. Reads only
+        immutable values: no lock, owner thread or lane method."""
+        lanes = {'signature': self._claims and self._claims._pool.health, 'claims': self._claims and self._claims.health,
+                 'observations': self._observations and self._observations.health,
+                 'ingress': self._ingress and self._ingress.health, 'billing': self._billing and self._billing.health,
+                 'probe_worker': self._workers and self._workers.health}
+        return {name: lane.view() for name, lane in lanes.items() if lane is not None}
+
     def serve_once(self):
         self._owner()
         if self._closed:
