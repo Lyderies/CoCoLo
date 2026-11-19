@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from wizard_flow_harness import ROOT, Harness, to_commit  # noqa: E402
+from wizard_flow_harness import FINISH, ROOT, Harness, to_commit  # noqa: E402
 
 ENTER, DOWN = "\r", "\x1b[B"
 
@@ -317,6 +317,99 @@ class CollectorTests(unittest.TestCase):
         _, screen = self.to_register()
         self.assertIn("not ready", screen)
         self.assertEqual(1, self.h.status_count)
+
+
+class InstallCommitTests(unittest.TestCase):
+    """W5: the install and commit step (setup.sh step 4), with a real install."""
+
+    def setUp(self) -> None:
+        self.h = Harness(self)
+        self.project, self.checks = self.h.make_project()
+
+    def git(self, *args: str) -> str:
+        return self.h.git(self.project, *args)
+
+    def test_an_update_that_changes_nothing_offers_no_commit(self) -> None:
+        """Replaces WizardTerminalTests.test_an_update_that_changes_nothing_offers_no_commit (W5.4)."""
+        self.h.run(*to_commit(self.checks), ENTER, *FINISH, start=self.project)
+        before = self.h.commit_count(self.project)
+        self.assertEqual(2, before)
+        # The project is listed now: pick it, update, keep the routing, install.
+        _, screen = self.h.run(ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, *FINISH, start=self.project)
+        self.assertIn("Nothing to commit: the project already has these files committed", screen)
+        self.assertNotIn("Commit now", screen)
+        self.assertNotIn("Next: commit the installed files", screen)
+        final = self.h.final(screen)
+        self.assertIn("nothing to commit", final)
+        self.assertNotIn("commit failed", final)
+        self.assertNotIn("The commit", final)
+        self.assertEqual(before, self.h.commit_count(self.project))
+
+    def test_only_paths_with_changes_are_committed(self) -> None:
+        """Replaces WizardTerminalTests.test_only_paths_with_changes_are_committed (W5.1, W5.3)."""
+        import json
+        import subprocess
+        routing_in = self.h.base / "par.json"
+        routing_in.write_text(json.dumps({"version": 1, "roles": {}, "verifiers": {}}))
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), "install", "--target", str(self.project),
+                        "--project-agent-routing", str(routing_in), "--operational-checks", str(self.checks),
+                        "--apply"], check=True, capture_output=True)
+        self.git("add", "-A")
+        self.git("commit", "-qm", "adopt")
+        before = self.h.commit_count(self.project)
+        # Update the install; choose providers (none kept); looks right; install; commit now.
+        _, screen = self.h.run(ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, *FINISH, start=self.project)
+        commit_screen = screen[screen.index("Next: commit the installed files"):screen.index("Commit now")]
+        self.assertIn("Only these 1 paths", commit_screen)
+        self.assertIn(".codex/orchestration/provider-routing.json", commit_screen)
+        self.assertNotIn("install-manifest.json", commit_screen)
+        self.assertIn("; committed", self.h.final(screen))
+        self.assertEqual(before + 1, self.h.commit_count(self.project))
+        self.assertEqual([".codex/orchestration/provider-routing.json"],
+                         self.git("show", "--name-only", "--format=", "HEAD").split())
+
+    def test_summary_says_not_committed_and_lists_what_is_left(self) -> None:
+        """Replaces WizardTerminalTests.test_summary_says_not_committed_and_lists_what_is_left (W5.7, W10.5)."""
+        _, screen = self.h.run(*to_commit(self.checks), DOWN + ENTER, *FINISH, start=self.project)
+        final = self.h.final(screen)
+        self.assertIn("not committed (you chose to commit yourself)", final)
+        self.assertIn("Left uncommitted in the project:", final)
+        self.assertIn(".agents/skills/", final)
+        self.assertRegex(final, r"\.\.\. and \d+ more")
+        self.assertNotIn("commit failed", final)
+        self.assertNotEqual("", self.git("status", "--porcelain"))
+
+    def test_the_hooks_are_offered_for_trust_only_after_the_runtime_check(self) -> None:
+        """Replaces WizardTerminalTests.test_the_hooks_are_offered_for_trust_only_after_the_runtime_check (W8.3)."""
+        _, screen = self.h.run(*to_commit(self.checks), DOWN + ENTER, *FINISH, start=self.project)
+        self.assertIn("Close every Codex session in this project first.", screen)
+        commit_screen = re.sub(r"\s+", " ", screen[:screen.index("Commit now")])
+        self.assertIn("In Codex, open /hooks and trust the orchestrator's learning hooks (main checkout only)",
+                      commit_screen)
+        self.assertNotIn("Do not trust", commit_screen)
+
+    def test_a_file_planted_in_the_orchestration_folder_stops_the_install(self) -> None:
+        """Replaces WizardTerminalTests.test_a_file_planted_in_the_orchestration_folder_stops_the_install (W1.6)."""
+        planted = self.project / ".codex" / "orchestration"
+        planted.mkdir(parents=True)
+        (planted / "socket.py").write_text("raise SystemExit(1)\n")
+        self.git("add", "-f", ".codex")
+        self.git("commit", "-qm", "planted")
+        _, screen = self.h.run(ENTER, ENTER, f"{self.checks}\r", start=self.project)
+        self.assertIn("holds files the orchestrator does not install", re.sub(r"\s+", " ", screen))
+        self.assertNotIn("open /hooks", re.sub(r"\s+", " ", screen))
+        self.assertFalse((self.project / ".codex" / "hooks.json").exists())
+        self.assertFalse((self.project / ".codex" / "orchestration" / "install-manifest.json").exists())
+
+    def test_a_failed_path_helper_stages_and_commits_nothing(self) -> None:
+        """Replaces WizardTerminalTests.test_a_failed_path_helper_stages_and_commits_nothing (W5.5)."""
+        self.h.helper_fails = True
+        _, screen = self.h.run(*to_commit(self.checks), *FINISH, start=self.project)
+        self.assertIn("commit failed: no paths to commit", screen)
+        self.assertNotIn("Commit now", screen)
+        self.assertIn("commit failed", self.h.final(screen))
+        self.assertEqual(1, self.h.commit_count(self.project))
+        self.assertEqual("", self.git("diff", "--cached", "--name-only"))
 
 
 if __name__ == "__main__":

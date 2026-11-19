@@ -104,6 +104,7 @@ class Harness:
         self.scan = {"ready": True, "warnings": []}
         self.cli = {}  # subcommand -> callable(args) -> (status, stdout bytes)
         self.attest = []  # exit statuses for successive hand-offs; 0 when run out
+        self.helper_fails = False  # FAKE_PJ_FAIL: the path helper exits 1
         self.launched: list[list[str]] = []
         self.handoffs: list[list[str]] = []
 
@@ -180,6 +181,8 @@ class Harness:
         return status or 0, out.getvalue().encode(), err.getvalue().encode()
 
     def _helper(self, args) -> tuple[int, bytes, bytes]:
+        if self.helper_fails and args[:1] == ["paths"]:
+            return 1, b"", b""
         import importlib.util
         spec = importlib.util.spec_from_file_location("setup_wizard_entry", ROOT / "scripts" / "setup-wizard.py")
         module = importlib.util.module_from_spec(spec)
@@ -238,6 +241,14 @@ class Harness:
         signers = f"codex-agents-owner {fields[0]} {fields[1]}\n".encode()
         (legacy / "owner-allowed-signers").write_bytes(signers)
         return hashlib.sha256(signers).hexdigest()
+
+    def commit_count(self, project: Path) -> int:
+        return int(self.git(project, "rev-list", "--count", "HEAD").strip())
+
+    @staticmethod
+    def final(screen: str) -> str:
+        """The last screen drawn: the summary, when the run reached it."""
+        return screen.rsplit("COCOLO setup", 1)[-1]
 
     def remembered(self, *projects: Path) -> None:
         """Projects setup already set up, as it lists them in the records' installer folder."""
