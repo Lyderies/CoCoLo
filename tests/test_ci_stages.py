@@ -56,12 +56,13 @@ class CiStageTests(unittest.TestCase):
                         self.assertIn("--jobs", line)
 
 
-    def test_integration_runs_in_four_shards_at_one_job_per_core(self):
-        """PLAN T4b: four shards (three left one at 5:45 on GitHub), each with --jobs equal to its cores."""
+    def test_integration_runs_in_six_shards_at_half_the_cores(self):
+        """PLAN T4b: six shards at half the cores: at one job per core, tests with fixed 10-12 s bounds still
+        timed out on GitHub's slower runners, where each test runs several services and children."""
         integration = self.jobs["integration"]
-        self.assertRegex(integration, r"shard: \[1, 2, 3, 4\]")
-        self.assertIn('--shard "${{ matrix.shard }}/4"', integration)
-        self.assertIn('--jobs "$(getconf _NPROCESSORS_ONLN)"', integration)
+        self.assertRegex(integration, r"shard: \[1, 2, 3, 4, 5, 6\]")
+        self.assertIn('--shard "${{ matrix.shard }}/6"', integration)
+        self.assertIn('--jobs "$(( ($(getconf _NPROCESSORS_ONLN) + 1) / 2 ))"', integration)
 
 
     def test_a_failing_integration_shard_keeps_its_failed_modules_work(self):
