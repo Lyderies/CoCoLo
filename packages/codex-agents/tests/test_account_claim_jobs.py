@@ -234,7 +234,7 @@ class AccountClaimJobTests(unittest.TestCase):
         self.assertEqual(0, self.jobs._intake.snapshot().jobs)
         self.fixture.assert_no_claim()
 
-    def test_new_signed_statement_during_worker_makes_preparation_stale(self):
+    def test_new_signed_statement_during_worker_is_captured_and_verified_again(self):
         gate, started, patcher = self.gate_first_project()
         with patcher:
             ticket = self.begin()
@@ -277,6 +277,43 @@ class AccountClaimJobTests(unittest.TestCase):
                 captures as captured:
             self.assert_wire_error(self.pump(self.begin()), self.request(), "claim_preparation_stale")
         self.assertEqual((1, 1), (commits.call_count, captured.call_count))
+
+    def test_existing_rule_a_fresh_claim_with_no_headroom_reading_is_admitted(self):
+        """Backs a decision the deleted-candidate test relies on (review 040-fr-stale): with no headroom
+        reading at all, a fresh claim is admitted. This is the existing admission rule, not FR1's."""
+        self.ledger._connection.execute("DELETE FROM records WHERE record_type='provider_headroom'")
+        result = decode_account_response(self.pump(self.begin()), self.request())
+        self.assertEqual("claimed", result["state"], result)
+
+    def test_FR1_a_failed_capture_on_retry_keeps_its_own_reason(self):
+        """Review 040-fr-stale: a failed recapture reported claim_preparation_stale whatever happened."""
+        from codex_agents.account_claim_contracts import ClaimError
+        original = self.jobs._intake.capture_admission
+        calls = []
+
+        def second_fails(*arguments, **options):
+            calls.append(1)
+            if len(calls) > 1:
+                raise ClaimError("claim_busy")
+            return original(*arguments, **options)
+        with mock.patch.object(self.views, "_claim_from_signature_job", side_effect=ClaimError("claim_preparation_stale")), \
+                mock.patch.object(self.jobs._intake, "capture_admission", side_effect=second_fails):
+            self.assert_wire_error(self.pump(self.begin()), self.request(), "claim_busy")
+        self.assertEqual(2, len(calls))
+
+    def test_FR2_a_cancel_during_a_retry_ends_it_as_cancelled(self):
+        from codex_agents.account_claim_contracts import ClaimError
+        ticket = self.begin()
+        original = self.jobs._intake.capture_admission
+
+        def cancel_then_capture(*arguments, **options):
+            handle = original(*arguments, **options)
+            self.jobs._jobs[ticket].cancelled = True  # Cancelled while the new preparation runs.
+            return handle
+        with mock.patch.object(self.views, "_claim_from_signature_job", side_effect=ClaimError("claim_preparation_stale")), \
+                mock.patch.object(self.jobs._intake, "capture_admission", side_effect=cancel_then_capture):
+            self.assert_wire_error(self.pump(ticket), self.request(), "claim_cancelled")
+        self.fixture.assert_no_claim()
 
     def test_FR1_a_preparation_that_stays_stale_is_refused_after_its_last_retry(self):
         from codex_agents import account_claim_jobs
@@ -345,7 +382,7 @@ class AccountClaimJobTests(unittest.TestCase):
         self.assertEqual([True], parsed)
         self.assertFalse(any(sql_json), "deferred owner used SQL JSON parsing")
 
-    def test_deleted_candidate_after_preparation_is_stale_without_claim(self):
+    def test_deleted_candidate_after_preparation_is_decided_again_on_a_new_capture(self):
         gate, started, patcher = self.gate_first_project()
         with patcher:
             ticket = self.begin()
@@ -364,7 +401,7 @@ class AccountClaimJobTests(unittest.TestCase):
         # candidate is never used: the decision is the fresh one.
         self.assertEqual("claimed", result["state"], result)
 
-    def test_changed_policy_after_preparation_is_stale_without_claim(self):
+    def test_changed_policy_after_preparation_is_decided_again_and_denied(self):
         gate, started, patcher = self.gate_first_project()
         with patcher:
             ticket = self.begin()
