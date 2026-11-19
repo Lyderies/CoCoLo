@@ -142,6 +142,16 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.assertNotIn('inspected a database', stdout + stderr)
         self.assertEqual(1, len(self.requests))
 
+    def test_ST1_account_services_still_starting_say_starting(self):
+        self.collector.account_services = 'starting'
+        self.hint.unlink()
+        code, stdout, stderr = self.command()
+        self.assertEqual(1, code, stdout + stderr)
+        report = json.loads(stdout)
+        self.assertFalse(report['ready'])
+        self.assertEqual('status_account_starting', report['reason_code'])
+        self.assertEqual('starting', report['account_services'])
+
     def test_missing_hint_does_not_read_database_or_start_runtime(self):
         self.hint.unlink()
         code, stdout, stderr = self.command()
