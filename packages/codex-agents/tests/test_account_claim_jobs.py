@@ -78,6 +78,11 @@ class AccountClaimJobTests(unittest.TestCase):
                          (view['faulted'], view['last_failure']['cause'], view['last_failure']['type']))
         self.assertNotIn('secret', repr(view))
 
+    def test_C5_a_submitted_claim_is_busy_in_the_lane_notes(self):
+        self.assertEqual(0, self.jobs.health.view()['busy'])
+        self.begin()
+        self.assertEqual(1, self.jobs.health.view()['busy'])
+
     def test_fault_before_offer_can_drain_queued_inputs_without_starting_work(self):
         self.begin()
         with mock.patch.object(self.jobs._pool, "poll", side_effect=RuntimeError("fixture before offer")), \

@@ -325,6 +325,15 @@ class AccountIngress:
         with self._lock:
             return any(not self._peers[token].disconnected and now < self._peers[token].deadline for token in group)
 
+    def _publish_health(self):
+        """S1-H1a C5: this owner's note: requests being answered (busy) and waiting (queued)."""
+        try:
+            with self._lock:
+                queued = sum(p.request is not None and not p.processing for p in self._peers.values())
+            self._note.publish(busy=len(self._groups), queued=queued)
+        except Exception:
+            pass
+
     def pump_owner(self):
         """Bounded owner batches, with no socket wait, worker start or join.
 
@@ -406,6 +415,7 @@ class AccountIngress:
             raise
         finally:
             self._pumping = False
+            self._publish_health()  # S1-H1a C5
 
     def request_close(self):
         self._owner()

@@ -308,11 +308,12 @@ class SignatureWorkerPool:
             slot.incoming.put_nowait(_Envelope(token, item.inputs, cancelled, active.deadline_ns, item.admission))
             self._publish_health()  # S1-H1a
             return item.handle
-        except BaseException:
+        except BaseException as error:
             # No inference of no-start after an ambiguous queue/publication
             # fault. Retain intake/static shares and refuse further offers.
             self._faulted = True
             slot.fault.set()
+            self.health.note_failure(self._note, 'signature_offer_failed', error)  # S1-H1a C4
             if slot.current is not None:
                 slot.current.unknown = True
                 slot.current.cancelled.set()
@@ -389,6 +390,7 @@ class SignatureWorkerPool:
                     or not self._valid_result(message.result, active)):
                 active.unknown = True
                 slot.fault.set()
+                self._reply_fault(slot)  # S1-H1a C4
                 continue
             result = message.result
             # Keep the sole completion in its slot across a failed fresh clock
@@ -397,6 +399,7 @@ class SignatureWorkerPool:
             if result.finished_ns is not None and result.finished_ns > now:
                 active.unknown = True
                 slot.fault.set()
+                self._reply_fault(slot)  # S1-H1a C4
                 continue
             if self._clock_failed:
                 result = SignatureWorkerResult('signature_execution_clock_failure', (), result.finished_ns,
@@ -421,11 +424,12 @@ class SignatureWorkerPool:
                     raise SignatureWorkerError()
                 slot.pending = None
                 slot.current = None
-            except BaseException:
+            except BaseException as error:
                 self._faulted = True
                 active.unknown = True
                 active.cancelled.set()
                 slot.fault.set()
+                self.health.note_failure(self._note, 'signature_confirmation_failed', error)  # S1-H1a C4
                 slot.current = active
                 self._returned.pop(active.handle, None)
                 raise
@@ -441,6 +445,12 @@ class SignatureWorkerPool:
         self._publish_health()
         return tuple(SignatureWorkerNotice(handle, self.result(handle), False) for handle in self._returned)
 
+    def _reply_fault(self, slot):
+        """S1-H1a C4: an invalid reply or time faults its slot; noted once, with no exception."""
+        if not getattr(slot, 'noted_fault', False):
+            slot.noted_fault = True
+            self.health.note_failure(self._note, 'reply_mismatch', None)
+
     def _publish_health(self):
         """S1-H1a: this owner's note: active jobs busy, unconfirmed ones and selected intake without
         a slot kept. Reporting only; never raises."""
@@ -449,7 +459,8 @@ class SignatureWorkerPool:
             kept = {slot.health_token for slot in active if slot.current.unknown}
             spare = max(0, self._intake.snapshot().selected - len(active))
             kept.update(self._intake_tokens[:spare])
-            self._note.publish(kept=frozenset(kept), busy=len(active) - sum(s.current.unknown for s in active))
+            self._note.publish(kept=frozenset(kept), busy_tokens=frozenset(slot.health_token for slot in active),
+                               faulted=self._faulted or any(slot.fault.is_set() for slot in self._slots))
         except Exception:
             pass
 

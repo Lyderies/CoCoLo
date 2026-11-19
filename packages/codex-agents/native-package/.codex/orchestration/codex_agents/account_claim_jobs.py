@@ -207,6 +207,7 @@ class AccountClaimJobs:
                     project_id, provider, self._work_limits, claim_anchor_ms(context))
                 self._signatures[job.signature_handle] = ticket
                 job.state = "pending"
+            self._publish_health()  # S1-H1a C5
             return ticket
         except BaseException:
             try:
@@ -275,6 +276,7 @@ class AccountClaimJobs:
                 job.signature_handle = self._intake.capture_admission(project_id, _provider(captured), self._work_limits)
                 self._signatures[job.signature_handle] = ticket
                 job.state = 'pending'
+            self._publish_health()  # S1-H1a C5
             return ticket
         except BaseException:
             try:
@@ -294,6 +296,12 @@ class AccountClaimJobs:
             raise
 
     def drive(self):
+        try:
+            self._drive_steps()
+        finally:
+            self._publish_health()  # S1-H1a C5
+
+    def _drive_steps(self):
         self._guard()
         if not self._started:
             raise ClaimError("claim_unavailable")

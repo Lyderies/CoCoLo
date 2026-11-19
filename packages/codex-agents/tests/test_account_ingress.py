@@ -122,6 +122,14 @@ class AccountIngressTests(unittest.TestCase):
         self.ingress = None  # its descriptor is kept for an explicit shutdown: nothing to drain here
         self.jobs.request_close()
 
+    def test_C5_a_request_waiting_and_then_answered_shows_in_the_lane_notes(self):
+        ingress = self.start()
+        client = self.pair(self.request('c5'))
+        self.wait(lambda: ingress.snapshot()['queued'] == 1, pump=False)
+        ingress.pump_owner()
+        self.assertEqual(1, ingress.health.view()['busy'] + ingress.health.view()['queued'])
+        self.read(client, self.request('c5'))
+
     def test_partial_request_saturation_keeps_reserved_health_off_owner(self):
         self.start(ordinary=2, timeout_ns=300_000_000)
         first, second = self.pair(), self.pair()

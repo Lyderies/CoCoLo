@@ -368,8 +368,9 @@ class BillingProbeWorkers:
             job = _Job(payload, slot, token=lane_health.new_token())
             self._jobs[handle], slot.current = job, handle
             self._charged += PROBE_SLOT_BYTES
-            self._note.publish(busy=len(self._jobs))
             slot.incoming.put_nowait(('prepare', handle, job))
+            # S1-H1a C1/C5: published after it is queued, busy by token (never while kept).
+            self._note.publish(busy_tokens=frozenset(j.token for j in self._jobs.values()))
             return handle
 
     def prepared(self, handle):
@@ -460,7 +461,7 @@ class BillingProbeWorkers:
             self._jobs.pop(handle)
             job.slot.current = None
             self._charged -= PROBE_SLOT_BYTES
-            self._note.publish(busy=len(self._jobs))
+            self._note.publish(busy_tokens=frozenset(j.token for j in self._jobs.values()))
 
     def close(self):
         self._owner()

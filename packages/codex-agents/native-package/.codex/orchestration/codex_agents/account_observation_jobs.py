@@ -255,7 +255,8 @@ class AccountObservationJobs:
         try:
             kept = {slot.health_token for slot in self._active
                     if slot.fault.is_set() or slot in self._mismatched}
-            self._note.publish(kept=frozenset(kept), busy=len(self._active) - len(kept),
+            self._note.publish(faulted=self._faulted, kept=frozenset(kept),
+                               busy_tokens=frozenset(slot.health_token for slot in self._active),
                                queued=sum(len(queue_) for queue_ in self._queues.values()))
         except Exception:
             pass
