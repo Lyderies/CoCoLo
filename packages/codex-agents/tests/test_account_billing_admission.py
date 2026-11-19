@@ -1,14 +1,12 @@
 """Real registered signature returns; model launch/native enrollment remain gated."""
 from copy import copy
 from pathlib import Path
-import runpy
 import sys
 import time
 import unittest
 from unittest import mock
 
 import tests.support  # noqa: F401
-from tests.support import REPOSITORY_ROOT
 from tests import test_providers as fixtures
 
 from codex_agents.account_billing_admission import AccountBillingAdmission, ProbeAdmission, ProbeAdmissionError
@@ -201,7 +199,6 @@ class AccountBillingAdmissionTests(unittest.TestCase):
 
     def test_standalone_backup_preserves_genuine_sealed_admission_and_rejects_missing_request(self):
         from copy import deepcopy
-        from codex_agents.learning_contracts import content_digest, validate_learning_record
         original = self.reserve()
         self.prepared(original)
         self.owner.admit(original)
@@ -211,15 +208,11 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         body = backup_body(path, self.fixture.project_id)
         self.assertEqual(14, body['ledger_schema_version'])
         self.assertTrue(self.ledger.verify_sanitized_backup(self.fixture.project_id, file_id='original_probe')['verified'])
-        tool = runpy.run_path(str(REPOSITORY_ROOT/'scripts/backup_installed_project.py'))
-        tool['_verify_relational_restore'](self.ledger._connection, body,
-            validate_learning_record=validate_learning_record, content_digest=content_digest)
         broken = deepcopy(body)
         broken['tables']['account_billing_probe_requests'] = []
         broken['counts']['account_billing_probe_requests'] = 0
-        with self.assertRaises(RuntimeError):
-            tool['_verify_relational_restore'](self.ledger._connection, broken,
-                validate_learning_record=validate_learning_record, content_digest=content_digest)
+        with self.assertRaises(learning_store.LedgerError):  # F3-10: moved from the removed format-2 check
+            learning_store._verify_project_backup_body(broken)
         self.assertEqual(before, self.rows())
 
     def test_restart_preserves_admitted_unknown_without_recreating_a_launchable_original(self):

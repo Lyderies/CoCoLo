@@ -12,7 +12,6 @@ throughout and registers the finished file in its own ledger.
 from __future__ import annotations
 
 import argparse
-import base64
 import contextlib
 import hashlib
 import json
@@ -123,7 +122,6 @@ def _write_authorization(path: Path, content: bytes) -> None:
             pass  # Never replaces the outcome above; a stray copy changes nothing the collector reads.
 
 
-_BYTES_KEY = "$codex_agents_bytes_base64"
 _PROJECT_COLUMNS = (
     "project_id", "canonical_root", "root_digest", "status", "created_at_ms",
     "deleted_at_ms",
@@ -279,155 +277,6 @@ def _tables(schema_version: int) -> tuple[str, ...]:
                  and (schema_version >= 11 or table != 'account_cleanup_receipts')
                  and (schema_version >= 12 or table not in {'account_observation_origins', 'account_observation_requests'})
                  and (schema_version >= 13 or table not in {'account_billing_probe_origins', 'account_billing_probe_requests'}))
-
-
-def _encode(value: object) -> object:
-    if isinstance(value, (bytes, bytearray, memoryview)):
-        return {_BYTES_KEY: base64.b64encode(bytes(value)).decode("ascii")}
-    return value
-
-
-def _decode(value: object) -> object:
-    if isinstance(value, dict) and set(value) == {_BYTES_KEY}:
-        encoded = value[_BYTES_KEY]
-        if not isinstance(encoded, str):
-            raise RuntimeError("project backup byte encoding is invalid")
-        try:
-            return base64.b64decode(encoded, validate=True)
-        except (ValueError, TypeError) as exc:
-            raise RuntimeError("project backup byte encoding is invalid") from exc
-    return value
-
-
-def _verify_relational_restore(
-    source: object,
-    body: dict[str, object],
-    *,
-    validate_learning_record: object,
-    content_digest: object,
-) -> None:
-    import sqlite3
-
-    source_connection = source
-    restored = sqlite3.connect(":memory:")
-    restored.row_factory = sqlite3.Row
-    restored.execute("PRAGMA foreign_keys = ON")
-    try:
-        for table in ("projects", *_tables(body["ledger_schema_version"])):
-            schema = source_connection.execute(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
-            ).fetchone()
-            if schema is not None:
-                restored.execute(str(schema[0]))
-        if body["ledger_schema_version"] >= 8:
-            parent_index = source_connection.execute(
-                "SELECT sql FROM sqlite_master WHERE type='index' AND name='launch_receipt_parent'"
-            ).fetchone()
-            if parent_index is None:
-                raise RuntimeError("project backup launch receipt parent is unavailable")
-            restored.execute(str(parent_index[0]))
-        if body["ledger_schema_version"] >= 9:
-            parent_index = source_connection.execute(
-                "SELECT sql FROM sqlite_master WHERE type='index' AND name='active_capacity_parent'"
-            ).fetchone()
-            if parent_index is None:
-                raise RuntimeError("project backup active capacity parent is unavailable")
-            restored.execute(str(parent_index[0]))
-        project = body["project"]
-        restored.execute(
-            f"INSERT INTO projects({','.join(_PROJECT_COLUMNS)}) VALUES(?,?,?,?,?,?)",
-            [_decode(project[name]) for name in _PROJECT_COLUMNS],
-        )
-        project_id = project["project_id"]
-        for table in _tables(body["ledger_schema_version"]):
-            columns = body["columns"][table]
-            rows = body["tables"][table]
-            if body["counts"][table] != len(rows):
-                raise RuntimeError("project backup count manifest is invalid")
-            if not columns:
-                if rows:
-                    raise RuntimeError("project backup row shape is invalid")
-                continue
-            placeholders = ",".join("?" for _ in range(len(columns) + 1))
-            for row in rows:
-                if set(row) != set(columns):
-                    raise RuntimeError("project backup row shape is invalid")
-                values = [_decode(row[name]) for name in columns]
-                if table == "records":
-                    record = validate_learning_record(json.loads(bytes(
-                        values[columns.index("content")]
-                    )))
-                    if content_digest(record) != values[columns.index("content_digest")]:
-                        raise RuntimeError("project backup record verification failed")
-                restored.execute(
-                    f"INSERT INTO {table}(project_id,{','.join(columns)}) "
-                    f"VALUES({placeholders})",
-                    [project_id, *values],
-                )
-        if restored.execute("PRAGMA foreign_key_check").fetchall():
-            raise RuntimeError("project backup foreign-key verification failed")
-        if body["ledger_schema_version"] >= 9 and restored.execute(
-            "SELECT 1 FROM launch_claims c LEFT JOIN active_run_capacity a "
-            "ON a.project_id=c.project_id AND a.handle_digest=c.handle_digest "
-            "WHERE a.run_id IS NULL OR a.run_id<>c.run_id OR a.bridge_run_id IS NOT c.bridge_run_id LIMIT 1"
-        ).fetchone() is not None:
-            raise RuntimeError("project backup capacity coverage is incomplete")
-        if body["ledger_schema_version"] >= 9 and restored.execute(
-            "SELECT 1 FROM active_run_capacity a LEFT JOIN capacity_completions c "
-            "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
-            "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
-            "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
-            "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
-            "WHERE a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
-            "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
-        ).fetchone() is not None:
-            raise RuntimeError("project backup completion coverage is incomplete")
-        if body['ledger_schema_version'] >= 11:
-            missing = restored.execute('SELECT 1 FROM capacity_executions e LEFT JOIN account_cleanup_receipts c '
-                'ON c.project_id=e.project_id AND c.reservation_digest=e.cleanup_reservation_digest '
-                'WHERE e.cleanup_reservation_digest IS NOT NULL AND '
-                '(c.handle_digest IS NULL OR c.handle_digest<>e.handle_digest OR c.run_id<>e.run_id '
-                'OR c.bridge_run_id<>e.bridge_run_id OR c.registration_digest<>e.owner_digest) LIMIT 1').fetchone()
-            orphan = restored.execute('SELECT 1 FROM account_cleanup_receipts c LEFT JOIN capacity_executions e '
-                'ON e.project_id=c.project_id AND e.handle_digest=c.handle_digest '
-                'WHERE e.cleanup_reservation_digest IS NULL OR e.cleanup_reservation_digest<>c.reservation_digest LIMIT 1').fetchone()
-            if missing is not None or orphan is not None:
-                raise RuntimeError('project backup cleanup coverage is incomplete')
-        if body['ledger_schema_version'] >= 12 and restored.execute(
-            'SELECT 1 FROM account_observation_origins o LEFT JOIN account_observation_requests r '
-            'ON r.project_id=o.project_id AND r.request_key=o.request_key WHERE r.request_key IS NULL OR '
-            'r.parameters_digest<>o.parameters_digest OR r.observed_at_ms<>o.observed_at_ms UNION ALL '
-            'SELECT 1 FROM account_observation_requests r LEFT JOIN account_observation_origins o '
-            'ON o.project_id=r.project_id AND o.request_key=r.request_key WHERE o.request_key IS NULL LIMIT 1'
-        ).fetchone() is not None:
-            raise RuntimeError('project backup observation coverage is incomplete')
-        if body['ledger_schema_version'] >= 13 and restored.execute(
-            'SELECT 1 FROM account_billing_probe_origins o LEFT JOIN account_billing_probe_requests r '
-            'ON r.project_id=o.project_id AND r.request_key=o.request_key WHERE r.request_key IS NULL OR '
-            'r.parameters_digest<>o.parameters_digest OR r.created_at_ms<>o.created_at_ms UNION ALL '
-            'SELECT 1 FROM account_billing_probe_requests r LEFT JOIN account_billing_probe_origins o '
-            'ON o.project_id=r.project_id AND o.request_key=r.request_key WHERE o.request_key IS NULL LIMIT 1'
-        ).fetchone() is not None:
-            raise RuntimeError('project backup billing probe coverage is incomplete')
-        if restored.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-            raise RuntimeError("project backup integrity verification failed")
-        for table in _tables(body["ledger_schema_version"]):
-            columns = body["columns"][table]
-            if not columns:
-                continue
-            actual = [
-                {name: _encode(row[name]) for name in columns}
-                for row in restored.execute(
-                    f"SELECT {','.join(columns)} FROM {table} WHERE project_id=?",
-                    (project_id,),
-                ).fetchall()
-            ]
-            if sorted(_canonical_json(row) for row in actual) != sorted(
-                _canonical_json(row) for row in body["tables"][table]
-            ):
-                raise RuntimeError("project backup relational roundtrip changed rows")
-    finally:
-        restored.close()
 
 
 _STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
