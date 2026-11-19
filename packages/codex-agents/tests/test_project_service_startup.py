@@ -97,6 +97,17 @@ class ProjectServiceStartupTests(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertNotEqual(before, capability.read_bytes())
 
+    def test_S1_U8a_the_owner_command_starts_this_projects_service_once(self):
+        self.assertEqual([], self.hosts())
+        started = self.cli('learning-start-project-service')
+        self.assertEqual((True, True), (started['ready'], started['serving']))
+        first = self.hosts()
+        self.assertEqual(1, len(first))
+        self.assertTrue(runtime_hint_path(self.paths, self.project).exists())
+        again = self.cli('learning-start-project-service')
+        self.assertEqual((True, True), (again['ready'], again['serving']))
+        self.assertEqual(first, self.hosts())  # an existing service is reused, not replaced
+
     def test_a_killed_host_is_replaced_and_an_unregistered_project_gets_none(self):
         opened = self.cli('learning-open-orchestration', '--request-id', 'crash-open')
         (pid,) = self.hosts()

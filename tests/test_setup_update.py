@@ -278,6 +278,27 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         self.assertEqual("", listed.read_text())
 
 
+    # S1-U8 ------------------------------------------------------------------------------------------
+
+    def test_U8_the_update_starts_the_projects_new_service_once_the_collector_is_ready(self):
+        project = self.installed()
+        code, screen = self.update(project)
+        self.assertEqual(0, code, screen[-1500:])
+        calls = (self.base / "register.log").read_text().splitlines()
+        started = [i for i, line in enumerate(calls) if "learning-start-project-service" in line]
+        registered = [i for i, line in enumerate(calls) if "learning-register" in line]
+        self.assertEqual(1, len(started))
+        self.assertLess(registered[-1], started[0])  # after the collector is registered and ready
+        self.assertIn(str(project), calls[started[0]])
+
+    def test_U8_a_service_that_cannot_start_stops_the_update_with_its_reason(self):
+        project = self.installed()
+        code, screen = self.update(project, {"FAKE_START": '{"ready": false, "reason_code": "project_service_other_version"}'})
+        self.assertEqual(1, code)
+        self.assertIn("project_service_other_version", screen)
+        self.assertEqual(0, self.attested())  # stopped at the collector step
+
+
 def load_tests(loader, tests, pattern):
     """Only the tests defined here; the inherited terminal tests run in their own modules."""
     names = sorted(name for name in vars(SetupUpdateTests) if name.startswith("test_"))

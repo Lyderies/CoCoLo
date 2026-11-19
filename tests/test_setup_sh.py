@@ -1009,6 +1009,11 @@ class WizardTerminalTests(unittest.TestCase):
             ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;; esac; fi\n'
             'if [ -n "$FAKE_REGISTER" ]; then case "$*" in *"cli.py learning-register "*)'
             f' printf "%s\\n" "$*" >> "{self.base / "register.log"}"; echo "$FAKE_REGISTER"; exit 0;;'
+            # S1-U8: the project's service, started after the collector is ready; FAKE_START replaces the reply.
+            ' *"cli.py learning-start-project-service "*)'
+            f' printf "%s\\n" "$*" >> "{self.base / "register.log"}";'
+            ' echo "${FAKE_START:-{\\"ready\\": true, \\"serving\\": true\\}}";'
+            ' case "${FAKE_START:-}" in *\'"ready": false\'*) exit 2;; esac; exit 0;;'
             # FAKE_STATUS_STARTING=N: the collector answers with a start-up reason N times first,
             # as a collector just restarted by registering does (C6); FAKE_STATUS_REASON names it.
             ' *"cli.py learning-status "*)'

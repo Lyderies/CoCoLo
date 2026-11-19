@@ -186,6 +186,10 @@ class DirectDriverMixin:
             if matches("*cli.py learning-register *"):
                 self._append(self.base / "register.log", joined)
                 return 0, (env["FAKE_REGISTER"] + "\n").encode(), b""
+            if matches("*cli.py learning-start-project-service *"):  # S1-U8
+                self._append(self.base / "register.log", joined)
+                reply = env.get("FAKE_START") or '{"ready": true, "serving": true}'
+                return (2 if '"ready": false' in reply else 0), (reply + "\n").encode(), b""
             if matches("*cli.py learning-status *"):
                 counter = self.base / "status.count"
                 n = (int(counter.read_text().strip()) if counter.exists() else 0) + 1
