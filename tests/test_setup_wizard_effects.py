@@ -149,5 +149,25 @@ class OwnerToolTests(unittest.TestCase):
         self.assertIn("not an exact copy of this setup's version", problem)
 
 
+
+class SessionScanTests(unittest.TestCase):
+    """W2.1: the runtime's Codex session scan, in-process from this clone, never Codex's files directly."""
+
+    def test_an_empty_codex_home_has_no_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(os.path.realpath(directory))
+            for name in ("home", "home/.codex", "home/.local", "home/.local/state"):
+                (base / name).mkdir(mode=0o700)
+            environ = {"HOME": str(base / "home"), "CODEX_HOME": str(base / "home" / ".codex"),
+                       "XDG_STATE_HOME": str(base / "home" / ".local" / "state")}
+            with mock.patch.dict(os.environ, environ):
+                self.assertEqual({"ready": True, "warnings": []}, effects.session_scan(ROOT))
+            self.assertEqual([".codex", ".local"], sorted(p.name for p in (base / "home").iterdir()))
+
+    def test_a_scan_that_fails_is_none(self) -> None:
+        with mock.patch.object(effects, "_scan_modules", side_effect=RuntimeError("broken")):
+            self.assertIsNone(effects.session_scan(ROOT))
+
+
 if __name__ == "__main__":
     unittest.main()
