@@ -8,8 +8,10 @@ to F3-5: this clone's project_backup writes and checks the file in a separate
 isolated Python, and the installed runtime's ledger registers it.
 """
 
+import json
 import os
 import runpy
+import signal
 import stat
 import subprocess
 import sys
@@ -28,6 +30,27 @@ TOOL = runpy.run_path(str(SCRIPT))
 # The script's own globals (run_path returns a copy), for patching what its functions read.
 SCRIPT_GLOBALS = TOOL["backup_partition"].__globals__
 RECORDS = 16_000  # About 11 MB of records (test_large_project_backups).
+
+
+def child_runs(launched=None, after=None, rewrite=None, started=None):
+    """Patch the script's child launch: record each argv, act once the child has answered (`after`),
+    rewrite its report (`rewrite`), or act just after it has started (`started`, given the process)."""
+    real = subprocess.Popen
+
+    class Watched(real):
+        def __init__(self, argv, *args, **kwargs):
+            if launched is not None:
+                launched.append(list(argv))
+            super().__init__(argv, *args, **kwargs)
+            if started is not None:
+                started(self)
+
+        def communicate(self, *args, **kwargs):
+            out, err = super().communicate(*args, **kwargs)
+            if after is not None:
+                after()
+            return (rewrite(out) if rewrite is not None else out), err
+    return mock.patch.object(subprocess, "Popen", Watched)
 
 
 class OwnerBackupStreamedTests(unittest.TestCase):
@@ -89,12 +112,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
 
     def test_F3_2_the_copy_is_written_by_this_clones_package_in_an_isolated_python(self):
         launched = []
-        real_run = subprocess.run
-
-        def run(argv, *args, **kwargs):
-            launched.append(list(argv))
-            return real_run(argv, *args, **kwargs)
-        with mock.patch.object(subprocess, "run", run):
+        with child_runs(launched=launched):
             self.owner_backup()
         [argv] = launched
         self.assertEqual([sys.executable, "-I", "-B", "-S", str(SCRIPT), "--stream-child"], argv[:6])
@@ -107,16 +125,12 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         self.assertIsNone(self.registered("too_big"))
 
     def test_F3_3_a_copy_that_fails_its_checks_is_never_registered(self):
-        real_run = subprocess.run
-
-        def broken(argv, *args, **kwargs):
-            done = real_run(argv, *args, **kwargs)
+        def change():
             partial = self.source.state.backups / self.project / ".checked_badly.partial"
             with open(partial, "r+b") as handle:  # the copy changes after the child checked it
                 handle.seek(0, os.SEEK_END)
                 handle.write(b"\xff" * 16)
-            return done
-        with mock.patch.object(subprocess, "run", broken), self.assertRaises(RuntimeError):
+        with child_runs(after=change), self.assertRaises(RuntimeError):
             self.owner_backup("checked_badly")
         self.assertEqual([], self.partition_files())
         self.assertIsNone(self.registered("checked_badly"))
@@ -135,6 +149,157 @@ class OwnerBackupStreamedTests(unittest.TestCase):
                           "isolated_restore_foreign_keys"}, set(report))
         self.assertEqual(learning_store.LEDGER_SCHEMA_VERSION, report["ledger_schema_version"])
         self.assertEqual(("ok", "ok"), (report["isolated_restore_integrity"], report["isolated_restore_foreign_keys"]))
+
+
+    # Review 040-f3-owner-backup ------------------------------------------------------------------
+
+    def assert_nothing_left(self, file_id):
+        self.assertEqual([], self.partition_files())
+        self.assertIsNone(self.registered(file_id))
+
+    def test_F3_1_the_childs_memory_does_not_grow_with_the_partition(self):
+        reports = []
+
+        def keep(out):
+            reports.append(json.loads(out))
+            return out
+        with child_runs(rewrite=keep):
+            self.owner_backup("small")
+        add_events(self.source, self.project, 4 * RECORDS)  # about 45 MB more
+        with child_runs(rewrite=keep):
+            self.owner_backup("large")
+        small, large = (report["peak_rss_bytes"] for report in reports)
+        self.assertLess(large - small, 16 * 1_048_576, f"the child grew from {small:,} to {large:,} bytes")
+
+    def test_F3_1_every_schema_layout_from_5_to_14_is_written_checked_and_registered(self):
+        from tests.test_account_launch_claims import drop_account_cleanup_for_legacy_fixture
+        connection = self.source._connection
+        for version in range(14, 4, -1):
+            with self.subTest(version=version):
+                # The layouts schema 10 and 9 left (drop_original_open_for_legacy_fixture, applied in steps).
+                if version == 10:
+                    drop_account_cleanup_for_legacy_fixture(self.source)
+                if version == 9:
+                    connection.execute("DROP TABLE account_open_requests")
+                    connection.execute("DROP TABLE account_open_receipts")
+                    connection.execute("ALTER TABLE host_run_bindings DROP COLUMN history_owner")
+                report = self.owner_backup(f"schema_{version}", schema_version=version)
+                self.assertEqual(version, report["ledger_schema_version"])
+                path = self.source.state.backups / self.project / f"schema_{version}.sqlite3"
+                project_backup.verify(path, project_id=self.project, schema_version=version,
+                                      compare=self.source._connection, exclude_file_id=f"schema_{version}")
+
+    def test_F3_1_the_limit_is_the_ledgers_backup_limit(self):
+        launched = []
+        with child_runs(launched=launched):
+            self.owner_backup()
+        self.assertEqual(str(learning_store.MAX_PROJECT_BACKUP_BYTES), launched[0][-1])
+
+    def test_F3_3_registration_records_the_digest_the_expiry_and_the_place(self):
+        expires = self.source._clock_ms() + 3_600_000
+        report = TOOL["backup_partition"](self.source, self.project, "placed", schema_version=14,
+                                          expires_at_ms=expires)
+        row = self.source._connection.execute(
+            "SELECT relative_path,content_digest,expires_at_ms FROM stored_files WHERE project_id=? AND file_id=?",
+            (self.project, "placed")).fetchone()
+        self.assertEqual((f"backups/{self.project}/placed.sqlite3", report["backup_sha256"], expires), tuple(row))
+
+    def test_F3_3a_a_copy_replaced_by_another_file_after_its_check_is_never_registered(self):
+        def replace():
+            partial = self.source.state.backups / self.project / ".swapped.partial"
+            twin = partial.with_name(".twin")
+            twin.write_bytes(partial.read_bytes())  # same bytes, another file
+            twin.chmod(0o600)
+            os.replace(twin, partial)
+        with child_runs(after=replace), self.assertRaisesRegex(RuntimeError, "not the file"):
+            self.owner_backup("swapped")
+        self.assert_nothing_left("swapped")
+
+    def test_F3_3b_a_linked_folder_on_the_way_is_refused_and_nothing_is_written_there(self):
+        elsewhere = self.source.state.root.parent / "elsewhere"
+        elsewhere.mkdir(mode=0o700)
+        backups = self.source.state.backups
+        moved = backups.with_name("backups-real")
+        os.replace(backups, moved)
+        backups.symlink_to(moved)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "link"):
+                self.owner_backup("linked")
+        finally:
+            backups.unlink()
+            os.replace(moved, backups)
+        self.assertNotIn("linked.sqlite3", [p.name for p in moved.rglob("*")] if moved.exists() else [])
+        self.assert_nothing_left("linked")
+
+    def test_F3_3b_a_final_file_that_appears_before_publication_is_kept_and_refused(self):
+        final = self.source.state.backups / self.project / "raced.sqlite3"
+
+        def appear():
+            final.write_bytes(b"someone else's file")
+        with child_runs(after=appear), self.assertRaises(RuntimeError):
+            self.owner_backup("raced")
+        self.assertEqual(b"someone else's file", final.read_bytes())
+        self.assertNotIn(".raced.partial", self.partition_files())
+        self.assertIsNone(self.registered("raced"))
+
+    def test_F3_3c_a_failed_folder_sync_after_publication_leaves_nothing(self):
+        real_fsync = os.fsync
+
+        def fsync(descriptor):
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError("folder sync failed")
+            return real_fsync(descriptor)
+        with mock.patch.object(os, "fsync", fsync), self.assertRaises(OSError):
+            self.owner_backup("unsynced")
+        self.assert_nothing_left("unsynced")
+
+    def test_F3_3c_a_registration_failure_leaves_nothing(self):
+        with mock.patch.object(self.source, "_register_stored_file",
+                               side_effect=learning_store.LedgerError("registry refused")), \
+                self.assertRaises(learning_store.LedgerError):
+            self.owner_backup("unregistered")
+        self.assert_nothing_left("unregistered")
+
+    def test_F3_3c_an_incomplete_child_report_leaves_nothing(self):
+        for missing in ("backup_sha256", "manifest_sha256", "counts", "identity"):
+            with self.subTest(missing=missing):
+                def drop(out):
+                    report = json.loads(out)
+                    report.pop(missing)
+                    return json.dumps(report)
+                with child_runs(rewrite=drop), self.assertRaises(RuntimeError):
+                    self.owner_backup(f"without_{missing}")
+                self.assert_nothing_left(f"without_{missing}")
+
+    def test_F3_3d_a_termination_signal_stops_the_child_and_leaves_nothing(self):
+        children = []
+
+        def signal_now(process):
+            children.append(process.pid)
+            os.kill(os.getpid(), signal.SIGTERM)
+        before = signal.getsignal(signal.SIGTERM)
+        with child_runs(started=signal_now), self.assertRaisesRegex(RuntimeError, "signal"):
+            self.owner_backup("signalled")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(children[0], 0)  # stopped and reaped
+        self.assertEqual(before, signal.getsignal(signal.SIGTERM))
+        self.assert_nothing_left("signalled")
+
+    def test_F3_3e_a_failed_quiesce_reports_the_backup_made_and_the_collector_not_stopped(self):
+        report = self.owner_backup("kept")
+
+        def quiesce():
+            raise RuntimeError("authorization unreadable")
+        final, code = TOOL["finish_backup"](report, leave_quiesced=True, quiesce=quiesce)
+        self.assertEqual(3, code)
+        self.assertTrue(final["ready"])
+        self.assertFalse(final["collector_quiesced"])
+        self.assertEqual("authorization unreadable", final["quiesce_error"])
+        self.assertIsNotNone(self.registered("kept"))
+        final, code = TOOL["finish_backup"](report, leave_quiesced=True, quiesce=lambda: None)
+        self.assertEqual((0, True), (code, final["collector_quiesced"]))
+        final, code = TOOL["finish_backup"](report, leave_quiesced=False, quiesce=quiesce)
+        self.assertEqual((0, False), (code, final["collector_quiesced"]))
 
 
 if __name__ == "__main__":
