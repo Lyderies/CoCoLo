@@ -443,5 +443,55 @@ class CommandsRuleTests(unittest.TestCase):
         self.assertLessEqual(len(steps.unsupported_home("x" * 500)[1]), len("Reason: ") + 200)
 
 
+
+class ReplyTests(unittest.TestCase):
+    """setup.sh's JSON helper (get, reason, raw, verifyclass, claude), as pure functions over replies."""
+
+    def test_get_walks_dotted_keys_and_formats_like_the_helper(self) -> None:
+        reply = {"a": {"b": True, "c": False, "n": 3, "l": [1, 2], "s": "x"}}
+        self.assertEqual(["true", "false", "3", "2", "x", "", ""],
+                         [steps.get(reply, f"a.{key}") for key in ("b", "c", "n", "l", "s", "missing", "s.deeper")])
+        self.assertEqual("", steps.get(None, "a"))
+
+    def test_reason_shows_a_plain_code_and_a_fixed_message_only_when_asked(self) -> None:
+        reply = {"reason_code": "claude_backend_not_subscription", "error": "Plan <SECRET>\n is wrong"}
+        self.assertEqual("(claude_backend_not_subscription)", steps.reason(reply, fixed=False))
+        self.assertEqual("Plan SECRET is wrong (claude_backend_not_subscription)", steps.reason(reply, fixed=True))
+        self.assertEqual("(code)", steps.reason({"account_reason_code": "code", "reason_code": "Not Plain"}, False))
+        self.assertEqual("", steps.reason({"reason_code": "x" * 70}, False))
+        self.assertEqual("", steps.reason([], True))
+
+    def test_raw_gathers_every_refusal_text_lowercased_on_one_line(self) -> None:
+        reply = {"refused": "Top\nLevel", "codex": {"project_errors": ["Managed Paths"], "error": "E"},
+                 "claude_settings": {"required_action": "Act"}, "codex_rule": {"errors": [3, "Rule"]}}
+        self.assertEqual("top level managed paths e act rule", steps.raw(reply))
+        self.assertEqual("", steps.raw(None))
+
+    def test_verify_class(self) -> None:
+        limited = {"codex": {"package_ready": True,
+                             "project_errors": ["operational check sandbox preflight failed: x"]},
+                   "claude": {"result": "verified"}, "claude_settings": {"ready": True}}
+        self.assertEqual("linux-limited", steps.verify_class(limited))
+        self.assertEqual("ready", steps.verify_class({"ready": True}))
+        limited["codex"]["project_errors"].append("other")
+        self.assertEqual("failed", steps.verify_class(limited))
+        self.assertEqual("failed", steps.verify_class(None))
+
+    def test_claude_login_keeps_only_plain_words(self) -> None:
+        self.assertEqual((True, "max", "claude.ai"),
+                         steps.claude_login(b'{"loggedIn": true, "subscriptionType": "max", "authMethod": "claude.ai"}'))
+        self.assertEqual((True, "unknown", "x"), steps.claude_login(b'{"loggedIn": true, "authMethod": "<x>"}'))
+        self.assertEqual((False, "", ""), steps.claude_login(b'{"loggedIn": false}'))
+        self.assertEqual((False, "", ""), steps.claude_login(b"not json"))
+
+    def test_shell_quote_matches_bash_printf_q(self) -> None:
+        for value, quoted in (("my proj;x", "my\\ proj\\;x"), ("a=b", "a=b"), ("~/x", "~/x"), ("", "''"),
+                              ("a,b.c_d+e:f@g%h/i-j", "a\\,b.c_d+e:f@g%h/i-j"), ("it's", "it\\'s"),
+                              ("#x", "\\#x"), ("x#y", "x#y"), ("a!b{c}[d]^e*f?$g", "a\\!b\\{c\\}\\[d\\]\\^e\\*f\\?\\$g"),
+                              ("a\nb", "$'a\\nb'")):
+            with self.subTest(value=value):
+                self.assertEqual(quoted, steps.shell_quote(value))
+
+
 if __name__ == "__main__":
     unittest.main()
