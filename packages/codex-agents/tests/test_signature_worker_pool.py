@@ -112,8 +112,11 @@ class SignatureWorkerPoolTests(unittest.TestCase):
 
     def started_on_a_worker(self, pool):
         handle = self.capture(0)
+        pool.offer_next()  # the owner hands it to a worker
         started = time.monotonic()
-        while pool.health.view()['busy'] < 1:  # the owner hands it to a worker
+        # The owner hands it to a worker (a fast fake job may already be done), then stops polling.
+        while (not any(slot.current is not None for slot in pool._slots)
+               and pool.health.view()['last_failure'] is None):
             pool.poll()
             self.assertLess(time.monotonic() - started, 10)
             time.sleep(0.002)

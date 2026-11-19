@@ -13,6 +13,7 @@ import queue
 import threading
 import time
 
+from . import lane_health
 from .signature_input_wire import SignatureWireLimits
 from .signature_job_intake import SignatureJobIntake
 from .signature_payloads import SignaturePayloadError
@@ -150,13 +151,16 @@ def _worker_loop(slot, wire_limits, poll_ns, cleanup_ns):
         except execution.SignatureExecutionUnconfirmed as error:
             retained = error.context
             result = None
+            slot.note.publish(kept=frozenset({slot.health_token}))  # S1-H1a, by this worker
+            slot.lane.note_failure(slot.note, 'signature_execution_unconfirmed', error)
         except SignaturePayloadError:
             result = SignatureWorkerResult('signature_execution_invalid_output', (), None, 0, False)
         except AdmissionDecodeError:
             # Parsing precedes execution: no helper has started on this path.
             result = SignatureWorkerResult('signature_execution_invalid_output', (), None, 0, True)
-        except BaseException:
+        except BaseException as error:
             result = SignatureWorkerResult('signature_execution_internal_failure', (), None, 0, False)
+            slot.lane.note_failure(slot.note, 'signature_worker_failed', error)  # S1-H1a
         # No complete job retains a full input/wire/payload in its mailbox or
         # this persistent worker's locals. Exception handlers have also ended.
         inputs = None
@@ -177,9 +181,11 @@ def _worker_loop(slot, wire_limits, poll_ns, cleanup_ns):
 def _worker(slot, wire_limits, poll_ns, cleanup_ns):
     try:
         _worker_loop(slot, wire_limits, poll_ns, cleanup_ns)
-    except BaseException:
+    except BaseException as error:
         # Retain the exceptional frame/custody without printing input-bearing
         # tracebacks. The owner sees a fault and never reuses this slot.
+        slot.note.publish(faulted=True)  # S1-H1a, by this worker
+        slot.lane.note_failure(slot.note, 'signature_worker_failed', error)
         slot.fault.set()
         threading.Event().wait()
 
@@ -214,6 +220,14 @@ class SignatureWorkerPool:
         self._share = share
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._slots = [_Slot() for _ in range(limits.max_workers)]
+        # S1-H1a: published notes (reporting only). A slot keeps at most one unconfirmed job for good,
+        # so one token per slot counts it once, whichever of its worker or this owner publishes it.
+        self.health = lane_health.Lane('signature')
+        self._note = self.health.slot('owner')
+        for index, slot in enumerate(self._slots):
+            slot.lane, slot.note = self.health, self.health.slot(f'worker-{index}')
+            slot.health_token = lane_health.new_token()
+        self._intake_tokens = [lane_health.new_token() for _ in self._slots]
         self._returned = {}
         self._bootstrapped = self._starting = self._faulted = self._closing = self._closed = False
         self._clock_failed = False
@@ -292,6 +306,7 @@ class SignatureWorkerPool:
             active = _Active(item.handle, token, cancelled, now, now + self._limits.timeout_ns, len(item.inputs.rows))
             slot.current = active
             slot.incoming.put_nowait(_Envelope(token, item.inputs, cancelled, active.deadline_ns, item.admission))
+            self._publish_health()  # S1-H1a
             return item.handle
         except BaseException:
             # No inference of no-start after an ambiguous queue/publication
@@ -423,7 +438,20 @@ class SignatureWorkerPool:
         # Results are repeated until explicit consumption/discard. A later slot
         # clock fault (or reply allocation failure) cannot lose an earlier
         # completion. Every entry remains under its intake reservation.
+        self._publish_health()
         return tuple(SignatureWorkerNotice(handle, self.result(handle), False) for handle in self._returned)
+
+    def _publish_health(self):
+        """S1-H1a: this owner's note: active jobs busy, unconfirmed ones and selected intake without
+        a slot kept. Reporting only; never raises."""
+        try:
+            active = [slot for slot in self._slots if slot.current is not None]
+            kept = {slot.health_token for slot in active if slot.current.unknown}
+            spare = max(0, self._intake.snapshot().selected - len(active))
+            kept.update(self._intake_tokens[:spare])
+            self._note.publish(kept=frozenset(kept), busy=len(active) - sum(s.current.unknown for s in active))
+        except Exception:
+            pass
 
     def result(self, handle):
         self._owner()
