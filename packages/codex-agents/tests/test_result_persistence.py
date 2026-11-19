@@ -92,6 +92,31 @@ class ResultPersistenceTests(unittest.TestCase):
         lane._writer.join(6)
         self.assertFalse(lane._writer.is_alive())
 
+    def test_R6_14_earlier_requests_have_their_own_room_too_and_the_close_marker_always_fits(self):
+        release = threading.Event()
+
+        def slow_history():
+            release.wait(10)
+            return self.open_history()
+
+        lane = ResultPersistenceLane(self.fixture.owner, self.fixture.pool, mock.Mock(side_effect=slow_history),
+                                     max_entries=1, retained_bytes=MAX_PERSISTENCE_ENTRY_BYTES,
+                                     allow_local_execution_reference=True)
+        try:
+            for _ in range(result_persistence.EARLIER_SLOTS):
+                lane.expire_results()
+            with self.assertRaisesRegex(HistoryError, 'history_writer_busy'):
+                lane.expire_results()
+            for _ in range(result_persistence.REPORT_SLOTS):
+                lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
+            # The lane's one job and its close marker still fit.
+            self.assertGreaterEqual(lane._incoming.maxsize - lane._incoming.qsize(), 2)
+            lane.close()
+        finally:
+            release.set()
+        lane._writer.join(6)
+        self.assertFalse(lane._writer.is_alive())
+
     def stop_lane(self, lane):
         lane.close()
         lane._writer.join(6)

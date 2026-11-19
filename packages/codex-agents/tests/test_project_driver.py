@@ -443,6 +443,39 @@ class ProjectDriverTests(DriverHarness):
         runs = self.report_for(handle)['runs']
         self.assertEqual((1, 1, 0), (runs['opened'], runs['admitted'], runs['failed_before_open']), runs)
 
+    def test_R6_15_a_registration_that_found_no_room_is_written_without_a_prepare(self):
+        from codex_agents import result_persistence
+        from codex_agents.history_contracts import HistoryError
+        original, calls = result_persistence.ResultPersistenceLane.report_registered_run, []
+
+        def busy_twice(lane, *args):
+            calls.append(1)
+            if len(calls) <= 2:
+                raise HistoryError('history_writer_busy')
+            return original(lane, *args)
+        with mock.patch.object(result_persistence.ResultPersistenceLane, 'report_registered_run', busy_twice):
+            self.open_run()
+            self.wait_for(lambda: len(self.registered_rows()) == 1, seconds=30)
+
+    def test_R6_16_a_prepare_waiting_on_a_closed_writer_is_refused(self):
+        from codex_agents import result_persistence
+        from codex_agents.history_contracts import HistoryError
+        with mock.patch.object(result_persistence.ResultPersistenceLane, 'report_registered_run',
+                               side_effect=HistoryError('history_service_unavailable')), \
+                mock.patch.object(codex_preparation.CodexPreparationLane, 'submit') as submit:
+            context, route_path, _, run_handle = self.open_run()
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('run_failed', refused['reason_code'], refused)
+        submit.assert_not_called()
+
+    def test_R6_18_a_registered_run_the_host_abandons_is_reported_run_failed(self):
+        _, _, handle, run_handle = self.open_run()
+        self.wait_for(lambda: len(self.registered_rows()) == 1, seconds=30)
+        self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle, '--reason', 'owner_cancelled')
+        self.wait_for(lambda: [row[2] for row in self.registered_rows()] == ['run_failed'], seconds=30)
+        runs = self.report_for(handle)['runs']
+        self.assertEqual((1, 1, 0), (runs['admitted'], runs['failed_before_open'], runs['pending']), runs)
+
     def test_R6_a_run_that_opens_is_counted_once_by_its_open(self):
         context, route_path, handle, run_handle = self.open_run()
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])

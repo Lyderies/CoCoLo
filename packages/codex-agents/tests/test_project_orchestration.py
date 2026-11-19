@@ -201,6 +201,13 @@ class ProjectOrchestrationTests(unittest.TestCase):
         self.assertEqual(before, self.store._connection.execute('SELECT * FROM project_orchestration_checkpoints').fetchall())
         self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0])
 
+    def test_R6_17_a_replay_from_another_supervisor_instance_is_refused(self):
+        handle = self.opened()['orchestration_handle']
+        run = 'hrn_' + '7' * 48
+        self.store.record_registered_run(handle, run, 'run-7', 1, instance='earlier', now_ms=self.now)
+        with self.assertRaisesRegex(HistoryError, 'history_conflict'):
+            self.store.record_registered_run(handle, run, 'run-7', 1, instance='current', now_ms=self.now)
+
     def test_R6_13_retiring_an_attempt_removes_its_registration(self):
         handle = self.opened()['orchestration_handle']
         run = 'hrn_' + 'f' * 48
