@@ -107,6 +107,20 @@ class MenuTests(unittest.TestCase):
         last = out.getvalue().rsplit("\033[H\033[2J", 1)[1]
         self.assertIn("     One\n     Two\n   > Three\n\n  Up/Down move   Enter select   ? what ran   q quit\n", last)
 
+    def test_W1_a_long_item_keeps_its_beginning_and_end_so_two_stay_apart(self) -> None:
+        base = "/srv/work/projects/clients/" + "x" * 60
+        items = [base + "/alpha-service", base + "/bravo-service", "Short"]
+        term, out = make("\n", cols=60)
+        term.menu(0, items)
+        last = out.getvalue().rsplit("\033[H\033[2J", 1)[1]
+        rows = [line for line in last.splitlines() if line.startswith(("     ", "   > "))][:3]
+        shown = [row.strip().lstrip("> ").strip() for row in rows]
+        self.assertEqual(60 - 8, len(shown[0]))
+        self.assertNotEqual(shown[0], shown[1])
+        self.assertTrue(shown[0].startswith("/srv/work/") and shown[0].endswith("/alpha-service"), shown[0])
+        self.assertIn("...", shown[0])
+        self.assertEqual("Short", shown[2])
+
     def test_quit_asks_first_and_y_stops_with_130(self) -> None:
         term, out = make("q", "n", "q", "y")
         with self.assertRaises(terminal.Stop) as stopped:
