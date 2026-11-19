@@ -209,3 +209,85 @@ def cannot_open(expanded: str, typed: str, guess: str | None) -> list[str]:
     if guess:
         lines.append(f"That path does not exist, but this one does: {guess}")
     return lines
+
+
+def failure_line(step: int, step_name: str, label: str, exit_code: int, hint: str) -> str:
+    """W10.4: one failure, as the saved summary holds it: step, label, exit code and a fixed hint only."""
+    return f"step {step} ({step_name}): {label} | exit code {exit_code} | {hint}"
+
+
+def summary_text(failures: list[str]) -> str:
+    """W10.4: the saved summary: a fixed heading and the failure lines, never command output."""
+    return "COCOLO setup: what failed\n" + "".join(line + "\n" for line in failures)
+
+
+def summary_destination_refusal(path: str) -> str | None:
+    """W10.3: why a summary destination is refused, or None."""
+    if _CONTROL.search(path):
+        return "That location has a control character in it (such as a newline); nothing written"
+    return None
+
+
+# setup.sh's explain_installer, in its order: the first pattern that matches gives the fixed message.
+# The installer's own text is only matched, never shown.
+_INSTALLER_REFUSALS = (
+    (("*holds files the orchestrator does not install*",),
+     "The project's .codex/orchestration holds files the orchestrator does not install, which code running "
+     "outside Codex's sandbox could load (a Codex session may have planted them). Remove them, then run setup "
+     "again. The installer names them: {manual}"),
+    (("*xdg_state_home must be inside a hidden folder*",),
+     "XDG_STATE_HOME must be inside a hidden folder in your home, such as ~/.local/state. Unset it or move it, "
+     "then run setup again."),
+    (("*a folder above the learning state*",),
+     "A folder above your orchestrator records (such as ~/.local or ~/.local/state) is a symbolic link, is not "
+     "a folder, belongs to another user or can be changed by other users. Fix it, or set XDG_STATE_HOME to "
+     "another hidden folder in your home, then run setup again."),
+    (("*cannot install the learning hooks*",),
+     "The learning hooks could not be written: the project's folder path holds a quote, a backslash or a "
+     "control character, or this Python is not in a trusted installation folder. Move the project, or run "
+     "setup with a Python from Homebrew, python.org or the system."),
+    (("*learning hook*",),
+     "The project's learning hooks are missing, from an older release or edited by hand (Codex runs them "
+     "outside its sandbox). Update the install (choose 'Update the install and walk through every step')."),
+    (("*merge*progress*", "*rebase*progress*", "*cherry-pick*progress*", "*revert*progress*",
+      "*bisect*progress*", "*unmerged*"),
+     "A Git operation (merge, rebase, cherry-pick or similar) is unfinished in the project. Finish or abort it "
+     "first."),
+    (("*managed paths*", "*uncommitted*"),
+     "Managed paths (.codex, .agents, .claude) have uncommitted changes. Commit or discard them first."),
+    (("*top of its working tree*", "*not a usable git*"),
+     "The path is not the top folder of a Git working tree. Choose the project root."),
+    (("*symlink*", "*unsafe_or_unavailable_path*", "*not a regular file*"),
+     "A managed path is a symlink or cannot be used safely. Replace it with a real file or folder."),
+    (("*differs*", "*conflict*", "*collision*", "*modified obsolete*", "*already exists*"),
+     "A file in the project collides with a managed file (it differs from what would be installed). Move or "
+     "commit it, then retry."),
+    (("*permission rules*",),
+     "The Claude Code permission rules that keep owner commands away from a Claude session are missing from "
+     ".claude/settings.json. Update the install (choose 'Update the install and walk through every step'), "
+     "then commit."),
+    (("*settings.json*", "*agent-orchestration-permissions*"),
+     "The project's .claude/settings.json could not be merged safely: it must be a regular file holding a JSON "
+     "object whose permissions.deny is a list. Fix it, commit, and retry."),
+    (("*not an exact copy*",),
+     "The orchestrator installed in this project is not an exact copy of this setup's version, so it was not "
+     "run. Update the install, or restore the project's files with git."),
+    (("*codex commands rule*",),
+     "The Codex commands rule could not be removed by the installed orchestrator. Run the remove command "
+     "shown in the summary yourself to see which file to delete."),
+    (("*configuration is missing*", "*required*configuration*"),
+     "Project configuration is missing (project-agent-routing.json or operational-checks.json)."),
+    (("*not committed*", "*verification*"),
+     "Verification failed: the project configuration and installed files must be committed and clean."),
+)
+
+
+def installer_refusal(raw: str, manual: str) -> tuple[str, bool]:
+    """W5.5, W10.4: the fixed message for an installer refusal, and whether it was recognised. The raw
+    text is matched (case-sensitive, as bash's case is), never shown; an unknown refusal points to
+    the command to run by hand."""
+    from fnmatch import fnmatchcase
+    for patterns, message in _INSTALLER_REFUSALS:
+        if any(fnmatchcase(raw, pattern) for pattern in patterns):
+            return message.format(manual=manual), True
+    return "The installer refused: run it manually to see why:", False
