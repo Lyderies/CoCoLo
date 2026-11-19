@@ -1486,10 +1486,11 @@ class ProjectHistory:
             raise HistoryError("history_invalid_input")
         with self._transaction():
             known = self._connection.execute(
-                "SELECT orchestration_handle,run_id FROM project_registered_runs WHERE project_id=? AND run_handle=? "
-                "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
+                "SELECT orchestration_handle,run_id,service_instance FROM project_registered_runs WHERE project_id=? "
+                "AND run_handle=? AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
             if known is not None:
-                if tuple(known) != (orchestration_handle, run_id):
+                # A run an earlier service registered never resumes under another (R6-17).
+                if tuple(known) != (orchestration_handle, run_id, instance):
                     raise HistoryError("history_conflict")
                 return
             held = self._connection.execute(

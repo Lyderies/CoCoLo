@@ -51,6 +51,7 @@ class ResultPersistenceHandle:
 
 
 REPORT_SLOTS = 8  # S1-R6-7: reporting writes queued at once, beside the lane's own room
+EARLIER_SLOTS = 4  # S1-R6-14: earlier-lease requests (list, settle, expire) queued at once
 
 
 @dataclass(repr=False)
@@ -163,9 +164,10 @@ class ResultPersistenceLane:
         self._service_authorizers = (history_authorizer, result_authorizer, orchestration_authorizer)
         # API requests cannot consume one slot per result entry or the close marker, and reporting
         # writes have their own REPORT_SLOTS (S1-R6-7).
-        self._incoming = queue.Queue(maxsize=max_entries + 1 + REPORT_SLOTS
+        self._incoming = queue.Queue(maxsize=max_entries + 1 + REPORT_SLOTS + EARLIER_SLOTS
                                      + (0 if request_limits is None else request_limits.requests))
         self._reporting = 0  # reporting writes queued or being written (at most REPORT_SLOTS)
+        self._earlier_held = 0  # earlier-lease requests queued or being run (at most EARLIER_SLOTS)
         self._ready = threading.Event()
         self._closed = self._fault = False
         self._store = None
@@ -991,17 +993,17 @@ class ResultPersistenceLane:
 
     def earlier_leases(self):
         """Ask the writer for the leases an earlier service left armed; poll its `state`."""
-        return self._queue_earlier(_EarlierLeases('list'))
+        return self._queue_counted(_EarlierLeases('list'), '_earlier_held', EARLIER_SLOTS)
 
     def settle_earlier_lease(self, binding, raw):
         """Expire one such lease with the account's closure for its claim request."""
         if type(binding) is not ResultLeaseBinding or type(raw) is not bytes or not 0 < len(raw) <= MAX_DENIAL_RECEIPT_BYTES:
             raise HistoryError('history_invalid_input')
-        return self._queue_earlier(_EarlierLeases('settle', binding, raw))
+        return self._queue_counted(_EarlierLeases('settle', binding, raw), '_earlier_held', EARLIER_SLOTS)
 
     def expire_results(self):
         """Ask the writer to run one bounded result cleanup (0.3.4 R2); poll its `state`."""
-        return self._queue_earlier(_EarlierLeases('expire'))
+        return self._queue_counted(_EarlierLeases('expire'), '_earlier_held', EARLIER_SLOTS)
 
     def report_registered_run(self, orchestration_handle, run_handle, run_id, attempt):
         """S1-R6: record that the driver registered this run, under this service's supervisor instance;
@@ -1014,15 +1016,18 @@ class ResultPersistenceLane:
         return self._queue_report(_EarlierLeases('failed_before_open', arguments=(run_handle, attempt, reason)))
 
     def _queue_report(self, request):
+        return self._queue_counted(request, '_reporting', REPORT_SLOTS)
+
+    def _queue_counted(self, request, counter, slots):
         with self._lock:
-            if self._reporting >= REPORT_SLOTS:
+            if getattr(self, counter) >= slots:
                 raise HistoryError('history_writer_busy')
-            self._reporting += 1
+            setattr(self, counter, getattr(self, counter) + 1)
         try:
             return self._queue_earlier(request)
         except BaseException:
             with self._lock:
-                self._reporting -= 1
+                setattr(self, counter, getattr(self, counter) - 1)
             raise
 
     def _queue_earlier(self, request):
@@ -1084,6 +1089,8 @@ class ResultPersistenceLane:
             request.result, request.reason, request.state = result, reason, state
             if request.kind in {'register', 'failed_before_open'}:
                 self._reporting -= 1
+            else:
+                self._earlier_held -= 1
 
     def _run(self):
         operations = {"prepare": self._prepare, "publish": self._publish,

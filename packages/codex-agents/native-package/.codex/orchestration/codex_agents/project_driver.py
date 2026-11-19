@@ -102,6 +102,8 @@ _RETRYING = object()
 FENCE_RETRY_SECONDS = 1.0
 FENCE_RETRY_MAX_SECONDS = 300.0
 MAX_FENCE_ATTEMPTS = 10
+# A failure report is asked again only for these (R6-8); any other refusal can never succeed.
+_REPORT_RETRIED = frozenset({'history_writer_busy', 'history_service_unavailable', 'history_unavailable'})
 # O10 E1: the account (or its service) stopped or could not take the call; asked again while this
 # service runs, never counted as a refusal.
 FENCE_OUTAGES = frozenset({'account_unavailable', 'account_closed_without_reply', 'service_refused_busy',
@@ -156,7 +158,7 @@ class _Run:
     run_id: str
     inputs_digest: str
     state: str = 'registered'
-    registration: object = None  # S1-R6: its reporting registration on the writer (polled)
+    reporting: object = None  # S1-R6: its reporting registration on the writer (polled)
     reason: str | None = None
     preparation: object = None
     prepared: object = None
@@ -431,11 +433,15 @@ class RunDriver:
                 # It already closed by itself; dropping it changes nothing anywhere.
                 del self._runs[held[0].key]
                 self._reply(connection, {'state': 'failed', 'reason_code': 'run_closed'})
-            elif held[0].lease is not None or held[0].state not in {'registered', 'failed'} or held[0].future is not None:
+            elif (held[0].lease is not None or held[0].state not in {'registered', 'recording_registration', 'failed'}
+                  or held[0].future is not None):
                 # A leased or claimed run holds custody and maybe capacity; that needs reconciliation.
                 self._reply(connection, {'state': 'refused', 'reason_code': 'history_conflict'})
             else:
                 run = held[0]
+                if run.state != 'failed' and run.reporting is not None:
+                    # R6-18: written after its registration (one ordered queue); dropped if that never was.
+                    self._report('failed_before_open', run.key[0], run.key[1], 'run_failed')
                 self._give_back(run)
                 del self._runs[run.key]
                 self._reply(connection, {'state': 'failed', 'reason_code': 'run_abandoned'})
@@ -553,16 +559,20 @@ class RunDriver:
         self._after_registration(run)
 
     def _submit_registration(self, run):
+        """Hand the run's registration to the writer; True unless the writer is closed or faulted."""
         try:
-            run.registration = self._runtime.persistence.report_registered_run(
+            run.reporting = self._runtime.persistence.report_registered_run(
                 run.prospective.orchestration_handle, run.key[0], run.run_id, run.key[1])
-        except HistoryError:
-            run.registration = None  # No reporting room yet, or the lane is closing: asked again next step.
+        except HistoryError as error:
+            run.reporting = None
+            return error.reason_code == 'history_writer_busy'  # No room yet: asked again next step (R6-15).
+        return True
 
     def _after_registration(self, run):
-        if run.registration is None:
-            self._submit_registration(run)
-        request = run.registration
+        if run.reporting is None and not self._submit_registration(run):
+            self._fail(run, 'run_failed')  # The writer is closed or faulted (R6-16).
+            return
+        request = run.reporting
         if request is None or request.state == 'queued':
             return
         if request.state != 'done':
@@ -643,8 +653,9 @@ class RunDriver:
         lane = self._runtime.persistence
         for entry in list(self._reports):
             request = entry[2]
-            if request is not None and request.state == 'done':
-                self._reports.remove(entry)
+            if request is not None and (request.state == 'done' or (
+                    request.state == 'failed' and request.reason not in _REPORT_RETRIED)):
+                self._reports.remove(entry)  # Written, or never can be (no registration, a conflict).
             elif request is None or request.state == 'failed':
                 try:
                     entry[2] = lane.report_failed_before_open(*entry[1])
@@ -672,8 +683,8 @@ class RunDriver:
                 self._fence_later(run)  # Its claim may still be admitted: only the account can say.
             return
         run.state, run.reason = 'failed', reason
-        if (not run.claim_sent and run.receipt is None and run.binding is None and run.registration is not None
-                and run.registration.state == 'done'):
+        if (not run.claim_sent and run.receipt is None and run.binding is None and run.reporting is not None
+                and run.reporting.state == 'done'):
             # S1-R6: the host open is recorded just before the claim is sent, so this run (most likely)
             # never had one; the store checks its own open rows (R6-10). Reporting only: the closing
             # below is unchanged.
@@ -911,6 +922,9 @@ class RunDriver:
             if run.fence_at is not None and self._clock() >= run.fence_at:
                 run.fence_at = None
                 self._fence(run)  # A refused fence, asked again (see `_fence_later`).
+        elif run.state == 'registered':
+            if run.reporting is None:
+                self._submit_registration(run)  # R6-15: whether or not a prepare has come
         elif run.state == 'recording_registration':
             self._after_registration(run)
         elif run.state == 'reading':
