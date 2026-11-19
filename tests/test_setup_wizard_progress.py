@@ -161,6 +161,28 @@ class RunnerTests(unittest.TestCase):
             self.fail(f"child {child} still running: {shlex.quote(str(child))}")
 
 
+    def test_the_command_starts_before_the_screen_is_drawn(self):
+        """A screen redraw that blocks (a terminal not being read) never holds the command back."""
+        marker = self.logdir / "started"
+        seen = []
+        out = io.StringIO()
+        term = terminal.Terminal(out=out, read=lambda count, timeout: b"", colours=terminal.NO_COLOURS,
+                                 size=lambda: (80, 24))
+        term.run_cmd("Installing", python(f"open({str(marker)!r}, 'w').close()\nimport time; time.sleep(0.5)"),
+                     logdir=self.logdir, slow_seconds=10, width=lambda: 80,
+                     draw=lambda: seen.append(self.wait_for(marker)))
+        self.assertEqual([True], seen)
+
+    @staticmethod
+    def wait_for(path, seconds=5.0):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if path.exists():
+                return True
+            time.sleep(0.02)
+        return False
+
+
 class WidthTests(unittest.TestCase):
     """S3-P9a and S3-P5 on terminal_width itself: (COLUMNS, the terminal's size, the terminfo answer)."""
 
