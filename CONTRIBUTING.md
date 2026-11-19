@@ -11,6 +11,12 @@ public issue.
 - `feature/<name>` branches come off the current version branch and merge back into it once their checks
   and any required review pass.
 - The owner merges a version branch into `main` after the full regression run and CI pass.
+- `main` is protected by a ruleset: changes only through pull requests, one approving review (admins
+  may bypass), every review conversation resolved, the branch up to date with `main`, and these checks
+  passing: `checks`, `unit (ubuntu-latest)`, `unit (macos-latest)` and `integration (1)` to
+  `integration (6)`. No force push and no deletion. Release tags (`v*`) cannot be moved or deleted.
+  Changing the number of integration shards in `.github/workflows/ci.yml` means changing the
+  ruleset's required checks too.
 - `planning` is a separate branch, with no shared history, for plans, design working documents and
   research. See [Planning material](#planning-material).
 
