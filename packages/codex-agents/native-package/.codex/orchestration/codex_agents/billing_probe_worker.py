@@ -9,6 +9,7 @@ import hashlib
 import os
 from pathlib import Path
 import queue
+from threading import local as _ThreadLocal
 import threading
 import time
 
@@ -116,6 +117,19 @@ def probe_payload(project, request_key, root, identity, *, deadline_ns, created_
     return raw
 
 
+_CAUGHT = _ThreadLocal()  # per worker thread
+
+
+def _caught(error):
+    """S1-H1a C7: keep, for this thread's next failure note, the exception a helper caught."""
+    _CAUGHT.error = error
+
+
+def _take_caught():
+    error, _CAUGHT.error = getattr(_CAUGHT, 'error', None), None
+    return error
+
+
 def _remove(workspace):
     if workspace is None:
         return True
@@ -124,8 +138,8 @@ def _remove(workspace):
         workspace.lstat()
     except FileNotFoundError:
         return True
-    except BaseException:
-        pass
+    except BaseException as error:
+        _caught(error)  # S1-H1a C7
     return False
 
 
@@ -178,7 +192,8 @@ def _prepare(payload):
             canonical_json(identity), key, 'hrn_'+digest('probe-native-v1')[:48], value['deadline_ns'],
             hashlib.sha256(payload).hexdigest())
         return prepared, workspace, False
-    except BaseException:
+    except BaseException as error:
+        _caught(error)  # S1-H1a C7: its type, for the worker that notes this failure
         if workspace is not None:
             clean = _remove(workspace)
             return None, None if clean else workspace, not clean
@@ -233,7 +248,8 @@ def _execute(job):
             observed = value['created_at_ms']  # Incomplete; retain restrictions without shortening their horizon.
         body, reason = _normalized(infos, failure,
             parse_bounded_json_value(prepared.identity, max_bytes=MAX_PROBE_INPUT_BYTES), observed)
-    except BaseException:
+    except BaseException as error:
+        _caught(error)  # S1-H1a C7: its type, for the worker that notes this failure
         body = canonical_json({'records': [], 'observed_at_ms': None, 'reason_code': 'probe_incomplete'})
     removed = _remove(prepared.workspace)
     return BillingProbePacket(body, prepared.inputs_digest, removed, reason)
@@ -250,6 +266,7 @@ def _worker(slot, registry):
             if item is None:
                 return
             operation, handle, job = item
+            _take_caught()  # S1-H1a C7: nothing stale from an earlier item
             if operation == 'prepare':
                 with registry._lock:
                     if job.cancelled:
@@ -268,9 +285,9 @@ def _worker(slot, registry):
                     state = job.state
                 # S1-H1a notes are published outside the registry lock (a blocked owner may hold it).
                 if state == 'unknown':
-                    _held(slot, job, 'probe_preparation_unknown')
+                    _held(slot, job, 'probe_preparation_unknown', _take_caught())
                 elif state == 'failed':
-                    slot.lane.note_failure(slot.note, 'probe_preparation_failed', None)
+                    slot.lane.note_failure(slot.note, 'probe_preparation_failed', _take_caught())
                 if not discard:
                     job = handle = item = prepared = None
                     continue
@@ -283,13 +300,16 @@ def _worker(slot, registry):
                     job.state = 'cleaned' if removed and job.ticket is None else 'unknown'
                     state = job.state
                 if state == 'unknown':
-                    _held(slot, job, 'cleanup_incomplete')
+                    _held(slot, job, 'cleanup_incomplete', _take_caught())
                 if slot.stop.is_set():
                     return
             elif operation == 'execute':
                 with registry._lock:
                     job.state = 'active'
                 packet = _execute(job)
+                error = _take_caught()
+                if error is not None:  # S1-H1a C7: execution failed inside its helper (reporting only)
+                    slot.lane.note_failure(slot.note, 'probe_execution_failed', error)
                 with registry._lock:
                     job.packet, job.state = packet, 'finishing'
                     job.packet_snapshot = (packet.body, packet.inputs_digest, packet.workspace_removed, packet.reason_code)
