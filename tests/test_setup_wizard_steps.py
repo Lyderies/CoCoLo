@@ -102,5 +102,74 @@ class RoutingChoiceTests(unittest.TestCase):
                 self.assertEqual(expected, steps.provider_routing(*case))
 
 
+
+class ProfileTests(unittest.TestCase):
+    """W8.1 and W4.6: the orchestrator profile, decided from its bytes (the safe read is an effect)."""
+
+    def test_profile_compares_effective_settings_not_bytes(self) -> None:
+        header = "# written by hand SECRET\n\n"
+        same = (header + 'sandbox_mode = "workspace-write"  # keep\n\n'
+                "[sandbox_workspace_write]\nnetwork_access = true\n")
+        self.assertEqual("same", steps.profile_difference(same.encode()))
+        self.assertEqual("same", steps.profile_difference((same + 'writable_roots = ["x"]\n').encode()))
+        self.assertEqual("network_access", steps.profile_difference(same.replace("= true", "= false").encode()))
+        self.assertEqual("sandbox_mode", steps.profile_difference(same.replace("workspace-write", "read-only").encode()))
+        self.assertEqual("network_access", steps.profile_difference(b'sandbox_mode = "workspace-write"\n'))
+        self.assertEqual("unreadable", steps.profile_difference(b"this is [not toml"))
+        self.assertEqual("unreadable", steps.profile_difference(None))
+
+    def test_profile_larger_than_the_read_limit_is_unreadable(self) -> None:
+        good = 'sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n'
+        padded = good + "# pad\n" * 12000 + "network_access = false\n"
+        self.assertGreater(len(padded), 65536)
+        self.assertEqual("unreadable", steps.profile_difference(padded.encode()))
+        self.assertEqual("same", steps.profile_difference((good + "# pad\n" * 100).encode()))
+
+    def test_network_follows_the_last_setting_in_its_own_table(self) -> None:
+        secret = "# SECRET\nmodel = \"x\"\n"
+        enabled = (secret + 'sandbox_mode = "workspace-write"\n\n[other]\nnetwork_access = false\n\n'
+                   "[sandbox_workspace_write]  # allow network\nnetwork_access   =   true # yes\n")
+        self.assertTrue(steps.profile_network_on(enabled.encode()))
+        for name, profile in {
+            "network off": secret + "[sandbox_workspace_write]\nnetwork_access = false\n",
+            "setting in another table": secret + "[other]\nnetwork_access = true\n",
+            "setting before any table": "network_access = true\n",
+            "last assignment wins": "[sandbox_workspace_write]\nnetwork_access = true\nnetwork_access = false\n",
+            "commented out": "[sandbox_workspace_write]\n# network_access = true\n",
+        }.items():
+            with self.subTest(profile=name):
+                self.assertFalse(steps.profile_network_on(profile.encode()))
+        self.assertFalse(steps.profile_network_on(None))
+
+    def test_codex_hint(self) -> None:
+        """W4.6: `codex -p orchestrator` only when the profile turns network on, or is ready; else why."""
+        for wanted, ready, network in ((True, False, True), (False, False, True), (True, True, True), (True, True, False)):
+            with self.subTest(wanted=wanted, ready=ready, network=network):
+                self.assertEqual("codex -p orchestrator", steps.codex_hint(wanted, ready, network)[0])
+        command, why = steps.codex_hint(True, False, False)
+        self.assertEqual("codex", command)
+        self.assertIn("network_access = true", why)
+        self.assertIn("missing", why)
+        command, why = steps.codex_hint(False, False, False)
+        self.assertEqual("codex", command)
+        self.assertIn("not chosen", why)
+
+
+class CodexPrimaryTests(unittest.TestCase):
+    """W4.5: whether a Codex session may orchestrate, from the routing file's bytes."""
+
+    def test_codex_primary_follows_the_provider_configuration(self) -> None:
+        self.assertTrue(steps.codex_primary(None))  # No file: only Codex is enabled.
+        for choices, expected in (
+            (("on", "off", "-", "off"), True),
+            (("off", "on", "claude-opus-5-5", "on"), True),
+            (("on", "on", "claude-opus-5-5", "off"), True),
+            (("off", "on", "claude-opus-5-5", "off"), False),
+        ):
+            with self.subTest(choices=choices):
+                self.assertEqual(expected, steps.codex_primary(steps.provider_routing(*choices).encode()))
+        self.assertFalse(steps.codex_primary(b"{"))
+
+
 if __name__ == "__main__":
     unittest.main()
