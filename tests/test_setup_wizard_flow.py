@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from wizard_flow_harness import FINISH, ROOT, Harness, to_commit  # noqa: E402
+from wizard_flow_harness import FINISH, ROOT, TRUSTED_PY, Harness, to_commit  # noqa: E402
 
 ENTER, DOWN = "\r", "\x1b[B"
 
@@ -351,7 +351,7 @@ class InstallCommitTests(unittest.TestCase):
         import subprocess
         routing_in = self.h.base / "par.json"
         routing_in.write_text(json.dumps({"version": 1, "roles": {}, "verifiers": {}}))
-        subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), "install", "--target", str(self.project),
+        subprocess.run([TRUSTED_PY, str(ROOT / "scripts" / "install.py"), "install", "--target", str(self.project),
                         "--project-agent-routing", str(routing_in), "--operational-checks", str(self.checks),
                         "--apply"], check=True, capture_output=True)
         self.git("add", "-A")
@@ -449,7 +449,7 @@ class InstallCommitTests(unittest.TestCase):
         import subprocess
         routing_in = self.h.base / "par.json"
         routing_in.write_text(json.dumps({"version": 1, "roles": {}, "verifiers": {}}))
-        subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), "install", "--target", str(self.project),
+        subprocess.run([TRUSTED_PY, str(ROOT / "scripts" / "install.py"), "install", "--target", str(self.project),
                         "--project-agent-routing", str(routing_in), "--operational-checks", str(self.checks),
                         "--apply"], check=True, capture_output=True)
         (self.project / ".codex" / "local*").write_text("local\n")

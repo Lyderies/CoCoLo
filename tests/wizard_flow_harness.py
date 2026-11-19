@@ -23,6 +23,7 @@ if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
 from setup_wizard import effects, flow, terminal  # noqa: E402
+from test_setup_sh import TRUSTED_PY  # noqa: E402  (the trusted interpreter the terminal tests run under)
 
 ENTER, DOWN = "\r", "\x1b[B"
 
@@ -98,6 +99,13 @@ class Harness:
         patcher = mock.patch.dict(os.environ, environ, clear=True)
         patcher.start()
         test.addCleanup(patcher.stop)
+        # Every Python runs as under the terminal tests: the trusted interpreter they chose (CI's
+        # toolcache Python is not one), for the installer's sub-installers too.
+        if TRUSTED_PY is None:
+            test.skipTest("no trusted Python 3.11 or later is available")
+        trusted = mock.patch.object(effects.installer().attest, "trusted_python", lambda: TRUSTED_PY)
+        trusted.start()
+        test.addCleanup(trusted.stop)
         cwd = os.getcwd()
         test.addCleanup(os.chdir, cwd)
         # The stand-ins' answers (the FAKE_* wrappers' equivalents).
@@ -157,12 +165,12 @@ class Harness:
             command = rest[1] if len(rest) > 1 else ""
             if command == "codex-session-scan":
                 if self.scan == "real":  # The runtime's own scan of this home's Codex sessions.
-                    done = subprocess.run([sys.executable, *flow.PYF, *rest], capture_output=True,
+                    done = subprocess.run([TRUSTED_PY, *flow.PYF, *rest], capture_output=True,
                                           stdin=subprocess.DEVNULL)
                     return done.returncode, done.stdout, done.stderr
                 return 0, json.dumps(self.scan).encode(), b""
             if command in self.cli_real:  # The real CLI, as a process.
-                done = subprocess.run([sys.executable, *flow.PYF, *rest], capture_output=True, stdin=subprocess.DEVNULL)
+                done = subprocess.run([TRUSTED_PY, *flow.PYF, *rest], capture_output=True, stdin=subprocess.DEVNULL)
                 return done.returncode, done.stdout, done.stderr
             if command in self.cli:
                 status, out = self.cli[command](rest[2:])
@@ -299,7 +307,7 @@ class Harness:
         """The installer run directly, as test_setup_sh's adopt and verify tests do."""
         routing_in = self.base / "par.json"
         routing_in.write_text(json.dumps({"version": 1, "roles": {}, "verifiers": {}}))
-        subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), "install", "--target", str(project),
+        subprocess.run([TRUSTED_PY, str(ROOT / "scripts" / "install.py"), "install", "--target", str(project),
                         "--project-agent-routing", str(routing_in), "--operational-checks", str(checks), "--apply"],
                        check=True, capture_output=True)
         if commit:
@@ -383,7 +391,7 @@ class Harness:
             return chunk
         out = io.StringIO()
         term = FlowTerminal(self, out=out, read=read, colours=terminal.NO_COLOURS, size=lambda: (cols, lines))
-        wizard = flow.Wizard(term, start=str(start), python=sys.executable, owner_path=os.environ.get("PATH", ""),
+        wizard = flow.Wizard(term, start=str(start), python=TRUSTED_PY, owner_path=os.environ.get("PATH", ""),
                              bash_version="3.2.57")
         self.wizard = wizard
         attest_results = list(self.attest)
