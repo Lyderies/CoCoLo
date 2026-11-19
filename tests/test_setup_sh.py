@@ -1214,6 +1214,16 @@ class WizardTerminalTests(unittest.TestCase):
             except OSError:
                 time.sleep(0.05)
 
+    def wait_for_line_editor(self, timeout: float = 25.0) -> None:
+        """Wait until the wizard's line editor reads keys itself (the terminal is out of line mode),
+        so keys typed next are never handled by the terminal first (Linux load failure, 0.4.0 O3)."""
+        import termios
+
+        end = time.monotonic() + timeout
+        while termios.tcgetattr(self.fd)[3] & termios.ICANON:
+            self.assertLess(time.monotonic(), end, "the line editor never started")
+            time.sleep(0.02)
+
     def expect(self, text: str, timeout: float = 25.0) -> None:
         import select
 
@@ -1965,6 +1975,7 @@ class WizardTerminalTests(unittest.TestCase):
         project, checks = self.make_project()
         self.failed_install_to_summary_menu(project, checks)
         destination = self.base / "summary-bad.txt"
+        self.wait_for_line_editor()  # Ctrl-V must reach the line editor, not the terminal's line mode.
         self.send(f"{self.base}/sum\x16\x01mary.txt\r")  # Ctrl-V Ctrl-A types a control character
         self.expect("control character")
         self.assertFalse(any(self.base.glob("sum*mary.txt")))
