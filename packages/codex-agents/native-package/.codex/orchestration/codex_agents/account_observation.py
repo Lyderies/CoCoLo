@@ -17,7 +17,11 @@ from .provider_observation_contracts import (
 )
 from .sql_read_budget import SQLReadLimits
 
+# Counts requests not yet removed. A finished one is removed OBSERVATION_REPLAY_MS after its deadline
+# (0.3.4 R6), so this holds about a day of requests, not every one ever made.
 MAX_OBSERVATION_REQUESTS = 4096
+# How long after its deadline a request is kept, so a caller that lost the reply can still ask again.
+OBSERVATION_REPLAY_MS = 24 * 60 * 60 * 1000
 _FIELDS = ('project_id', 'request_key', 'parameters_digest', 'runtime_digest', 'caller_scope', 'provider',
            'handle_digest', 'run_id', 'phase', 'observed_at_ms', 'deadline_at_ms', 'state', 'references_json')
 
@@ -366,3 +370,19 @@ class AccountObservationOwner:
             return reply
         finally:
             self.abort(reservation)
+
+
+def purge_old_observations(ledger, now, limit):
+    """Remove observation requests more than OBSERVATION_REPLAY_MS past their deadline, each with its
+    origin in the same transaction (one without the other is damage). Bounded; returns how many went.
+    The caller holds the ledger lock outside any transaction."""
+    cutoff = now - OBSERVATION_REPLAY_MS
+    rows = ledger._connection.execute('SELECT project_id,request_key FROM account_observation_requests '
+                                      'WHERE deadline_at_ms<? LIMIT ?', (cutoff, limit)).fetchall()
+    if rows:
+        with ledger._account_transaction():
+            for project, key in rows:
+                for table in ('account_observation_requests', 'account_observation_origins'):
+                    ledger._connection.execute(f'DELETE FROM {table} WHERE project_id=? AND request_key=?',
+                                               (project, key))
+    return len(rows)

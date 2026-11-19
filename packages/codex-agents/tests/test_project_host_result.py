@@ -168,6 +168,108 @@ class ProjectHostResultTests(unittest.TestCase):
         self.assertEqual((self.delivery,), self.fixture.store.pending_terminals())
         self.assert_held()
 
+    def test_034_R1_a_retired_result_no_longer_counts_against_the_entry_limit(self):
+        """0.3.4 R1: the entry limit counts only live entries; a retired result keeps its tombstone
+        (no re-arming) but frees its place. In 0.8.29 every row ever written counted, so each project
+        store could record 64 results in its whole life."""
+        from dataclasses import replace
+        from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
+        self.call()
+        store = self.fixture.store
+        # Past the result's retention: it retires, and its orchestration stays open.
+        later = store.result_reservation(self.binding).expires_at_ms + 1
+        self.enterContext(mock.patch.object(store, '_result_now', return_value=later))
+        self.assertEqual(1, store.expire_results(limit=1))
+        self.assertEqual('expired', store.result_reservation(self.binding).state)
+        # Room for exactly one live entry: the retired one must not take it.
+        store._result_capacity = ResultCapacity(1, MAX_RESULT_BODY_BYTES, store._result_capacity.reservation_ms,
+                                                store._result_capacity.retention_ms)
+        other = replace(self.fixture.scope, run_handle='hrn_' + 'e' * 48, run_id='run:' + 'e' * 64,
+                        claim_request_id='other', claim_request_digest='e' * 64)
+        self.assertEqual('reserved', store.reserve_result_lease(other, self.fixture.assigned).state)
+
+    def test_034_R4_a_store_left_full_by_0829_recovers_at_the_first_cleanup(self):
+        """0.3.4 R4: a store 0.8.29 left full (results committed, never retired, their orchestration
+        closed) takes new results again after the service's first cleanup, with no owner step."""
+        from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES, ResultCapacity
+        owner, closing = self.reference_lifecycle()
+        self.call()
+        owner.apply(closing, client_version='codex-host-v1', before_commit=lambda: None)
+        store = self.fixture.store
+        self.assertEqual('committed', store.result_reservation(self.binding).state)
+        store._result_capacity = ResultCapacity(1, MAX_RESULT_BODY_BYTES, store._result_capacity.reservation_ms,
+                                                store._result_capacity.retention_ms)
+        with self.assertRaisesRegex(HistoryError, 'history_result_capacity'):
+            store._check_result_capacity()
+        store.expire_results(limit=10)  # The project service's first pass.
+        store._check_result_capacity()
+
+    def test_034_R1c_finished_result_rows_are_removed_once_nothing_can_present_them(self):
+        """0.3.4 R1b/R1c: lease rows of any state also capped the store, and neither table was ever
+        cleaned. A retired result of a closed orchestration is removed, reservation and lease together,
+        once its hard deadline and the crash grace have passed, and not before."""
+        owner, closing = self.reference_lifecycle()
+        self.call()
+        owner.apply(closing, client_version='codex-host-v1', before_commit=lambda: None)
+        store = self.fixture.store
+        self.assertEqual(1, store.expire_results(limit=1))
+
+        def rows():
+            return tuple(store._connection.execute(f'SELECT COUNT(*) FROM {table} WHERE project_id=?',
+                                                   (store.project_id,)).fetchone()[0]
+                         for table in ('result_reservations', 'result_leases'))
+        self.assertEqual((1, 1), rows())
+        deadline = store.result_reservation(self.binding).hard_deadline_at_ms
+        with mock.patch.object(store, '_result_now', return_value=deadline + 3_600_000):
+            store.expire_results(limit=10)
+        self.assertEqual((1, 1), rows())  # The attempt could still be presented until the grace ends.
+        # Corrected for 0.3.4 R1f (COCOLO review 034-security): this fixture's run has no account release
+        # recorded, so it is kept past the grace too. A released run goes: test_result_lifetime R1f.
+        with mock.patch.object(store, '_result_now', return_value=deadline + 3_600_001):
+            store.expire_results(limit=10)
+        self.assertEqual((1, 1), rows())
+
+    def test_034_R1g_a_row_that_does_not_verify_is_kept_and_passed_over(self):
+        """R1g (review 034-security): one changed row made every pass fail for good, before the other
+        removals ran. It is now kept, untrusted, and the pass goes on."""
+        owner, closing = self.reference_lifecycle()
+        self.call()
+        owner.apply(closing, client_version='codex-host-v1', before_commit=lambda: None)
+        store = self.fixture.store
+        store.expire_results(limit=1)
+        deadline = store.result_reservation(self.binding).hard_deadline_at_ms
+        store._connection.execute('UPDATE result_reservations SET hard_deadline_at_ms=hard_deadline_at_ms-1')
+        with mock.patch.object(store, '_result_now', return_value=deadline + 3_600_001):
+            self.assertEqual(0, store._purge_finished_results(deadline + 3_600_001, 10))
+        self.assertEqual(1, store._connection.execute('SELECT COUNT(*) FROM result_reservations').fetchone()[0])
+
+    def test_034_the_purge_grace_is_the_accounts_crash_grace(self):
+        """Review 034-security: the project's purge grace is a copy of the account's; they must agree."""
+        from codex_agents.active_run_capacity import CRASHED_CLAIM_GRACE_MS
+        from codex_agents.project_history import RESULT_PURGE_GRACE_MS
+        self.assertGreaterEqual(RESULT_PURGE_GRACE_MS, CRASHED_CLAIM_GRACE_MS)
+
+    def test_034_R6_cleanup_reservations_go_with_their_result(self):
+        """0.3.4 R6: project cleanup reservations (and the rows under them) counted against 4,096 for the
+        store's life. They are removed with their result's lease, so they never outlive it."""
+        owner, closing = self.reference_lifecycle()
+        self.call()
+        owner.apply(closing, client_version='codex-host-v1', before_commit=lambda: None)
+        store = self.fixture.store
+        store.expire_results(limit=1)
+
+        def rows():
+            return tuple(store._connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                         for table in ('project_cleanup_reservations', 'project_cleanup_receipts', 'project_host_opens'))
+        before = rows()
+        self.assertEqual(1, before[0])
+        deadline = store.result_reservation(self.binding).hard_deadline_at_ms
+        with mock.patch.object(store, '_result_now', return_value=deadline + 3_600_001):
+            store.expire_results(limit=10)
+        # Corrected for 0.3.4 R1f: no account release is recorded for this run, so its cleanup
+        # reservation stays (it went regardless in 0.8.30).
+        self.assertEqual(before, rows())
+
     def test_failed_closed_body_deletion_retains_charge_until_actual_retry_cleanup(self):
         owner, closing = self.reference_lifecycle()
         self.call()

@@ -16,7 +16,11 @@ from .project_worker_result import current_host_reference
 
 MAX_CHECK_REPORT_BYTES = 65_536
 MAX_PENDING_CHECK_RECEIPTS = 64
-MAX_CHECK_RECEIPTS = 4096
+# Per QA retention window, not ever (0.3.4 R6): rows older than QA_RETENTION_MS are removed. Raised from 4,096
+# (about 180 a day; a busy evening of reviews made about 60).
+MAX_CHECK_RECEIPTS = 16_384
+# The ledger's own retention, which learning reads QA evidence within (client_runtime.LEARNING_MAX_AGE_MS).
+QA_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 CHECK_TTL_MS = 600_000
 _RECEIPT = re.compile(r'oqc_[0-9a-f]{48}')
 _SCOPE_DOMAIN = b'project-qa-check-scope-v1\0'
@@ -277,3 +281,31 @@ def issue_check_receipt(history, context, host_outcome_digest, verifier_host_out
                 or read_check_receipt(history, value['receipt_id']) != value):
             raise HistoryError('history_conflict')
     return _metadata(value, known=False)
+
+
+def purge_old_qa(history, now, limit):
+    """Remove QA rows past QA_RETENTION_MS, bounded (0.3.4 R6). A QA record goes with its receipt and
+    request in one transaction, never alone: a missing QA row beside a consumed receipt is damage. A
+    receipt never consumed goes with its request. Returns how many groups went."""
+    cutoff = now - QA_RETENTION_MS
+    project = history.project_id
+    purged = 0
+    for qa_row in history._connection.execute(
+            'SELECT worker_outcome_digest,check_receipt_id FROM project_operational_qa '
+            'WHERE project_id=? AND ingested_at_ms<? LIMIT ?', (project, cutoff, limit)).fetchall():
+        with history._transaction():
+            history._connection.execute('DELETE FROM project_operational_qa WHERE project_id=? AND worker_outcome_digest=?',
+                                        (project, qa_row[0]))
+            for table in ('project_qa_check_receipts', 'project_qa_check_requests'):
+                history._connection.execute(f'DELETE FROM {table} WHERE project_id=? AND receipt_id=?',
+                                            (project, qa_row[1]))
+        purged += 1
+    for receipt_row in history._connection.execute(
+            'SELECT receipt_id FROM project_qa_check_receipts WHERE project_id=? AND consumed_at_ms IS NULL '
+            'AND created_at_ms<? LIMIT ?', (project, cutoff, limit)).fetchall():
+        with history._transaction():
+            for table in ('project_qa_check_receipts', 'project_qa_check_requests'):
+                history._connection.execute(f'DELETE FROM {table} WHERE project_id=? AND receipt_id=?',
+                                            (project, receipt_row[0]))
+        purged += 1
+    return purged

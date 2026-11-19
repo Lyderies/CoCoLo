@@ -877,6 +877,35 @@ class HostRestartTests(DriverHarness):
             super().setUp()
 
 
+    def test_034_R7_a_finished_run_whose_result_was_never_recorded_no_longer_blocks_close(self):
+        """0.3.4 R7 (local-routing orc_0f42): the reply was lost, then the service restarted. Dispatching
+        again is no longer possible and classification refuses a leased run, so in 0.8.29 the
+        orchestration could never close. The account's verified release proves the run is over."""
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+
+        def released():
+            # The account's release, acknowledged in the project store (read without the service).
+            import sqlite3
+            for path in self.state.root.rglob('history.sqlite3'):
+                connection = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
+                try:
+                    if connection.execute('SELECT COUNT(*) FROM project_cleanup_reservations '
+                                          'WHERE account_release_digest IS NOT NULL').fetchone()[0]:
+                        return True
+                except sqlite3.Error:
+                    pass
+                finally:
+                    connection.close()
+            return False
+        self.wait_for(released, seconds=30)
+        self.restart_host()
+        closed = self.cli('learning-close-orchestration', '--orchestration-handle', orchestration, '--status', 'failed')
+        self.assertEqual('failed', closed['status'], closed)
+
+
 class ManyRunsTests(DriverHarness):
     """A long-lived service runs more children than it tracks at once (four), one after another."""
 

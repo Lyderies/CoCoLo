@@ -114,6 +114,25 @@ class ProjectQACommitTests(unittest.TestCase):
             self.assertEqual({**value,'known':True},self.commit())
             self.assertEqual(value['qa_digest'],self.details()['summary']['qa_digest'])
 
+    def test_034_R6_a_qa_record_goes_with_its_receipt_and_request_after_retention(self):
+        """0.3.4 R6: QA records were never removed (4,096 per project, ever). After the 90-day
+        retention a record goes together with its receipt and request, never alone, since a missing
+        QA row beside a consumed receipt is damage."""
+        from codex_agents.project_qa_checks import QA_RETENTION_MS
+        self.commit()
+
+        def rows():
+            return tuple(self.store._connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                         for table in ('project_operational_qa', 'project_qa_check_receipts', 'project_qa_check_requests'))
+        self.assertEqual((1, 1, 1), rows())
+        ingested = self.store._connection.execute('SELECT ingested_at_ms FROM project_operational_qa').fetchone()[0]
+        with mock.patch.object(self.store, '_result_now', return_value=ingested + QA_RETENTION_MS):
+            self.store.expire_results(limit=10)
+        self.assertEqual((1, 1, 1), rows())
+        with mock.patch.object(self.store, '_result_now', return_value=ingested + QA_RETENTION_MS + 1):
+            self.store.expire_results(limit=10)
+        self.assertEqual((0, 0, 0), rows())
+
     def test_new_receipt_cannot_replace_the_original_qa_for_one_worker(self):
         value=self.commit()
         second=self.issue(request_id='other-original-qa-checks')['check_receipt']

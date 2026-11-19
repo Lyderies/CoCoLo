@@ -138,8 +138,122 @@ class ProjectOrchestrationTests(unittest.TestCase):
         closed = self.call('close', self.target(paused, status='cancelled', goal_tokens_used=None, goal_time_used_seconds=None), 'close')
         self.assertEqual('cancelled', closed['current']['snapshot']['status'])
         self.assertTrue(self.call('open', identity='open')['known'])
+        # Corrected for 0.3.4 R6 (owner, 2026-11-18): the limit counts open or paused orchestrations
+        # only, so a new one opens once the only open one is closed. 0.8.29 refused it here, because
+        # every orchestration ever opened counted (a lifetime cap of 256 per project).
+        self.assertEqual('active', self.call('open', identity='new-open')['current']['snapshot']['status'])
+
+    def test_034_R6_the_orchestration_limit_counts_only_open_ones(self):
+        self.store._orchestration_limits = OrchestrationLimits(1, 3)
+        first = self.opened()
         with self.assertRaisesRegex(HistoryError, 'history_orchestration_full'):
-            self.call('open', identity='new-open')
+            self.call('open', identity='second')
+        self.call('close', self.target(first, status='completed', goal_tokens_used=None,
+                                       goal_time_used_seconds=None), 'close')
+        second = self.call('open', identity='second')['current']['snapshot']
+        self.assertEqual('active', second['status'])
+        with self.assertRaisesRegex(HistoryError, 'history_orchestration_full'):
+            self.call('open', identity='third')
+
+    def test_034_R1g_a_closed_orchestration_still_named_never_holds_back_a_later_one(self):
+        """R1g (re-review 034-security-2): the purge took the first due orchestrations and only then
+        skipped the ones a result row still names, so one named for good starved every later one."""
+        from codex_agents.orchestration_store import ORCHESTRATION_RETENTION_MS
+        self.store._orchestration_limits = OrchestrationLimits(2, 12)
+        handles = []
+        for identity in ('first', 'second'):
+            opened = self.call('open', identity='open-' + identity)['current']['snapshot']
+            self.call('close', self.target(opened, status='completed', goal_tokens_used=None,
+                                           goal_time_used_seconds=None), 'close-' + identity)
+            handles.append(opened['orchestration_handle'])
+        # A result row of the first stays (say, an attempt the account never released).
+        self.store._connection.execute(
+            "INSERT INTO result_reservations(project_id,claim_id,run_handle,attempt,claim_digest,orchestration_handle,"
+            "binding,assignment_digest,created_at_ms,hard_deadline_at_ms,reserved_until_ms,expires_at_ms,state) "
+            "VALUES(?,'clm_x','hrn_x',1,?,?,x'00','a',0,0,0,0,'expired')", (PROJECT_A, 'c' * 64, handles[0]))
+        self.now += ORCHESTRATION_RETENTION_MS + 1
+        owner = self.store._orchestration_owner()
+        for _ in range(3):
+            owner.purge_closed(self.now, 1)
+
+        def kept(handle):
+            return self.store._connection.execute('SELECT COUNT(*) FROM project_orchestrations WHERE orchestration_handle=?',
+                                                  (handle,)).fetchone()[0]
+        self.assertEqual((1, 0), (kept(handles[0]), kept(handles[1])))
+
+    def test_034_R10_an_update_ends_the_earlier_runtimes_open_orchestrations(self):
+        """R10 (live 2026-11-19): after an update, nothing could close an orchestration opened under the
+        earlier runtime, and it counted as open for good."""
+        from dataclasses import replace
+        first = self.opened()
+        paused = self.call('open', identity='second')['current']['snapshot']
+        self.call('pause', self.target(paused), 'pause-second')
+        updated = replace(self.scope, runtime_digest='b' * 64)
+        other_instance = replace(self.scope, supervisor_instance_id='another', runtime_digest='b' * 64)
+        owner = self.store._orchestration_owner()
+        self.assertEqual(2, owner._open_count())
+        self.assertEqual(0, owner.end_earlier(other_instance, 10))  # Not this service's journals.
+        self.assertEqual(0, owner.end_earlier(self.scope, 10))      # Its own scope: nothing earlier.
+        self.assertEqual(2, owner.end_earlier(updated, 10))
+        self.assertEqual(0, owner._open_count())
+        for snapshot in (first, paused):
+            ended = owner._current(self.scope, snapshot['orchestration_handle'])['snapshot']
+            self.assertEqual('interrupted', ended['status'])
+            self.assertIsNotNone(ended['ended_at_ms'])
+        self.assertEqual(0, owner.end_earlier(updated, 10))  # Already ended: once only.
+
+    def test_034_R10_a_used_request_id_never_stops_the_end(self):
+        """Review 034-r10: the end used the predictable request id 'end-earlier-<handle>'; one already
+        used by an old client made every attempt conflict, so the orchestration stayed open for good."""
+        from dataclasses import replace
+        opened = self.opened()
+        handle = opened['orchestration_handle']
+        self.call('checkpoint', self.target(opened, goal_tokens_used=0, goal_time_used_seconds=0),
+                  'end-earlier-' + handle)
+        owner = self.store._orchestration_owner()
+        self.assertEqual(1, owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 10))
+        self.assertEqual('interrupted', owner._current(self.scope, handle)['snapshot']['status'])
+
+    def test_034_R10_each_pass_tries_at_most_its_limit(self):
+        """Review 034-r10: only successful ends counted, so orchestrations kept open by a run not yet
+        over were all retried on every pass."""
+        from dataclasses import replace
+        from unittest import mock
+        from codex_agents import orchestration_store
+        self.store._orchestration_limits = OrchestrationLimits(4, 12)
+        for identity in ('a', 'b', 'c'):
+            self.call('open', identity='open-' + identity)
+        tries = []
+
+        def pending(owner, request, **options):
+            tries.append(request.payload['orchestration_handle'])
+            raise HistoryError('history_orchestration_pending')
+        owner = self.store._orchestration_owner()
+        with mock.patch.object(orchestration_store.OrchestrationOwner, 'apply', pending):
+            for _ in range(3):
+                self.assertEqual(0, owner.end_earlier(replace(self.scope, runtime_digest='b' * 64), 1))
+        self.assertEqual(3, len(tries))
+        self.assertEqual(3, len(set(tries)))  # Each pass went on to the next one.
+
+    def test_034_R6_a_closed_orchestration_is_removed_after_its_retention(self):
+        from codex_agents.orchestration_store import ORCHESTRATION_RETENTION_MS
+        first = self.opened()
+        self.call('close', self.target(first, status='completed', goal_tokens_used=None,
+                                       goal_time_used_seconds=None), 'close')
+        handle = first['orchestration_handle']
+
+        def kept():
+            return tuple(self.store._connection.execute(f'SELECT COUNT(*) FROM {table} WHERE orchestration_handle=?',
+                                                        (handle,)).fetchone()[0]
+                         for table in ('project_orchestrations', 'project_orchestration_checkpoints'))
+        before = kept()
+        self.assertGreater(before[1], 0)
+        self.now += ORCHESTRATION_RETENTION_MS  # Not yet past it.
+        self.store.expire_results(limit=10)
+        self.assertEqual(before, kept())
+        self.now += 1
+        self.store.expire_results(limit=10)
+        self.assertEqual((0, 0), kept())
 
     def test_transaction_rollback_and_lost_reply_reconcile_one_checkpoint(self):
         original = self.store._transaction

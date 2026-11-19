@@ -54,6 +54,8 @@ START_REASONS = frozenset({
     'run_abandoned', 'run_closed', 'run_lost', 'run_lost_held', 'run_client_changed', 'run_account_call_failed',
     # An earlier service's run the project's service is still closing (0.3.3, C3d).
     'run_settling',
+    # The project's result store has no free place (0.3.4 R3).
+    'result_capacity_full',
 }) | ACCOUNT_REASON_CODES | CLAIM_DENIAL_CODES | PREPARATION_STAGE_REASONS
 # A run whose project service stopped or crashed: ended abandoned with an unknown outcome.
 # Its capacity is released once the next service saw nothing of it still running.
@@ -235,6 +237,16 @@ def _status_ingestion_unavailable():
     return value
 
 
+def _status_account_capacity(value):
+    """Each account limit with its live count (0.3.4 R9); None from a collector that does not report it."""
+    if (type(value) is not dict or set(value) != {'observations', 'cleanup_receipts'}
+            or any(type(item) is not dict or set(item) != {'live', 'limit'}
+                   or not account_integer(item['live']) or not account_integer(item['limit'])
+                   for item in value.values())):
+        return None
+    return {name: {'live': item['live'], 'limit': item['limit']} for name, item in value.items()}
+
+
 def _status_collector_fields(health):
     """Closed display metadata only; a health view grants no execution authority."""
     template = empty_ingestion_snapshot(registered=False)
@@ -298,7 +310,9 @@ def status_client(state_root, project_root):
               # Whether this project's learning history still has to move to its own store.
               'learning_migration': 'unavailable',
               # Runs an earlier version left that still hold a slot, and when the last stops.
-              'earlier_version_runs': None}
+              'earlier_version_runs': None,
+              # How near this project is to each account limit (0.3.4 R9).
+              'account_capacity': None}
     try:
         state = CollectorPaths(state_root)
         report['client_failures'] = client_health_snapshot(state, project_root)
@@ -306,7 +320,9 @@ def status_client(state_root, project_root):
         return report | {'reason_code': 'status_runtime_unavailable', 'error': 'Status services are unavailable.'}
     collector_ready = False
     try:
-        report.update(_status_collector_fields(CollectorClient(state.socket, timeout=1).health(project_root)))
+        health = CollectorClient(state.socket, timeout=1).health(project_root)
+        report.update(_status_collector_fields(health))
+        report['account_capacity'] = _status_account_capacity(health.get('account_capacity'))
         report['active'] = collector_ready = True
         try:
             moved = CollectorClient(state.socket, timeout=1).learning_migration(Path(project_root))
@@ -497,6 +513,18 @@ def owner_learning_client(state_root, project_root, operation, **arguments):
     if operation == 'feedback':
         return history.learning_feedback(arguments['record'], arguments['signature'])
     return history.learning_review_case(**arguments)
+
+
+def capacity_report_client(state_root, project_root, *, host_client):
+    """Each limit of this project's store with its live count, or None when its service is not running."""
+    try:
+        state = CollectorPaths(state_root)
+        scope, _, endpoint = read_runtime_hint(state, project_root)
+        history = HistoryClient(endpoint, scope.project_id, scope.runtime_digest, timeout=2)
+        enroll_clients(state, project_root, scope, (endpoint,), host_client=host_client)
+        return history.capacity_report()
+    except Exception:
+        return None  # A diagnostic: it never stops learning-status (review 034-security).
 
 
 def orchestration_report_client(state_root, project_root, orchestration_id, *, host_client):

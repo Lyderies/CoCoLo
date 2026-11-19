@@ -114,6 +114,7 @@ MAX_FORGET_ATTEMPTS = 12
 # How often the journal is checked for runs of stopped earlier services, and how long
 # one settlement request may take.
 SWEEP_SECONDS = 1.0
+EXPIRY_SECONDS = 10.0  # Result cleanup; at least once a minute (0.3.4 R2).
 SETTLE_TIMEOUT_SECONDS = 10
 # The runtime this code runs from, as for preparation: the client capabilities a
 # result is admitted against come from here, as the CLI reads them from its runtime.
@@ -128,6 +129,8 @@ REASON_CODES = frozenset({
     # A run of an earlier, stopped service: settled (abandoned, outcome unknown, capacity no
     # longer counted), or not yet, because something of it may still run.
     'run_lost', 'run_lost_held',
+    # The project's result store has no free place (0.3.4 R3): close finished orchestrations.
+    'result_capacity_full',
 }) | PREPARATION_STAGE_REASONS
 _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 'assignment', 'task', 'route',
                     'parent_grant'}
@@ -289,6 +292,7 @@ class RunDriver:
         runtime.pool._registry.launch_journal = self._journal
         # Runs of earlier service instances, by run handle: (host class, 'released' or 'held').
         self._lost, self._sweep, self._next_sweep = {}, None, 0.0
+        self._expiry, self._next_expiry = None, 0.0  # The first cleanup runs at start (0.3.4 R2).
         # Leases an earlier service left armed with no admitted claim, fenced here (0.3.3, C3).
         self._earlier, self._earlier_fences, self._fenced = None, {}, {}
         self._earlier_failures, self._earlier_at, self._earlier_listed = 0, 0.0, False
@@ -793,6 +797,7 @@ class RunDriver:
         self._forget_retired()
         self._sweep_lost()
         self._fence_earlier()
+        self._expire_results()
         for run in list(self._runs.values()):
             try:
                 self._advance(run)
@@ -879,10 +884,20 @@ class RunDriver:
             run.lease = ResultLeaseBinding(**run.scope.as_data(), orchestration_handle=run.prospective.orchestration_handle,
                 run_handle=run.key[0], run_id=run.run_id, attempt=run.key[1],
                 claim_request_id=run.claim_request_id, claim_request_digest=account_request_digest(claim))
-            run.persistence = lane.prepare_lease(run.lease, run.prepared_inputs.worker)
+            try:
+                run.persistence = lane.prepare_lease(run.lease, run.prepared_inputs.worker)
+            except HistoryError as error:
+                if error.reason_code != 'history_result_capacity':
+                    raise
+                self._fail(run, 'result_capacity_full')  # 0.3.4 R3: named, never the generic run_failed.
+                return
             run.state = 'leasing'
         elif run.state == 'leasing':
-            state = lane.snapshot(run.persistence)['state']
+            snapshot = lane.snapshot(run.persistence)
+            state = snapshot['state']
+            if state == 'failed' and snapshot['reason_code'] == 'history_result_capacity':
+                self._fail(run, 'result_capacity_full')  # 0.3.4 R3
+                return
             if state != 'preparing':
                 lane.arm(run.persistence)
                 run.state = 'arming'
@@ -1249,6 +1264,22 @@ class RunDriver:
                 fence, request_id='earlier-' + hashlib.sha256(binding.claim_request_id.encode()).hexdigest()[:32])
         finally:
             call.role = call.host_client = call.context = None
+
+    def _expire_results(self):
+        """Owner step: retire results past their retention or whose orchestration closed, and remove
+        finished rows, at start and then every EXPIRY_SECONDS (0.3.4 R2). In 0.8.29 nothing ran this,
+        so a project's results were never retired and its store filled for good."""
+        if self._expiry is not None:
+            if self._expiry.state == 'queued':
+                return
+            self._expiry = None  # Done or failed: a failure stays charged and is tried again later.
+        if self._clock() < self._next_expiry:
+            return
+        self._next_expiry = self._clock() + EXPIRY_SECONDS
+        try:
+            self._expiry = self._runtime.persistence.expire_results()
+        except HistoryError:
+            pass  # The writer is closing.
 
     # Runs of earlier service instances of this project.
     def _sweep_lost(self):

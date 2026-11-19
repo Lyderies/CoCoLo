@@ -127,7 +127,7 @@ from codex_agents.client_runtime import (  # noqa: E402
     RuntimeBillingProbeError, RuntimeObservationError, RuntimeOpenError, RuntimeOrchestrationError, RuntimeResultError, dispatch_codex_client,
     billing_probe_client, observe_provider_client, open_codex_client, orchestration_client, record_codex_result_client, status_client,
     HostOutcomeUnknown, _host_pair, operational_checks_client, record_operational_qa_client, learning_cycle_client,
-    routing_evidence_client, owner_learning_client, orchestration_report_client, runtime_hint_path,
+    routing_evidence_client, owner_learning_client, orchestration_report_client, capacity_report_client, runtime_hint_path,
     run_control_client, bridged_run_owner, abandon_bridged_run,
 )
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
@@ -2286,6 +2286,12 @@ def main() -> int:
         elif args.command == "learning-status":
             _start_collector_quietly(args)
             report = status_client(args.state_root, args.project_root)
+            try:
+                label = _host_client()
+            except HostClientUnknown:
+                label = OWNER_CLIENT
+            # How near each limit of this project's store is (0.3.4 R9); None while its service is not running.
+            report['project_capacity'] = capacity_report_client(args.state_root, args.project_root, host_client=label)
             if report.get('reason_code') == 'status_collector_transport_unavailable':
                 _COLLECTOR_UNREACHED = True
                 report = _with_codex_hint(args.command, report)
@@ -3862,7 +3868,11 @@ def main() -> int:
         })
         return 2
     except DispatchError as exc:
-        _print({"ready": False, "error": "dispatch unavailable", "reason_code": exc.reason_code})
+        error = "dispatch unavailable"
+        if exc.reason_code == "result_capacity_full":
+            error = ("the project's result store is full: close finished orchestrations "
+                     "(learning-close-orchestration), or wait for their results to pass their retention")
+        _print({"ready": False, "error": error, "reason_code": exc.reason_code})
         return 2
     except RuntimeOpenError as exc:
         _print({'ready': False, 'error': 'host open unavailable', 'reason_code': exc.reason_code})

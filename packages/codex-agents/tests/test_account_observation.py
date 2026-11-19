@@ -2,6 +2,7 @@
 from dataclasses import replace
 import threading
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import tests.support  # noqa: F401
@@ -223,6 +224,30 @@ class AccountObservationTests(unittest.TestCase):
             with self.assertRaisesRegex(ObservationError, 'observation_unavailable'):
                 self.reserve()
         self.assertEqual(records, [tuple(row) for row in self.ledger._connection.execute('SELECT * FROM records')])
+
+    def test_034_R6_finished_observations_go_a_day_after_their_deadline_and_free_the_limit(self):
+        """0.3.4 R6: in 0.8.29 every observation a project ever asked for counted against 4,096 and none
+        was removed. An origin and its request now go together a day after the request's deadline."""
+        reservation = self.reserve()
+        self.owner.complete(reservation, self.probe(reservation))
+        deadline = reservation.row['deadline_at_ms']
+
+        def rows():
+            return tuple(self.ledger._connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                         for table in ('account_observation_origins', 'account_observation_requests'))
+        self.assertEqual((1, 1), rows())
+        self.ledger.sweep_account_retention(now_ms=deadline + account_observation.OBSERVATION_REPLAY_MS)
+        self.assertEqual((1, 1), rows())
+        self.ledger.sweep_account_retention(now_ms=deadline + account_observation.OBSERVATION_REPLAY_MS + 1)
+        self.assertEqual((0, 0), rows())
+        with mock.patch.object(account_observation, 'MAX_OBSERVATION_REQUESTS', 1):
+            self.reserve('after-purge')
+
+    def test_034_R6_the_collector_runs_the_account_retention_sweep(self):
+        from codex_agents import learning_store
+        source = Path(learning_store.__file__).read_text()
+        loop = source[source.index('next_sweep = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS'):]
+        self.assertIn('self.ledger.sweep_account_retention()', loop[:loop.index('listener.accept()')])
 
     def test_durable_quota_survives_abort_and_known_reply_still_works_at_capacity(self):
         with mock.patch.object(account_observation, 'MAX_OBSERVATION_REQUESTS', 1):

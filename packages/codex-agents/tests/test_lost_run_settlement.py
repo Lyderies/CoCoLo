@@ -385,7 +385,9 @@ class LostRunAfterStopTests(LostRunHarness):
         original, failed = result_persistence.ResultPersistenceLane._earlier, {'list': 0, 'settle': 0}
 
         def once(lane, request):
-            if failed[request.kind] == 0:
+            # Fixture fix for 0.3.4 R2: the lane also takes the service's 'expire' requests now; only the
+            # two kinds under test fail once.
+            if request.kind in failed and failed[request.kind] == 0:
                 failed[request.kind] += 1
                 with lane._lock:
                     request.state, request.reason = 'failed', 'history_unavailable'
