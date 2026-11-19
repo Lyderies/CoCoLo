@@ -73,13 +73,13 @@ def terminal_width(columns, stty, tput) -> int:
     return 9999 if len(width) > 4 else int(width)
 
 
-def live_width() -> int:
-    """The width of the wizard's own terminal now, read again at each redraw (S3-P5)."""
+def live_width(fd: int = 0) -> int:
+    """The width of the wizard's own terminal (standard input) now, read again at each redraw (S3-P5)."""
     import fcntl
     import struct
     import termios
     try:
-        rows, cols = struct.unpack("HHHH", fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8))[:2]
+        rows, cols = struct.unpack("HHHH", fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8))[:2]
         stty = f"{rows} {cols}"
     except OSError:
         stty = None
