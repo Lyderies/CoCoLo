@@ -141,5 +141,15 @@ class TemporaryFolderTests(unittest.TestCase):
         self.assertFalse(effects.project_in_temp(str(ROOT)) and not str(ROOT).startswith(tempfile.gettempdir()))
 
 
+
+class GitToolTests(unittest.TestCase):
+    def test_the_commit_runs_as_the_installers_git_tool_process(self) -> None:
+        """Review 040-s5-wizard-2 (a): as setup.sh's owner_git, so the runner supervises and shows it."""
+        argv = effects.owner_git_argv("/trusted/python3", "commit", "/p", "m1", "m2", ".codex/a")
+        self.assertEqual(["/trusted/python3", "-I", "-B", "-S", "-X", "pycache_prefix=/dev/null", "-c"], argv[:7])
+        self.assertIn("module.git_tool(sys.argv[2:])", argv[7])
+        self.assertEqual([str(ROOT / "scripts" / "install.py"), "commit", "/p", "m1", "m2", ".codex/a"], argv[8:])
+
+
 if __name__ == "__main__":
     unittest.main()

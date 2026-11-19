@@ -29,7 +29,91 @@ def launches(source: str):
             yield ast.get_source_segment(source, node.args[0])
 
 
+# Functions that may pass an argument list along in a variable: the runner and the hand-off. Every
+# call to them, and every other launch, must spell its list out (review 040-s5-wizard-2 b).
+PASS_THROUGH = {("Terminal", "run_cmd"), ("Terminal", "call"), ("Wizard", "run"), ("Wizard", "handoff"),
+                (None, "git_commit")}
+LAUNCHERS = {"run", "Popen", "call", "run_cmd", "handoff"}
+TRUSTED_FIRST = {"self.py", "self.git"}
+
+
+def launch_problems(source: str) -> list[str]:
+    """Every process launch whose argument list is not spelled out starting with the trusted interpreter
+    or git (or built by effects.owner_git_argv from the trusted interpreter), outside PASS_THROUGH."""
+    tree = ast.parse(source)
+    problems = []
+
+    def visit(node, owner, function):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ClassDef):
+                visit(child, child.name, function)
+            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                visit(child, owner, child.name)
+            else:
+                if (isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                        and child.func.attr in LAUNCHERS):
+                    check(child, owner, function)
+                visit(child, owner, function)
+
+    def check(call, owner, function):
+        # subprocess.run/Popen, Terminal.call and Wizard.handoff take the list first; Wizard.run and
+        # Terminal.run_cmd take a label first, then the list.
+        is_subprocess = isinstance(call.func.value, ast.Name) and call.func.value.id == "subprocess"
+        position = 1 if call.func.attr == "run_cmd" or (call.func.attr == "run" and not is_subprocess) else 0
+        if len(call.args) <= position:
+            return
+        argv = call.args[position]
+        text = ast.get_source_segment(source, argv) or ""
+        if isinstance(argv, ast.List):
+            first = ast.get_source_segment(source, argv.elts[0]) if argv.elts else ""
+            if first not in TRUSTED_FIRST:
+                problems.append(text)
+        elif isinstance(argv, ast.Call) and ast.get_source_segment(source, argv.func) == "effects.owner_git_argv":
+            if not argv.args or ast.get_source_segment(source, argv.args[0]) != "self.py":
+                problems.append(text)
+        elif (owner, function) not in PASS_THROUGH:
+            problems.append(text)
+
+    visit(tree, None, None)
+    return problems
+
+
+def ls_files_problems(source: str) -> list[str]:
+    """Every "ls-files" that is not an argument of install._git_run (which passes --literal-pathspecs)."""
+    tree = ast.parse(source)
+    allowed = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and ast.get_source_segment(source, node.func) == "install._git_run"):
+            allowed.update(id(arg) for arg in node.args)
+    return [ast.get_source_segment(source, node) for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and node.value == "ls-files" and id(node) not in allowed]
+
+
 class WizardSourceTests(unittest.TestCase):
+    def test_the_launch_and_literal_path_checks_reject_the_reviews_bypasses(self) -> None:
+        """Review 040-s5-wizard-2 (b): the mutations that passed the earlier checks now fail them."""
+        for bypass in ("program = 'python3'\nargv = [program, '-c', 'x']\nsubprocess.run(argv)\n",
+                       "argv = ['git', 'status']\nsubprocess.run(argv)\n",
+                       "subprocess.run(['python3', '-c', 'x'])\n",
+                       "class Wizard:\n    def other(self):\n        self.t.call(['git', 'status'])\n"):
+            with self.subTest(bypass=bypass):
+                self.assertTrue(launch_problems(bypass))
+        for bypass in ("self.g(project, 'ls-files', '--', name)\n",
+                       "install._git_run(project, 'log')\nself.g(project, \"ls-files\", name)\n"):
+            with self.subTest(bypass=bypass):
+                self.assertTrue(ls_files_problems(bypass))
+        self.assertEqual([], ls_files_problems("install._git_run(Path(p), 'ls-files', '-z', '--', rel)\n"))
+
+    def test_every_launch_spells_out_a_trusted_argument_list(self) -> None:
+        for name, source in SOURCES.items():
+            with self.subTest(source=name):
+                self.assertEqual([], launch_problems(source))
+
+    def test_every_ls_files_goes_through_the_installers_literal_pathspecs(self) -> None:
+        for name, source in SOURCES.items():
+            with self.subTest(source=name):
+                self.assertEqual([], ls_files_problems(source))
+
     def test_every_python_the_wizard_starts_is_isolated(self) -> None:
         """Replaces SetupScriptTests.test_every_python_the_wizard_starts_is_isolated (W1.3, W1.6)."""
         # Every argument list that starts with the trusted interpreter, whether it goes to subprocess

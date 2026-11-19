@@ -300,5 +300,48 @@ class ReviewCorrectionTests(unittest.TestCase):
         self.assertEqual([("UPDATE", ".codex/a"), ("UPDATE", ".codex/b")], entries)
 
 
+
+class SecondReviewEffectTests(unittest.TestCase):
+    """Review 040-s5-wizard-2 (a): unreadable files count as changed; the profile's folders are private
+    and its cleanup survives an interruption; Git's failure always has a reason."""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(os.path.realpath(directory.name))
+
+    def test_two_unreadable_files_count_as_changed(self) -> None:
+        target, bundle = self.base / "project", self.base / "bundle"
+        (target / ".codex").mkdir(parents=True)
+        (bundle / ".codex").mkdir(parents=True)
+        (bundle / ".codex" / "a").symlink_to(self.base / "nowhere")
+        (target / ".codex" / "a").symlink_to(self.base / "nowhere")
+        self.assertEqual([("UPDATE", ".codex/a")],
+                         effects.plan_entries({"codex": {"files": [".codex/a"]}}, target, bundle))
+
+    def test_every_new_profile_folder_is_private(self) -> None:
+        home = self.base / "a" / "b" / "codex"
+        self.assertTrue(effects.create_profile(home, "content"))
+        for folder in (self.base / "a", self.base / "a" / "b", home):
+            self.assertEqual(0o700, folder.stat().st_mode & 0o777, folder)
+
+    def test_an_interrupted_profile_write_removes_the_file_and_still_stops(self) -> None:
+        home = self.base / "codex"
+
+        def interrupted(*args, **kwargs):
+            raise KeyboardInterrupt
+        with mock.patch.object(effects.os, "fdopen", interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                effects.create_profile(home, "content")
+        self.assertFalse((home / "orchestrator.config.toml").exists())
+
+    def test_a_git_that_cannot_run_still_gives_a_reason(self) -> None:
+        why = []
+        with mock.patch.object(effects, "git_helpers", lambda project: []), \
+                mock.patch.object(effects.installer(), "project_changes", side_effect=OSError("boom")):
+            self.assertIsNone(effects.git_changes(self.base, [".codex"], why))
+        self.assertEqual(["Git could not be run"], why)
+
+
 if __name__ == "__main__":
     unittest.main()

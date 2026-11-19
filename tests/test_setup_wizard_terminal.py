@@ -269,5 +269,26 @@ class CompletionSafetyTests(unittest.TestCase):
             self.assertEqual([], terminal.complete_path(os.path.join(base, "ev"), home="/h"))
 
 
+
+class DisplaySafetyTests(unittest.TestCase):
+    """Review 040-s5-wizard-2 (d): nothing shown on screen carries a control character (C0, DEL or C1),
+    whatever its source; colour comes only from the terminal layer itself."""
+
+    def test_lists_bodies_menus_and_prompts_are_stripped_of_controls(self) -> None:
+        term, out = make("\n", "\n")
+        term.body("one\nline\x1b]0;title\x07 end")
+        term.list_add("ok", "path\x1b[2J\x9b31m")
+        term.list_sub("sub\x07")
+        term.list_cmd("cmd\x1b")
+        term.list_plain("plain\x7f")
+        term.list_heading("Heading\x1b")
+        term.menu(0, ["item\x1b[31m"])
+        term.ask_text("Prompt\x1b", "/def\x1b[2Jault", home="/h")
+        text = out.getvalue().replace("\033[H\033[2J", "").replace("\033[?25l", "").replace("\033[?25h", "")
+        self.assertNotRegex(text, "[\x00-\x09\x0b-\x1f\x7f-\x9f]")
+        for shown in ("one", "line]0;title end", "path[2J31m", "sub", "item[31m", "/def[2Jault", "Heading"):
+            self.assertIn(shown, text)
+
+
 if __name__ == "__main__":
     unittest.main()

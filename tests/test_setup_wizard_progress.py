@@ -7,6 +7,7 @@ starts the command, so this is an integration test.
 import io
 import os
 import shlex
+import subprocess
 import signal
 import sys
 import tempfile
@@ -223,6 +224,27 @@ class RunnerTests(unittest.TestCase):
             self.fail("the helper's child is still running")
         done = term.call(python("import sys; print('out'); sys.exit(3)"))
         self.assertEqual((3, b"out\n"), (done.returncode, done.stdout))
+
+
+    def test_a_second_signal_during_the_stop_still_kills_and_reaps_the_group(self):
+        """Review 040-s5-wizard-2 (a): the stop keeps the process and finishes before a signal acts."""
+        term = terminal.Terminal(out=io.StringIO(), read=lambda count, timeout: b"", colours=terminal.NO_COLOURS,
+                                 size=lambda: (80, 24))
+        process = subprocess.Popen(["sh", "-c", "trap '' TERM; sleep 30"], start_new_session=True)
+        term.active = process
+        time.sleep(0.2)
+
+        def second(signum, frame):
+            raise terminal.Stop(130)
+        previous = signal.signal(signal.SIGALRM, second)
+        self.addCleanup(signal.signal, signal.SIGALRM, previous)
+        signal.setitimer(signal.ITIMER_REAL, 0.1)  # inside the stop's pause
+        try:
+            term.stop_active()
+        except terminal.Stop:
+            pass
+        self.assertIsNotNone(process.returncode)  # killed despite ignoring TERM, and reaped
+        self.assertIsNone(term.active)
 
 
 class WidthTests(unittest.TestCase):
