@@ -104,6 +104,7 @@ class Harness:
         self.clients = {"codex": (0, b""), "claude": (0, CLAUDE_SIGNED_IN)}
         self.scan = {"ready": True, "warnings": []}
         self.cli = {}  # subcommand -> callable(args) -> (status, stdout bytes)
+        self.cli_real: set[str] = set()  # subcommands run for real
         self.attest = []  # exit statuses for successive hand-offs; 0 when run out
         self.helper_fails = False  # FAKE_PJ_FAIL: the path helper exits 1
         self.apply_fails = False  # FAKE_FAIL: the install's --apply prints a secret and exits 2
@@ -160,6 +161,9 @@ class Harness:
                                           stdin=subprocess.DEVNULL)
                     return done.returncode, done.stdout, done.stderr
                 return 0, json.dumps(self.scan).encode(), b""
+            if command in self.cli_real:  # The real CLI, as a process.
+                done = subprocess.run([sys.executable, *flow.PYF, *rest], capture_output=True, stdin=subprocess.DEVNULL)
+                return done.returncode, done.stdout, done.stderr
             if command in self.cli:
                 status, out = self.cli[command](rest[2:])
                 return status, out, b""
@@ -239,6 +243,69 @@ class Harness:
             return 0, b'{"ready": true, "collector_runtime_version": "0.0.0"}\n'
         self.cli["learning-status"] = status
 
+    def fake_rule(self, status: str) -> None:
+        """FAKE_RULE: host-command reports the rule `status`; install-codex-rule prints or writes it.
+        Every call is logged in rule_log."""
+        import hashlib
+        self.rule_log: list[list[str]] = []
+
+        def rule(command):
+            def answer(args):
+                self.rule_log.append([command, *args])
+                root = Path(os.path.realpath(args[args.index("--project-root") + 1]))
+                digest = hashlib.sha256(str(root).encode()).hexdigest()[:12]
+                home = Path(os.environ["HOME"]) / ".codex"
+                rule_file = str(home / "rules" / f"agent-orchestration-{digest}.rules")
+                copy = str(home / "agent-orchestration" / digest / ("0" * 64))
+                if command == "host-command":
+                    report = {"ready": status == "installed", "codex_rule": status, "rule_file": rule_file,
+                              "runtime_copy": copy}
+                elif "--print" in args:
+                    report = {"ready": True, "rule_file": rule_file, "runtime_copy": copy,
+                              "rule_text": 'prefix_rule(pattern = ["python3"], decision = "allow")\n'}
+                else:
+                    report = {"ready": True, "codex_rule": "replaced" if "--replace" in args else "created",
+                              "rule_file": rule_file, "runtime_copy": copy, "runtime_copy_status": "created"}
+                return 0, json.dumps(report).encode()
+            return answer
+        self.cli["host-command"] = rule("host-command")
+        self.cli["install-codex-rule"] = rule("install-codex-rule")
+
+    def fake_untrusted(self) -> None:
+        """FAKE_UNTRUSTED: host-command refuses because the interpreter cannot be trusted."""
+        self.cli["host-command"] = lambda args: (2, b'{"ready": false, "error": "the Python interpreter cannot '
+                                                    b'be trusted: x"}\n')
+
+    def non_temporary_base(self) -> Path:
+        """A fresh folder outside every temporary root (the commands rule refuses those), or skip."""
+        import shutil
+        candidates = [os.environ.get("XDG_RUNTIME_DIR") or ""]
+        if sys.platform == "darwin":
+            cache = subprocess.run(["/usr/bin/getconf", "DARWIN_USER_CACHE_DIR"], capture_output=True, text=True,
+                                   check=False).stdout.strip()
+            candidates.insert(0, cache)
+        temporary = {os.path.realpath(path) for path in
+                     ("/tmp", "/var/tmp", tempfile.gettempdir(), os.environ.get("TMPDIR") or "/tmp")}
+        for candidate in candidates:
+            real = os.path.realpath(candidate) if candidate else ""
+            if real and os.path.isdir(real) and not any(real == root or real.startswith(root + os.sep)
+                                                        for root in temporary):
+                base = Path(os.path.realpath(tempfile.mkdtemp(prefix="agent-orch-test-", dir=real)))
+                self.test.addCleanup(shutil.rmtree, base, True)
+                return base
+        self.test.skipTest("no folder outside the temporary roots is available")
+
+    def install_by_hand(self, project: Path, checks: Path, commit: bool) -> None:
+        """The installer run directly, as test_setup_sh's adopt and verify tests do."""
+        routing_in = self.base / "par.json"
+        routing_in.write_text(json.dumps({"version": 1, "roles": {}, "verifiers": {}}))
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), "install", "--target", str(project),
+                        "--project-agent-routing", str(routing_in), "--operational-checks", str(checks), "--apply"],
+                       check=True, capture_output=True)
+        if commit:
+            self.git(project, "add", "-A")
+            self.git(project, "commit", "-qm", "install")
+
     def plant_legacy_records(self) -> str:
         """An old-format records folder in the test home, as a session on ~/Library could make."""
         import hashlib
@@ -294,13 +361,21 @@ class Harness:
 
     # Running ---------------------------------------------------------------------------------
 
-    def run(self, *keys: str, start: Path | str, cols: int = 100, lines: int = 30) -> tuple[int, str]:
+    def run(self, *keys, start: Path | str, cols: int = 100, lines: int = 30) -> tuple[int, str]:
         """Run the wizard from `start` with the keys typed in order; returns (exit code, screen text).
-        Running out of keys ends the run the way closed input does."""
+        A callable among the keys runs when the input reaches it (what a terminal test did between
+        keys). Running out of keys ends the run the way closed input does."""
         os.chdir(start)
-        data = bytearray("".join(keys).encode())
+        pending = list(keys)
+        data = bytearray()
 
         def read(count, timeout):
+            while not data and pending:
+                item = pending.pop(0)
+                if callable(item):
+                    item()
+                else:
+                    data.extend(item.encode())
             if not data:
                 return b""
             chunk = bytes(data[:count])

@@ -621,5 +621,158 @@ class FailureAndSummaryTests(unittest.TestCase):
         self.assertNotIn("? what ran", screen.split("Everything looks good")[0])
 
 
+class ExistingInstallTests(unittest.TestCase):
+    """W7, W8, W9.4: the existing-install menu, billing, the owner key and the Codex commands rule."""
+
+    def setUp(self) -> None:
+        self.h = Harness(self)
+
+    QUIT_FROM_MENU = DOWN * 6 + ENTER
+
+    def test_replace_a_lost_owner_key_is_offered_and_can_be_backed_out_of(self) -> None:
+        """Replaces WizardTerminalTests.test_replace_a_lost_owner_key_is_offered_and_can_be_backed_out_of (W7.3)."""
+        project, checks = self.h.make_project(base=self.h.non_temporary_base())
+        self.h.install_by_hand(project, checks, commit=False)
+        self.h.fake_rule("missing")
+        code, screen = self.h.run(ENTER, ENTER, DOWN * 4 + ENTER, DOWN + ENTER, ENTER, self.QUIT_FROM_MENU,
+                                  start=project)
+        self.assertIn("Use this only if you can no longer unlock your owner key", screen)
+        self.assertIn("Replace the owner key", screen)
+        self.assertIn("Update the install", screen.split("Replace the owner key", 1)[1])  # back to the menu
+        self.assertEqual([], self.h.handoffs)
+        self.assertIn("Stopped.", screen)
+        self.assertEqual(0, code)
+
+    def test_changing_the_passphrase_hands_over_retries_and_backing_out_runs_nothing(self) -> None:
+        """Replaces WizardTerminalTests.test_changing_the_passphrase_hands_over_retries_and_backing_out_runs_nothing (W7.4)."""
+        project, checks = self.h.make_project(base=self.h.non_temporary_base())
+        self.h.install_by_hand(project, checks, commit=False)
+        self.h.attest = [1]
+        backed_out = []
+        code, screen = self.h.run(ENTER, ENTER, DOWN * 3 + ENTER, DOWN + ENTER,
+                                  lambda: backed_out.append(list(self.h.handoffs)),
+                                  ENTER, DOWN * 3 + ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, start=project)
+        self.assertEqual([[]], backed_out)  # backing out ran nothing
+        self.assertIn("this wizard never sees them", screen)
+        self.assertIn("did not finish cleanly (exit code 1", screen)
+        self.assertIn("The owner key passphrase was changed.", screen)
+        self.assertEqual(2, len(self.h.handoffs))
+        self.assertTrue(all(argv[-2:] == [str(ROOT / "scripts" / "attest.py"), "--change-passphrase"]
+                            for argv in self.h.handoffs), self.h.handoffs)
+        self.assertEqual(0, code)
+
+    def test_verify_retry_back_and_the_summary_return_to_the_menu(self) -> None:
+        """Replaces WizardTerminalTests.test_verify_retry_back_and_the_summary_return_to_the_menu (W9.3)."""
+        if sys.platform != "darwin":
+            self.skipTest("operational checks use the macOS sandbox, so verify is not ready elsewhere")
+        project, checks = self.h.make_project(base=self.h.non_temporary_base())
+        self.h.install_by_hand(project, checks, commit=False)  # left uncommitted: verification fails
+        self.h.fake_rule("missing")
+
+        def commit():
+            self.h.git(project, "add", "-A")
+            self.h.git(project, "commit", "-qm", "install")
+        code, screen = self.h.run(ENTER, ENTER, DOWN + ENTER, ENTER, DOWN + ENTER, commit, ENTER, DOWN + ENTER,
+                                  ENTER, DOWN + ENTER, ENTER, self.QUIT_FROM_MENU, start=project)
+        self.assertGreaterEqual(screen.count("Try again"), 2)  # still failing: the menu came back
+        self.assertIn("Another folder...", screen)  # the project is in the list now
+        self.assertIn("Codex commands rule: missing", screen)
+        summary = screen.split("Codex commands rule: missing", 1)[1]
+        self.assertNotIn("Save a summary of what failed", summary)  # the old failures are gone
+        self.assertIn("Update the install", summary)
+        self.assertIn("Stopped.", screen)
+        self.assertEqual(0, code)
+
+    def test_going_back_does_not_leak_the_last_attempts_choices_into_the_next(self) -> None:
+        """Replaces WizardTerminalTests.test_going_back_does_not_leak_the_last_attempts_choices_into_the_next (W9.4)."""
+        project, checks = self.h.make_project()
+        self.h.attest = [1]
+        bridging = DOWN * 5 + " " + ENTER
+        code, screen = self.h.run(ENTER, ENTER, f"{checks}\r", ENTER, bridging, ENTER, ENTER, ENTER, ENTER,
+                                  DOWN + ENTER, ENTER, ENTER, DOWN + DOWN + ENTER, ENTER, DOWN + DOWN + ENTER,
+                                  ENTER, ENTER, ENTER, ENTER, start=project)
+        final = re.sub(r"\s+", " ", self.h.final(screen))
+        self.assertIn("bridging was not chosen", final)
+        self.assertNotIn("orchestrator profile is missing", final)
+        self.assertEqual(0, code)
+
+    def test_a_modified_orchestrator_is_never_run(self) -> None:
+        """Replaces WizardTerminalTests.test_a_modified_orchestrator_is_never_run (W1.6)."""
+        project, checks = self.h.make_project()
+        self.h.run(*to_commit(checks), ENTER, *FINISH, start=project)
+        cli = project / ".codex" / "orchestration" / "cli.py"
+        cli.write_text(cli.read_text() + "\nprint('changed')\n")
+        self.h.git(project, "commit", "-qam", "change")
+        self.h.handoffs.clear()
+        self.h.launched.clear()
+        code, screen = self.h.run(ENTER, ENTER, DOWN + DOWN + ENTER, ENTER, ENTER, ENTER, start=project)
+        self.assertIn("does not match this setup", screen)
+        self.assertIn(".codex/orchestration/cli.py differs", screen)
+        self.assertEqual([], self.h.handoffs)  # attest.py never ran
+        self.assertFalse(any(str(cli) in argv for argv in self.h.launched))
+        self.assertEqual(0, code)
+
+    def test_a_stale_rule_left_unchanged_keeps_its_undo_instruction(self) -> None:
+        """Replaces WizardTerminalTests.test_a_stale_rule_left_unchanged_keeps_its_undo_instruction (W8.4)."""
+        import hashlib
+        project, checks = self.h.make_project(base=self.h.non_temporary_base())
+        digest = hashlib.sha256(str(project.resolve()).encode()).hexdigest()[:12]
+        self.h.fake_rule("stale")
+        _, screen = self.h.run(*to_commit(checks), ENTER, ENTER, DOWN + ENTER, DOWN + ENTER, ENTER, ENTER, ENTER,
+                               start=project)
+        self.assertIn("Leave it unchanged", screen)
+        self.assertIn("differs", screen.split("Leave it unchanged", 1)[0])
+        final = self.h.final(screen)
+        self.assertIn("8. Commands: exists, differs, left alone", final)
+        self.assertIn("rule for this project is stale", re.sub(r"\s+", " ", final))
+        self.assertNotIn("until the Codex commands rule exists", final)
+        self.assertRegex(final, r"to undo only the rule, delete:\n\s+\S*/\.codex/rules/agent-orchestration-"
+                         + digest + r"\.rules")
+        self.assertNotIn("install-codex-rule", [entry[0] for entry in self.h.rule_log])  # left unchanged
+
+    def verify_only(self, project: Path, checks: Path) -> tuple[int, str]:
+        self.h.install_by_hand(project, checks, commit=True)
+        return self.h.run(ENTER, ENTER, DOWN + ENTER, ENTER, ENTER, start=project)
+
+    def test_verify_reports_the_codex_commands_rule_without_writing_it(self) -> None:
+        """Replaces WizardTerminalTests.test_verify_reports_the_codex_commands_rule_without_writing_it (W8.5)."""
+        project, checks = self.h.make_project(base=self.h.non_temporary_base())
+        self.h.fake_rule("missing")
+        code, screen = self.verify_only(project, checks)
+        self.assertIn("Codex commands rule: missing", screen)
+        final = re.sub(r"\s+", " ", self.h.final(screen))
+        self.assertIn("8. Commands: missing", final)
+        self.assertIn("Codex sessions cannot reach the orchestrator", final)
+        self.assertNotIn("to undo only the rule, delete:", final)
+        self.assertFalse((self.h.home / ".codex").exists())
+        self.assertEqual(0, code)
+
+    def test_an_unsupported_codex_home_is_explained_with_its_fix(self) -> None:
+        """Replaces WizardTerminalTests.test_an_unsupported_codex_home_is_explained_with_its_fix (W8.6)."""
+        project, checks = self.h.make_project(base=self.h.non_temporary_base())
+        self.h.cli_real.add("host-command")  # the real CLI, with HOME at a test folder
+        code, screen = self.verify_only(project, checks)
+        flat = re.sub(r"\s+", " ", screen)
+        self.assertIn("cannot be used with this Codex setup", flat)
+        self.assertIn("HOME is not this account's home folder", flat)
+        self.assertIn("run setup with HOME set to your own home folder", flat)
+        self.assertNotIn("may be older", flat)
+        self.assertFalse((self.h.home / ".codex").exists())
+        self.assertEqual(0, code)
+
+    def test_an_untrusted_python_is_explained_and_nothing_is_written(self) -> None:
+        """Replaces WizardTerminalTests.test_an_untrusted_python_is_explained_and_nothing_is_written (W8)."""
+        project, checks = self.h.make_project(base=self.h.non_temporary_base())
+        self.h.fake_untrusted()
+        _, screen = self.h.run(*to_commit(checks), ENTER, ENTER, DOWN + ENTER, DOWN + ENTER, ENTER, ENTER, ENTER,
+                               start=project)
+        self.assertIn("This Python cannot be trusted", screen)
+        final = self.h.final(screen)
+        self.assertIn("8. Commands: not checked", final)
+        self.assertIn("until the Codex commands rule exists", re.sub(r"\s+", " ", final))
+        self.assertNotIn("to undo only the rule, delete:", final)
+        self.assertFalse((self.h.home / ".codex").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
