@@ -361,6 +361,16 @@ class BillingProbeWorkerTests(unittest.TestCase):
                 self.until(lambda: self.pool.health.view()['faulted'])
                 self.assertEqual(1, self.pool.health.view()['kept'])
 
+    def test_C7_a_preparation_failure_caught_inside_the_helper_keeps_its_type(self):
+        from codex_agents import bridge
+        with mock.patch.object(bridge, 'private_workspace', side_effect=PermissionError('a secret path')):
+            handle = self.pool.prepare(self.payload())
+            self.until(lambda: self.pool.snapshot(handle)['state'] in {'failed', 'unknown'})
+        failure = self.pool.health.view()['last_failure']
+        self.assertEqual('PermissionError', failure['type'])
+        self.assertIn(failure['cause'], {'probe_preparation_failed', 'probe_preparation_unknown'})
+        self.assertNotIn('secret', repr(self.pool.health.view()))
+
     def test_unbound_preparation_holds_slot_until_actual_discard(self):
         handle, prepared = self.prepare()
         with self.assertRaisesRegex(workers.ProbeWorkerError, 'probe_worker_full'):
