@@ -249,7 +249,7 @@ class HostOpenPublishLockTests(unittest.TestCase):
         for holder in holders:
             holder.join(5)
         self.assertTrue(holders)
-        with self.assertRaisesRegex(Exception, "open_unavailable"):
+        with self.assertRaisesRegex(Exception, "open_account_busy"):  # S1-U10b (was open_unavailable)
             decode_account_response(raw, request)
         # The work limits allow 1 s, and the publish read waited exactly that; the holder
         # would keep the lock for 5 s. Earlier reads in the open take it uncontended.

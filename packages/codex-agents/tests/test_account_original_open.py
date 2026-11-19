@@ -428,15 +428,24 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
     def test_wire_default_denial_unconfigured_and_synchronous_paths_never_open_or_prepare(self):
         request = self.wire_command()
         raw = encode_account_request(request)
-        for configured, authorizer, expected in ((True, False, 'account_not_authorized'), (False, True, 'open_unavailable')):
+        # S1-U10a: open workers not configured yet answer open_account_starting (was open_unavailable).
+        for configured, authorizer, expected in ((True, False, 'account_not_authorized'), (False, True, 'open_account_starting')):
             service, _ = self.wire_service(configured=configured, authorizer=authorizer)
             with self.subTest(configured=configured), self.assertRaisesRegex(AccountError, expected):
                 decode_account_response(service.begin(raw, self.token), request)
         service, _ = self.wire_service()
-        with self.assertRaisesRegex(AccountError, 'open_unavailable'):
+        with self.assertRaisesRegex(AccountError, 'open_failed'):  # S1-U10f: an open is never synchronous
             decode_account_response(service.handle(raw, self.token), request)
         self.assertEqual([], self.reference.pending())
         self.assertEqual(0, self.jobs.snapshot()['tickets'])
+
+    def test_S1_U10a_an_account_that_is_closing_says_so(self):
+        request = self.wire_command()
+        service, _ = self.wire_service()
+        self.jobs.request_close()
+        with self.assertRaisesRegex(AccountError, '^open_account_closing$'):
+            decode_account_response(self.pump_wire(service, service.begin(encode_account_request(request), self.token)), request)
+        self.assertEqual([], self.reference.pending())
 
     def test_client_lost_reply_requires_explicit_same_identity_and_does_not_repeat_admission(self):
         service, _ = self.wire_service()
