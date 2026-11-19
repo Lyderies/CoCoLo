@@ -254,6 +254,30 @@ class AccountClaimJobTests(unittest.TestCase):
         self.assertEqual("claimed", result["state"], result)
         self.assertEqual(1, captured.call_count)  # One more capture: the retry.
 
+    def test_FR4_a_statement_that_appears_with_a_bad_signature_is_verified_and_refuses(self):
+        """Review 040-fr-stale: the retry must verify what it newly captures, not only capture it."""
+        gate, started, patcher = self.gate_first_project()
+        with patcher:
+            ticket = self.begin()
+            self.jobs.drive()
+            self.assertTrue(started.wait(2))
+            self.ledger._connection.execute("UPDATE owner_attestations SET signature=?", (b"invalid-signature",))
+            gate.set()
+            result = decode_account_response(self.pump(ticket), self.request())
+        self.assertEqual(("denied", "billing_attestation_missing"), (result["state"], result["reason_code"]))
+        self.fixture.assert_no_claim()
+
+    def test_FR1_a_run_whose_own_rows_changed_is_not_prepared_again(self):
+        """Review 040-fr-stale: a new capture cannot mend a run whose own rows changed, so it is refused at once."""
+        from codex_agents.account_claim_contracts import ClaimError
+        changed = ClaimError("claim_preparation_stale")
+        changed.run_changed = True
+        captures = mock.patch.object(self.jobs._intake, "capture_admission", wraps=self.jobs._intake.capture_admission)
+        with mock.patch.object(self.views, "_claim_from_signature_job", side_effect=changed) as commits, \
+                captures as captured:
+            self.assert_wire_error(self.pump(self.begin()), self.request(), "claim_preparation_stale")
+        self.assertEqual((1, 1), (commits.call_count, captured.call_count))
+
     def test_FR1_a_preparation_that_stays_stale_is_refused_after_its_last_retry(self):
         from codex_agents import account_claim_jobs
         from codex_agents.account_claim_contracts import ClaimError
@@ -328,8 +352,12 @@ class AccountClaimJobTests(unittest.TestCase):
             self.jobs.drive()
             self.assertTrue(started.wait(2))
             self.ledger._connection.execute("DELETE FROM records WHERE record_type='provider_headroom'")
-            gate.set()
-            result = decode_account_response(self.pump(ticket), self.request())
+            captures = mock.patch.object(self.jobs._intake, "capture_admission",
+                                         wraps=self.jobs._intake.capture_admission)
+            with captures as captured:
+                gate.set()
+                result = decode_account_response(self.pump(ticket), self.request())
+            self.assertEqual(1, captured.call_count)  # Review 040-fr-stale: decided on a new capture.
         # Corrected for 0.4.0 FR1/FR4 (owner, 2026-11-19): a stale preparation is captured and prepared again,
         # and decides as a fresh claim would on the new facts. Until then this test expected claim_preparation_stale.
         # A fresh claim with no headroom reading is admitted too (checked 2026-11-19), so the deleted
