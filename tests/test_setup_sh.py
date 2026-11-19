@@ -938,6 +938,8 @@ KEPT_TERMINAL_RUNS = frozenset({
 @unittest.skipUnless(sys.platform != "win32", "needs a pseudo-terminal")
 class WizardTerminalTests(unittest.TestCase):
     def setUp(self) -> None:
+        if type(self) is WizardTerminalTests and self._testMethodName not in KEPT_TERMINAL_RUNS:
+            self.skipTest("runs in-process with the same body (test_setup_wizard_direct)")
         if TRUSTED_PY is None:
             self.skipTest("no Python in a trusted installation folder")
         self._tmp = tempfile.TemporaryDirectory()

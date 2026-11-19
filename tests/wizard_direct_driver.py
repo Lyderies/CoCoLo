@@ -14,6 +14,7 @@ import io
 import os
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -22,8 +23,8 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT / "scripts") not in sys.path:
-    sys.path.insert(0, str(ROOT / "scripts"))
+if str(ROOT / "scripts") not in sys.path:  # After the standard library, as setup-wizard.py adds it.
+    sys.path.append(str(ROOT / "scripts"))
 
 from setup_wizard import effects, flow, terminal  # noqa: E402
 from test_setup_sh import KEPT_TERMINAL_RUNS, TOKEN, TRUSTED_PY  # noqa: E402
@@ -106,6 +107,8 @@ class DirectDriverMixin:
     """Mixed in before test_setup_sh.WizardTerminalTests: its tests, driven in-process."""
 
     def setUp(self) -> None:
+        if getattr(self, "_undo", None):  # setUp called again inside a test: end the earlier start first
+            self._reap()
         if self._testMethodName in KEPT_TERMINAL_RUNS:
             self.skipTest("kept as a real terminal run (WizardTerminalTests)")
         super().setUp()
@@ -267,22 +270,24 @@ class DirectDriverMixin:
     # The driver: WizardTerminalTests' start, expect, settle, send and finish -----------------
 
     def start(self, cwd: Path, extra_env: dict | None = None, *, direct: bool = False) -> None:
+        if getattr(self, "_undo", None):  # started again: the earlier wizard ends and is undone first
+            self._reap()
         # The environment setup.sh gives the wizard (its lines 48-51 and 152): system folders only on
         # PATH, the owner's PATH kept aside, bytecode off, and the launcher's three COCOLO_ values.
         env = dict(self.env, **(extra_env or {}))
         env.update(PATH="/usr/bin:/bin:/usr/sbin:/sbin", PYTHONDONTWRITEBYTECODE="1",
                    COCOLO_PYTHON=self.wrapper, COCOLO_OWNER_PATH=env["PATH"], COCOLO_BASH_VERSION=_bash_version())
+        # Undone by _reap once the wizard has ended, so a test that starts again (or calls setUp
+        # again) begins from the test's own environment and folder.
         environment = mock.patch.dict(os.environ, env, clear=True)
         environment.start()
-        self.addCleanup(environment.stop)
         here = os.getcwd()
         os.chdir(cwd)
-        self.addCleanup(os.chdir, here)
         # In-process, the installer's own trusted-interpreter check answers with the interpreter the
         # wrapper runs it under.
         trusted = mock.patch.object(effects.installer().attest, "trusted_python", lambda: TRUSTED_PY)
         trusted.start()
-        self.addCleanup(trusted.stop)
+        self._undo = [trusted.stop, lambda: os.chdir(here), environment.stop]
         # Simulated, not evidence of isolation: the two lines setup.sh's launcher would log before the
         # wizard (its version check and its exec). The real launcher runs in KEPT_TERMINAL_RUNS.
         self._log_launch(["-I", "-B", "-S", "-X", "pycache_prefix=/dev/null", "-c",
@@ -332,16 +337,22 @@ class DirectDriverMixin:
 
         def main():
             code = 0
-            with mock.patch("signal.signal"):
+            with mock.patch("signal.signal"):  # The real handlers belong to the process's main thread.
                 try:
                     wizard.main()
                 except terminal.Stop as stop:
                     code = stop.code
                     if stop.message:
                         self.output.write(stop.message + "\n")
+                except BaseException:  # As an uncaught error in the process: a traceback and status 1.
+                    import traceback
+                    self.output.write(traceback.format_exc())
+                    code = 1
                 finally:
-                    wizard.cleanup()
-            self.result.append(code)
+                    try:
+                        wizard.cleanup()
+                    finally:
+                        self.result.append(code)
         self.thread = threading.Thread(target=main, daemon=True)
         self.pid = 1
         self.thread.start()
@@ -398,3 +409,9 @@ class DirectDriverMixin:
             if self.thread.is_alive():
                 print(f"{self.id()}: the wizard thread did not end; stopping the test process", file=sys.stderr)
                 os._exit(1)
+        while getattr(self, "_undo", None):
+            self._undo.pop(0)()
+        # As the terminal driver: no private working folder left behind.
+        for path in self.scratch_entries():
+            if Path(path).parent == self.scratch:
+                shutil.rmtree(path, ignore_errors=True)

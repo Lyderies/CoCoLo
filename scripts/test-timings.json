@@ -2649,5 +2649,6 @@
  "root:test_setup_sh.WizardTerminalTests.test_verify_reports_the_codex_commands_rule_without_writing_it": 8.19,
  "root:test_setup_sh.WizardTerminalTests.test_verify_retry_back_and_the_summary_return_to_the_menu": 5.85,
  "root:test_setup_sh.WizardTerminalTests.test_wildcard_named_obsolete_file_is_removed_without_touching_its_neighbour": 4.79,
+ "root:test_setup_wizard_direct": 134.0,
  "root:test_wizard_clock": 0.34
 }
