@@ -72,11 +72,13 @@ def _inside(path: str, root: str) -> bool:
 
 class Wizard:
     def __init__(self, term, *, start: str, python: str, owner_path: str, bash_version: str,
-                 update: bool = False) -> None:
+                 update: bool = False, answers: dict | None = None) -> None:
         self.t = term
         # S1: `./setup.sh --update PROJECT` (or the menu's "Update this project"): every step with no menu,
         # each question answered as DESIGN-0.4.0-S1-update.md says; only attest.py asks, for the passphrase.
-        self.update = term.no_pauses = update
+        # `--answers FILE` (S1-U3) runs the same way, its checked answers deciding where they are given.
+        self.answers = answers
+        self.update = term.no_pauses = update or answers is not None
         self.start_dir = start
         self.py = python
         self.owner_path = owner_path
@@ -97,6 +99,18 @@ class Wizard:
         if isinstance(update, str):
             raise Stop(1, f"The update stopped: {update}. Nothing further was changed; run ./setup.sh to choose.")
         return update
+
+    def answer(self, key: str, default):
+        """The answers file's answer, or the update's own answer when there is no file."""
+        return self.answers.get(key, default) if self.answers is not None else default
+
+    def choice_needed(self, key: str, update_reason: str, items: list[str]) -> int:
+        """A question an update never answers itself; an answers file answers it or names it (S1-U3)."""
+        if self.answers is not None and key in self.answers:
+            return self.ask(items, 0 if self.answers[key] else 1)
+        if self.answers is not None:
+            return self.ask(items, f"answers file: {key}: needed here and not given")
+        return self.ask(items, update_reason)
 
     # Bookkeeping ----------------------------------------------------------------------------
 
@@ -513,8 +527,14 @@ class Wizard:
             self.install_opts += ["--project-agent-routing", str(inputs / "project-agent-routing.json")]
         if not os.path.isfile(os.path.join(folder, ".codex", "orchestration", "operational-checks.json")):
             if self.update:
-                raise Stop(1, "The update stopped: the project has no .codex/orchestration/operational-checks.json. "
-                              "Nothing was changed.")
+                snapshot = inputs / "operational-checks.json"
+                given = self.answer("operational_checks", None)
+                if given and os.path.isfile(given) and effects.copy_input(given, snapshot):
+                    self.install_opts += ["--operational-checks", str(snapshot)]
+                    return
+                raise Stop(1, "The update stopped: " + ("answers file: operational_checks: not a readable regular file "
+                              "of at most 1 MiB" if given else "the project has no .codex/orchestration/"
+                              "operational-checks.json") + ". Nothing was changed.")
             while True:
                 self.t.screen_reset()
                 self.begin_step(2)
@@ -609,7 +629,7 @@ class Wizard:
                     self.mode = ("full", "full", "verify", "attest", "passphrase", "replace")[choice]
                     t.screen_reset()
                     self.begin_step(2)
-            elif self.update:
+            elif self.update and self.answers is None:
                 raise Stop(1, f"The update stopped: {folder} has no COCOLO install to update. Run ./setup.sh to "
                               "install it. Nothing was changed.")
             if self.mode != "full":
@@ -689,6 +709,17 @@ class Wizard:
             self.fail_reason = "provider configuration refused"
             self.failure_menu()
             return False
+        if self.answers is not None:
+            chosen = self.answers["providers"]
+            models = chosen["claude_models"] if chosen["claude"] == "on" else "-"
+            self.routing_content = steps.provider_routing(chosen["codex"], chosen["claude"], models, chosen["bridge"])
+            self.routing_write = not (status == "present" and raw_routing == self.routing_content.encode("utf-8"))
+            if chosen["bridge"] == "on":
+                self.profile_wanted = True
+            self.codex_primary = chosen["codex"] == "on" or chosen["bridge"] == "on"
+            t.list_add("ok", "Providers from the answers file")
+            self.mark_step(3, "ok", f"codex={chosen['codex']} claude={chosen['claude']} bridge={chosen['bridge']}")
+            return True
         if status == "present":
             t.body("This project already has a provider configuration (.codex/orchestration/provider-routing.json). "
                    "Keep it, or choose providers again and replace it.")
@@ -969,7 +1000,8 @@ class Wizard:
         for line in steps.first_ten(self.commit_paths):
             t.list_sub(line)
         while True:
-            choice = self.ask(["Commit now (recommended)", "I will commit myself", "Show every path"])
+            choice = self.ask(["Commit now (recommended)", "I will commit myself", "Show every path"],
+                              0 if self.answer("commit", True) else 1)
             if choice != 2:
                 break
             t.view_text("\n".join(self.commit_paths), "Paths to commit")
@@ -1051,8 +1083,8 @@ class Wizard:
         else:
             t.list_add("info", "Setup cannot compare them; check the owner key above yourself.")
         t.body("Move these records to the protected folder? [Y/n]")
-        choice = self.ask(["Yes, move them", "No, leave them where they are"], "records_need_owner_choice: the earlier "
-                          "records can be moved only when you choose to")
+        choice = self.choice_needed("move_records", "records_need_owner_choice: the earlier records can be moved "
+                                    "only when you choose to", ["Yes, move them", "No, leave them where they are"])
         t.screen_reset()
         self.begin_step(5)
         if choice != 0:
@@ -1069,8 +1101,8 @@ class Wizard:
                    "working with the orchestrator until you run this setup for each of them.")
         t.list_sub("Do this while no child agent is running in any project.")
         t.body("Upgrade the records now? [Y/n]")
-        choice = self.ask(["Yes, upgrade them", "No, leave them as they are"], "records_need_owner_choice: the "
-                          "earlier records can be upgraded only when you choose to")
+        choice = self.choice_needed("upgrade_records", "records_need_owner_choice: the earlier records can be "
+                                    "upgraded only when you choose to", ["Yes, upgrade them", "No, leave them as they are"])
         t.screen_reset()
         self.begin_step(5)
         if choice != 0:
@@ -1352,7 +1384,8 @@ class Wizard:
                 self.mark_step(7, "skip", "exists, differs, left alone")
             t.pause()
             return
-        choice = self.ask(["Create the profile", "Skip", "Quit"])
+        choice = self.ask(["Create the profile", "Skip", "Quit"],
+                          0 if self.answer("codex_profile", "create") == "create" else 1)
         if choice == 1:
             self.mark_step(7, "skip", "skipped")
             return
@@ -1479,9 +1512,11 @@ class Wizard:
         while True:
             # In an update the earlier answer stands: a rule allowed before is refreshed, none stays none.
             if stale:
-                choice = self.ask(["Leave it unchanged", "Replace it", "Show the new rule", "Quit"], 1)
+                choice = self.ask(["Leave it unchanged", "Replace it", "Show the new rule", "Quit"],
+                                  1 if self.answer("commands_rule", True) else 0)
             else:
-                choice = self.ask(["No, not now", "Yes, allow these commands", "Show the exact rule", "Quit"], 0)
+                choice = self.ask(["No, not now", "Yes, allow these commands", "Show the exact rule", "Quit"],
+                                  1 if self.answer("commands_rule", False) else 0)
             if choice == 0:
                 self.mark_step(8, "skip", "exists, differs, left alone" if stale else "not created")
                 return

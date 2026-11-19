@@ -5,7 +5,9 @@ Isolated mode leaves this folder off sys.path, so this clone's own scripts folde
 the standard library (W1.8); nothing is imported from the project or the current folder.
 """
 
+import json
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -29,6 +31,77 @@ def _load(path):
             return json.load(handle)
     except Exception:
         return None
+
+
+class AnswersRefused(Exception):
+    """An answers file that cannot be used; the message names the answer (S1-U3)."""
+
+
+_ANSWER_KEYS = ("project", "operational_checks", "providers", "commit", "commands_rule", "codex_profile",
+                "move_records", "upgrade_records")
+_PROVIDER_KEYS = ("codex", "claude", "claude_models", "bridge")
+
+
+def read_answers(path: str) -> dict:
+    """`--answers FILE`: every answer a fresh install reaches, checked before anything changes.
+
+    Required: project, providers (codex, claude, claude_models, bridge), commit and commands_rule;
+    operational_checks unless the project already has one; codex_profile when bridging is on.
+    move_records and upgrade_records are needed only when setup reaches that question.
+    """
+    def refuse(key: str, why: str) -> AnswersRefused:
+        return AnswersRefused(f"answers file: {key}: {why}. Nothing was changed.")
+    try:
+        info = os.stat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 65_536:
+            raise refuse("file", "not a regular file of at most 64 KiB")
+        with open(path, encoding="utf-8") as handle:
+            answers = json.load(handle)
+    except AnswersRefused:
+        raise
+    except (OSError, ValueError) as exc:
+        raise refuse("file", f"cannot be read as JSON ({type(exc).__name__})") from None
+    if not isinstance(answers, dict):
+        raise refuse("file", "not a JSON object")
+    for key in answers:
+        if key not in _ANSWER_KEYS:
+            raise refuse(key, "not a setup answer")
+    for key in ("project", "providers", "commit", "commands_rule"):
+        if key not in answers:
+            raise refuse(key, "missing")
+    if not isinstance(answers["project"], str) or not answers["project"]:
+        raise refuse("project", "must be a path")
+    project = answers["project"]
+    if not os.path.isfile(os.path.join(project, ".codex", "orchestration", "operational-checks.json")):
+        if not isinstance(answers.get("operational_checks"), str):
+            raise refuse("operational_checks", "missing" if "operational_checks" not in answers else "must be a path")
+    providers = answers["providers"]
+    if not isinstance(providers, dict):
+        raise refuse("providers", "must be an object")
+    for key in providers:
+        if key not in _PROVIDER_KEYS:
+            raise refuse(f"providers.{key}", "not a provider answer")
+    for key in _PROVIDER_KEYS:
+        if key not in providers:
+            raise refuse(f"providers.{key}", "missing")
+    for key in ("codex", "claude", "bridge"):
+        if providers[key] not in ("on", "off"):
+            raise refuse(f"providers.{key}", 'must be "on" or "off"')
+    if not isinstance(providers["claude_models"], str):
+        raise refuse("providers.claude_models", "must be a comma-separated list of models")
+    models = providers["claude_models"] if providers["claude"] == "on" else "-"
+    try:
+        steps.provider_routing(providers["codex"], providers["claude"], models, providers["bridge"])
+    except steps.ChoiceError as exc:
+        raise refuse("providers", str(exc)) from None
+    for key in ("commit", "commands_rule", "move_records", "upgrade_records"):
+        if key in answers and type(answers[key]) is not bool:
+            raise refuse(key, "must be true or false")
+    if providers["bridge"] == "on" and answers.get("codex_profile") not in ("create", "skip"):
+        raise refuse("codex_profile", "missing" if "codex_profile" not in answers else 'must be "create" or "skip"')
+    if "codex_profile" in answers and answers["codex_profile"] not in ("create", "skip"):
+        raise refuse("codex_profile", 'must be "create" or "skip"')
+    return answers
 
 
 def helper(argv: list[str]) -> int:
@@ -208,7 +281,8 @@ def main(argv: list[str]) -> int:
         return answered
     if argv[:1] in (["-h"], ["--help"]):
         print("Usage: ./setup.sh [PROJECT_PATH]\n       ./setup.sh --update PROJECT_PATH   (update an installed project "
-              "with no menu; only the owner-key passphrase is asked)\n\nInteractive wizard that installs COCOLO (Claude Orchestrator, Codex "
+              "with no menu; only the owner-key passphrase is asked)\n       ./setup.sh --answers FILE   (install from "
+              "an answers file with no menu: docs/setup-wizard.md)\n\nInteractive wizard that installs COCOLO (Claude Orchestrator, Codex "
               "Orchestrator, Local Orchestrator) into a Git project.\nRun it from a terminal in the root of this "
               "repository. Keys: Up/Down move, Enter selects,\nSpace toggles, q quits. Set NO_COLOR=1 for plain output.")
         return 0
@@ -220,16 +294,25 @@ def main(argv: list[str]) -> int:
     import shutil
     import signal
     update = argv[:1] == ["--update"]
-    if update and len(argv) != 2:
-        print("usage: setup.sh --update PROJECT_PATH", file=sys.stderr)
+    scripted = argv[:1] == ["--answers"]
+    if (update or scripted) and len(argv) != 2:
+        print(f"usage: setup.sh {argv[0]} {'PROJECT_PATH' if update else 'ANSWERS_FILE'}", file=sys.stderr)
         return 2
-    start = argv[1] if update else os.getcwd() if not argv or argv[0].startswith("--") else argv[0]
+    answers = None
+    if scripted:
+        try:
+            answers = read_answers(argv[1])
+        except AnswersRefused as refused:
+            print(refused, file=sys.stderr)
+            return 2
+    start = (argv[1] if update else answers["project"] if scripted
+             else os.getcwd() if not argv or argv[0].startswith("--") else argv[0])
     term = terminal.Terminal(out=sys.stdout, read=tty_read, colours=terminal.terminal_colours(),
                              size=lambda: tuple(shutil.get_terminal_size((80, 24))))
     term.hold = tty_hold
     wizard = flow.Wizard(term, start=start, python=os.environ.get("COCOLO_PYTHON") or sys.executable,
                          owner_path=os.environ.get("COCOLO_OWNER_PATH", ""),
-                         bash_version=os.environ.get("COCOLO_BASH_VERSION", ""), update=update)
+                         bash_version=os.environ.get("COCOLO_BASH_VERSION", ""), update=update, answers=answers)
 
     def on_signal(signum, frame):
         term.write("\n")

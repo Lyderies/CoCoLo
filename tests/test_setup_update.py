@@ -158,7 +158,10 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
     def test_U3_commit_false_leaves_the_install_uncommitted(self):
         project, checks = self.make_project()
         code, screen = self.scripted(self.answers_for(project, checks, commit=False))
-        self.assertEqual(0, code, screen[-1500:])
+        # Uncommitted files cannot be verified, so the run ends 1 (every step ok is 0), saying why.
+        self.assertEqual(1, code, screen[-1500:])
+        self.assertIn("not committed (you chose to commit yourself)", screen)
+        self.assertIn("must be committed and clean", screen)
         self.assertEqual(1, self.commit_count(project))
 
     def test_U3_a_missing_unknown_or_invalid_answer_is_refused_naming_it_before_anything_changes(self):

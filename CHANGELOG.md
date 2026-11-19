@@ -13,6 +13,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   is committed, the collector registered, and attest.py asks for the passphrase. It stops plainly,
   changing nothing, on a failed check, a client not signed in, uncommitted managed files, or earlier
   records that need your choice.
+- `./setup.sh --answers FILE` installs a project with no menu from a JSON answers file
+  (docs/setup-wizard.md); a missing, unknown or invalid answer is refused by name before anything
+  changes.
 - Tests are sorted into stages: `unit`, `integration` and `e2e` (`scripts/test-stages.json`).
   `scripts/parallel_tests.py --stage unit` runs only the unit tests; a unit test that starts a
   process, opens a socket or sleeps fails. `scripts/measure_test_behaviour.py` measures each module.

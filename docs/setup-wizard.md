@@ -172,3 +172,27 @@ or a folder above it (a nested project's tree, `.git` and `.claude` included).
   on Claude Code's tools, not a sandbox: a command spelled another way (for example through `bash -c` or a
   script that starts the CLI itself) is not matched, so do not give a Claude primary more trust because of
   them.
+
+## Scripted setup: `./setup.sh --answers FILE`
+
+Installs a project with no menu, every answer coming from a JSON file; attest.py still asks for your
+owner-key passphrase. The file is checked before anything changes, and a missing, unknown or invalid
+answer is refused by name (exit 2).
+
+```json
+{
+  "project": "/path/to/project",
+  "operational_checks": "/path/to/operational-checks.json",
+  "providers": {"codex": "on", "claude": "on", "claude_models": "claude-sonnet-5-5", "bridge": "off"},
+  "commit": true,
+  "commands_rule": false
+}
+```
+
+- `operational_checks` is needed only when the project has none yet.
+- `codex_profile` (`"create"` or `"skip"`) is needed when `bridge` is `"on"`.
+- `move_records` and `upgrade_records` (true or false) are needed only if setup finds earlier records
+  that must be moved or upgraded; without them the run stops there and names the answer.
+- `commit: false` leaves the install for you to commit; it cannot be verified until you do, so the
+  run ends with exit status 1 and says so.
+
