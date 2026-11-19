@@ -71,6 +71,7 @@ class CiStageTests(unittest.TestCase):
         self.assertIn("--keep", integration)
         self.assertIn("actions/upload-artifact@v7.0.2", integration)
         self.assertIn("retention-days: 7", integration)
+        self.assertIn('kept/original', integration)  # The failing run's own unit logs, not only a rerun.
 
 
     def test_a_piped_test_run_still_fails_its_job(self):

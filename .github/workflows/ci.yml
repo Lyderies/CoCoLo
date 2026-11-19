@@ -86,7 +86,10 @@ jobs:
           report = json.loads(text[text.rindex("\n{") + 1:])
           print("\n".join(sorted({unit.split("#")[0] for unit in report["failed_units"]})))
           EOF
-          mkdir -p "$RUNNER_TEMP/kept"
+          mkdir -p "$RUNNER_TEMP/kept/original"
+          # The failing run's own unit logs: the full test output, cut to the last lines in the job log.
+          original=$(python -c 'import json,sys; t=open(sys.argv[1]).read(); print(json.loads(t[t.rindex("\n{")+1:])["logs"])' "$RUNNER_TEMP/integration.txt" 2>/dev/null || true)
+          [ -n "$original" ] && cp "$original"/*.log "$RUNNER_TEMP/kept/original/" 2>/dev/null || true
           while read -r module; do
             [ -n "$module" ] || continue
             python scripts/parallel_tests.py --keep --module "$module" --jobs "$(getconf _NPROCESSORS_ONLN)" > "$RUNNER_TEMP/kept/rerun-${module//[^A-Za-z0-9_.]/_}.txt" 2>&1 || true
