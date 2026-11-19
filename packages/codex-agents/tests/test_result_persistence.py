@@ -117,6 +117,26 @@ class ResultPersistenceTests(unittest.TestCase):
         lane._writer.join(6)
         self.assertFalse(lane._writer.is_alive())
 
+    def test_R6_19_a_stopped_writer_fails_every_queued_request_and_a_closed_lane_says_so_before_busy(self):
+        release = threading.Event()
+
+        def slow_history():
+            release.wait(10)
+            return self.open_history()
+
+        lane = ResultPersistenceLane(self.fixture.owner, self.fixture.pool, mock.Mock(side_effect=slow_history),
+                                     max_entries=1, retained_bytes=MAX_PERSISTENCE_ENTRY_BYTES,
+                                     allow_local_execution_reference=True)
+        requests = [lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
+                    for _ in range(result_persistence.REPORT_SLOTS)]
+        with mock.patch.object(lane, '_earlier', side_effect=RuntimeError('fixture writer fault')):
+            release.set()
+            lane._writer.join(6)
+        self.assertFalse(lane._writer.is_alive())
+        self.assertEqual({('failed', 'history_service_unavailable')}, {(r.state, r.reason) for r in requests})
+        with self.assertRaisesRegex(HistoryError, 'history_service_unavailable'):
+            lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
+
     def stop_lane(self, lane):
         lane.close()
         lane._writer.join(6)

@@ -476,6 +476,28 @@ class ProjectDriverTests(DriverHarness):
         runs = self.report_for(handle)['runs']
         self.assertEqual((1, 1, 0), (runs['admitted'], runs['failed_before_open'], runs['pending']), runs)
 
+    def test_R6_20_21_abandoning_a_run_waiting_on_its_registration_answers_its_prepare_and_reports_nothing(self):
+        from codex_agents import result_persistence
+        from codex_agents import project_driver
+        never = result_persistence._EarlierLeases('register')  # stays queued: the writer never answers it
+        drivers, advance = [], project_driver.RunDriver._advance
+
+        def seen(driver, run):
+            drivers.append(driver)
+            return advance(driver, run)
+        with mock.patch.object(result_persistence.ResultPersistenceLane, 'report_registered_run',
+                               return_value=never), mock.patch.object(project_driver.RunDriver, '_advance', seen):
+            context, route_path, _, run_handle = self.open_run()
+            process = self.separate_dispatch(context, route_path, run_handle)
+            self.wait_for(lambda: drivers and any(run.state == 'recording_registration'
+                                                  for run in drivers[-1]._runs.values()), seconds=30)
+            self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle, '--reason', 'owner_cancelled')
+            output, _ = process.communicate(timeout=30)
+        self.assertEqual('run_abandoned', json.loads(output)['reason_code'], output)
+        never.state, never.reason = 'failed', 'history_conflict'  # refused after all: still no report
+        self.wait_for(lambda: not drivers[-1]._reports, seconds=10)
+        self.assertEqual([], self.registered_rows())
+
     def test_R6_a_run_that_opens_is_counted_once_by_its_open(self):
         context, route_path, handle, run_handle = self.open_run()
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
