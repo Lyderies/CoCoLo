@@ -4,6 +4,10 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- The setup wizard is now Python. `./setup.sh` is a short launcher: it checks `python3` before it
+  runs, as before, then starts the wizard, which shows the same screens, asks the same questions and
+  keeps every safeguard. Path prompts take typing, Backspace, Ctrl-U, Ctrl-W, Ctrl-V and Tab to
+  complete a path; moving the cursor inside a typed path is no longer offered.
 - Tests are sorted into stages: `unit`, `integration` and `e2e` (`scripts/test-stages.json`).
   `scripts/parallel_tests.py --stage unit` runs only the unit tests; a unit test that starts a
   process, opens a socket or sleeps fails. `scripts/measure_test_behaviour.py` measures each module.

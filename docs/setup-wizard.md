@@ -122,7 +122,9 @@ or a folder above it (a nested project's tree, `.git` and `.claude` included).
   `~/.local`), so a sibling install like `/srv/work/tools` is refused. Owner tools and the runtime use
   one list. It runs with `-I -B -S -X pycache_prefix=/dev/null`, so nothing in the working folder, the
   environment, site-packages or a bytecode cache loads.
-- **Clients and basic tools.** The wizard runs with `/bin/bash` and finds its basic tools only in the
+- **Clients and basic tools.** `./setup.sh` is a short launcher run by `/bin/bash`: it checks the
+  interpreter as above, then starts the wizard itself, which is Python (`scripts/setup-wizard.py` and
+  `scripts/setup_wizard/`), with those isolation flags. Both find basic tools only in the
   system folders, so a program planted in an earlier `PATH` entry (say `~/Work/tools/bin`, which a session
   opened on `~/Work` could write) never runs; your `PATH` is used only to find `python3`, which is checked
   as above. The Codex and Claude sign-in checks go through the runtime's own client lookup: the client is
