@@ -90,6 +90,24 @@ class DriverHarness(ServiceHarness, CliTestCase):
             cli_module.main()
         return json.loads(stdout.getvalue())
 
+    def wait_for_launches(self, count, processes, seconds):
+        """Wait as before for `count` children to launch; on timeout, say why (Linux load failures,
+        0.4.0 O3): how many launched, and each dispatch's exit status and the end of its output."""
+        launched = lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']]  # noqa: E731
+        try:
+            self.wait_for(lambda: len(launched()) == count, seconds=seconds)
+        except AssertionError:
+            report = []
+            for process in processes:
+                if process.poll() is None:
+                    report.append('still running')
+                    continue
+                output, errors = process.communicate(timeout=5)
+                report.append(f'exit {process.returncode}: {output.decode(errors="replace")[-400:]!r} '
+                              f'{errors.decode(errors="replace")[-200:]!r}')
+            self.fail(f'{len(launched())} of {count} children launched within {seconds} s; dispatches: '
+                      f'{report}; driver stops: {self.stopped_runs[-6:]}')
+
     def separate_dispatch(self, context, route_path, run_handle, project=None):
         """A second primary process waits on dispatch while this one inspects the run."""
         env = {k: v for k, v in os.environ.items() if not any(m in k.upper() for m in ('API_KEY', 'ACCESS_TOKEN', 'SECRET'))}
@@ -1683,7 +1701,7 @@ class SharedPoolTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         processes = [self.separate_dispatch(run[0], run[1], run[3], project) for project, run in runs]
         launched = lambda: [i for i in self.invocations('codex') if 'exec' in i['argv']]  # noqa: E731
-        self.wait_for(lambda: len(launched()) == 6, seconds=120)
+        self.wait_for_launches(6, processes, 120)
         for child in launched():
             os.killpg(child['pgid'], 0)  # All six are alive together.
         refused = self.cli_for(third, 'dispatch', *seventh[0], '--route', seventh[1], '--run-handle', seventh[3],
@@ -1722,7 +1740,7 @@ class TwoProjectTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         processes = [self.separate_dispatch(first[0], first[1], first[3], self.project),
                      self.separate_dispatch(second[0], second[1], second[3], self.second)]
-        self.wait_for(lambda: len([i for i in self.invocations('codex') if 'exec' in i['argv']]) == 2, seconds=40)
+        self.wait_for_launches(2, processes, 40)
         targets = [('--orchestration-handle', run[2], '--run-handle', run[3]) for run in (first, second)]
         for project, target in zip((self.project, self.second), targets):
             status = self.cli_for(project, 'learning-run-status', *target)
@@ -1755,7 +1773,7 @@ class TwoProjectTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         processes = [self.separate_dispatch(first[0], first[1], first[3], self.project),
                      self.separate_dispatch(second[0], second[1], second[3], self.second)]
-        self.wait_for(lambda: len([i for i in self.invocations('codex') if 'exec' in i['argv']]) == 2, seconds=40)
+        self.wait_for_launches(2, processes, 40)
         targets = [('--orchestration-handle', run[2], '--run-handle', run[3]) for run in (first, second)]
 
         def timed_status(project, target, expected=0):
