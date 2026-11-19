@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +50,8 @@ class RunnerTests(unittest.TestCase):
 
     @staticmethod
     def frames(output):
+        # The cursor show and hide codes are not frames (setup.sh's tests stubbed them out).
+        output = output.replace("\x1b[?25l", "").replace("\x1b[?25h", "")
         return [frame.replace("\x1b[K", "") for frame in output.split("\r") if frame.replace("\x1b[K", "").strip()]
 
     def test_a_running_step_shows_how_long_it_has_run(self):
@@ -183,6 +186,14 @@ class RunnerTests(unittest.TestCase):
         return False
 
 
+    def test_S3_P5_any_width_value_lets_the_step_finish(self):
+        for columns in (0, 4, 8, 80):
+            with self.subTest(columns=columns):
+                output, status, _ = self.run_step(["sleep", "0.5"], width=lambda c=columns: c)
+                self.assertEqual(0, status)
+                self.assertTrue(all(len(frame) < max(columns, 1) for frame in self.frames(output)), columns)
+
+
 class WidthTests(unittest.TestCase):
     """S3-P9a and S3-P5 on terminal_width itself: (COLUMNS, the terminal's size, the terminfo answer)."""
 
@@ -204,6 +215,25 @@ class WidthTests(unittest.TestCase):
         ):
             with self.subTest(stty=stty, tput=tput, columns=columns):
                 self.assertEqual(expected, terminal.terminal_width(columns, stty, tput))
+
+
+
+class LiveWidthTests(unittest.TestCase):
+    def test_S3_P5_the_width_comes_from_the_terminal_itself(self):
+        """The wizard's own terminal (standard input), here a pseudo-terminal 30 columns wide, decides."""
+        import fcntl
+        import pty
+        import struct
+        import termios
+        primary, secondary = pty.openpty()
+        try:
+            fcntl.ioctl(secondary, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 30, 0, 0))
+            environ = {key: value for key, value in os.environ.items() if key != "COLUMNS"}
+            with unittest.mock.patch.dict(os.environ, environ, clear=True):
+                self.assertEqual(30, terminal.live_width(secondary))
+        finally:
+            os.close(primary)
+            os.close(secondary)
 
 
 if __name__ == "__main__":
