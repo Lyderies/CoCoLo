@@ -97,6 +97,11 @@ class LostRunHarness(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled({**result(), 'assignment_id': name})))
         return self.cli('dispatch', *context, '--route', route_path, '--run-handle', opened['run_handle'])
 
+    def lost_capacity(self, orchestration, run_handle):
+        """The capacity state run-status reports for this lost run ('held' until the sweep settles it)."""
+        return self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle,
+                        expected=2)['capacity_state']
+
     def assert_lost_status(self, orchestration, run_handle, capacity_state):
         status = self.cli('learning-run-status', '--orchestration-handle', orchestration, '--run-handle', run_handle,
                           expected=2)
@@ -150,7 +155,10 @@ class LostRunAfterCrashTests(LostRunHarness):
         orchestration, run_handle, child = self.crash_while_running(2)
         # The child writes into its dead host's pipe and ends; its watchdog follows.
         started = time.monotonic()
-        self.wait_for(lambda: self.counted() == 0, seconds=30)
+        # Settled when the account counts it no longer and the host reports it released: the host's
+        # sweep hands its result over just after the account settles the claim.
+        self.wait_for(lambda: self.counted() == 0 and self.lost_capacity(orchestration, run_handle) == 'released',
+                      seconds=30)
         self.assertLess(time.monotonic() - started, 25)
         self.assert_process_gone(child)
         self.assertEqual([('abandoned', 'service_lost', 0)], self.claimed_bindings())
