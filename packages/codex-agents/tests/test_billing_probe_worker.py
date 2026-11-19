@@ -371,6 +371,21 @@ class BillingProbeWorkerTests(unittest.TestCase):
         self.assertIn(failure['cause'], {'probe_preparation_failed', 'probe_preparation_unknown'})
         self.assertNotIn('secret', repr(self.pool.health.view()))
 
+    def test_C6_an_unknown_preparation_is_published_while_the_registry_lock_is_held(self):
+        started, go = threading.Event(), threading.Event()
+
+        def unknown(payload):
+            started.set()
+            go.wait(5)
+            return None, None, True
+        with mock.patch.object(workers, '_prepare', side_effect=unknown):
+            self.pool.prepare(self.payload())
+            self.assertTrue(started.wait(5))
+            with self.registry._lock:
+                go.set()
+                self.until(lambda: self.pool.health.view()['kept'] == 1)
+                self.assertIs(int, type(self.pool.health.view()['held_since_ms']))
+
     def test_unbound_preparation_holds_slot_until_actual_discard(self):
         handle, prepared = self.prepare()
         with self.assertRaisesRegex(workers.ProbeWorkerError, 'probe_worker_full'):
