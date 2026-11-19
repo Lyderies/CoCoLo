@@ -145,6 +145,18 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.assertNotIn('inspected a database', stdout + stderr)
         self.assertEqual(1, len(self.requests))
 
+    def test_H1a_health_carries_the_lane_notes_and_this_projects_slots(self):
+        lanes = {'probe_worker': {'faulted': False, 'kept': 1, 'busy': 0, 'queued': 0,
+                                  'last_failure': None, 'held_since_ms': 5}}
+        self.collector.account_lanes = lambda: lanes
+        health = self.client.health(self.project)
+        self.assertEqual(lanes, health['account_lanes'])
+        self.assertTrue(health['account_slots']['available'])
+        self.assertEqual(lanes, self.client.health()['account_lanes'])  # project-less: notes, no slots
+        self.assertNotIn('account_slots', self.client.health())
+        self.collector.account_lanes = lambda: 1 / 0  # a failing view never breaks health
+        self.assertEqual({'available': False}, self.client.health(self.project)['account_lanes'])
+
     def test_ST1_account_services_still_starting_say_starting(self):
         self.collector.account_services = 'starting'
         self.hint.unlink()
