@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from wizard_flow_harness import FINISH, ROOT, TRUSTED_PY, Harness, to_commit  # noqa: E402
+from wizard_flow_harness import ROOT, TRUSTED_PY, Harness  # noqa: E402
 
 ENTER, DOWN = "\r", "\x1b[B"
 
@@ -173,7 +173,7 @@ class CollectorTests(unittest.TestCase):
 
     def to_register(self, *after: str) -> tuple[int, str]:
         """A fresh install, committed, then Register now, then `after`."""
-        return self.h.run(*to_commit(self.checks), ENTER, ENTER, ENTER, *after, start=self.project)
+        return self.h.run(*self.h.to_commit(self.checks), ENTER, ENTER, ENTER, *after, start=self.project)
 
     @staticmethod
     def flat(screen: str) -> str:
@@ -226,7 +226,13 @@ class CollectorTests(unittest.TestCase):
         """Replaces WizardTerminalTests.test_an_earlier_versions_records_are_upgraded_only_when_approved (W6.3)."""
         self.h.fake_upgrade('{"ready": true, "state_moved": null, "ledger_upgraded_from": 6, '
                             '"ledger_copy": "/kept/old ledger"}')
-        _, screen = self.to_register(ENTER)  # Yes, upgrade them
+        before = []
+
+        def nothing_upgraded_yet():
+            before.extend(self.h.register_log)
+        _, screen = self.to_register(nothing_upgraded_yet, ENTER)  # Yes, upgrade them
+        self.assertEqual(1, len(before))  # asked once, refused, nothing upgraded before the answer
+        self.assertNotIn("--upgrade-ledger", before[0])
         question = self.flat(screen.split("Upgrade the records now?", 1)[1].split("Yes, upgrade them", 1)[0])
         self.assertIn("written by an earlier version of the orchestrator", question)
         self.assertIn("keeps a checked copy of everything as it is", question)
@@ -289,7 +295,13 @@ class CollectorTests(unittest.TestCase):
         digest = self.h.plant_legacy_records()
         self.h.fake_upgrade('{"ready": true, "state_moved": "/somewhere/old copy", "ledger_upgraded_from": 6,'
                             ' "ledger_copy": "/kept/old ledger"}')
-        _, screen = self.to_register(ENTER, ENTER)  # Yes, move them; Yes, upgrade them
+        before = []
+
+        def nothing_upgraded_yet():
+            before.extend(self.h.register_log)
+        _, screen = self.to_register(ENTER, nothing_upgraded_yet, ENTER)  # Yes, move them; Yes, upgrade them
+        self.assertEqual(1, len(before))  # refused before moving: the second answer still to come
+        self.assertNotIn("--upgrade-ledger", before[0])
         self.assertLess(screen.index("Move these records to the protected folder?"),
                         screen.index("Upgrade the records now?"))
         flat = self.flat(screen)
@@ -331,11 +343,11 @@ class InstallCommitTests(unittest.TestCase):
 
     def test_an_update_that_changes_nothing_offers_no_commit(self) -> None:
         """Replaces WizardTerminalTests.test_an_update_that_changes_nothing_offers_no_commit (W5.4)."""
-        self.h.run(*to_commit(self.checks), ENTER, *FINISH, start=self.project)
+        self.h.run(*self.h.to_commit(self.checks), ENTER, *self.h.finish(), start=self.project)
         before = self.h.commit_count(self.project)
         self.assertEqual(2, before)
         # The project is listed now: pick it, update, keep the routing, install.
-        _, screen = self.h.run(ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, *FINISH, start=self.project)
+        _, screen = self.h.run(ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, *self.h.finish(), start=self.project)
         self.assertIn("Nothing to commit: the project already has these files committed", screen)
         self.assertNotIn("Commit now", screen)
         self.assertNotIn("Next: commit the installed files", screen)
@@ -358,7 +370,7 @@ class InstallCommitTests(unittest.TestCase):
         self.git("commit", "-qm", "adopt")
         before = self.h.commit_count(self.project)
         # Update the install; choose providers (none kept); looks right; install; commit now.
-        _, screen = self.h.run(ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, *FINISH, start=self.project)
+        _, screen = self.h.run(ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, *self.h.finish(), start=self.project)
         commit_screen = screen[screen.index("Next: commit the installed files"):screen.index("Commit now")]
         self.assertIn("Only these 1 paths", commit_screen)
         self.assertIn(".codex/orchestration/provider-routing.json", commit_screen)
@@ -370,7 +382,7 @@ class InstallCommitTests(unittest.TestCase):
 
     def test_summary_says_not_committed_and_lists_what_is_left(self) -> None:
         """Replaces WizardTerminalTests.test_summary_says_not_committed_and_lists_what_is_left (W5.7, W10.5)."""
-        _, screen = self.h.run(*to_commit(self.checks), DOWN + ENTER, *FINISH, start=self.project)
+        _, screen = self.h.run(*self.h.to_commit(self.checks), DOWN + ENTER, *self.h.finish(), start=self.project)
         final = self.h.final(screen)
         self.assertIn("not committed (you chose to commit yourself)", final)
         self.assertIn("Left uncommitted in the project:", final)
@@ -381,9 +393,9 @@ class InstallCommitTests(unittest.TestCase):
 
     def test_the_hooks_are_offered_for_trust_only_after_the_runtime_check(self) -> None:
         """Replaces WizardTerminalTests.test_the_hooks_are_offered_for_trust_only_after_the_runtime_check (W8.3)."""
-        _, screen = self.h.run(*to_commit(self.checks), DOWN + ENTER, *FINISH, start=self.project)
-        self.assertIn("Close every Codex session in this project first.", screen)
-        commit_screen = re.sub(r"\s+", " ", screen[:screen.index("Commit now")])
+        _, screen = self.h.run(*self.h.to_commit(self.checks), DOWN + ENTER, *self.h.finish(), start=self.project)
+        self.assertIn("Close every Codex session in this project first.", screen[:screen.index("Install now")])
+        commit_screen = re.sub(r"\s+", " ", screen[screen.index("Install now"):screen.index("Commit now")])
         self.assertIn("In Codex, open /hooks and trust the orchestrator's learning hooks (main checkout only)",
                       commit_screen)
         self.assertNotIn("Do not trust", commit_screen)
@@ -404,7 +416,7 @@ class InstallCommitTests(unittest.TestCase):
     def test_a_failed_path_helper_stages_and_commits_nothing(self) -> None:
         """Replaces WizardTerminalTests.test_a_failed_path_helper_stages_and_commits_nothing (W5.5)."""
         self.h.helper_fails = True
-        _, screen = self.h.run(*to_commit(self.checks), *FINISH, start=self.project)
+        _, screen = self.h.run(*self.h.to_commit(self.checks, commit_menu=False), *self.h.finish(), start=self.project)
         self.assertIn("commit failed: no paths to commit", screen)
         self.assertNotIn("Commit now", screen)
         self.assertIn("commit failed", self.h.final(screen))
@@ -421,7 +433,7 @@ class InstallCommitTests(unittest.TestCase):
         (self.project / ".git" / "info" / "attributes").write_text("* filter=planted\n")
         before = self.h.commit_count(self.project)
         self.h.plant_after_apply = (self.project, script)
-        _, screen = self.h.run(*to_commit(self.checks), ENTER, *FINISH, start=self.project)
+        _, screen = self.h.run(*self.h.to_commit(self.checks), ENTER, *self.h.finish(), start=self.project)
         commit_screen = screen[:screen.index("Commit now")]
         self.assertIn("could not check whether installed files are ignored", re.sub(r"\s+", " ", commit_screen))
         self.assertNotIn("Nothing to commit", commit_screen)
@@ -460,8 +472,8 @@ class InstallCommitTests(unittest.TestCase):
         manifest.write_text(json.dumps(data, indent=2))
         self.git("add", "-A")
         self.git("commit", "-qm", "adopt")
-        _, screen = self.h.run(ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, *FINISH, start=self.project)
-        self.assertIn(".codex/local*", screen[:screen.index("Commit now")])
+        _, screen = self.h.run(ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, *self.h.finish(), start=self.project)
+        self.assertIn(".codex/local*", screen[screen.index("Next: commit the installed files"):screen.index("Commit now")])
         self.assertIn("; committed", self.h.final(screen))
         tracked = self.git("ls-files").splitlines()
         self.assertNotIn(".codex/local*", tracked)
@@ -478,7 +490,7 @@ class InstallCommitTests(unittest.TestCase):
                 (hooks / name).write_text(f"#!/bin/sh\necho {name} >> '{ran}'\nexit 1\n")
                 (hooks / name).chmod(0o755)
         self.git("config", "core.hooksPath", "githooks")
-        _, screen = self.h.run(*to_commit(self.checks), ENTER, *FINISH, start=self.project)
+        _, screen = self.h.run(*self.h.to_commit(self.checks), ENTER, *self.h.finish(), start=self.project)
         self.assertIn("Setup commits with Git's plumbing commands only", re.sub(r"\s+", " ", screen))
         self.assertIn("; committed", self.h.final(screen))
         self.assertFalse(ran.exists(), "a project hook ran")
@@ -489,7 +501,7 @@ class InstallCommitTests(unittest.TestCase):
         from unittest import mock
         self.git("config", "commit.gpgSign", "true")  # signing is off for the commit: never the cause
         with mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "", "GIT_COMMITTER_NAME": ""}):
-            _, screen = self.h.run(*to_commit(self.checks), ENTER, *FINISH, start=self.project)
+            _, screen = self.h.run(*self.h.to_commit(self.checks), ENTER, *self.h.finish(), start=self.project)
         self.assertIn("Git identity", screen)
         final = self.h.final(screen)
         self.assertIn("commit failed", final)
@@ -498,7 +510,7 @@ class InstallCommitTests(unittest.TestCase):
 
     def test_commit_stages_updated_files_and_provider_routing(self) -> None:
         """Replaces WizardTerminalTests.test_commit_stages_updated_files_and_provider_routing (W5.3, W8)."""
-        _, screen = self.h.run(*to_commit(self.checks), ENTER, *FINISH, start=self.project)
+        _, screen = self.h.run(*self.h.to_commit(self.checks), ENTER, *self.h.finish(), start=self.project)
         final = re.sub(r"\s+", " ", self.h.final(screen))
         self.assertIn("8. Commands: project in a temporary folder", final)
         self.assertIn("This project is in a temporary folder, so Codex sessions cannot", final)
@@ -522,7 +534,7 @@ class FailureAndSummaryTests(unittest.TestCase):
 
     def failed_install(self, *after: str) -> tuple[int, str]:
         self.h.apply_fails = True
-        return self.h.run(*to_commit(self.checks), *after, start=self.project)
+        return self.h.run(*self.h.to_commit(self.checks, commit_menu=False), *after, start=self.project)
 
     def test_failure_summary_is_an_allowlist_and_never_echoes_output(self) -> None:
         """Replaces WizardTerminalTests.test_failure_summary_is_an_allowlist_and_never_echoes_output (W10.4, W1.7)."""
@@ -561,7 +573,11 @@ class FailureAndSummaryTests(unittest.TestCase):
     def test_summary_inside_a_git_working_tree_asks_first(self) -> None:
         """Replaces WizardTerminalTests.test_summary_inside_a_git_working_tree_asks_first (W10.2)."""
         destination = self.project / "summary.txt"
-        code, screen = self.failed_install(DOWN + ENTER, DOWN + ENTER, f"{destination}\r", DOWN + ENTER, ENTER, ENTER)
+        not_written_yet = []
+        code, screen = self.failed_install(DOWN + ENTER, DOWN + ENTER, f"{destination}\r",
+                                           lambda: not_written_yet.append(not destination.exists()),
+                                           DOWN + ENTER, ENTER, ENTER)
+        self.assertEqual([True], not_written_yet)  # nothing written before the owner chose
         self.assertIn("inside a Git working tree", screen)
         self.assertLess(screen.index("Save it here anyway"), screen.index("Saved a summary"))
         self.assertEqual(0, code)
@@ -578,7 +594,7 @@ class FailureAndSummaryTests(unittest.TestCase):
 
     def failed_billing(self, fails: int, *after: str) -> tuple[int, str]:
         self.h.attest = [1] * fails
-        return self.h.run(*to_commit(self.checks), ENTER, ENTER, DOWN + ENTER, ENTER, ENTER, *after,
+        return self.h.run(*self.h.to_commit(self.checks), ENTER, ENTER, DOWN + ENTER, ENTER, ENTER, *after,
                           start=self.project)
 
     def test_a_failed_attestation_offers_try_again_and_succeeds_on_retry(self) -> None:
@@ -618,7 +634,8 @@ class FailureAndSummaryTests(unittest.TestCase):
         self.assertIn("What ran in this step, in order:", screen)
         self.assertIn("Command output is kept private", screen)
         self.assertIn("Everything looks good", screen.split("Command output is kept private", 1)[1])
-        self.assertNotIn("? what ran", screen.split("Everything looks good")[0])
+        details = screen.split("What ran in this step, in order:", 1)[1].split("Command output is kept private", 1)[1]
+        self.assertNotIn("? what ran", details.split("Everything looks good", 1)[0])  # the ? screen offers no ?
 
 
 class ExistingInstallTests(unittest.TestCase):
@@ -691,6 +708,11 @@ class ExistingInstallTests(unittest.TestCase):
         code, screen = self.h.run(ENTER, ENTER, f"{checks}\r", ENTER, bridging, ENTER, ENTER, ENTER, ENTER,
                                   DOWN + ENTER, ENTER, ENTER, DOWN + DOWN + ENTER, ENTER, DOWN + DOWN + ENTER,
                                   ENTER, ENTER, ENTER, ENTER, start=project)
+        self.assertEqual(2, len(self.h.handoffs))  # the failed attestation, then the attestation-only run
+        after_failure = screen.split("attest stub run 1", 1)[1]
+        self.assertIn("Try again", after_failure.split("attest stub run 2", 1)[0])
+        self.assertIn("Update the install", after_failure.split("attest stub run 2", 1)[0])
+        self.assertIn("attest.py ran", screen.split("attest stub run 2", 1)[1])
         final = re.sub(r"\s+", " ", self.h.final(screen))
         self.assertIn("bridging was not chosen", final)
         self.assertNotIn("orchestrator profile is missing", final)
@@ -699,7 +721,7 @@ class ExistingInstallTests(unittest.TestCase):
     def test_a_modified_orchestrator_is_never_run(self) -> None:
         """Replaces WizardTerminalTests.test_a_modified_orchestrator_is_never_run (W1.6)."""
         project, checks = self.h.make_project()
-        self.h.run(*to_commit(checks), ENTER, *FINISH, start=project)
+        self.h.run(*self.h.to_commit(checks), ENTER, *self.h.finish(), start=project)
         cli = project / ".codex" / "orchestration" / "cli.py"
         cli.write_text(cli.read_text() + "\nprint('changed')\n")
         self.h.git(project, "commit", "-qam", "change")
@@ -718,7 +740,7 @@ class ExistingInstallTests(unittest.TestCase):
         project, checks = self.h.make_project(base=self.h.non_temporary_base())
         digest = hashlib.sha256(str(project.resolve()).encode()).hexdigest()[:12]
         self.h.fake_rule("stale")
-        _, screen = self.h.run(*to_commit(checks), ENTER, ENTER, DOWN + ENTER, DOWN + ENTER, ENTER, ENTER, ENTER,
+        _, screen = self.h.run(*self.h.to_commit(checks), ENTER, ENTER, DOWN + ENTER, DOWN + ENTER, ENTER, ENTER, ENTER,
                                start=project)
         self.assertIn("Leave it unchanged", screen)
         self.assertIn("differs", screen.split("Leave it unchanged", 1)[0])
@@ -764,7 +786,7 @@ class ExistingInstallTests(unittest.TestCase):
         """Replaces WizardTerminalTests.test_an_untrusted_python_is_explained_and_nothing_is_written (W8)."""
         project, checks = self.h.make_project(base=self.h.non_temporary_base())
         self.h.fake_untrusted()
-        _, screen = self.h.run(*to_commit(checks), ENTER, ENTER, DOWN + ENTER, DOWN + ENTER, ENTER, ENTER, ENTER,
+        _, screen = self.h.run(*self.h.to_commit(checks), ENTER, ENTER, DOWN + ENTER, DOWN + ENTER, ENTER, ENTER, ENTER,
                                start=project)
         self.assertIn("This Python cannot be trusted", screen)
         final = self.h.final(screen)

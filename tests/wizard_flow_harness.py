@@ -91,9 +91,15 @@ class Harness:
             folder.chmod(0o700)
         self.scratch = self.base / "scratch"
         self.scratch.mkdir(mode=0o700)
+        # As test_setup_sh: CODEX_HOME and CODEX_THREAD_ID dropped (nothing reads real Codex records),
+        # no bytecode setting inherited, TMPDIR a private folder of this test.
         environ = {key: value for key, value in os.environ.items()
-                   if key not in ("CODEX_HOME", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NO_COLOR", "COLUMNS")}
-        environ.update(HOME=str(self.home), XDG_STATE_HOME=str(state), GIT_CONFIG_GLOBAL="/dev/null",
+                   if key not in ("CODEX_HOME", "CODEX_THREAD_ID", "PYTHONDONTWRITEBYTECODE", "ANTHROPIC_API_KEY",
+                                  "OPENAI_API_KEY", "NO_COLOR", "COLUMNS")}
+        self.tmpdir = self.base / "tmp"
+        self.tmpdir.mkdir()
+        environ.update(HOME=str(self.home), XDG_STATE_HOME=str(state), TMPDIR=str(self.tmpdir),
+                       GIT_CONFIG_GLOBAL="/dev/null",
                        GIT_CONFIG_SYSTEM="/dev/null", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
                        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
         patcher = mock.patch.dict(os.environ, environ, clear=True)
@@ -106,6 +112,9 @@ class Harness:
         trusted = mock.patch.object(effects.installer().attest, "trusted_python", lambda: TRUSTED_PY)
         trusted.start()
         test.addCleanup(trusted.stop)
+        # Guard, as test_setup_sh: the records the owner tools would use lie in this test's home.
+        owner_state = effects.attest().clone_module("host_paths").owner_state_root()
+        test.assertTrue(Path(owner_state).is_relative_to(self.home), owner_state)
         cwd = os.getcwd()
         test.addCleanup(os.chdir, cwd)
         # The stand-ins' answers (the FAKE_* wrappers' equivalents).
@@ -152,7 +161,9 @@ class Harness:
         if argv and argv[0] == getattr(getattr(self, "wizard", None), "git", None):
             done = subprocess.run(argv, capture_output=True, env=(options or {}).get("env"))
             return done.returncode, done.stdout, done.stderr
-        rest = argv[len(flow.PYF) + 1:] if argv[1:len(flow.PYF) + 1] == flow.PYF else argv
+        # Every Python the wizard starts: the trusted interpreter with the literal isolation flags.
+        assert argv[:6] == [TRUSTED_PY, "-I", "-B", "-S", "-X", "pycache_prefix=/dev/null"], argv
+        rest = argv[6:]
         if rest[:1] == [str(flow.INSTALLER)]:
             if self.apply_fails and "--apply" in rest:
                 return 2, ('{"error": "boom %s user@example.invalid"}\n' % TOKEN).encode(), (TOKEN + "\n").encode()
@@ -177,6 +188,7 @@ class Harness:
                 return status, out, b""
             raise AssertionError(f"no stand-in for the CLI command {command!r}")
         if rest[:2] == ["-c", flow.OWNER_TOOL]:
+            assert rest[2] == str(ROOT / "scripts" / "attest.py"), rest  # this clone's own attest.py
             tool = rest[3:]
             if tool[:1] == ["client-status"]:
                 status, out = self.clients[tool[1]]
@@ -188,6 +200,7 @@ class Harness:
         if rest[:2] == [str(ROOT / "scripts" / "setup-wizard.py"), "--helper"]:
             return self._helper(rest[2:])
         if rest[:2] == ["-c", effects.OWNER_GIT]:
+            assert rest[2] == str(flow.INSTALLER), rest
             return self._in_process(effects.installer().git_tool, rest[3:])
         raise AssertionError(f"no stand-in for {argv!r}")
 
@@ -197,8 +210,14 @@ class Harness:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
                 status = function(list(args))
-            except SystemExit as exit:
-                status = exit.code if isinstance(exit.code, int) else 1
+            except SystemExit as exit:  # As a process: no code is 0; a message goes to stderr and is 1.
+                if exit.code is None:
+                    status = 0
+                elif isinstance(exit.code, int):
+                    status = exit.code
+                else:
+                    print(exit.code, file=sys.stderr)
+                    status = 1
         return status or 0, out.getvalue().encode(), err.getvalue().encode()
 
     def _helper(self, args) -> tuple[int, bytes, bytes]:
@@ -369,6 +388,36 @@ class Harness:
 
     # Running ---------------------------------------------------------------------------------
 
+    # Checkpoints -----------------------------------------------------------------------------
+
+    def expect(self, *texts: str):
+        """A checkpoint among the keys: each text must be on the screen drawn since the last checkpoint
+        (what test_setup_sh's expect waited for). Several texts mean any one of them."""
+        def check():
+            seen = plain(self._out.getvalue()[self._mark:])
+            self.test.assertTrue(any(text in seen for text in texts), f"never saw {texts!r}; screen: {seen[-1500:]!r}")
+            self._mark = len(self._out.getvalue())
+        return check
+
+    def to_commit(self, checks: Path, commit_menu: bool = True) -> list:
+        """test_setup_sh's drive_to_commit_menu, each screen checked: a fresh install to the commit screen."""
+        keys = [self.expect("Everything looks good"), ENTER, self.expect("Project path", "Another folder..."), ENTER,
+                self.expect("Path to operational-checks.json"), f"{checks}\r",
+                self.expect("fresh install is possible"), ENTER, self.expect("Codex children"), ENTER,
+                self.expect("Looks right"), ENTER, self.expect("Install now"), ENTER]
+        return keys + ([self.expect("Commit now")] if commit_menu else [])
+
+    def finish(self, temporary: bool = True, trusted: bool = True) -> list:
+        """test_setup_sh's finish_after_install, each screen checked, ending in Exit with exit code 0."""
+        refusal = ("This project is in a temporary folder" if temporary else
+                   "No, not now" if trusted else "This Python cannot be trusted")
+
+        def exit_zero():
+            self._exit_zero = True
+        return [self.expect("Continue"), ENTER, self.expect("Register now"), DOWN + ENTER,
+                self.expect("Start the attestation"), DOWN + ENTER, self.expect("Not chosen"), ENTER,
+                self.expect(refusal), ENTER, self.expect("remove --target"), exit_zero, ENTER]
+
     def run(self, *keys, start: Path | str, cols: int = 100, lines: int = 30) -> tuple[int, str]:
         """Run the wizard from `start` with the keys typed in order; returns (exit code, screen text).
         A callable among the keys runs when the input reaches it (what a terminal test did between
@@ -390,6 +439,7 @@ class Harness:
             del data[:count]
             return chunk
         out = io.StringIO()
+        self._out, self._mark, self._exit_zero = out, 0, False
         term = FlowTerminal(self, out=out, read=read, colours=terminal.NO_COLOURS, size=lambda: (cols, lines))
         wizard = flow.Wizard(term, start=str(start), python=TRUSTED_PY, owner_path=os.environ.get("PATH", ""),
                              bash_version="3.2.57")
@@ -413,4 +463,9 @@ class Harness:
         finally:
             wizard.cleanup()
         self.seconds = time.monotonic() - started
+        # The run ended where its keys did: none left over (the wizard did not stop earlier than scripted).
+        self.test.assertFalse(data or [key for key in pending if not callable(key)],
+                              f"keys left: the wizard stopped early; screen: {plain(out.getvalue())[-1500:]!r}")
+        if self._exit_zero:
+            self.test.assertEqual(0, code, f"the run did not end with Exit: {message}")
         return code, plain(out.getvalue()) + ("\n" + message if message else "")
