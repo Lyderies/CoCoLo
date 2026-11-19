@@ -887,13 +887,17 @@ class AccountService:
                 self._provenance_live()
                 with self._front_lock:
                     if self._closed:
-                        raise OpenError('open_not_authorized')
+                        raise OpenError('open_account_closing')  # S1-U10a (verifier of review 040-s1-u10)
                     return raw
             except OpenError as error:
                 return self._reply(labels, reason=error.reason_code)
-            except Exception as error:  # S1-U10b/f
-                return self._reply(labels, reason='open_account_busy' if getattr(error, 'reason_code', None)
-                                   == 'sql_read_busy' else 'open_failed')
+            except SQLReadError as error:  # S1-U10b
+                return self._reply(labels, reason='open_account_busy' if error.reason_code == 'sql_read_busy'
+                                   else 'open_failed')
+            except AccountError as error:  # an authorization or service refusal keeps its own reason
+                return self._reply(labels, reason=error.reason_code)
+            except Exception:  # S1-U10f
+                return self._reply(labels, reason='open_failed')
         return raw
 
     def _handle(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
