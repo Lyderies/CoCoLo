@@ -1999,6 +1999,51 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Stopped.")
         self.assertEqual(self.finish(), 0)
 
+    def test_changing_the_passphrase_hands_over_retries_and_backing_out_runs_nothing(self) -> None:
+        """W7.4 (S5): the menu's passphrase change hands the terminal to attest.py --change-passphrase;
+        backing out runs nothing; a failed change offers Try again; a finished one says so. (attest.py
+        finds the key in the account's real ~/.ssh, so the passphrase itself is tested in test_attest.)"""
+        import json
+        project, checks = self.make_project(base=self.non_temporary_base())
+        routing_in = self.base / "par.json"
+        routing_in.write_text(json.dumps({"version": 1, "roles": {}, "verifiers": {}}))
+        subprocess.run(
+            [TRUSTED_PY, str(ROOT / "scripts" / "install.py"), "install", "--target", str(project),
+             "--project-agent-routing", str(routing_in), "--operational-checks", str(checks), "--apply"],
+            check=True, capture_output=True, env=self.env)
+        count = self.base / "attest.count"
+        self.start(project, {"FAKE_ATTEST": str(count), "FAKE_ATTEST_FAILS": "1"})
+        self.expect("Everything looks good")
+        self.send("\r")
+        self.choose_project()
+        self.expect("Change the owner key passphrase")
+        self.send("\x1b[B\x1b[B\x1b[B\r")
+        self.expect("this wizard never sees them")
+        self.send("\x1b[B\r")  # Back to the main menu: attest.py never ran
+        self.choose_project()
+        self.expect("Change the owner key passphrase")
+        self.assertFalse(count.exists())
+        self.send("\x1b[B\x1b[B\x1b[B\r")
+        self.expect("Change the passphrase")
+        self.send("\r")
+        self.expect("attest stub run 1")
+        self.expect("Press Enter to continue")
+        self.send("\r")
+        self.expect("did not finish cleanly (exit code 1")
+        self.expect("Try again")
+        self.send("\r")
+        self.expect("attest stub run 2")
+        self.expect("Press Enter to continue")
+        self.send("\r")
+        self.expect("The owner key passphrase was changed.")
+        self.send("\r")  # Continue
+        self.expect("Back to the main menu")
+        self.send("\r")  # Exit
+        self.assertEqual(self.finish(), 0)
+        handoffs = [line for line in self.py_full.read_text().splitlines() if "attest.py --" in line]
+        self.assertEqual(2, len(handoffs))
+        self.assertTrue(all(line.endswith("scripts/attest.py --change-passphrase") for line in handoffs), handoffs)
+
     @unittest.skipUnless(sys.platform == "darwin",
                          "operational checks use the macOS sandbox, so verify is not ready elsewhere")
     def test_verify_retry_back_and_the_summary_return_to_the_menu(self) -> None:
