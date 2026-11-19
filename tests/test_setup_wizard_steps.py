@@ -321,5 +321,49 @@ class ChangedPathTests(unittest.TestCase):
                          steps.uncommitted_display([".codex/a"], False))
 
 
+
+class CommitOutcomeTests(unittest.TestCase):
+    """W5.3, W5.4, W5.7 and W10.5: the commit screen, the state after it and the summary's commit line."""
+
+    def test_the_commit_screen_names_the_count_and_plumbing_only(self) -> None:
+        text = steps.commit_body(3)
+        self.assertIn("Only these 3 paths are committed, nothing is pushed.", text)
+        self.assertIn("Setup commits with Git's plumbing commands only", text)
+
+    def test_long_lists_show_ten_then_how_many_more(self) -> None:
+        paths = [f".codex/{n}" for n in range(13)]
+        self.assertEqual(paths[:10] + ["... and 3 more"], steps.first_ten(paths))
+        self.assertEqual(paths[:10], steps.first_ten(paths[:10]))
+        self.assertEqual(["  .codex/0", "  ... and 12 more"][-1], steps.first_ten(paths, "  ")[-1])
+
+    def test_each_commit_state_has_its_summary_line(self) -> None:
+        for state, note in (("committed", "committed"), ("nothing", "nothing to commit"),
+                            ("not_committed", "not committed (you chose to commit yourself)"),
+                            ("failed", "commit failed")):
+            with self.subTest(state=state):
+                self.assertEqual((state, note), steps.commit_outcome(state, "", 0))
+
+    def test_a_commit_that_left_files_or_ignored_files_has_failed(self) -> None:
+        self.assertEqual(("failed", "commit failed"), steps.commit_outcome("committed", ".codex/a", 0))
+        self.assertEqual(("failed", "installed files ignored or could not be checked"),
+                         steps.commit_outcome("committed", "", 2))
+        self.assertEqual(("failed", "installed files ignored or could not be checked"),
+                         steps.commit_outcome("not_committed", "", 1))
+        self.assertEqual(("not_committed", "not committed (you chose to commit yourself)"),
+                         steps.commit_outcome("not_committed", ".codex/a", 0))
+
+    def test_the_summary_lists_what_is_left_only_when_not_committed(self) -> None:
+        self.assertEqual(["Left uncommitted in the project:", "  .codex/a", "  .claude/b"],
+                         steps.left_uncommitted(".codex/a\n.claude/b\n", "not_committed"))
+        self.assertEqual([], steps.left_uncommitted(".codex/a", "committed"))
+        self.assertEqual([], steps.left_uncommitted("", "failed"))
+        lines = steps.left_uncommitted("\n".join(f"p{n}" for n in range(12)), "failed")
+        self.assertEqual("  ... and 2 more", lines[-1])
+        self.assertEqual(12, len(lines))
+
+    def test_git_refusing_names_the_identity(self) -> None:
+        self.assertIn("Git identity (user.name and user.email)", steps.COMMIT_REFUSED_HINT)
+
+
 if __name__ == "__main__":
     unittest.main()
