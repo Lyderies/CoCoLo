@@ -11216,8 +11216,9 @@ class LearningLedger:
     def account_slot_health(self, project_id: str) -> dict[str, Any]:
         """S1-H1a: this project's account slots still held, read only. Never waits on the ledger lock
         (`ledger_busy`), and stops at SLOT_HEALTH_STEPS SQLite steps (`budget_spent`, never a partial
-        count). Run deadlines use the row's wall-clock deadline, as do probe deadlines (stated in the
-        reply); this frees nothing."""
+        count). A run slot is past its deadline when both clocks are (or the machine rebooted since
+        its claim), and still counted, i.e. not yet past crashed_claim's grace on both; probe
+        deadlines are wall-clock only (stated in the reply). This frees nothing."""
         if not self._lock.acquire(blocking=False):
             return {"available": False, "reason": "ledger_busy"}
         try:
@@ -11228,13 +11229,19 @@ class LearningLedger:
                 steps[0] += interval
                 return 1 if steps[0] >= SLOT_HEALTH_STEPS else 0
 
-            now_ms = time.time_ns() // 1_000_000
+            now_ms, mono = time.time_ns() // 1_000_000, time.monotonic_ns()
+            grace_ns = CRASHED_CLAIM_GRACE_MS * 1_000_000
             self._connection.set_progress_handler(budget, interval)
             try:
                 runs = self._connection.execute(
-                    "SELECT COALESCE(SUM(deadline_at_ms IS NOT NULL AND deadline_at_ms<?),0),"
+                    "SELECT COALESCE(SUM(deadline_at_ms IS NOT NULL AND deadline_at_ms<:now "
+                    "AND (execution_deadline_ns<:mono OR clock_reference_ns>:mono) "
+                    "AND NOT (deadline_at_ms+:grace<:now AND (execution_deadline_ns+:grace_ns<=:mono "
+                    "OR clock_reference_ns>:mono))),0),"
                     "COALESCE(SUM(deadline_at_ms IS NULL),0) FROM active_run_capacity "
-                    "WHERE project_id=? AND released_at_ms IS NULL", (now_ms, project_id)).fetchone()
+                    "WHERE project_id=:project AND released_at_ms IS NULL",
+                    {"now": now_ms, "mono": mono, "grace": CRASHED_CLAIM_GRACE_MS, "grace_ns": grace_ns,
+                     "project": project_id}).fetchone()
                 probes = self._connection.execute(
                     "SELECT COUNT(*),COALESCE(SUM(deadline_at_ms<?),0) FROM account_billing_probe_requests "
                     "WHERE project_id=? AND state='admitted'", (now_ms, project_id)).fetchone()
