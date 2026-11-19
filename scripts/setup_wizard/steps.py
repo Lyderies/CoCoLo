@@ -118,3 +118,59 @@ def codex_primary(raw: bytes | None) -> bool:
         return codex is True or data.get("codex_primary_may_bridge_to_claude") is True
     except Exception:
         return False
+
+
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+_REGISTRATION_FAILURES = {
+    "ledger_upgrade_failed": "Your records were not upgraded: they are as the earlier version left them.",
+    "ledger_upgrade_capacity": "Your records were not upgraded and nothing was changed: their backups do not fit.",
+    "registration_incomplete_after_upgrade": "Your records were upgraded, but registering this project did not "
+                                             "finish. Run setup again and repeat this step.",
+    "ledger_upgrade_unknown": "The upgrade stopped and the records could not be read afterwards. Delete nothing.",
+    "registration_incomplete_after_move": "Registering this project did not finish. Run setup again and repeat "
+                                          "this step.",
+    "collector_not_started_after_registration": "This project is registered, but the collector did not start "
+                                                "again. Run setup again and repeat this step.",
+}
+
+
+def plain(value) -> str:
+    """A value from a reply, safe to show: text only, every control character removed."""
+    return _CONTROL.sub("", value) if isinstance(value, str) else ""
+
+
+def registration_outcome(reply: dict, moved: str | None) -> tuple[bool, list[str]]:
+    """W6.2, W6.5: whether learning-register succeeded, and the lines the collector step shows. One
+    fixed sentence per failure reason, never one that misdescribes how far it got; paths and causes
+    shown with control characters removed. `moved` is the old records' path when they just moved."""
+    lines = []
+    copy = plain(reply.get("ledger_copy"))
+    if reply.get("ready") is not True:
+        lines.append("Collector registration failed")
+        reason = reply.get("reason_code")
+        if reason in _REGISTRATION_FAILURES:
+            lines.append(_REGISTRATION_FAILURES[reason])
+        if reason == "ledger_upgrade_failed":
+            cause = plain(reply.get("cause"))
+            if cause:
+                lines.append(f"What stopped it: {cause}.")
+        elif reason == "ledger_upgrade_capacity":
+            error = plain(reply.get("error"))
+            lines.append(error.removeprefix("the records were not upgraded and nothing was changed: ") + ".")
+        if copy.startswith("/"):
+            lines.append(f"A copy of the records as they were before the upgrade is at {copy}.")
+        state = plain(reply.get("state_moved"))
+        if state.startswith("/"):
+            lines.append(f"Your records were moved to the protected folder first and stay there; the old copy is "
+                         f"at {state}. The earlier version's collector was not started again.")
+        return False, lines
+    lines.append("Collector registered")
+    if copy.startswith("/"):
+        lines.append(f"Upgraded your orchestrator records. A copy of them as they were is at {copy}; "
+                     "delete it once you're happy.")
+    moved = plain(moved)
+    if moved.startswith("/"):
+        lines.append("Moved your orchestrator records once to a protected folder, ~/.local/state/codex-agents. "
+                     f"The old copy at {moved} can be deleted once you're happy.")
+    return True, lines
