@@ -73,5 +73,15 @@ class CiStageTests(unittest.TestCase):
         self.assertIn("retention-days: 7", integration)
 
 
+    def test_a_piped_test_run_still_fails_its_job(self):
+        """A run piped into tee must keep the runner's exit status: GitHub's default shell has no pipefail,
+        and the job passed while test_project_driver timed out (PLAN T4c, 2026-11-19)."""
+        for name, job in self.jobs.items():
+            for step in re.split(r"\n      - ", job):
+                if "parallel_tests.py" in step and "| tee" in step:
+                    with self.subTest(job=name):
+                        self.assertRegex(step, r"\n        shell: bash\n")
+
+
 if __name__ == "__main__":
     unittest.main()
