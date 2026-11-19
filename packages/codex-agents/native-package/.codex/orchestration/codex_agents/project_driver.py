@@ -295,6 +295,8 @@ class RunDriver:
         self._expiry, self._next_expiry = None, 0.0  # The first cleanup runs at start (0.3.4 R2).
         # Leases an earlier service left armed with no admitted claim, fenced here (0.3.3, C3).
         self._earlier, self._earlier_fences, self._fenced = None, {}, {}
+        # S1-R6: reporting writes for the orchestration report, in order, each retried a few times.
+        self._reports = []
         self._earlier_failures, self._earlier_at, self._earlier_listed = 0, 0.0, False
         self._sweeper = ThreadPoolExecutor(max_workers=1, thread_name_prefix='project-driver-sweep')
         self._owner_name = 'project-driver-%d-%d' % (os.getpid(), id(self))
@@ -525,6 +527,7 @@ class RunDriver:
                                        value['route'], value['parent_grant'], worker)
         prospective.snapshot()
         self._runs[key] = _Run(key, self._scope, host_client, prospective, value['run_id'], inputs_digest)
+        self._report('register', value['orchestration_handle'], key[0], value['run_id'], key[1])
 
     def _prepare(self, key, inputs_digest, value, host_client):
         run = self._runs.get(key)
@@ -599,6 +602,32 @@ class RunDriver:
         finally:
             connection.close()
 
+    def _report(self, kind, *arguments):
+        """Queue one reporting write (S1-R6); it never holds up the run, and a failed one is retried."""
+        self._reports.append([kind, arguments, None, 0])
+        self._send_reports()  # at once: a report asked for next is read after it (the writer's queue is FIFO)
+
+    def _send_reports(self):
+        """Owner step: send queued reporting writes one at a time, in order; retry a failed one a few
+        times, then drop it (the report then shows that run as it otherwise would)."""
+        lane = self._runtime.persistence
+        while self._reports:
+            entry = self._reports[0]
+            kind, arguments, request, tries = entry
+            if request is None:
+                try:
+                    entry[2] = (lane.report_registered_run(*arguments) if kind == 'register'
+                                else lane.report_failed_before_open(*arguments))
+                except Exception:
+                    return  # the lane is closing or faulted: try again next step
+                return
+            if request.state == 'queued':
+                return
+            if request.state == 'failed' and tries < 3:
+                entry[2], entry[3] = None, tries + 1
+                return
+            self._reports.pop(0)
+
     def _fail(self, run, reason):
         """Stop a run; one that can provably never launch then closes by itself.
 
@@ -620,6 +649,10 @@ class RunDriver:
                 self._fence_later(run)  # Its claim may still be admitted: only the account can say.
             return
         run.state, run.reason = 'failed', reason
+        if not run.claim_sent and run.receipt is None and run.binding is None:
+            # S1-R6: the host open is recorded just before the claim is sent, so this run never had
+            # one: the report shows it with its reason. Reporting only; the closing below is unchanged.
+            self._report('failed_before_open', run.key[0], run.key[1], reason)
         if run.persistence is None:
             self._give_back(run)
             run.closed = run.prepared is None and run.lease is None
@@ -798,6 +831,7 @@ class RunDriver:
         self._sweep_lost()
         self._fence_earlier()
         self._expire_results()
+        self._send_reports()
         for run in list(self._runs.values()):
             try:
                 self._advance(run)

@@ -191,7 +191,8 @@ class LearningSourceTransferTests(unittest.TestCase):
     def old14(self):
         self.transfer()
         self.old_rows = {n: rows for n, rows in self.target_rows().items()
-                         if n not in archive.SOURCE_COLUMNS and n not in ACTIVATION_COLUMNS}
+                         if n not in archive.SOURCE_COLUMNS and n not in ACTIVATION_COLUMNS
+                         and n not in history.REGISTERED_RUN_COLUMNS}
         directory = Path(self.fixture.temporary.name) / 'old14'
         directory.mkdir(mode=0o700)
         database = directory / 'history.sqlite3'

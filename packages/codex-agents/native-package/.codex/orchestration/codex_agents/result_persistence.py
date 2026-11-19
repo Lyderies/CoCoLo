@@ -64,6 +64,7 @@ class _EarlierLeases:
     state: str = 'queued'
     result: object = None
     reason: str | None = None
+    arguments: tuple = ()  # `register` / `failed_before_open` (S1-R6)
 
 
 @dataclass(repr=False)
@@ -995,6 +996,15 @@ class ResultPersistenceLane:
         """Ask the writer to run one bounded result cleanup (0.3.4 R2); poll its `state`."""
         return self._queue_earlier(_EarlierLeases('expire'))
 
+    def report_registered_run(self, orchestration_handle, run_handle, run_id, attempt):
+        """S1-R6: record that the driver registered this run (reporting only); poll its `state`."""
+        return self._queue_earlier(_EarlierLeases('register', arguments=(orchestration_handle, run_handle, run_id,
+                                                                         attempt)))
+
+    def report_failed_before_open(self, run_handle, attempt, reason):
+        """S1-R6: record that a registered run failed before its host open (reporting only)."""
+        return self._queue_earlier(_EarlierLeases('failed_before_open', arguments=(run_handle, attempt, reason)))
+
     def _queue_earlier(self, request):
         with self._lock:
             if self._closed or self._fault:
@@ -1012,6 +1022,10 @@ class ResultPersistenceLane:
                 with contextlib.suppress(HistoryError, sqlite3.Error):
                     history._orchestration_owner().end_earlier(self._service_scope, 10)
                 result = history.expire_results(limit=10)
+            elif request.kind == 'register':
+                result = history.record_registered_run(*request.arguments, now_ms=history._result_now())
+            elif request.kind == 'failed_before_open':
+                result = history.record_run_failed_before_open(*request.arguments, now_ms=history._result_now())
             elif request.kind == 'list':
                 with self._lock:
                     held = {pending.lease_binding for pending in self._jobs.values() if pending.lease_binding is not None}

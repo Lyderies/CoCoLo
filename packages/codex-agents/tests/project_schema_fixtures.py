@@ -4,8 +4,16 @@ from dataclasses import replace
 from codex_agents.claim_storage import lease_state_seal
 
 
+def legacy_registered_run_layout(store):
+    """Remove only the empty schema17 registered-run table (S1-R6) from an older fixture."""
+    if store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0]:
+        raise AssertionError('legacy fixture contains a registered run')
+    store._connection.execute('DROP TABLE project_registered_runs')
+
+
 def legacy_learning_activation_layout(store):
     """Remove only the empty schema16 cutover table from an older fixture."""
+    legacy_registered_run_layout(store)
     for name in ('project_owner_attestations', 'project_learning_activation'):
         if store._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0]:
             raise AssertionError('legacy fixture contains a learning cutover or owner record')

@@ -8,6 +8,8 @@ The installed CLI does not use it until the service/enrollment/migration gates p
 
 from __future__ import annotations
 
+import re
+
 import contextlib
 import fcntl
 import functools
@@ -30,7 +32,7 @@ from .project_release_ack import ACK_COLUMNS, ACK_SCHEMA
 from .execution_grant import MAX_EXECUTION_GRANT_BYTES, verify_execution_grant
 from .history_contracts import (
     MAX_SEQUENCE, AttemptBinding, HistoryEntry, HistoryError, TerminalDelivery,
-    _DIGEST, _ID, _PROJECT, matches, valid_integer,
+    _DIGEST, _ID, _PROJECT, _RUN, matches, valid_integer,
 )
 from .host_result_contracts import HostResultReference, decode_host_result_reference
 from .orchestration_api import OrchestrationLimits
@@ -53,7 +55,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 16
+_SCHEMA_VERSION = 17
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -160,9 +162,27 @@ _SCHEMA_V12 = _SCHEMA_V11 + LEARNING_OUTCOME_INDEX
 _SCHEMA_V13 = _SCHEMA_V12 + LEARNING_QA_SCHEMA
 _SCHEMA_V14 = _SCHEMA_V13 + LEARNING_CHUNK_SCHEMA
 _SCHEMA_V15 = _SCHEMA_V14 + LEARNING_SOURCE_SCHEMA
-_SCHEMA = _SCHEMA_V15 + ACTIVATION_SCHEMA
+_SCHEMA_V16 = _SCHEMA_V15 + ACTIVATION_SCHEMA
+# S1-R6: each run the driver registered, and the fixed reason if it failed before its host open
+# (reporting only: nothing here frees, withdraws or fences anything).
+REGISTERED_RUN_SCHEMA = """
+CREATE TABLE project_registered_runs(
+ project_id TEXT NOT NULL,run_handle TEXT NOT NULL,attempt INTEGER NOT NULL,
+ orchestration_handle TEXT NOT NULL,run_id TEXT NOT NULL,registered_at_ms INTEGER NOT NULL,
+ failed_reason TEXT,failed_at_ms INTEGER,
+ PRIMARY KEY(project_id,run_handle,attempt),
+ FOREIGN KEY(project_id) REFERENCES history_identity(project_id));
+CREATE INDEX project_registered_runs_orchestration ON project_registered_runs(project_id,orchestration_handle);
+"""
+REGISTERED_RUN_COLUMNS = {
+    "project_registered_runs": ("project_id", "run_handle", "attempt", "orchestration_handle", "run_id",
+                                "registered_at_ms", "failed_reason", "failed_at_ms"),
+}
+_FIXED_REASON = re.compile(r"[a-z][a-z_]{2,63}")
+_SCHEMA = _SCHEMA_V16 + REGISTERED_RUN_SCHEMA
 _COLUMNS = {
     **ACTIVATION_COLUMNS,
+    **REGISTERED_RUN_COLUMNS,
     **LEARNING_SOURCE_COLUMNS,
     **LEARNING_CHUNK_COLUMNS,
     **LEARNING_QA_COLUMNS,
@@ -411,19 +431,19 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15} and application == _APPLICATION_ID
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16} and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
                                                5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8,
                                                9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11,
                                                12: _SCHEMA_V12, 13: _SCHEMA_V13, 14: _SCHEMA_V14,
-                                               15: _SCHEMA_V15}[version])):
+                                               15: _SCHEMA_V15, 16: _SCHEMA_V16}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*ACTIVATION_COLUMNS, *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*REGISTERED_RUN_COLUMNS, *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
                                                  or (name == 'project_cleanup_reservations' and version == 9)) else columns)
@@ -448,7 +468,8 @@ class ProjectHistory:
                                   + (LEARNING_QA_SCHEMA if version < 13 else '')
                                   + (LEARNING_CHUNK_SCHEMA if version < 14 else '')
                                   + (LEARNING_SOURCE_SCHEMA if version < 15 else '')
-                                  + ACTIVATION_SCHEMA).split(';'):
+                                  + (ACTIVATION_SCHEMA if version < 16 else '')
+                                  + REGISTERED_RUN_SCHEMA).split(';'):
                     if statement.strip():
                         connection.execute(statement)
                 connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
@@ -1454,6 +1475,46 @@ class ProjectHistory:
                             claim_binding_digest=self._claim_lease_digest(value, binding, hard_deadline_at_ms))
             self._set_lease(value)
         return actual
+
+    @_operation
+    def record_registered_run(self, orchestration_handle, run_handle, run_id, attempt, *, now_ms):
+        """S1-R6: the driver registered this run (before its preparation). A replay is a no-op; another
+        run under the same (run handle, attempt) is refused. Reporting only."""
+        if (not matches(orchestration_handle, _ID) or not matches(run_handle, _RUN) or not matches(run_id, _ID)
+                or not valid_integer(attempt, minimum=1) or not valid_integer(now_ms)):
+            raise HistoryError("history_invalid_input")
+        with self._transaction():
+            known = self._connection.execute(
+                "SELECT orchestration_handle,run_id FROM project_registered_runs WHERE project_id=? AND run_handle=? "
+                "AND attempt=?", (self.project_id, run_handle, attempt)).fetchone()
+            if known is not None:
+                if tuple(known) != (orchestration_handle, run_id):
+                    raise HistoryError("history_conflict")
+                return
+            self._connection.execute(
+                "INSERT INTO project_registered_runs VALUES(?,?,?,?,?,?,NULL,NULL)",
+                (self.project_id, run_handle, attempt, orchestration_handle, run_id, now_ms))
+
+    @_operation
+    def record_run_failed_before_open(self, run_handle, attempt, reason, *, now_ms):
+        """S1-R6: a registered run failed before its host open, with its fixed reason. Recorded once and
+        never changed; only a fixed reason code is stored. Reporting only: nothing is freed here."""
+        if (not matches(run_handle, _RUN) or not valid_integer(attempt, minimum=1)
+                or type(reason) is not str or not _FIXED_REASON.fullmatch(reason) or not valid_integer(now_ms)):
+            raise HistoryError("history_invalid_input")
+        with self._transaction():
+            known = self._connection.execute(
+                "SELECT failed_reason FROM project_registered_runs WHERE project_id=? AND run_handle=? AND attempt=?",
+                (self.project_id, run_handle, attempt)).fetchone()
+            if known is None:
+                raise HistoryError("history_not_found")
+            if known[0] is not None:
+                if known[0] != reason:
+                    raise HistoryError("history_conflict")
+                return
+            self._connection.execute(
+                "UPDATE project_registered_runs SET failed_reason=?,failed_at_ms=? WHERE project_id=? AND run_handle=? "
+                "AND attempt=?", (reason, now_ms, self.project_id, run_handle, attempt))
 
     @_operation
     def expire_result_leases(self, *, limit: int = 10) -> int:

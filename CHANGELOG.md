@@ -30,6 +30,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   hint is not this account's private file (`open_service_hint_refused`), the
   project is not active (`open_project_inactive`), stored open records disagree
   (`open_state_inconsistent`), or something else failed (`open_failed`). Codex package 0.8.33.
+- `learning-status` shows how long each collector start-up phase took (`collector_startup_ms`).
+- An orchestration report counts a run that failed before its open: `runs.admitted`,
+  `runs.failed_before_open` and `failed_before_open_reasons` (fixed reasons only), and such a run is
+  `abandoned`, no longer missing. `runs.opened` still counts real opens. The project's records gain
+  schema 17 (one small reporting table); setup upgrades them as before.
 - Tests are sorted into stages: `unit`, `integration` and `e2e` (`scripts/test-stages.json`).
   `scripts/parallel_tests.py --stage unit` runs only the unit tests; a unit test that starts a
   process, opens a socket or sleeps fails. `scripts/measure_test_behaviour.py` measures each module.

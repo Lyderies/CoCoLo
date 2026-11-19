@@ -66,6 +66,14 @@ def orchestration_report(history, orchestration_id):
         if len(opens) > MAX_RUNS:
             raise HistoryError("history_learning_capacity")
         runs = {run_id: opened_at for run_id, opened_at, _, _ in opens if type(run_id) is str}
+        # S1-R6: runs the driver registered; one with no host open either failed before it (its fixed
+        # reason) or is still unresolved. A run with a host open is counted by its open only.
+        registered = history._connection.execute(
+            "SELECT run_id,failed_reason FROM project_registered_runs INDEXED BY project_registered_runs_orchestration "
+            "WHERE project_id=? AND orchestration_handle=? LIMIT ?", (history.project_id, handle, MAX_RUNS + 1)).fetchall()
+        if len(registered) > MAX_RUNS:
+            raise HistoryError("history_learning_capacity")
+        before_open = {run_id: reason for run_id, reason in registered if type(run_id) is str and run_id not in runs}
         # Every attempt's lease expired: one still open could yet record a result.
         expired = {run_id for run_id, _, _, _ in opens if type(run_id) is str} - {
             run_id for run_id, _, _, state in opens if state != 'expired'}
@@ -138,14 +146,23 @@ def orchestration_report(history, orchestration_id):
     ended = current["ended_at_ms"]
     recorded = len(outcomes)
     abandoned = len(expired - set(outcomes))
+    failed_reasons = {}
+    for reason in before_open.values():
+        if reason is not None:
+            failed_reasons[reason] = failed_reasons.get(reason, 0) + 1
+    failed_before_open = sum(failed_reasons.values())
+    unresolved = len(before_open) - failed_before_open
     goal_known = current["goal_tokens_used"] is not None or current["goal_time_used_seconds"] is not None
     return {
         "orchestration_id": orchestration_id, "status": str(current["status"]),
         "started_at_ms": int(current["started_at_ms"]), "ended_at_ms": ended,
         "duration_ms": None if ended is None else int(ended) - int(current["started_at_ms"]),
-        "runs": {"opened": len(runs), "terminal": recorded, "pending": len(runs) - recorded - abandoned,
-                 "abandoned": abandoned,
-                 "current_active": len(runs) - recorded - abandoned if current["status"] == "active" else 0,
+        "runs": {"opened": len(runs), "admitted": len(runs) + len(before_open), "terminal": recorded,
+                 "pending": len(runs) - recorded - abandoned + unresolved,
+                 "abandoned": abandoned + failed_before_open, "failed_before_open": failed_before_open,
+                 "failed_before_open_reasons": dict(sorted(failed_reasons.items())),
+                 "current_active": (len(runs) - recorded - abandoned + unresolved
+                                    if current["status"] == "active" else 0),
                  "agent_bound": len(runs), "deadlines_observed": 0},
         "checkpoint_count": checkpoint_count,
         "checkpoints": [{"sequence": int(item["sequence"]), "status": str(item["status"]),
