@@ -265,10 +265,12 @@ def _worker(slot, registry):
                     job.state = 'discarding' if discard else 'prepared' if prepared is not None else 'unknown' if unknown else 'failed'
                     if prepared is not None:
                         job.snapshot = _prepared_snapshot(prepared)
-                    if job.state == 'unknown':
-                        _held(slot, job, 'probe_preparation_unknown')
-                    elif job.state == 'failed':
-                        slot.lane.note_failure(slot.note, 'probe_preparation_failed', None)
+                    state = job.state
+                # S1-H1a notes are published outside the registry lock (a blocked owner may hold it).
+                if state == 'unknown':
+                    _held(slot, job, 'probe_preparation_unknown')
+                elif state == 'failed':
+                    slot.lane.note_failure(slot.note, 'probe_preparation_failed', None)
                 if not discard:
                     job = handle = item = prepared = None
                     continue
@@ -279,8 +281,9 @@ def _worker(slot, registry):
                     job.workspace = None if removed else job.workspace
                     job.prepared = None
                     job.state = 'cleaned' if removed and job.ticket is None else 'unknown'
-                    if job.state == 'unknown':
-                        _held(slot, job, 'cleanup_incomplete')
+                    state = job.state
+                if state == 'unknown':
+                    _held(slot, job, 'cleanup_incomplete')
                 if slot.stop.is_set():
                     return
             elif operation == 'execute':
@@ -297,11 +300,12 @@ def _worker(slot, registry):
                     return
             job = handle = item = None
     except BaseException as error:
+        # S1-H1a: published first, without the registry lock, so a blocked owner cannot delay it.
+        _held(slot, job, 'probe_worker_failed', error, faulted=True)
         with registry._lock:
             slot.fault = True
             if job is not None:
                 job.state = 'unknown'
-            _held(slot, job, 'probe_worker_failed', error, faulted=True)
 
 
 class BillingProbeWorkers:

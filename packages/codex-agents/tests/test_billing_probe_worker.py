@@ -345,16 +345,19 @@ class BillingProbeWorkerTests(unittest.TestCase):
         self.assertNotIn('secret', repr(view))
 
     def test_H1a_a_worker_fault_is_published_while_the_registry_lock_is_held(self):
-        # Round-5 verifier: the note must not wait for a lock a blocked owner may hold.
-        started = threading.Event()
+        # Round-5 verifier: the note must not wait for a lock a blocked owner may hold. The worker is
+        # inside its preparation when the lock is taken, then fails.
+        started, go = threading.Event(), threading.Event()
 
         def failing(payload):
             started.set()
+            go.wait(5)
             raise RuntimeError('fixture')
         with mock.patch.object(workers, '_prepare', side_effect=failing):
+            self.pool.prepare(self.payload())
+            self.assertTrue(started.wait(5))
             with self.registry._lock:
-                self.pool.prepare(self.payload())
-                started.wait(5)
+                go.set()
                 self.until(lambda: self.pool.health.view()['faulted'])
                 self.assertEqual(1, self.pool.health.view()['kept'])
 
