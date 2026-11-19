@@ -176,19 +176,28 @@ class Wizard:
         self.last_reply = None if quiet else _load(self.t.last_out)
         return status
 
+    def python_argv(self, *args: str) -> list[str]:
+        """The trusted interpreter, isolated (W1.3): the one way the wizard starts Python."""
+        return [self.py, *PYF, *args]
+
+    def git_argv(self, *args: str, project: str | None = None) -> list[str]:
+        """The trusted git with every helper and maintenance setting off (W1.4): the one way the wizard
+        starts Git directly."""
+        return [self.git, *(["-C", project] if project is not None else []), *GIT_SAFE, *args]
+
     def run_installer(self, label: str, *args: str, draw=None) -> int:
-        return self.run(label, [self.py, *PYF, str(INSTALLER), *args], draw=draw)
+        return self.run(label, self.python_argv(str(INSTALLER), *args), draw=draw)
 
     def run_owner_cli(self, label: str, *args: str, draw=None) -> int:
         """This clone's own orchestrator CLI; the project's copy never runs (W1.6)."""
-        status = self.run(label, [self.py, *PYF, str(CLONE_CLI), *args], fixed=True, draw=draw)
+        status = self.run(label, self.python_argv(str(CLONE_CLI), *args), fixed=True, draw=draw)
         self.last_fixed = True
         return status
 
     def owner_tool(self, *args: str) -> subprocess.CompletedProcess:
         """setup.sh's owner_tool: one of attest.py's owner checks, in the trusted Python, isolated. A
         process, as in setup.sh, so the argv the tests intercept is the same."""
-        return self.t.call([self.py, *PYF, "-c", OWNER_TOOL, str(ATTEST), *args])
+        return self.t.call(self.python_argv("-c", OWNER_TOOL, str(ATTEST), *args))
 
     def client_status(self, name: str, top: str | None) -> tuple[int, bytes]:
         """W1.5: a client's sign-in status as the runtime runs it (attest.py client-status)."""
@@ -197,7 +206,7 @@ class Wizard:
 
     def session_scan(self):
         """W2.1: the runtime's scan of recent Codex sessions (this clone's codex-session-scan)."""
-        done = self.t.call([self.py, *PYF, str(CLONE_CLI), "codex-session-scan", "--clone-root", str(CLONE)])
+        done = self.t.call(self.python_argv(str(CLONE_CLI), "codex-session-scan", "--clone-root", str(CLONE)))
         if done.returncode != 0:
             return None
         try:
@@ -206,7 +215,7 @@ class Wizard:
             return None
 
     def g(self, project: str, *args: str) -> subprocess.CompletedProcess:
-        return self.t.call([self.git, "-C", project, *GIT_SAFE, *args], text=True, env={**os.environ, **GIT_ENV})
+        return self.t.call(self.git_argv(*args, project=project), text=True, env={**os.environ, **GIT_ENV})
 
     def manual_installer(self, operation: str, project: str, apply: bool = False) -> str:
         return (f"python3 -I -B -S -X pycache_prefix=/dev/null {steps.shell_quote(str(INSTALLER))} {operation} "
@@ -323,7 +332,7 @@ class Wizard:
             top = self.work_tree_top(self.start_dir)
             self.git = effects.git_executable([Path(self.start_dir)]) or ""
             if self.git:
-                version = self.t.call([self.git, "--version"], text=True, env={**os.environ, "xcrun_nocache": "1"})
+                version = self.t.call(self.git_argv("--version"), text=True, env={**os.environ, "xcrun_nocache": "1"})
                 words = version.stdout.split(" ")
                 t.list_add("ok", f"git: {words[2].strip() if len(words) > 2 else ''}")
             else:
@@ -887,8 +896,8 @@ class Wizard:
         apply_file, plan_file = self.logdir / "apply.json", self.logdir / "plan-paths.nul"
         apply_file.write_text(json.dumps(applied if isinstance(applied, dict) else {}))
         plan_file.write_bytes(b"".join(rel.encode("utf-8") + b"\0" for rel in self.planned))
-        done = self.t.call([self.py, *PYF, str(CLONE / "scripts" / "setup-wizard.py"), "--helper", "paths",
-                               str(apply_file), self.project, str(plan_file), self.git or "git"])
+        done = self.t.call(self.python_argv(str(CLONE / "scripts" / "setup-wizard.py"), "--helper", "paths",
+                                            str(apply_file), self.project, str(plan_file), self.git or "git"))
         if done.returncode != 0:
             return [], done.returncode
         return [item.decode("utf-8", "surrogateescape") for item in done.stdout.split(b"\0") if item], 0
@@ -1146,7 +1155,7 @@ class Wizard:
         if self.runtime_refused(6):
             return
         while True:
-            status = self.handoff([self.py, *PYF, str(ATTEST), "--target", self.project])
+            status = self.handoff(self.python_argv(str(ATTEST), "--target", self.project))
             t.screen_reset()
             self.begin_step(6)
             if status == 0:
@@ -1181,7 +1190,7 @@ class Wizard:
             raise Stop(0, "Stopped.")
         if self.runtime_refused(6):
             return
-        status = self.handoff([self.py, *PYF, str(ATTEST), "--target", self.project, "--replace-owner-key"])
+        status = self.handoff(self.python_argv(str(ATTEST), "--target", self.project, "--replace-owner-key"))
         t.screen_reset()
         self.begin_step(6)
         if status == 0:
@@ -1207,7 +1216,7 @@ class Wizard:
         if choice == 2:
             raise Stop(0, "Stopped.")
         while True:
-            status = self.handoff([self.py, *PYF, str(ATTEST), "--change-passphrase"])
+            status = self.handoff(self.python_argv(str(ATTEST), "--change-passphrase"))
             t.screen_reset()
             self.begin_step(6)
             if status == 0:
