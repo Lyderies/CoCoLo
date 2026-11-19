@@ -320,6 +320,8 @@ COMMIT_REFUSED_HINT = ("Git refused it. The usual cause is that your Git identit
 
 _COMMIT_NOTES = {
     "committed": "committed",
+    "committed_stale": "committed; Git could not update the project's index (run git status and stage the committed "
+                       "files yourself)",
     "nothing": "nothing to commit",
     "not_committed": "not committed (you chose to commit yourself)",
 }
@@ -357,7 +359,7 @@ def commit_outcome(state: str, uncommitted: str, ignored: int) -> tuple[str, str
 def left_uncommitted(uncommitted: str, state: str) -> list[str]:
     """W5.7: the summary's list of what is left, shown unless the commit went through."""
     paths = [line for line in uncommitted.split("\n") if line]
-    if not paths or state == "committed":
+    if not paths or state in ("committed", "committed_stale"):
         return []
     return ["Left uncommitted in the project:"] + first_ten(paths, "  ")
 

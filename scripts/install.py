@@ -664,8 +664,17 @@ def _write_new(directory: int, name: str, content: bytes, mode: int) -> None:
         _write_all(handle, content)
         os.fchmod(handle, mode)
         os.fsync(handle)
-    finally:
+    except BaseException:
         os.close(handle)
+        handle = -1
+        try:
+            os.unlink(name, dir_fd=directory)  # No partial file is left behind (review 040-s5-wizard-3 d).
+        except OSError:
+            pass
+        raise
+    finally:
+        if handle >= 0:
+            os.close(handle)
 
 
 class OwnerState:
@@ -1136,6 +1145,19 @@ def git_tool(argv: list[str]) -> int:
     reason on stderr; any other failure exits 1.
     """
 
+    import signal
+
+    def unwind(signum, frame):  # SIGTERM or SIGHUP: unwind, so commit_paths' cleanup still runs.
+        raise SystemExit(128 + signum)
+    previous = {number: signal.signal(number, unwind) for number in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        return _git_tool(argv)
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
+def _git_tool(argv: list[str]) -> int:
     try:
         if len(argv) >= 2 and argv[0] == "changes":
             found = project_changes(Path(argv[1]), argv[2:] or list(MANAGED_PATHS))

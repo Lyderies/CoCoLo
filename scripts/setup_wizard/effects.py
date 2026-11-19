@@ -501,8 +501,9 @@ def create_profile(folder, content: str) -> bool:
             pass
         try:
             path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as kept:
+            raise EffectRefused(f"{path} may be incomplete and could not be removed; delete it, then run setup "
+                                "again") from kept
         if isinstance(exc, OSError):
             return False
         raise

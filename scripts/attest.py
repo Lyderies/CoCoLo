@@ -570,6 +570,10 @@ def client_status(name: str, project: Path | None = None) -> tuple[int, bytes]:
         return CLIENT_UNTRUSTED, b""
     scratch = make_scratch("client-")
     try:
+        # Termination signals wait while the client starts, so it is never running unprotected: from
+        # the first step after Popen, any exit stops its group (review 040-s5-wizard-3 a).
+        held = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, held)
         try:
             process = subprocess.Popen(
                 [executable, *CLIENT_COMMANDS[name]], cwd=scratch,
@@ -577,11 +581,13 @@ def client_status(name: str, project: Path | None = None) -> tuple[int, bytes]:
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 start_new_session=True)
         except OSError:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
             return CLIENT_FAILED, b""
-        # Read as it arrives, never more than the cap: a client that keeps writing is stopped
-        # (its whole process group) the moment it passes the cap or the deadline.
-        deadline = time.monotonic() + CLIENT_TIMEOUT_SECONDS
         try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+            # Read as it arrives, never more than the cap: a client that keeps writing is stopped
+            # (its whole process group) the moment it passes the cap or the deadline.
+            deadline = time.monotonic() + CLIENT_TIMEOUT_SECONDS
             output = providers.read_bounded(process.stdout, limit=CLIENT_OUTPUT_LIMIT, deadline=deadline)
             process.wait(timeout=max(deadline - time.monotonic(), 0.1))
         except (providers.BoundedReadError, subprocess.TimeoutExpired, OSError):
@@ -925,25 +931,22 @@ ROUTING_READ_LIMIT = 1024 * 1024  # A routing file is read whole up to this; a l
 
 def enabled_providers(target: Path) -> list[str]:
     """The providers the project's routing enables: only Codex without a routing file. The file is read
-    without following a link, only as a regular file and whole up to ROUTING_READ_LIMIT; anything else
-    is refused (review 040-s5-wizard-2 c)."""
-    path = target / ROUTING_RELATIVE
-    if not os.path.lexists(path):
-        return ["codex"]
+    without following a symlink anywhere on the way (_read_below), only as a regular file and whole up
+    to ROUTING_READ_LIMIT; anything else is refused (reviews 040-s5-wizard-2 c, 040-s5-wizard-3 a)."""
     try:
-        handle = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        root = os.open(os.path.realpath(target), os.O_RDONLY | os.O_DIRECTORY)
     except OSError as exc:
         raise AttestError("provider-routing.json is unreadable") from exc
     try:
-        if not stat.S_ISREG(os.fstat(handle).st_mode):
-            raise AttestError("provider-routing.json is unreadable")
-        data = b""
-        while len(data) <= ROUTING_READ_LIMIT and (chunk := os.read(handle, 65536)):
-            data += chunk
+        data = _read_below(root, ROUTING_RELATIVE.as_posix(), limit=ROUTING_READ_LIMIT)
     except OSError as exc:
         raise AttestError("provider-routing.json is unreadable") from exc
     finally:
-        os.close(handle)
+        os.close(root)
+    if data is None:
+        return ["codex"]
+    if data == b"":
+        raise AttestError("provider-routing.json is unreadable")
     if len(data) > ROUTING_READ_LIMIT:
         raise AttestError("provider-routing.json is larger than 1 MiB")
     try:

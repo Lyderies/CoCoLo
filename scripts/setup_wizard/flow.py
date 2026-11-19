@@ -639,7 +639,7 @@ class Wizard:
             self.failure_menu()
             return False
         if status == "refused":
-            t.list_add("fail", "provider-routing.json is a symlink or not a regular file; refused")
+            t.list_add("fail", "provider-routing.json is a symlink, not a regular file, or cannot be read safely; refused")
             t.list_sub("Replace it with a regular file in the project, commit, and run setup again.")
             self.mark_step(3, "fail", "provider-routing.json refused")
             self.fail_reason = "provider configuration refused"
@@ -870,6 +870,8 @@ class Wizard:
         self.commit_state, note = steps.commit_outcome(self.commit_state, "", ignored_n)
         if self.commit_state == "committed":
             t.list_add("ok", "Committed the installed files (not pushed)")
+        elif self.commit_state == "committed_stale":
+            t.list_add("warn", "Committed the installed files (not pushed), but Git's index was not updated")
         elif self.commit_state == "not_committed":
             t.list_add("skip", "Commit left to you; verification needs the files committed")
         verified = self.verify_install(draw=t.render)
@@ -937,16 +939,29 @@ class Wizard:
             self.failure_detail("Not committed", self.git_helpers_text(helpers) + " Commit the files yourself, then run "
                                 "./setup.sh again and choose Verify.")
             return False
-        # As setup.sh: the installer's git tool, under the runner, quiet (Git's output can name you).
+        # As setup.sh: the installer's git tool, under the runner. It prints only its own fixed refusal
+        # sentence (Git's own output stays inside it), which is shown for a refusal.
         status = self.run("Committing", effects.owner_git_argv(self.py, "commit", project, COMMIT_MSG_1, COMMIT_MSG_2,
-                                                               *self.commit_paths), quiet=True)
+                                                               *self.commit_paths))
         state, line = steps.commit_status(status)
-        if line:
-            self.t.list_add("warn", line)
         if state == "committed":
-            self.commit_state = "committed"
+            self.commit_state = "committed_stale" if line else "committed"
+            if line:
+                self.t.list_add("warn", line)
             return True
+        if state == "nothing":
+            self.commit_state = "nothing"
+            self.t.list_add("ok", "Nothing to commit: the project already has these files committed")
+            return True
+        why = ""
+        if status == 2 and self.t.last_err:  # The git tool's own fixed refusal sentence.
+            try:
+                why = steps.plain(Path(self.t.last_err).read_text(errors="replace").strip())[:200]
+            except OSError:
+                why = ""
         self.failure_detail("The commit did not go through", steps.COMMIT_REFUSED_HINT)
+        if why:
+            self.t.list_sub(f"Reason: {why}")
         return False
 
     # Step 5: collector ----------------------------------------------------------------------
@@ -1294,7 +1309,15 @@ class Wizard:
             raise Stop(0, "Stopped.")
         t.screen_reset()
         self.begin_step(7)
-        if effects.create_profile(folder, PROFILE_CONTENT):
+        try:
+            created = effects.create_profile(folder, PROFILE_CONTENT)
+        except effects.EffectRefused as exc:
+            t.list_add("fail", f"Could not create {path}")
+            t.list_sub(str(exc))
+            self.mark_step(7, "fail", "not created")
+            t.pause()
+            return
+        if created:
             t.list_add("ok", f"Created {path} (mode 0600)")
             self.profile_ready = True
             self.mark_step(7, "ok", "created")
