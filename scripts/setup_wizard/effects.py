@@ -504,7 +504,9 @@ def create_profile(folder, content: str) -> bool:
         except OSError as kept:
             if not isinstance(exc, OSError):  # A stop stays a stop; the kept file is still named.
                 import sys
-                print(f"Warning: {path} may be incomplete and could not be removed; delete it.", file=sys.stderr)
+                import re
+                shown = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", str(path))  # Never drives the terminal.
+                print(f"Warning: {shown} may be incomplete and could not be removed; delete it.", file=sys.stderr)
                 raise exc from None
             raise EffectRefused(f"{path} may be incomplete and could not be removed; delete it, then run setup "
                                 "again") from kept

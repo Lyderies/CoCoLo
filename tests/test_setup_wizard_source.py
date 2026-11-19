@@ -86,6 +86,8 @@ def launch_problems(source: str, name: str = "flow.py") -> list[str]:
                 if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
                         and isinstance(inner.func.value, ast.Name) and inner.func.value.id == "argv"):
                     problems.append(f"argv changed in place in {owner}.{function}")
+                if isinstance(inner, ast.Assign) and isinstance(inner.value, ast.Name) and inner.value.id == "argv":
+                    problems.append(f"argv held under another name in {owner}.{function}")
                 # The wrapper launches exactly the list it was given (effects.git_commit: the git tool's).
                 if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
                         and isinstance(inner.func.value, ast.Name) and inner.func.value.id == "subprocess"
@@ -100,6 +102,15 @@ def launch_problems(source: str, name: str = "flow.py") -> list[str]:
     other_apis = {("os", "system"), ("os", "popen"), ("os", "fork"), ("os", "forkpty"), ("pty", "spawn"),
                   ("pty", "fork")}
     for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in ("os", "pty"):
+            for alias in node.names:
+                if (node.module, alias.name) in other_apis or (node.module == "os" and alias.name.startswith(
+                        ("exec", "spawn", "posix_spawn"))) or node.module == "pty":
+                    problems.append(f"from {node.module} import {alias.name}")
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ("os", "pty", "subprocess") and alias.asname:
+                    problems.append(f"import {alias.name} as {alias.asname}")
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             if (node.value.id, node.attr) in other_apis or (node.value.id == "os" and node.attr.startswith(
                     ("exec", "spawn", "posix_spawn"))):
@@ -111,8 +122,17 @@ def launch_problems(source: str, name: str = "flow.py") -> list[str]:
         forwarded = set()  # Wizard.run forwards its own argv parameter, unchanged, to the runner.
         for owner, function, node in _functions(tree):
             if (owner, function) == ("Wizard", "run"):
-                assigned = any(isinstance(t, ast.Name) and t.id == "argv" for inner in ast.walk(node)
-                               if isinstance(inner, ast.Assign) for t in inner.targets)
+                assigned = any(
+                    (isinstance(t, ast.Name) and t.id == "argv")
+                    or (isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) and t.value.id == "argv")
+                    for inner in ast.walk(node) if isinstance(inner, (ast.Assign, ast.AugAssign))
+                    for t in (inner.targets if isinstance(inner, ast.Assign) else [inner.target])) or any(
+                    (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
+                     and isinstance(inner.func.value, ast.Name) and inner.func.value.id == "argv")
+                    or (isinstance(inner, ast.Assign) and isinstance(inner.value, ast.Name) and inner.value.id == "argv")
+                    for inner in ast.walk(node))
+                if assigned:
+                    problems.append("Wizard.run changes the argv it forwards")
                 if not assigned:
                     forwarded.update(id(inner) for inner in ast.walk(node)
                                      if isinstance(inner, ast.Name) and inner.id == "argv")

@@ -107,6 +107,13 @@ _SPINNER = "|/-\\"
 _HELD_SIGNALS = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGALRM}
 
 
+def _unheld(mask):
+    """Run in the child before the command: the signal mask the wizard had before it held its signals,
+    so a started process never inherits them held (review 040-s5-wizard-5 a). The wizard starts no
+    thread, so a preexec function is safe here."""
+    return lambda: signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+
+
 def phase_of(path) -> str:
     """S3-P1, S3-P2, S3-P6: the last `cocolo-phase: ` line in the last 4 KiB of the error log, as ASCII
     letters, digits, spaces and ,.'- only, at most 60 characters."""
@@ -517,7 +524,8 @@ class Terminal:
         try:
             try:
                 process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
-                                           start_new_session=True, env={**os.environ, "COCOLO_PHASES": "1"})
+                                           start_new_session=True, env={**os.environ, "COCOLO_PHASES": "1"},
+                                           preexec_fn=_unheld(previous))
             finally:
                 if not quiet:
                     os.close(stdout)
@@ -562,7 +570,7 @@ class Terminal:
         previous = signal.pthread_sigmask(signal.SIG_BLOCK, _HELD_SIGNALS)  # Registered before any stop acts.
         try:
             process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                       start_new_session=True, **options)
+                                       start_new_session=True, preexec_fn=_unheld(previous), **options)
             self.active = process
         except BaseException:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous)

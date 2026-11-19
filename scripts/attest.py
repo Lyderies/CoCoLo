@@ -581,7 +581,10 @@ def client_status(name: str, project: Path | None = None) -> tuple[int, bytes]:
                 [executable, *CLIENT_COMMANDS[name]], cwd=scratch,
                 env=providers.client_environment(os.environ, scratch),
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                start_new_session=True)
+                start_new_session=True,
+                # The client starts with the mask this check had, never with its signals held
+                # (review 040-s5-wizard-5 a); attest starts no thread, so a preexec function is safe.
+                preexec_fn=lambda: signal.pthread_sigmask(signal.SIG_SETMASK, previous))
         except OSError:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous)
             return CLIENT_FAILED, b""
