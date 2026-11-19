@@ -38,11 +38,16 @@ def _seal(key, row):
         n: row[n] for n in ('project_id', *RELEASE_COLUMNS) if n != 'state_seal'}))
 
 
+def live_cleanup_receipts(ledger, project):
+    """Cleanup receipts whose release is not recorded (0.3.4 R6); in 0.8.29 every one ever reserved counted."""
+    return ledger._connection.execute('SELECT COUNT(*) FROM account_cleanup_receipts WHERE project_id=? '
+                                      'AND released_at_ms IS NULL', (project,)).fetchone()[0]
+
+
 def reserve_cleanup(ledger, binding, grant):
     if not ledger._connection.in_transaction:
         raise ClaimError('claim_cleanup_unavailable')
-    if ledger._connection.execute('SELECT COUNT(*) FROM account_cleanup_receipts WHERE project_id=?',
-                                  (binding.project_id,)).fetchone()[0] >= MAX_RELEASE_RESERVATIONS:
+    if live_cleanup_receipts(ledger, binding.project_id) >= MAX_RELEASE_RESERVATIONS:
         raise ClaimError('claim_cleanup_unavailable')
     key = ledger.state.digest_key()
     parameters = _parameters(ledger, binding, grant)

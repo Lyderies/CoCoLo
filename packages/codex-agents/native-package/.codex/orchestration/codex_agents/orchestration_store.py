@@ -14,9 +14,12 @@ from .orchestration_api import (
     checked_orchestration_view, decode_orchestration_request, encode_orchestration_request,
     orchestration_request_digest, HOST_CLIENT_VERSIONS, ORCHESTRATION_TERMINAL_STATES, SCOPE_FIELDS,
 )
-from .project_history import ProjectHistory, _operation
+from .project_history import MAX_LEASE_ROWS, ProjectHistory, _operation
 
 MAX_JOURNAL_EVENTS = 65_536
+# A closed orchestration is kept this long for reports, then removed with its checkpoints (0.3.4 R6):
+# the ledger's own retention (client_runtime.LEARNING_MAX_AGE_MS).
+ORCHESTRATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 
 class OrchestrationOwner:
     def __init__(self, history):
@@ -107,6 +110,110 @@ class OrchestrationOwner:
             raise HistoryError('history_incompatible')
         return view
 
+    def _latest_snapshot(self, row):
+        """The snapshot of an orchestration's latest checkpoint, verified by its own keyed seal; None
+        when it cannot be verified."""
+        try:
+            view = self._checkpoint(row['orchestration_handle'], row['sequence'])
+        except HistoryError:
+            return None
+        return view['snapshot'] if view['checkpoint_digest'] == row['checkpoint_digest'] else None
+
+    def _open_count(self):
+        """Orchestrations not yet closed. One whose latest checkpoint cannot be verified counts as
+        open, so a changed row never frees a place."""
+        count = 0
+        for row in self._db.execute('SELECT orchestration_handle,sequence,checkpoint_digest FROM project_orchestrations '
+                                    'WHERE project_id=?', (self._history.project_id,)).fetchall():
+            snapshot = self._latest_snapshot(row)
+            count += snapshot is None or snapshot['status'] not in ORCHESTRATION_TERMINAL_STATES
+        return count
+
+    def end_earlier(self, current, limit):
+        """End, as interrupted, the open or paused orchestrations an earlier runtime of this same service
+        left (0.3.4 R10): same project, namespace, supervisor instance and generation, another runtime
+        digest. Nothing could use or close them after an update. The ordinary close does it, under each
+        one's own sealed scope, so a run not yet over still keeps it open. Returns how many ended."""
+        current = OrchestrationScope(**{name: getattr(current, name) for name in SCOPE_FIELDS})
+        if current.project_id != self._history.project_id:
+            return 0
+        same = {name: getattr(current, name) for name in SCOPE_FIELDS if name != 'runtime_digest'}
+        own = self._scope_digest(current)
+        # A bounded window from where the last pass stopped; every attempt counts (review 034-r10).
+        after = self._history._purge_cursors.get('earlier')
+        rows = self._db.execute('SELECT rowid,orchestration_handle,sequence,checkpoint_digest,scope_digest '
+                                'FROM project_orchestrations WHERE project_id=? AND scope_digest!=?'
+                                + ('' if after is None else ' AND rowid>?') + ' ORDER BY rowid LIMIT ?',
+                                (current.project_id, own, *(() if after is None else (after,)), limit * 16)).fetchall()
+        if not rows and after is not None:
+            self._history._purge_cursors['earlier'] = None
+            return self.end_earlier(current, limit)
+        ended = tried = 0
+        for row in rows:
+            if tried >= limit:
+                break
+            self._history._purge_cursors['earlier'] = row['rowid']
+            snapshot = self._latest_snapshot(row)
+            if (snapshot is None or snapshot['status'] in ORCHESTRATION_TERMINAL_STATES
+                    or any(snapshot['scope'].get(name) != value for name, value in same.items())
+                    or snapshot['scope'].get('runtime_digest') == current.runtime_digest):
+                continue
+            earlier = OrchestrationScope(**snapshot['scope'])
+            if self._scope_digest(earlier) != row['scope_digest']:
+                continue  # The row does not belong to the scope its checkpoint names: left as it is.
+            tried += 1
+            # A fresh request id each time: no client can have used it before (review 034-r10).
+            request = OrchestrationRequest(1, 'orchestration.close', 'end-earlier-' + secrets.token_hex(16), earlier, {
+                'orchestration_handle': row['orchestration_handle'], 'expected_sequence': snapshot['sequence'],
+                'status': 'interrupted', 'goal_tokens_used': None, 'goal_time_used_seconds': None})
+            try:
+                self.apply(request, client_version=snapshot['client_version'], before_commit=lambda: None)
+            except HistoryError:
+                continue  # A run not yet over, or anything else: it stays open for a later pass.
+            ended += 1
+        return ended
+
+    def purge_closed(self, now, limit):
+        """Remove closed orchestrations past ORCHESTRATION_RETENTION_MS, with their checkpoints and
+        requests, once no result row names them (0.3.4 R6). Each pass examines a bounded window from where
+        the last one stopped, and reads the leases once (R1g). Returns how many went."""
+        project = self._history.project_id
+        after = self._history._purge_cursors.get('orchestrations')
+        statement = 'SELECT rowid,orchestration_handle,sequence,checkpoint_digest FROM project_orchestrations WHERE project_id=?'
+        rows = self._db.execute(statement + ('' if after is None else ' AND rowid>?') + ' ORDER BY rowid LIMIT ?',
+                                (project, *(() if after is None else (after,)), limit * 16)).fetchall()
+        if not rows and after is not None:
+            self._history._purge_cursors['orchestrations'] = None
+            return self.purge_closed(now, limit)  # Start again from the first.
+        named, purged = None, 0
+        for row in rows:
+            if purged >= limit:
+                break  # The cursor stays on the last row examined; the next pass goes on from there.
+            self._history._purge_cursors['orchestrations'] = row['rowid']
+            snapshot = self._latest_snapshot(row)
+            if (snapshot is None or snapshot['status'] not in ORCHESTRATION_TERMINAL_STATES
+                    or snapshot['ended_at_ms'] is None or now <= snapshot['ended_at_ms'] + ORCHESTRATION_RETENTION_MS):
+                continue
+            if named is None:
+                # A lease names its orchestration only inside its sealed binding: read them once per pass.
+                named = set()
+                for lease in self._db.execute('SELECT * FROM result_leases WHERE project_id=?', (project,)).fetchall():
+                    try:
+                        named.add(self._history._lease(lease).binding.orchestration_handle)
+                    except HistoryError:
+                        return purged  # Unreadable: keep every orchestration rather than guess.
+            handle = row['orchestration_handle']
+            if handle in named or self._db.execute('SELECT 1 FROM result_reservations WHERE project_id=? '
+                                                   'AND orchestration_handle=? LIMIT 1', (project, handle)).fetchone():
+                continue  # Still named; a later one may still go (re-review 034-security-2).
+            with self._history._transaction():
+                for table in ('project_orchestration_requests', 'project_orchestration_checkpoints',
+                              'project_orchestrations'):
+                    self._db.execute(f'DELETE FROM {table} WHERE project_id=? AND orchestration_handle=?',
+                                     (project, handle))
+            purged += 1
+        return purged
+
     @_operation
     def active_for(self, binding):
         scope = OrchestrationScope(**{name: getattr(binding, name) for name in SCOPE_FIELDS})
@@ -133,14 +240,36 @@ class OrchestrationOwner:
         # Only fixed owner-selected tables, bounded scalar rows before any blob.
         if table not in {'result_leases', 'result_reservations', 'project_execution_consumptions'}:
             raise HistoryError('history_invalid_input')
-        capacity = self._history._result_capacity
-        if capacity is None:
+        if self._history._result_capacity is None:
             raise HistoryError('history_orchestration_unavailable')
+        # This bounds the verification work, not results (0.3.4 R1e): with the 64-entry limit here, a
+        # store holding more than 64 rows, finished ones included, could close no orchestration.
         positions = self._db.execute('SELECT rowid FROM ' + table + ' WHERE project_id=? LIMIT ?',
-                                     (self._history.project_id, capacity.max_entries + 1)).fetchall()
-        if len(positions) > capacity.max_entries:
+                                     (self._history.project_id, MAX_LEASE_ROWS + 1)).fetchall()
+        if len(positions) > MAX_LEASE_ROWS:
             raise HistoryError('history_orchestration_unavailable')
         return positions
+
+    def _account_released(self, binding):
+        """Whether the account's release of this run is verified in the project store (0.3.4 R7): the
+        child is gone and its slot freed, which a timeout, a missing process or a fenced terminal
+        does not prove."""
+        from .project_release_ack import read_account_release
+        row = self._db.execute('SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?',
+                               (binding.project_id, binding.run_handle, binding.attempt)).fetchone()
+        if row is None:
+            return False  # A legacy reservation without a lease has no release evidence here.
+        lease = self._history._lease(row)
+        if (lease.claim_id != binding.claim_id or lease.binding.orchestration_handle != binding.orchestration_handle
+                or lease.binding.run_id != binding.run_id):
+            raise HistoryError('history_conflict')  # Not this reservation's lease (review 034-security).
+        try:
+            read_account_release(self._history, lease.binding)
+        except HistoryError as exc:
+            if exc.reason_code == 'history_result_not_ready':
+                return False
+            raise
+        return True
 
     def _unfinished(self, scope, handle):
         # A timeout, absent process or accepted terminal does not prove cleanup.
@@ -184,9 +313,12 @@ class OrchestrationOwner:
             try:
                 entry = self._history.record('host_result_admission:' + digest)
             except HistoryError as exc:
-                if exc.reason_code == 'history_not_found':
+                if exc.reason_code != 'history_not_found':
+                    raise
+                if not self._account_released(binding):
                     return True
-                raise
+                continue  # 0.3.4 R7: over, by the account's verified release; reported unrecorded.
+
             receipt = parse_bounded_json(entry.content)
             if (entry.source != 'host' or receipt.get('record_type') != 'host_result_admission'
                     or receipt.get('binding_digest') != digest or receipt['run_id'] != binding.run_id
@@ -233,8 +365,8 @@ class OrchestrationOwner:
         now = self._history._result_now()
         with self._history._transaction():
             if operation == 'orchestration.open':
-                count = self._db.execute('SELECT COUNT(*) FROM project_orchestrations WHERE project_id=?', (scope.project_id,)).fetchone()[0]
-                if count >= limits.max_orchestrations:
+                # Only open or paused ones count (0.3.4 R6); in 0.8.29 every one ever opened did.
+                if self._open_count() >= limits.max_orchestrations:
                     raise HistoryError('history_orchestration_full')
                 handle = 'orc_' + secrets.token_hex(24)
                 snapshot = {'scope': scope.as_data(), 'orchestration_handle': handle,

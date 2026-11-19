@@ -163,6 +163,24 @@ class ProjectCheckReceiptTests(unittest.TestCase):
         self.assertEqual({**first,'known':True},self.issue())
         self.assertEqual(1,self.count())
 
+    def test_034_R6_receipts_and_their_requests_go_after_retention_and_the_ceiling_is_raised(self):
+        """0.3.4 R6: in 0.8.29 every receipt ever issued counted against 4,096 and none was removed."""
+        from codex_agents.project_qa_checks import QA_RETENTION_MS
+        self.assertEqual(16_384, project_qa_checks.MAX_CHECK_RECEIPTS)
+        self.issue()
+
+        def rows():
+            return tuple(self.store._connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                         for table in ('project_qa_check_receipts', 'project_qa_check_requests'))
+        self.assertEqual((1, 1), rows())
+        created = self.store._connection.execute('SELECT created_at_ms FROM project_qa_check_receipts').fetchone()[0]
+        with mock.patch.object(self.store, '_result_now', return_value=created + QA_RETENTION_MS):
+            self.store.expire_results(limit=10)
+        self.assertEqual((1, 1), rows())
+        with mock.patch.object(self.store, '_result_now', return_value=created + QA_RETENTION_MS + 1):
+            self.store.expire_results(limit=10)
+        self.assertEqual((0, 0), rows())
+
     def test_report_byte_limit_refuses_before_original_private_artifact_io(self):
         # Both arrays satisfy the fixed runner's per-array and per-ID bounds;
         # their combined canonical bytes exceed this receipt's storage bound.

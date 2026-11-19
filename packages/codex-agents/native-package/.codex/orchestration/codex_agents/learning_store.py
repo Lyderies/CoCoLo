@@ -2201,6 +2201,17 @@ class LearningLedger:
             due.append((str(row["project_id"]), str(row["relative_path"])))
         return due
 
+    def sweep_account_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
+        """Remove finished account rows past their retention, a small batch at a time (0.3.4 R6);
+        returns how many went. Skipped while a reader or a transaction is active."""
+        from .account_observation import purge_old_observations
+
+        with self._lock:
+            if self._active_readers or self._connection.in_transaction:
+                return 0
+            now = self._clock_ms() if now_ms is None else now_ms
+            return purge_old_observations(self, now, batch)
+
     def sweep_event_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
         """Summarise, then remove, up to `batch` expired raw events; returns how many were removed.
 
@@ -11176,6 +11187,18 @@ class LearningLedger:
                 (project_id, code, timestamp),
             )
 
+    def account_capacity(self, project_id: str) -> dict[str, dict[str, int]]:
+        """How near this project is to each account limit (0.3.4 R9): counts by the rule each limit enforces."""
+        from .account_cleanup import MAX_RELEASE_RESERVATIONS, live_cleanup_receipts
+        from .account_observation import MAX_OBSERVATION_REQUESTS
+
+        with self._lock:
+            observations = self._connection.execute(
+                "SELECT COUNT(*) FROM account_observation_origins WHERE project_id=?", (project_id,)).fetchone()[0]
+            receipts = live_cleanup_receipts(self, project_id)
+        return {"observations": {"live": int(observations), "limit": MAX_OBSERVATION_REQUESTS},
+                "cleanup_receipts": {"live": int(receipts), "limit": MAX_RELEASE_RESERVATIONS}}
+
     def health_snapshot(self, project_id: str) -> dict[str, dict[str, int]]:
         with self._lock:
             rows = self._connection.execute(
@@ -11745,6 +11768,9 @@ class CollectorServer:
                     # a small batch at a time, without the owner running anything.
                     with contextlib.suppress(LedgerError, OSError, sqlite3.Error, ValueError, KeyError):
                         self.ledger.sweep_event_retention()
+                    # Finished account rows past their retention go too, so no limit fills for good (0.3.4 R6).
+                    with contextlib.suppress(LedgerError, OSError, sqlite3.Error, ValueError, KeyError):
+                        self.ledger.sweep_account_retention()
                 try:
                     connection, _ = listener.accept()
                 except TimeoutError:
@@ -11950,6 +11976,7 @@ class CollectorServer:
                     response["collector_health"] = self.ledger.health_snapshot(
                         project_id
                     )
+                    response["account_capacity"] = self.ledger.account_capacity(project_id)
                     response["ingestion"] = self.ledger.ingestion_snapshot(
                         project_id,
                         client_failures=client_health_snapshot(

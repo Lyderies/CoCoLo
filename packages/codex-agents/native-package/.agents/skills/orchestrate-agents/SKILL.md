@@ -109,6 +109,10 @@ says `dispatch: native`, stop and report it.
    `result` and `bridge_report`, save those unchanged. Run `learning-status` for
    the exact project root and require readiness before recording that exact result
    and only its actual nonnull forced-terminal fact. Never redispatch or repair it.
+   If a reply was lost or refused after the child finished, dispatch the same handle
+   once more while the project's service still runs: it returns the same fenced
+   result, which you record. If that is no longer possible, close the orchestration
+   once the run is released; the run is counted abandoned.
    A failure after launch without a usable report leaves no result to record:
    pause the orchestration, confirm the child is gone, classify that run abandoned
    (`host_confirmed_gone`), and resume. Never reconstruct a missing result.

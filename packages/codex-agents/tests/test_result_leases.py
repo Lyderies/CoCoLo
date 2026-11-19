@@ -164,8 +164,9 @@ class ResultLeaseTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, "history_result_capacity"):
             self.reserve(3)
         self.store.retire_result(binding())
-        with self.assertRaisesRegex(HistoryError, "history_result_capacity"):
-            self.reserve(3)  # Tombstone remains an entry, bound lease is counted once.
+        # Corrected for 0.3.4 R1 (owner, 2026-11-18): a retired result keeps its tombstone but no longer
+        # takes an entry, so the third fits. 0.8.29 refused it (a lifetime cap).
+        self.reserve(3)
 
     def test_mixed_live_body_capacity_cannot_be_bypassed_by_legacy_or_leased_reserve(self):
         self.fixture.reserve()

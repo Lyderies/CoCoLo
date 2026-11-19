@@ -337,3 +337,24 @@ stage without revealing paths or exception values. `runner_unavailable` is the f
 more specific reason applies. A terminated process may have a negative exit code;
 large-file fixtures can exceed QA's resource limit. Inspect the wrapper locally, retaining the guard.
 See the [in-process wrapper recipe and bytecode warning](manual-setup.md#operational-checks).
+
+## A dispatch refused with `result_capacity_full`
+
+The project's store has no free place for another result. Each project keeps up to 64 live
+results: those of open orchestrations, and those still inside their seven-day retention.
+
+- Close orchestrations you have finished with (`learning-close-orchestration`). Their results retire
+  within seconds, and a new dispatch then fits.
+- `learning-status` shows `project_capacity.results`: how many results are live, and the limit.
+- Before 0.3.4, every result a project had ever stored counted, so a project could record only 64 in
+  its whole life and then failed every child with `run_failed`. Updating fixes that; a full store
+  recovers by itself at the project service's first cleanup.
+
+## An orchestration will not close: `history_orchestration_pending`
+
+A run of the orchestration has not finished, or its result was never recorded.
+
+- If `dispatch` lost or refused its reply after the child finished, dispatch the same handle once
+  more while the project's service still runs; it returns the same result, which you then record.
+- From 0.3.4, once the account has released the run, close works even if its result was never
+  recorded, and the run is counted abandoned. A run still running blocks close until it ends.

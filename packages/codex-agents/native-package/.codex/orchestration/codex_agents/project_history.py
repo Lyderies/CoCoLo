@@ -58,6 +58,15 @@ _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outco
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
 MAX_DELIVERY_PAGE_BYTES = 16_384
+# The account's crash grace (active_run_capacity.CRASHED_CLAIM_GRACE_MS): after a result's hard deadline
+# plus this, the account refuses its binding, so nothing can present that attempt again (0.3.4 R1c).
+RESULT_PURGE_GRACE_MS = 3_600_000
+# How many lease rows, live or finished, a reservation verifies at most (0.3.4 R1d).
+MAX_LEASE_ROWS = 4_096
+# How many results one reservation may retire before it is refused for capacity (0.3.4 R8).
+RECLAIM_BATCH = 16
+# How many rows one purge pass examines per row it may remove (0.3.4 R1g).
+PURGE_SCAN_FACTOR = 16
 MAX_BINDING_BYTES = 4096
 MAX_HISTORY_ROW_BYTES = 2 * MAX_RECORD_BYTES
 MAX_LEARNING_PAGE_BYTES = 262_144
@@ -237,6 +246,8 @@ class ProjectHistory:
         self._result_capacity = None
         self._result_expiry_cursor: int | None = None
         self._lease_expiry_cursor: int | None = None
+        # Where the finished-row purge goes on from (0.3.4 R1g): scheduling state only, like the above.
+        self._purge_cursors: dict[str, int | None] = {"reservations": None, "leases": None, "orchestrations": None, "earlier": None}
         self._result_clock = result_clock_ms if result_clock_ms is not None else (lambda: time.time_ns() // 1_000_000)
         if (
             type(allow_schema_upgrade) is not bool
@@ -870,30 +881,50 @@ class ProjectHistory:
              value.binding.run_handle, value.binding.attempt),
         )
 
+    def _reclaim_if_full(self):
+        """Reclaim on allocation (0.3.4 R8): a store that looks full first retires what it may (results
+        past retention, or of closed orchestrations), a bounded batch, then the check inside the
+        reservation's transaction decides as before. Without this, a result of an orchestration
+        closed seconds ago still held its place until the service's next cleanup."""
+        try:
+            self._check_result_capacity()
+        except HistoryError as error:
+            if error.reason_code != "history_result_capacity":
+                raise
+            try:
+                self.expire_results(limit=RECLAIM_BATCH)
+            except HistoryError:
+                pass  # What could not be retired stays charged; the check below refuses.
+
     def _check_result_capacity(self):
         # A result not yet written may still need the largest body; a written one holds only
         # the bytes it has (kept for its verifier). Charging every kept result the largest
         # body let a project hold only four results at a time.
+        # Only live entries count (0.3.4 R1): an expired result keeps its tombstone, so its attempt can
+        # never be armed again, but no longer takes a place. In 0.8.29 every row ever written counted,
+        # so a project could record only max_entries results in its whole life.
         counts = self._connection.execute(
-            "SELECT COUNT(*),"
+            "SELECT SUM(CASE WHEN state!='expired' THEN 1 ELSE 0 END),"
             "SUM(CASE WHEN state='reserved' OR (state!='expired' AND body_size IS NULL) THEN 1 ELSE 0 END),"
             "SUM(CASE WHEN state IN ('committed','retiring') AND body_size IS NOT NULL "
             "THEN MIN(MAX(body_size,0),?) ELSE 0 END) "
             "FROM result_reservations WHERE project_id=?", (MAX_RESULT_BODY_BYTES, self.project_id),
         ).fetchone()
-        entries, charged, written = counts[0], counts[1] or 0, counts[2] or 0
+        entries, charged, written = counts[0] or 0, counts[1] or 0, counts[2] or 0
         # Verify each bounded lease before trusting mutable state to exclude a
         # tombstone or bound row. SQL labels alone cannot free reserved space.
+        # This bounds the verification work, not results (0.3.4 R1d): finished lease rows stay until their
+        # purge, so the 64-entry limit here refused a 65th run inside about 7.5 hours.
         positions = self._connection.execute("SELECT rowid FROM result_leases WHERE project_id=? LIMIT ?",
-                                             (self.project_id, self._result_capacity.max_entries + 1)).fetchall()
-        if len(positions) > self._result_capacity.max_entries:
+                                             (self.project_id, MAX_LEASE_ROWS + 1)).fetchall()
+        if len(positions) > MAX_LEASE_ROWS:
             raise HistoryError("history_result_capacity")
         for position in positions:
             row = self._connection.execute("SELECT * FROM result_leases WHERE rowid=?", (position[0],)).fetchone()
             value = self._lease(row)
-            if value.state != "bound":
+            if value.state not in {"bound", "expired"}:
                 entries += 1
-                charged += value.state != "expired"
+                charged += 1
         if (entries >= self._result_capacity.max_entries
                 or (charged + 1) * MAX_RESULT_BODY_BYTES + written > self._result_capacity.max_reserved_bytes):
             raise HistoryError("history_result_capacity")
@@ -919,6 +950,7 @@ class ProjectHistory:
         """
         binding = self._lease_binding(binding)
         encoded = assignment_bytes(assignment, binding)
+        self._reclaim_if_full()
         now = self._result_now()
         digest = keyed_digest(self._result_key, encoded)
         with self._transaction():
@@ -1484,6 +1516,7 @@ class ProjectHistory:
         value = ResultReservation(binding, digest, now, hard_deadline_at_ms,
                                   now + self._result_capacity.reservation_ms,
                                   now + self._result_capacity.reservation_ms, "reserved")
+        self._reclaim_if_full()
         with self._transaction():
             self._orchestration_owner().active_for(binding)
             if self._connection.execute("SELECT 1 FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
@@ -1868,11 +1901,121 @@ class ProjectHistory:
             except (sqlite3.Error, OSError):
                 if failure is None:
                     failure = "history_unavailable"
+        from .project_qa_checks import purge_old_qa
+        # Each removal has its turn whatever another one meets (0.3.4 R1g).
+        for purge in (self._purge_finished_results, self._orchestration_owner().purge_closed,
+                      lambda now, limit: purge_old_qa(self, now, limit)):
+            try:
+                purge(now, limit)
+            except HistoryError as exc:
+                if failure is None:
+                    failure = exc.reason_code
+            except sqlite3.Error:
+                if failure is None:
+                    failure = "history_unavailable"
         if failure is not None:
             # Preserve failure visibility, without chaining private file/SQL
             # details, after other selected rows have had their cleanup turn.
             raise HistoryError(failure)
         return retired
+
+    def _purge_finished_results(self, now: int, limit: int) -> int:
+        """Remove finished result rows once nothing can present their attempt again (0.3.4 R1c, R1f, R1g).
+
+        A retired reservation and its lease go together, with the rows that refer to them, once the
+        reservation is expired, its hard deadline plus the crash grace has passed (the account then
+        refuses that binding), its orchestration is closed, and the account's release of the attempt is
+        verified. A lease that never got a reservation goes on the same terms, from its reserved-until
+        time. The sealed values decide, never the state column alone. Each pass examines a bounded window
+        from where the last one stopped, so rows that cannot go yet never hold back later ones; a row
+        that does not verify is kept and passed over.
+        """
+        owner = self._orchestration_owner()
+        cutoff = now - RESULT_PURGE_GRACE_MS
+        purged = 0
+
+        def window(name, statement, arguments):
+            after = self._purge_cursors[name]
+            rows = self._connection.execute(statement + ("" if after is None else " AND rowid>?") + " ORDER BY rowid LIMIT ?",
+                                            (*arguments, *(() if after is None else (after,)), limit * PURGE_SCAN_FACTOR)
+                                            ).fetchall()
+            if not rows and after is not None:
+                self._purge_cursors[name] = None
+                return window(name, statement, arguments)
+            return [row[0] for row in rows]
+
+        for position in window("reservations", "SELECT rowid FROM result_reservations WHERE project_id=? "
+                               "AND state='expired' AND hard_deadline_at_ms<?", (self.project_id, cutoff)):
+            if purged >= limit:
+                break  # The cursor stays on the last row examined; the next pass goes on from there.
+            self._purge_cursors["reservations"] = position
+            try:
+                row = self._connection.execute("SELECT * FROM result_reservations WHERE project_id=? AND rowid=?",
+                                               (self.project_id, position)).fetchone()
+                value = self._reservation(row)
+                if value.state != "expired" or not value.hard_deadline_at_ms < cutoff or not owner.closed_for(value.binding):
+                    continue
+                lease_row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND claim_id=?",
+                                                     (self.project_id, value.binding.claim_id)).fetchone()
+                lease = None if lease_row is None else self._lease(lease_row)
+                if lease is not None and ((lease.binding.run_handle, lease.binding.attempt)
+                                          != (value.binding.run_handle, value.binding.attempt)
+                                          or lease.state not in {"bound", "expired"} or not self._attempt_released(lease)):
+                    continue  # Not this attempt's lease, still live, or not released: kept.
+            except HistoryError:
+                continue  # Kept: it does not verify, so nothing about it is trusted.
+            with self._transaction():
+                self._delete_attempt_rows(value.binding.run_handle, value.binding.attempt, value.binding.claim_id)
+            purged += 1
+        for position in window("leases", "SELECT rowid FROM result_leases l WHERE project_id=? AND state='expired' "
+                               "AND reserved_until_ms<? AND NOT EXISTS(SELECT 1 FROM result_reservations r "
+                               "WHERE r.project_id=l.project_id AND r.claim_id=l.claim_id)", (self.project_id, cutoff)):
+            if purged >= limit:
+                break  # The cursor stays on the last row examined; the next pass goes on from there.
+            self._purge_cursors["leases"] = position
+            try:
+                row = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND rowid=?",
+                                               (self.project_id, position)).fetchone()
+                lease = self._lease(row)
+                if (lease.state != "expired" or not lease.reserved_until_ms < cutoff or not owner.closed_for(lease.binding)
+                        or not self._attempt_released(lease)):
+                    continue
+            except HistoryError:
+                continue
+            with self._transaction():
+                self._delete_attempt_rows(lease.binding.run_handle, lease.binding.attempt, None)
+            purged += 1
+        return purged
+
+    def _attempt_released(self, lease) -> bool:
+        """Whether an attempt may go (0.3.4 R1f): it reserved no cleanup, or the account's release of it
+        is verified here. Otherwise the account could still hold the run while its project record went."""
+        if lease.cleanup_reservation_digest is None:
+            return True
+        from .project_release_ack import read_account_release
+        try:
+            read_account_release(self, lease.binding)
+        except HistoryError as error:
+            if error.reason_code == "history_result_not_ready":
+                return False
+            raise
+        return True
+
+    def _delete_attempt_rows(self, run_handle: str, attempt: int, claim_id: str | None) -> None:
+        """One finished attempt's rows, children first (foreign keys are on)."""
+        attempt_key = (self.project_id, run_handle, attempt)
+        for table in ("project_cleanup_acknowledgements", "project_cleanup_receipts", "project_cleanup_reservations",
+                      "project_host_opens"):
+            self._connection.execute(f"DELETE FROM {table} WHERE project_id=? AND run_handle=? AND attempt=?",
+                                     attempt_key)
+        if claim_id is not None:
+            self._connection.execute("DELETE FROM project_execution_consumptions WHERE project_id=? AND claim_id=?",
+                                     (self.project_id, claim_id))
+        self._connection.execute("DELETE FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                                 attempt_key)
+        if claim_id is not None:
+            self._connection.execute("DELETE FROM result_reservations WHERE project_id=? AND claim_id=?",
+                                     (self.project_id, claim_id))
 
     @_operation
     def admit_host_result(self, reference: HostResultReference, *, assignment: dict, task: dict,

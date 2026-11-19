@@ -77,6 +77,25 @@ class AccountCleanupReleaseTests(unittest.TestCase):
         self.assertEqual(1, self.ledger._connection.execute('SELECT COUNT(*) FROM account_cleanup_receipts').fetchone()[0])
         self.assertNotIn(self.binding.run_handle, str(tuple(self.ledger._connection.execute('SELECT * FROM account_cleanup_receipts').fetchone())))
 
+    def test_034_R6_a_released_cleanup_receipt_no_longer_counts_against_the_limit(self):
+        """0.3.4 R6: in 0.8.29 every cleanup receipt ever reserved counted against 4,096. Only an
+        unreleased one counts now."""
+        from codex_agents import account_cleanup
+        project = self.binding.project_id
+        self.assertEqual(1, account_cleanup.live_cleanup_receipts(self.ledger, project))
+        self.call()
+        self.assertEqual(0, account_cleanup.live_cleanup_receipts(self.ledger, project))
+
+        class PastTheLimit(Exception):
+            pass
+        self.ledger._connection.execute('BEGIN')  # reserve_cleanup runs only inside a transaction.
+        self.addCleanup(self.ledger._connection.rollback)
+        with mock.patch.object(account_cleanup, 'MAX_RELEASE_RESERVATIONS', 1), \
+                mock.patch.object(account_cleanup, '_parameters', side_effect=PastTheLimit):
+            with self.assertRaises(PastTheLimit):
+                account_cleanup.reserve_cleanup(self.ledger, self.binding, self.base.grant)
+        self.ledger._connection.rollback()
+
     def test_native_actor_and_original_binding_are_required_outside_json(self):
         for source in ('host', 'owner', 'hook', 'app_server'):
             self.source = source

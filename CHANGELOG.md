@@ -16,6 +16,46 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - CI runs by stage: pull requests run unit tests on Linux and macOS and integration tests on Linux;
   `main`, tags and a nightly run add the rest on both systems. Each job uses every core.
 
+## 0.3.4: no limit fills for good (Codex package 0.8.32)
+
+- A project could record only 64 results in its whole life. After that every child ended
+  `run_failed` with no named cause, and its orchestration could not be closed. The result limit
+  counted every result ever stored, and nothing in the product retired results. Now:
+  - only live results count;
+  - the project's service retires results by itself, at start and every 10 seconds, once their
+    orchestration is closed or their retention has passed;
+  - a reservation that finds the store full first retires what it may;
+  - a finished result is removed with everything that refers to it once nothing can present it again:
+    its orchestration is closed, and its hard deadline plus one hour has passed.
+  A store that is already full recovers by itself after the update. A store that is really full now
+  says so: `dispatch` answers `result_capacity_full`, with what frees space, instead of `run_failed`.
+  Found in live use.
+- Eight more limits counted everything that had ever happened rather than what is live. Each is now
+  counted live, and its finished rows are removed after a retention:
+  - orchestrations count only open or paused ones, and closed ones go after 90 days;
+  - QA records, check receipts and their requests go after 90 days, and their ceiling is 16,384 per
+    90 days;
+  - provider observations go a day after their deadline;
+  - cleanup reservations go with their result;
+  - released cleanup receipts no longer count;
+  - two checks that refused once a store held more than 64 result rows of any kind, one on every new
+    run and one on every orchestration close, now bound only their verification work (4,096 rows).
+    Before, with more than 64 results, no orchestration could close.
+- A run whose result was never recorded no longer blocks its orchestration's close for good. This
+  happens when its dispatch reply was lost or refused and the project's service then restarted. Close
+  now accepts it once the account's release of the run is verified, and counts the run abandoned. While
+  the service still runs, dispatching the same handle once more returns the same fenced result to
+  record; the skills now say so.
+- An update no longer leaves orchestrations nobody can close. An orchestration is tied to the runtime
+  that opened it, so after an update its project's new service could not even read one left open,
+  and it counted against the 256-open limit for good. The project service now ends those, as
+  `interrupted`, through the ordinary close; a run not yet over still keeps one open. Found live.
+- `learning-status` shows how near each project is to each limit: `project_capacity` (results, open
+  orchestrations, cleanup reservations, QA records, check receipts) and `account_capacity`
+  (observations, unreleased cleanup receipts), each with its live count and limit.
+- New tests run more lifecycles than every limit, and check that every way a run ends returns every
+  live count to where it started.
+
 ## 0.3.3: dispatch on a busy account (Codex package 0.8.29)
 
 - On a busy account, a child's open was admitted but its dispatch was refused with

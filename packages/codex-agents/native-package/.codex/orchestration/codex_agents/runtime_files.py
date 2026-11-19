@@ -127,6 +127,7 @@ RUNTIME_FILES = (
     "codex_agents/prepared_dispatch.py",
     "codex_agents/process_tree.py",
     "codex_agents/project_backup.py",
+    "codex_agents/project_capacity_report.py",
     "codex_agents/project_cleanup.py",
     "codex_agents/project_driver.py",
     "codex_agents/project_history.py",

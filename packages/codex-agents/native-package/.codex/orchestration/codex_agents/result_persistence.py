@@ -8,8 +8,10 @@ and normal-client migration remain mandatory before production activation.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import contextlib
 import os
 import queue
+import sqlite3
 import threading
 import time
 import weakref
@@ -53,7 +55,8 @@ class _EarlierLeases:
     """One request on the writer for leases an earlier service left armed (0.3.3, C3).
 
     `list` answers (binding, storage evidence, host client) for each lease armed for a claim and
-    held by no job of this service; `settle` expires one with the account's closure.
+    held by no job of this service; `settle` expires one with the account's closure; `expire` runs one
+    bounded result cleanup (0.3.4 R2).
     """
     kind: str
     binding: ResultLeaseBinding | None = None
@@ -140,6 +143,8 @@ class ResultPersistenceLane:
         pool._owner()
         self._owner, self._pool, self._open = owner, pool, open_history
         self._project = owner._monitor.scope().project_id
+        # This service's scope, read here on the owner thread; the writer thread cannot ask (0.3.4 R10).
+        self._service_scope = owner._monitor.scope()
         self._runtime = owner._monitor.scope().runtime_digest
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._maximum = max_entries
@@ -986,6 +991,10 @@ class ResultPersistenceLane:
             raise HistoryError('history_invalid_input')
         return self._queue_earlier(_EarlierLeases('settle', binding, raw))
 
+    def expire_results(self):
+        """Ask the writer to run one bounded result cleanup (0.3.4 R2); poll its `state`."""
+        return self._queue_earlier(_EarlierLeases('expire'))
+
     def _queue_earlier(self, request):
         with self._lock:
             if self._closed or self._fault:
@@ -997,7 +1006,13 @@ class ResultPersistenceLane:
         """Writer step: the history's own checked leases, or one settled with its closure."""
         try:
             history = self._history()
-            if request.kind == 'list':
+            if request.kind == 'expire':
+                # An update leaves the earlier runtime's open orchestrations to this service (0.3.4 R10).
+                # A failure here never stops the result cleanup below (review 034-r10).
+                with contextlib.suppress(HistoryError, sqlite3.Error):
+                    history._orchestration_owner().end_earlier(self._service_scope, 10)
+                result = history.expire_results(limit=10)
+            elif request.kind == 'list':
                 with self._lock:
                     held = {pending.lease_binding for pending in self._jobs.values() if pending.lease_binding is not None}
                 found, after = [], 0
