@@ -1194,7 +1194,8 @@ terminal_width() {
     case $width in *[!0]*) ;; *) width="" ;; esac
   fi
   if [ -z "$width" ]; then
-    width=$(tput cols 2>/dev/null || true)
+    # A tput that fails is not trusted, whatever it printed (fifth review).
+    width=$(tput cols 2>/dev/null) || width=""
     # tput answering 0 does not know the size either (S3-P9a); COLUMNS=0 still means no frame.
     case $width in *[!0]*) ;; *) width="" ;; esac
   fi
