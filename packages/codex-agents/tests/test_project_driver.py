@@ -380,6 +380,19 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual({'preparation_managed_configuration': 1}, runs['failed_before_open_reasons'])
         self.assertEqual(0, report['qa']['passed'] + report['qa']['failed'] + report['qa']['pending'])
 
+    def test_R6_a_run_that_fails_after_its_lease_but_before_its_open_is_reported_with_its_reason(self):
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        context, route_path, handle, run_handle = self.open_run()
+        with mock.patch.object(project_history.ProjectHistory, '_check_result_capacity',
+                               side_effect=HistoryError('history_result_capacity')):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('result_capacity_full', refused['reason_code'], refused)
+        runs = self.report_for(handle)['runs']
+        self.assertEqual((0, 1, 1, 1, 0), (runs['opened'], runs['admitted'], runs['failed_before_open'],
+                                           runs['abandoned'], runs['pending']), runs)
+        self.assertEqual({'result_capacity_full': 1}, runs['failed_before_open_reasons'])
+
     def test_a_run_refused_before_or_inside_preparation_names_the_refusal(self):
         # local-routing's 0.8.17 test still saw only run_unavailable, 0.3 s after dispatch.
         cases = (
