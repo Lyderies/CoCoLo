@@ -143,8 +143,27 @@ def select(planned: list[tuple[float, str, list[str]]], suite: str, wanted: set[
     return [unit for unit in planned if stage_of(suite, unit[1], stages) in wanted]
 
 
+def shard(queue: list, index: int, count: int) -> list:
+    """The units of shard `index` of `count` (PLAN T4a): longest first into the shard with the least
+    recorded time, ties by name, so every runner computes the same split. Order is kept within a shard."""
+    totals, members = [0.0] * count, [[] for _ in range(count)]
+    for unit in sorted(queue, key=lambda unit: (-unit[0], unit[1], unit[2])):
+        lightest = min(range(count), key=lambda position: (totals[position], position))
+        totals[lightest] += unit[0]
+        members[lightest].append(unit)
+    return sorted(members[index - 1], reverse=True)
+
+
+def parse_shard(text: str) -> tuple[int, int]:
+    index, _, count = text.partition("/")
+    if not (index.isdigit() and count.isdigit()) or not 1 <= int(index) <= int(count) <= 16:
+        raise argparse.ArgumentTypeError(f"--shard wants K/N with 1 <= K <= N <= 16, got {text!r}")
+    return int(index), int(count)
+
+
 def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
-        wanted: set[str] = frozenset(STAGE_NAMES), modules: dict[str, set[str]] | None = None) -> int:
+        wanted: set[str] = frozenset(STAGE_NAMES), modules: dict[str, set[str]] | None = None,
+        part: tuple[int, int] = (1, 1)) -> int:
     """Run the suites' units in the wanted stages; with `modules` ({suite: module names}), only those."""
     timings = json.loads(TIMINGS.read_text()) if TIMINGS.is_file() else {}
     stages = json.loads(STAGES.read_text())
@@ -157,6 +176,8 @@ def run(jobs: int, suites: list[str], save: Path | None, keep: bool,
                     for seconds, name, names in select(
                         units(suite, timings, None if modules is None else modules[suite]), suite, wanted, stages)),
                    reverse=True)
+    if part != (1, 1):
+        queue = shard(queue, *part)
     base = Path(tempfile.mkdtemp(prefix="pt", dir="/private/tmp" if sys.platform == "darwin" else None))
     running, results, started = {}, [], time.monotonic()
     environment = {k: v for k, v in os.environ.items()
@@ -236,6 +257,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stage", action="append", choices=STAGE_NAMES, help="run only these stages")
     parser.add_argument("--save-timings", type=Path, help="write this run's measurements here")
     parser.add_argument("--keep", action="store_true", help="keep every unit's folder and log")
+    parser.add_argument("--shard", type=parse_shard, default=(1, 1), metavar="K/N",
+                        help="run only shard K of N, balanced by recorded time (CI)")
     parser.add_argument("--module", action="append", metavar="SUITE:MODULE",
                         help="run only this test module (repeatable), for example codex:tests.test_bridge")
     args = parser.parse_args(argv)
@@ -251,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error(f"--module wants SUITE:MODULE, got {item!r}")
             modules[suite].add(module)
         suites = [suite for suite in suites if modules[suite]]
-    return run(args.jobs, suites, args.save_timings, args.keep, set(args.stage or STAGE_NAMES), modules)
+    return run(args.jobs, suites, args.save_timings, args.keep, set(args.stage or STAGE_NAMES), modules, args.shard)
 
 
 if __name__ == "__main__":
