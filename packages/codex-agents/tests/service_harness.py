@@ -88,6 +88,22 @@ class ServiceHarness:
             patcher = mock.patch.object(result_persistence.ResultPersistenceLane, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # The checks serve_project makes before the lane, which it reports only as unavailable.
+        from codex_agents import project_service
+        from codex_agents.collector_paths import CollectorPaths
+
+        def recorded(label, function):
+            def call(*arguments, **options):
+                try:
+                    return function(*arguments, **options)
+                except BaseException as error:
+                    self.lane_starts.append((label, type(error).__name__, str(error)[:160]))
+                    raise
+            return call
+        for owner, name in ((project_service, '_owned_directory'), (CollectorPaths, 'digest_key')):
+            patcher = mock.patch.object(owner, name, recorded(name, getattr(owner, name)))
+            patcher.start()
+            self.addCleanup(patcher.stop)
         # Where a run stopped, for the failure message; the driver itself keeps only a reason code.
         self.stopped_runs, original_fail = [], project_driver.RunDriver._fail
 
