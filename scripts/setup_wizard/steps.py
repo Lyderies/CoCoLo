@@ -291,3 +291,25 @@ def installer_refusal(raw: str, manual: str) -> tuple[str, bool]:
         if any(fnmatchcase(raw, pattern) for pattern in patterns):
             return message.format(manual=manual), True
     return "The installer refused: run it manually to see why:", False
+
+
+def changed_paths(records: list[str] | None, candidates: list[str]) -> list[str]:
+    """W5.1: the candidates that really changed, in Git's order (a rename's old and new names are both
+    records). `records` is None when Git could not answer: then every candidate counts, so a failure
+    never hides a needed commit."""
+    if not candidates:
+        return []
+    if records is None:
+        return list(candidates)
+    wanted = set(candidates)
+    return [name for name in records if name in wanted]
+
+
+def uncommitted_display(records: list[str] | None, git_safe: bool) -> str:
+    """W5.2: the uncommitted managed paths, one per line, control characters removed; or why they
+    were not checked."""
+    if not git_safe:
+        return "(not checked: the project's Git settings name programs that Git would run)"
+    if records is None:
+        return "(not checked: Git could not read the project)"
+    return "\n".join(plain(name) for name in records)
