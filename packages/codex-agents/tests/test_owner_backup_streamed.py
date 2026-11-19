@@ -228,10 +228,12 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         try:
             with self.assertRaisesRegex(RuntimeError, "link"):
                 self.owner_backup("linked")
+            written = [p.name for p in moved.rglob("*")]  # the real folder, behind the link
         finally:
             backups.unlink()
             os.replace(moved, backups)
-        self.assertNotIn("linked.sqlite3", [p.name for p in moved.rglob("*")] if moved.exists() else [])
+        self.assertNotIn("linked.sqlite3", written)
+        self.assertNotIn(".linked.partial", written)
         self.assert_nothing_left("linked")
 
     def test_F3_3b_a_final_file_that_appears_before_publication_is_kept_and_refused(self):
@@ -275,18 +277,20 @@ class OwnerBackupStreamedTests(unittest.TestCase):
                 self.assert_nothing_left(f"without_{missing}")
 
     def test_F3_3d_a_termination_signal_stops_the_child_and_leaves_nothing(self):
-        children = []
+        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            with self.subTest(signal=number.name):
+                children = []
 
-        def signal_now(process):
-            children.append(process.pid)
-            os.kill(os.getpid(), signal.SIGTERM)
-        before = signal.getsignal(signal.SIGTERM)
-        with child_runs(started=signal_now), self.assertRaisesRegex(RuntimeError, "signal"):
-            self.owner_backup("signalled")
-        with self.assertRaises(ProcessLookupError):
-            os.kill(children[0], 0)  # stopped and reaped
-        self.assertEqual(before, signal.getsignal(signal.SIGTERM))
-        self.assert_nothing_left("signalled")
+                def signal_now(process):
+                    children.append(process.pid)
+                    os.kill(os.getpid(), number)
+                before = signal.getsignal(number)
+                with child_runs(started=signal_now), self.assertRaisesRegex(RuntimeError, "signal"):
+                    self.owner_backup(f"signalled_{number.name}")
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(children[0], 0)  # stopped and reaped
+                self.assertEqual(before, signal.getsignal(number))
+                self.assert_nothing_left(f"signalled_{number.name}")
 
     def test_F3_3e_a_failed_quiesce_reports_the_backup_made_and_the_collector_not_stopped(self):
         report = self.owner_backup("kept")
@@ -343,6 +347,79 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         with mock.patch.object(subprocess, "Popen", crashing), self.assertRaisesRegex(RuntimeError, "boom in the child"):
             self.owner_backup("crashed")
         self.assert_nothing_left("crashed")
+
+
+    # Review 040-f3-owner-backup-2 (F3-11 to F3-14) ---------------------------------------------------
+
+    def test_F3_11_a_signal_right_after_registration_keeps_the_registered_backup(self):
+        real = self.source._register_stored_file
+
+        def register_then_signal(*args, **kwargs):
+            real(*args, **kwargs)
+            os.kill(os.getpid(), signal.SIGTERM)
+        before = signal.getsignal(signal.SIGTERM)
+        with mock.patch.object(self.source, "_register_stored_file", register_then_signal):
+            report = self.owner_backup("committed")
+        self.assertTrue(report["stopped_after_registration"])
+        self.assertEqual(["committed.sqlite3"], self.partition_files())
+        self.assertEqual(report["backup_sha256"], self.registered("committed")["content_digest"])
+        self.assertEqual(before, signal.getsignal(signal.SIGTERM))
+
+    def authorization(self):
+        path = self.source.state.root / "authorization-under-test.json"
+        path.write_bytes(b'{"runtime_digest":"' + b"a" * 64 + b'","runtime_version":"0.8.32","schema_version":1}\n')
+        path.chmod(0o600)
+        return path
+
+    def test_F3_12_a_quiesce_failing_after_the_replacement_restores_the_authorization(self):
+        path = self.authorization()
+        before = path.read_bytes()
+        real_chmod = os.chmod
+
+        def chmod(target, mode, *args, **kwargs):
+            if str(target) == str(path):
+                raise OSError("chmod failed")
+            return real_chmod(target, mode, *args, **kwargs)
+        with mock.patch.object(os, "chmod", chmod), self.assertRaisesRegex(OSError, "chmod failed") as caught:
+            TOOL["_quiesce_collector_authorization"](path)
+        self.assertNotIsInstance(caught.exception, SCRIPT_GLOBALS["QuiesceLeftStopped"])
+        self.assertEqual(before, path.read_bytes())  # as it was: the collector is not left stopped
+
+    def test_F3_12_a_quiesce_that_cannot_be_undone_reports_the_collector_left_stopped(self):
+        report = self.owner_backup("left_stopped")
+
+        def quiesce():
+            raise SCRIPT_GLOBALS["QuiesceLeftStopped"]("restore failed")
+        final, code = TOOL["finish_backup"](report, leave_quiesced=True, quiesce=quiesce)
+        self.assertEqual(3, code)
+        self.assertTrue(final["collector_quiesced"])
+        self.assertIn("restore failed", final["quiesce_error"])
+
+    def test_F3_13_a_collector_that_does_not_restart_is_in_the_one_report(self):
+        report = self.owner_backup("not_restarted")
+
+        def resume():
+            raise RuntimeError("collector would not start")
+        final, code = TOOL["settle_maintenance"]({**report, "collector_quiesced": False}, 0, resume=resume)
+        self.assertEqual(3, code)
+        self.assertTrue(final["ready"])
+        self.assertIn("collector would not start", final["restart_error"])
+        final, code = TOOL["settle_maintenance"]({**report, "collector_quiesced": True}, 0, resume=resume)
+        self.assertEqual((0, None), (code, final.get("restart_error")))  # left stopped as asked: no restart
+
+    def test_F3_14_a_file_cleanup_cannot_remove_is_named(self):
+        real_unlink = os.unlink
+
+        def unlink(name, *args, **kwargs):
+            if str(name).endswith("stuck.partial"):
+                os.stat(name, dir_fd=kwargs.get("dir_fd"), follow_symlinks=False)  # absent: as unlink would say
+                raise PermissionError("cannot remove")
+            return real_unlink(name, *args, **kwargs)
+        with mock.patch.object(self.source, "_register_stored_file",
+                               side_effect=learning_store.LedgerError("registry refused")), \
+                mock.patch.object(os, "unlink", unlink), self.assertRaises(Exception) as caught:
+            self.owner_backup("stuck")
+        self.assertIn("could not be removed", str(caught.exception))
 
 
 if __name__ == "__main__":
