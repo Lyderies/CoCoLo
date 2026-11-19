@@ -58,6 +58,34 @@ class InstallBoundsTests(unittest.TestCase):
             install._write_new(directory, "settings.json", b"abcdef", 0o644)
         self.assertEqual(b"abcdef", (self.base / "settings.json").read_bytes())
 
+    def test_a_failed_write_removes_its_file(self) -> None:
+        """Review 040-s5-wizard-3 (d): no partial temporary is left behind."""
+        directory = os.open(self.base, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, directory)
+
+        def failing_write(fd, data):
+            raise OSError(28, "No space left on device")
+        with mock.patch.object(install.os, "write", failing_write):
+            with self.assertRaises(OSError):
+                install._write_new(directory, "owner.json", b"abcdef", 0o600)
+        self.assertEqual([], list(self.base.iterdir()))
+
+    def test_the_git_tool_unwinds_on_a_termination_signal(self) -> None:
+        """Review 040-s5-wizard-3 (d): SIGTERM and SIGHUP become SystemExit while the tool runs, so
+        commit_paths' cleanup (its private index folder) still runs; the old handlers come back after."""
+        seen = {}
+
+        def record(*args):
+            seen["term"] = signal.getsignal(signal.SIGTERM)
+            seen["hup"] = signal.getsignal(signal.SIGHUP)
+            return "committed"
+        before = signal.getsignal(signal.SIGTERM)
+        with mock.patch.object(install, "commit_paths", record):
+            self.assertEqual(0, install.git_tool(["commit", "/p", "m", "d", ".codex/a"]))
+        self.assertNotIn(seen["term"], (signal.SIG_DFL, signal.SIG_IGN, None))
+        self.assertNotIn(seen["hup"], (signal.SIG_DFL, signal.SIG_IGN, None))
+        self.assertEqual(before, signal.getsignal(signal.SIGTERM))
+
     def test_the_git_root_keeps_its_trailing_spaces(self) -> None:
         project = self.base / "proj "
         project.mkdir()
@@ -106,6 +134,56 @@ class AttestBoundsTests(unittest.TestCase):
             attest.enabled_providers(target)
         routing.write_text('{"providers": {"codex": {"enabled": true}, "claude": {"enabled": true}}}')
         self.assertEqual(["codex", "claude"], attest.enabled_providers(target))
+
+    def test_the_routing_read_never_follows_a_symlinked_folder(self) -> None:
+        """Review 040-s5-wizard-3 (a): a folder on the way swapped for a symlink is refused too."""
+        target = self.base / "project"
+        (target / ".codex").mkdir(parents=True)
+        elsewhere = self.base / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "provider-routing.json").write_text('{"providers": {"claude": {"enabled": true}}}')
+        (target / ".codex" / "orchestration").symlink_to(elsewhere)
+        with self.assertRaises(attest.AttestError):
+            attest.enabled_providers(target)
+
+    def test_a_status_check_stopped_right_after_the_client_starts_stops_its_group(self) -> None:
+        """Review 040-s5-wizard-3 (a): no gap between starting the client and protecting it."""
+        marker = self.base / "client-pid"
+        client = self.base / "codex"
+        client.write_text(f"#!/bin/sh\necho $$ > '{marker}'\nexec /bin/sleep 30\n")
+        client.chmod(0o755)
+        providers = attest.clone_module("providers")
+        scratch = self.base / "scratch"
+        scratch.mkdir(mode=0o700)
+        real_monotonic = time.monotonic
+        stopped = []
+
+        def stopped_once():
+            # The first clock read after the client starts is where a signal can land: raise there.
+            if not stopped:
+                deadline = real_monotonic() + 5
+                while not marker.exists() and real_monotonic() < deadline:
+                    time.sleep(0.05)
+                stopped.append(True)
+                raise SystemExit(143)
+            return real_monotonic()
+        with mock.patch.object(providers, "trusted_search_path", lambda: str(self.base)), \
+                mock.patch.object(providers, "resolve_client", lambda name, untrusted=(): (str(client), "0" * 64)), \
+                mock.patch.object(attest, "make_scratch", lambda prefix, project=None: scratch), \
+                mock.patch.object(attest, "remove_scratch", lambda path: True), \
+                mock.patch.object(attest.time, "monotonic", stopped_once):
+            with self.assertRaises(SystemExit):
+                attest.client_status("codex")
+        pid = int(marker.read_text())
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("the client is still running")
 
     def test_a_stopped_status_check_stops_the_clients_group(self) -> None:
         """The client runs in its own session; when the check is stopped, its whole group goes too."""

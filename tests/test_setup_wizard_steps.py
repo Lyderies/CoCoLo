@@ -524,5 +524,21 @@ class CommitStatusTests(unittest.TestCase):
             self.assertEqual(("failed", ""), steps.commit_status(status))
 
 
+
+class CommitOutcomeAfterReviewTests(unittest.TestCase):
+    """Review 040-s5-wizard-3 (a): a commit made with a stale index stays committed in the summary, with
+    what to do; nothing to commit is not a failure."""
+
+    def test_a_commit_with_a_stale_index_is_reported_as_committed(self) -> None:
+        state, note = steps.commit_outcome("committed_stale", ".codex/a", 0)
+        self.assertEqual("committed_stale", state)
+        self.assertIn("committed", note)
+        self.assertIn("git status", note)
+        self.assertEqual([], steps.left_uncommitted(".codex/a", "committed_stale"))
+
+    def test_the_tools_nothing_is_not_a_failure(self) -> None:
+        self.assertEqual(("nothing", "nothing to commit"), steps.commit_outcome("nothing", "", 0))
+
+
 if __name__ == "__main__":
     unittest.main()

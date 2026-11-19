@@ -343,5 +343,23 @@ class SecondReviewEffectTests(unittest.TestCase):
         self.assertEqual(["Git could not be run"], why)
 
 
+
+class ProfileCleanupReportTests(unittest.TestCase):
+    """Review 040-s5-wizard-3 (a): a partial profile that cannot be removed is reported, never silent."""
+
+    def test_an_unremovable_partial_profile_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(os.path.realpath(directory)) / "codex"
+
+            def failing_fdopen(*args, **kwargs):
+                raise OSError("disk full")
+            with mock.patch.object(effects.os, "fdopen", failing_fdopen), \
+                    mock.patch.object(effects.Path, "unlink", side_effect=PermissionError("no")):
+                with self.assertRaises(effects.EffectRefused) as refused:
+                    effects.create_profile(home, "content")
+            self.assertIn("orchestrator.config.toml", str(refused.exception))
+            self.assertIn("delete it", str(refused.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
