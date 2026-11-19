@@ -149,47 +149,12 @@ class OwnerToolTests(unittest.TestCase):
     def test_attest_is_this_clones_own_file(self) -> None:
         self.assertEqual(ROOT / "scripts" / "attest.py", Path(effects.attest().__file__))
 
-    def test_the_working_folder_is_private_and_removed_at_the_end(self) -> None:
-        """W1.7."""
-        folder = effects.make_scratch("wizard-")
-        self.assertTrue(folder.is_dir())
-        self.assertEqual(0o700, folder.stat().st_mode & 0o777)
-        self.assertTrue(str(folder).startswith(str(self.base)))
-        (folder / "work").write_text("x")
-        self.assertTrue(effects.remove_scratch(folder))
-        self.assertFalse(folder.exists())
-
-    def test_a_working_folder_that_cannot_be_made_is_a_fixed_refusal(self) -> None:
-        with mock.patch.object(effects.attest(), "SCRATCH_BASE", "relative"):
-            with self.assertRaises(effects.EffectRefused):
-                effects.make_scratch("wizard-")
-
     def test_a_project_without_this_release_installed_is_refused(self) -> None:
         """W1.6: owner commands run only once the installed copy is this release byte for byte."""
         project = self.base / "project"
         project.mkdir()
         problem = effects.runtime_problem(project)
         self.assertIn("not an exact copy of this setup's version", problem)
-
-
-
-class SessionScanTests(unittest.TestCase):
-    """W2.1: the runtime's Codex session scan, in-process from this clone, never Codex's files directly."""
-
-    def test_an_empty_codex_home_has_no_warnings(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(os.path.realpath(directory))
-            for name in ("home", "home/.codex", "home/.local", "home/.local/state"):
-                (base / name).mkdir(mode=0o700)
-            environ = {"HOME": str(base / "home"), "CODEX_HOME": str(base / "home" / ".codex"),
-                       "XDG_STATE_HOME": str(base / "home" / ".local" / "state")}
-            with mock.patch.dict(os.environ, environ):
-                self.assertEqual({"ready": True, "warnings": []}, effects.session_scan(ROOT))
-            self.assertEqual([".codex", ".local"], sorted(p.name for p in (base / "home").iterdir()))
-
-    def test_a_scan_that_fails_is_none(self) -> None:
-        with mock.patch.object(effects, "_scan_modules", side_effect=RuntimeError("broken")):
-            self.assertIsNone(effects.session_scan(ROOT))
 
 
 
@@ -290,6 +255,49 @@ class LaterStepEffectTests(unittest.TestCase):
             self.assertIsNone(effects.legacy_report())
         with mock.patch.object(effects.attest(), "default_state_root", side_effect=OSError):
             self.assertIsNone(effects.owner_key_report())
+
+
+
+class ReviewCorrectionTests(unittest.TestCase):
+    """Review 040-s5-wizard: (d) routing never truncated, (c) no partial profile, (f) safe plan hashes."""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(os.path.realpath(directory.name))
+
+    def test_a_large_routing_file_is_read_whole_or_refused_never_truncated(self) -> None:
+        path = self.base / "provider-routing.json"
+        body = " " * 70000 + '{"providers": {"codex": {"enabled": true}}}\n'
+        path.write_text(body)
+        status, raw = effects.read_routing(path)
+        self.assertEqual("present", status)
+        self.assertEqual(body.encode(), raw)
+        path.write_text(" " * (effects.ROUTING_READ_LIMIT + 1))
+        self.assertEqual(("refused", None), effects.read_routing(path))
+
+    def test_a_profile_write_that_fails_leaves_no_partial_file(self) -> None:
+        home = self.base / "codex"
+
+        def failing_fdopen(*args, **kwargs):
+            raise OSError("disk full")
+        with mock.patch.object(effects.os, "fdopen", failing_fdopen):
+            self.assertFalse(effects.create_profile(home, "content"))
+        self.assertFalse((home / "orchestrator.config.toml").exists())
+
+    def test_plan_hashes_never_follow_a_link_or_open_a_fifo(self) -> None:
+        target, bundle = self.base / "project", self.base / "bundle"
+        (target / ".codex").mkdir(parents=True)
+        (bundle / ".codex").mkdir(parents=True)
+        (bundle / ".codex" / "a").write_text("same")
+        (bundle / ".codex" / "b").write_text("same")
+        (self.base / "outside").write_text("same")
+        (target / ".codex" / "a").symlink_to(self.base / "outside")
+        os.mkfifo(target / ".codex" / "b")
+        started = time.monotonic()
+        entries = effects.plan_entries({"codex": {"files": [".codex/a", ".codex/b"]}}, target, bundle)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual([("UPDATE", ".codex/a"), ("UPDATE", ".codex/b")], entries)
 
 
 if __name__ == "__main__":

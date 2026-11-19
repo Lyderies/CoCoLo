@@ -194,6 +194,37 @@ class RunnerTests(unittest.TestCase):
                 self.assertTrue(all(len(frame) < max(columns, 1) for frame in self.frames(output)), columns)
 
 
+    def test_helper_processes_are_stopped_with_their_whole_group(self):
+        """Review 040-s5-wizard (c): a helper the wizard waits on (no spinner) runs in its own group,
+        and the whole group is stopped when the wizard stops."""
+        marker = self.logdir / "grandchild"
+        code = ("import subprocess, time\n"
+                f"child = subprocess.Popen(['sleep', '30']); open({str(marker)!r}, 'w').write(str(child.pid))\n"
+                "time.sleep(30)\n")
+        term = terminal.Terminal(out=io.StringIO(), read=lambda count, timeout: b"", colours=terminal.NO_COLOURS,
+                                 size=lambda: (80, 24))
+
+        def stop_soon(signum, frame):
+            raise terminal.Stop(130)
+        previous = signal.signal(signal.SIGALRM, stop_soon)
+        self.addCleanup(signal.signal, signal.SIGALRM, previous)
+        signal.setitimer(signal.ITIMER_REAL, 1.5)
+        with self.assertRaises(terminal.Stop):
+            term.call(python(code))
+        grandchild = int(marker.read_text())
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(grandchild, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("the helper's child is still running")
+        done = term.call(python("import sys; print('out'); sys.exit(3)"))
+        self.assertEqual((3, b"out\n"), (done.returncode, done.stdout))
+
+
 class WidthTests(unittest.TestCase):
     """S3-P9a and S3-P5 on terminal_width itself: (COLUMNS, the terminal's size, the terminfo answer)."""
 

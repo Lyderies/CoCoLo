@@ -254,5 +254,20 @@ class LineEditorTests(unittest.TestCase):
         self.assertEqual("ab", self.edit("ab\x04\n")[0])  # Ctrl-D in a line does nothing.
 
 
+
+class CompletionSafetyTests(unittest.TestCase):
+    """Review 040-s5-wizard (b): a file name with a control character is never offered by Tab."""
+
+    def test_names_with_control_characters_are_not_completed(self) -> None:
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            base = os.path.realpath(directory)
+            open(os.path.join(base, "evil\x1b[2Jname"), "w").close()
+            open(os.path.join(base, "fine"), "w").close()
+            self.assertEqual([os.path.join(base, "fine")], terminal.complete_path(os.path.join(base, ""), home="/h"))
+            self.assertEqual([], terminal.complete_path(os.path.join(base, "ev"), home="/h"))
+
+
 if __name__ == "__main__":
     unittest.main()
