@@ -62,19 +62,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
-      - name: Integration tests, one of four shards
+      - name: Integration tests, one of six shards
         # bash, not the default shell: only `shell: bash` adds pipefail, so the tee keeps the exit status.
         # One runner at two jobs per core took 8-9 minutes, and its tests that start real CLI
-        # processes ran into their time bounds under that load (PLAN T4). Four shards balanced by
-        # recorded time, one job per core: less work and less load on each.
+        # processes ran into their time bounds under that load (PLAN T4). Six shards balanced by
+        # recorded time, at half the cores: each test runs several services and children.
         shell: bash
-        run: python scripts/parallel_tests.py --stage integration --shard "${{ matrix.shard }}/4" --jobs "$(getconf _NPROCESSORS_ONLN)" | tee "$RUNNER_TEMP/integration.txt"
+        run: python scripts/parallel_tests.py --stage integration --shard "${{ matrix.shard }}/6" --jobs "$(( ($(getconf _NPROCESSORS_ONLN) + 1) / 2 ))" | tee "$RUNNER_TEMP/integration.txt"
       - name: Keep the failed modules' work
         # A failure seen only on these runners can be read from the kept folders (PLAN T4c). Only
         # synthetic fixtures and test keys are in them.
