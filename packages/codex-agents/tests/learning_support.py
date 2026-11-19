@@ -532,6 +532,10 @@ def child(directory, name):
             deadline = time.monotonic() + 60
             while not os.path.exists(frame["wait_for"]) and time.monotonic() < deadline:
                 time.sleep(0.02)
+            if not os.path.exists(frame["wait_for"]):
+                # Never carry on past a gate the test did not open: the order it guards is not met.
+                sys.stderr.write("fake client: wait_for gate never opened\\n")
+                sys.exit(97)
             continue
         print(frame["raw"] if "raw" in frame else json.dumps(frame), flush=True)
     last = os.path.join(directory, name + "-last-message.json")
