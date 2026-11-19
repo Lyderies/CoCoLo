@@ -21,11 +21,32 @@ REGISTERED = {"FAKE_REGISTER": '{"ready": true, "state_moved": null}'}
 
 class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
     def installed(self) -> Path:
-        """A project installed and committed by an ordinary setup run, as the update starts from."""
+        """A project installed and committed by an ordinary setup run, as the update starts from. Codex
+        children are off, so the commands step is skipped: with Codex on it fails here (the test's HOME is
+        not the account's home, so no rule can be installed), and an update reports a failed step (exit 1)."""
         project, checks = self.make_project()
-        self.drive_to_commit_menu(project, checks)
+        self.start(project)
+        self.expect("Everything looks good")
         self.send("\r")
-        self.finish_after_install()
+        self.choose_project()
+        self.expect("Path to operational-checks.json")
+        self.send(f"{checks}\r")
+        self.expect("fresh install is possible")
+        self.send("\r")
+        self.expect("Codex children")
+        self.send(" \r")  # Codex children off
+        for wait in ("Looks right", "Install now", "Commit now", "Continue"):
+            self.expect(wait)
+            self.send("\r")
+        self.expect("Register now")
+        self.send("\x1b[B\r")
+        self.expect("Start the attestation")
+        self.send("\x1b[B\r")
+        self.expect("Not chosen")
+        self.send("\r")
+        self.expect("remove --target")
+        self.send("\r")
+        self.assertEqual(0, self.finish())
         self._reap()
         return project
 
@@ -125,9 +146,9 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
 
     def answers_for(self, project: Path, checks: Path, **changes) -> Path:
         answers = {"project": str(project), "operational_checks": str(checks),
-                   "providers": {"codex": "on", "claude": "on", "claude_models": "claude-sonnet-5-5",
+                   "providers": {"codex": "off", "claude": "on", "claude_models": "claude-sonnet-5-5",
                                  "bridge": "off"},
-                   "commit": True, "commands_rule": False}
+                   "commit": True, "commands_rule": False, "move_records": False, "upgrade_records": False}
         for key, value in changes.items():
             if value is None:
                 answers.pop(key, None)
@@ -166,7 +187,9 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
 
     def test_U3_a_missing_unknown_or_invalid_answer_is_refused_naming_it_before_anything_changes(self):
         project, checks = self.make_project()
-        cases = {"commit": {"commit": None}, "colour": {"colour": "blue"},
+        cases = {"commit": {"commit": None}, "colour": {"colour": "blue"}, "mode": {"mode": "install"},
+                 "move_records": {"move_records": None}, "upgrade_records": {"upgrade_records": None},
+                 "operational_checks": {"operational_checks": ""},
                  "providers.codex": {"providers": {"codex": "maybe", "claude": "on",
                                                    "claude_models": "claude-sonnet-5-5", "bridge": "off"}},
                  "commands_rule": {"commands_rule": "yes"}}
@@ -178,17 +201,79 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
                 self.assertFalse((project / ".codex").exists())
                 self.assertEqual(0, self.attested())
 
-    def test_U3_records_that_need_a_choice_follow_the_answer_and_stop_without_one(self):
-        project, checks = self.make_project()
+    def test_U3_records_that_need_a_choice_follow_the_answer(self):
         upgrade = {"FAKE_REGISTER": "", "FAKE_UPGRADE": '{"ready": true, "state_moved": null}'}
-        code, screen = self.scripted(self.answers_for(project, checks), upgrade)
+        project, checks = self.make_project()
+        code, screen = self.scripted(self.answers_for(project, checks), upgrade)  # upgrade_records false
         self.assertEqual(1, code)
-        self.assertIn("answers file: upgrade_records", screen)
+        self.assertNotIn("--upgrade-ledger", (self.base / "register.log").read_text())
+        self.assertEqual(0, self.attested())  # stopped at the collector step: nothing after it ran
         self._reap()
         project2, checks2 = self.make_project("second")
         code, screen = self.scripted(self.answers_for(project2, checks2, upgrade_records=True), upgrade)
         self.assertEqual(0, code, screen[-1500:])
         self.assertIn("--upgrade-ledger", (self.base / "register.log").read_text())
+
+
+    # Review 040-s1-update ---------------------------------------------------------------------------
+
+    def test_U6_the_update_stops_at_the_first_failed_step_and_runs_nothing_after_it(self):
+        project = self.installed()
+        self.make_newer(project)
+        commits = self.commit_count(project)
+        code, screen = self.update(project, {"FAKE_FAIL": "1"})  # the install's apply fails
+        self.assertEqual(1, code)
+        self.assertIn("The update stopped", screen)
+        self.assertEqual(0, self.attested())  # no billing, profile or commands after the failure
+        self.assertNotRegex(screen, r"OK\s+\d\. Collector:")
+        self.assertEqual(commits, self.commit_count(project))
+
+    def make_newer(self, project: Path) -> None:
+        """Leave the project needing an update: one managed file differs, committed."""
+        import subprocess
+        changed = project / ".agents" / "skills" / "orchestrate-agents" / "SKILL.md"
+        changed.write_text(changed.read_text() + "\nOlder copy.\n")
+        env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null", "GIT_AUTHOR_NAME": "t",
+               "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+               "PATH": "/usr/bin:/bin"}
+        subprocess.run(["git", "-C", str(project), "commit", "-qam", "older"], check=True, env=env)
+
+    def test_U6_a_step_marked_failed_ends_the_update_with_exit_1(self):
+        project, checks = self.make_project()  # in a temporary folder: the commands step fails
+        code, screen = self.scripted(self.answers_for(project, checks, providers={
+            "codex": "on", "claude": "on", "claude_models": "claude-sonnet-5-5", "bridge": "off"}))
+        self.assertEqual(1, code)
+        self.assertRegex(screen, r"FAIL\s+\d\. Commands: project in a temporary folder")
+
+    def test_U2_update_from_the_menu_after_continuing_past_a_failed_check_stops(self):
+        project = self.installed()
+        (self.fakes / "claude").write_text(
+            '#!/bin/sh\necho \'{"loggedIn": false, "subscriptionType": "max", "authMethod": "x"}\'\n')
+        manifest = project / ".codex" / "orchestration" / "install-manifest.json"
+        before = manifest.read_bytes()
+        self.attest_count = self.base / "attest.count"
+        self.start(project, {**REGISTERED, "FAKE_ATTEST": str(self.attest_count)})
+        self.expect("Continue anyway")
+        self.send("\x1b[B\r")  # Continue anyway
+        self.choose_project()
+        self.expect("Update this project")
+        self.send("\r")
+        code = self.finish(timeout=60)
+        screen = self.plain(self.transcript)
+        self.assertEqual(1, code)
+        self.assertIn("every check passed", screen)
+        self.assertEqual(before, manifest.read_bytes())
+        self.assertEqual(0, self.attested())
+
+    def test_U6_a_refused_project_is_not_remembered(self):
+        project = self.installed()
+        listed = self.home / ".local" / "state" / "codex-agents" / "installer" / "setup-projects"
+        listed.write_text("")
+        changed = project / ".codex" / "orchestration" / "operational-checks.json"
+        changed.write_text(changed.read_text() + "\n")
+        code, _ = self.update(project)
+        self.assertEqual(1, code)
+        self.assertEqual("", listed.read_text())
 
 
 def load_tests(loader, tests, pattern):

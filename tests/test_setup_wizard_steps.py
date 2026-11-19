@@ -542,3 +542,16 @@ class CommitOutcomeAfterReviewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RoutingBridgeTests(unittest.TestCase):
+    """Review 040-s1-update: bridging is read from the routing JSON, whatever its whitespace."""
+
+    def test_bridging_is_read_as_json(self):
+        for raw, expected in ((b'{"codex_primary_may_bridge_to_claude": true}', True),
+                              (b'{"codex_primary_may_bridge_to_claude":\n\ttrue}', True),
+                              (b'{"codex_primary_may_bridge_to_claude": false}', False),
+                              (b'{"note": "\\"codex_primary_may_bridge_to_claude\\": true"}', False),
+                              (b'not json', False)):
+            with self.subTest(raw=raw):
+                self.assertIs(expected, steps.routing_bridges(raw))
