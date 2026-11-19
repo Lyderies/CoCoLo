@@ -245,13 +245,31 @@ class ContractTests(unittest.TestCase):
                     validate_result(candidate, assignment=self.assignment())
                 self.assertEqual(reason, captured.exception.reason_code)
 
-        for field in ("type", "outcome"):
+        # RV1 (PLAN-0.4.0): each evidence rule has its own content-free reason code.
+        for field, value, reason in (
+            ("type", ["SECRET"], "evidence_unsupported_type"),
+            ("outcome", ["SECRET"], "evidence_unsupported_outcome"),
+            ("criterion_id", "", "evidence_empty_criterion"),
+            ("reference", "", "evidence_empty_reference"),
+            ("details", ["SECRET"], "evidence_details_not_text"),
+        ):
             candidate = json.loads(json.dumps(base))
-            candidate["evidence"][0][field] = ["SECRET"]
+            candidate["evidence"][0][field] = value
             with self.subTest(field=field):
                 with self.assertRaises(ResultContractError) as captured:
                     validate_result(candidate, assignment=self.assignment())
-                self.assertEqual("invalid_evidence", captured.exception.reason_code)
+                self.assertEqual(reason, captured.exception.reason_code)
+                self.assertNotIn("SECRET", captured.exception.reason_code)
+        candidate = json.loads(json.dumps(base))
+        del candidate["evidence"][0]["details"]
+        with self.assertRaises(ResultContractError) as captured:
+            validate_result(candidate, assignment=self.assignment())
+        self.assertEqual("evidence_missing_fields", captured.exception.reason_code)
+        candidate = json.loads(json.dumps(base))
+        candidate["evidence"][0]["SECRET-FIELD"] = "x"
+        with self.assertRaises(ResultContractError) as captured:
+            validate_result(candidate, assignment=self.assignment())
+        self.assertEqual("evidence_unknown_fields", captured.exception.reason_code)
 
     def test_cli_maps_malformed_and_nonfinite_json_to_invalid_shape(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as temporary:

@@ -97,6 +97,17 @@ class ResultDiagnosticTests(unittest.TestCase):
             ),
             "unknown_fields": ({**valid, "CANARY-FIELD": "CANARY-REJECTED"}, assignment()),
             "inconsistent_axes": ({**valid, "execution_state": "failed"}, assignment()),
+            # RV1: each evidence rule's own code, all content-free.
+            "evidence_missing_fields": ({**valid, "evidence": [{k: v for k, v in evidence.items() if k != "details"}]},
+                                        assignment()),
+            "evidence_unknown_fields": ({**valid, "evidence": [{**evidence, "CANARY-FIELD": "x"}]}, assignment()),
+            "evidence_unsupported_type": ({**valid, "evidence": [{**evidence, "type": "CANARY-REJECTED"}]}, assignment()),
+            "evidence_empty_criterion": ({**valid, "evidence": [{**evidence, "criterion_id": ""}]}, assignment()),
+            "evidence_empty_reference": ({**valid, "evidence": [{**evidence, "reference": ""}]}, assignment()),
+            "evidence_unsupported_outcome": ({**valid, "evidence": [{**evidence, "outcome": "CANARY-REJECTED"}]},
+                                             assignment()),
+            "evidence_details_not_text": ({**valid, "evidence": [{**evidence, "details": ["CANARY-REJECTED"]}]},
+                                          assignment()),
         }
         self.assertEqual(RESULT_VALIDATION_REASON_CODES, set(cases))
         for reason, (invalid, assigned) in cases.items():
