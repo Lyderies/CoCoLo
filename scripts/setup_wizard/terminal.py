@@ -14,6 +14,17 @@ from . import steps
 STEP_NAMES = ("Checks", "Project", "Providers", "Install", "Collector", "Billing", "Profile", "Commands", "Done")
 COLOUR_NAMES = ("reset", "bold", "dim", "red", "green", "yellow", "blue", "magenta", "cyan")
 NO_COLOURS = dict.fromkeys(COLOUR_NAMES, "")
+# Never on screen: C0 controls, DEL and C1 controls (which UTF-8 terminals also obey). A body keeps its
+# line breaks (review 040-s5-wizard-2 d).
+_UNSHOWN = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_UNSHOWN_IN_BODY = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]")
+
+
+def shown(text: str) -> str:
+    """Text safe to put on the screen: every control character removed."""
+    return _UNSHOWN.sub("", text)
+
+
 _MARKS = {"ok": ("OK  ", "green"), "fail": ("FAIL", "red"), "warn": ("WARN", "yellow"), "skip": ("SKIP", "yellow")}
 
 
@@ -172,20 +183,24 @@ class Terminal:
         self.write("\033[?25h")
 
     def body(self, text: str) -> None:
+        text = _UNSHOWN_IN_BODY.sub("", text)
         self.body_text = f"{self.body_text}\n\n{text}" if self.body_text else text
 
     def list_add(self, kind: str, text: str) -> None:
         mark, colour = _MARKS.get(kind, ("  - ", "cyan"))
-        self.items += f"  {self.c[colour]}{self.c['bold']}{mark}{self.c['reset']} {text}\n"
+        self.items += f"  {self.c[colour]}{self.c['bold']}{mark}{self.c['reset']} {shown(text)}\n"
 
     def list_sub(self, text: str) -> None:
-        self.items += f"       {self.c['dim']}{text}{self.c['reset']}\n"
+        self.items += f"       {self.c['dim']}{shown(text)}{self.c['reset']}\n"
 
     def list_cmd(self, text: str) -> None:
-        self.items += f"    {text}\n"
+        self.items += f"    {shown(text)}\n"
 
     def list_plain(self, text: str) -> None:
-        self.items += f"  {text}\n"
+        self.items += f"  {shown(text)}\n"
+
+    def list_heading(self, text: str) -> None:
+        self.items += f"  {self.c['bold']}{shown(text)}{self.c['reset']}\n"
 
     def screen_reset(self) -> None:
         self.body_text = ""
@@ -298,6 +313,7 @@ class Terminal:
 
     def menu(self, default: int, items: list[str]) -> int:
         selected, count = default, len(items)
+        items = [shown(item) for item in items]
         self.hide_cursor()
         while True:
             self.render()
@@ -394,9 +410,9 @@ class Terminal:
             self.render()
             self.show_cursor()
             if default:
-                self.write(f"  {self.c['bold']}{prompt}{self.c['reset']} [{default}]\n  > ")
+                self.write(f"  {self.c['bold']}{shown(prompt)}{self.c['reset']} [{shown(default)}]\n  > ")
             else:
-                self.write(f"  {self.c['bold']}{prompt}{self.c['reset']} (type or paste the full path)\n  > ")
+                self.write(f"  {self.c['bold']}{shown(prompt)}{self.c['reset']} (type or paste the full path)\n  > ")
             typed = self._line(lambda text: complete_path(text, home))
             if typed is None:
                 raise Stop(1, "Input closed; stopping.", stderr=True)
@@ -412,7 +428,7 @@ class Terminal:
         self.hide_cursor()
         while True:
             self.term_size()
-            lines = fold(text, self.cols - 6).split("\n")
+            lines = fold(_UNSHOWN_IN_BODY.sub("", text), self.cols - 6).split("\n")
             count = len(lines)
             page = max(self.lines - 9, 3)
             offset = max(min(offset, count - page), 0)
@@ -451,6 +467,7 @@ class Terminal:
 
     def toggles(self, state: str, items: list[str]) -> str:
         selected, count = 0, len(items)
+        items = [shown(item) for item in items]
         self.hide_cursor()
         while True:
             self.render()
@@ -547,17 +564,25 @@ class Terminal:
         return subprocess.CompletedProcess(argv, status, stdout, stderr)
 
     def stop_active(self) -> None:
-        """Stop the running command's whole process group, then reap it."""
-        process, self.active = getattr(self, "active", None), None
+        """Stop the running command's whole process group, then reap it. Termination signals wait until
+        it is done, and the process is kept until it is reaped, so a second signal cannot cut the stop
+        short (review 040-s5-wizard-2 a)."""
+        process = getattr(self, "active", None)
         if process is None:
             return
-        for sig, pause in ((signal.SIGTERM, 0.3), (signal.SIGKILL, 0)):
-            try:
-                os.killpg(process.pid, sig)
-            except (ProcessLookupError, PermissionError):
-                pass
-            time.sleep(pause)
-        process.wait()
+        held = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGALRM}
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, held)
+        try:
+            for sig, pause in ((signal.SIGTERM, 0.3), (signal.SIGKILL, 0)):
+                try:
+                    os.killpg(process.pid, sig)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                time.sleep(pause)
+            process.wait()
+            self.active = None
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
     def log_step(self, label: str, status: int, why: str = "") -> None:
         """One line for the ? screen: what ran and how it ended, and a refusal's fixed reason."""

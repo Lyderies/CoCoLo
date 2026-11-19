@@ -100,7 +100,7 @@ class AttestBoundsTests(unittest.TestCase):
         """The client runs in its own session; when the check is stopped, its whole group goes too."""
         marker = self.base / "client-pid"
         client = self.base / "codex"
-        client.write_text(f"#!/bin/sh\necho $$ > '{marker}'\nexec sleep 30\n")
+        client.write_text(f"#!/bin/sh\necho $$ > '{marker}'\nexec /bin/sleep 30\n")  # clients get no PATH
         client.chmod(0o755)
         providers = attest.clone_module("providers")
         scratch = self.base / "scratch"

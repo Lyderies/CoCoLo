@@ -284,7 +284,9 @@ class DisplaySafetyTests(unittest.TestCase):
         term.list_heading("Heading\x1b")
         term.menu(0, ["item\x1b[31m"])
         term.ask_text("Prompt\x1b", "/def\x1b[2Jault", home="/h")
-        text = out.getvalue().replace("\033[H\033[2J", "").replace("\033[?25l", "").replace("\033[?25h", "")
+        # The terminal layer's own codes and line endings, then nothing from the content may remain.
+        text = (out.getvalue().replace("\033[H\033[2J", "").replace("\033[?25l", "").replace("\033[?25h", "")
+                .replace("\r\n", "\n"))
         self.assertNotRegex(text, "[\x00-\x09\x0b-\x1f\x7f-\x9f]")
         for shown in ("one", "line]0;title end", "path[2J31m", "sub", "item[31m", "/def[2Jault", "Heading"):
             self.assertIn(shown, text)

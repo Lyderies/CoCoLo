@@ -155,7 +155,7 @@ def _git(target: Path, *args: str) -> str:
     result = _git_run(target, *args)
     if result.returncode != 0:
         raise InstallRefused(f"target is not a usable Git working tree: {target}")
-    return result.stdout.strip()
+    return result.stdout.rstrip("\n")  # Only the line ending: a path may end in spaces.
 
 
 def _require_plain_repository(target: Path) -> None:
@@ -174,6 +174,19 @@ def _records(output: bytes) -> list[str]:
 def _blob_id(data: bytes, object_format: str) -> str:
     digest = hashlib.sha256 if object_format == "sha256" else hashlib.sha1
     return digest(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+WORKTREE_READ_LIMIT = 64 * 1024 * 1024  # A managed file larger than this is refused, not read whole.
+
+
+def _write_all(handle: int, content: bytes) -> None:
+    """Every byte, or OSError: os.write may write fewer than it was given."""
+    view = memoryview(content)
+    while view:
+        written = os.write(handle, view)
+        if written <= 0:
+            raise OSError("no progress writing a file")
+        view = view[written:]
 
 
 def _worktree_entry(root_fd: int, relative: str) -> tuple[str, bytes] | None:
@@ -203,8 +216,15 @@ def _worktree_entry(root_fd: int, relative: str) -> tuple[str, bytes] | None:
             return "", b""
         handle = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
         try:
-            chunks = []
+            # Checked on the opened file and read within a bound, so a file swapped in after the
+            # check, or one that keeps growing, cannot hang or exhaust setup (review 040-s5-wizard-2 c).
+            if not stat.S_ISREG(os.fstat(handle).st_mode):
+                return "", b""
+            chunks, size = [], 0
             while chunk := os.read(handle, 1 << 20):
+                size += len(chunk)
+                if size > WORKTREE_READ_LIMIT:
+                    raise InstallRefused(f"{relative} is larger than setup reads (64 MiB), so it was not checked")
                 chunks.append(chunk)
         finally:
             os.close(handle)
@@ -637,7 +657,7 @@ class _Project:
 def _write_new(directory: int, name: str, content: bytes, mode: int) -> None:
     handle = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=directory)
     try:
-        os.write(handle, content)
+        _write_all(handle, content)
         os.fchmod(handle, mode)
         os.fsync(handle)
     finally:

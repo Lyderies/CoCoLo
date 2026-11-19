@@ -162,9 +162,15 @@ class WizardSourceTests(unittest.TestCase):
         self.assertIn('GIT_ENV = {"xcrun_nocache": "1", "GIT_ALLOW_PROTOCOL": "", "GIT_NO_LAZY_FETCH": "1"}',
                       SOURCES["flow.py"])
         # No porcelain: status, add and commit go through the installer's plumbing.
-        for match in re.finditer(r'self\.g\([^)]*\)', ALL):
-            self.assertIsNone(re.search(r'"(status|add|commit|diff)"', match.group(0)), match.group(0))
-        self.assertIn("install.commit_paths(", SOURCES["effects.py"])
+        # No porcelain: no self.g call names status, add, commit or diff (the syntax tree, so nested
+        # parentheses or quotes cannot hide one); commits go through the installer's git tool.
+        for name, source in SOURCES.items():
+            for node in ast.walk(ast.parse(source)):
+                if isinstance(node, ast.Call) and ast.get_source_segment(source, node.func) == "self.g":
+                    words = {arg.value for arg in node.args if isinstance(arg, ast.Constant)}
+                    self.assertFalse(words & {"status", "add", "commit", "diff"}, (name, words))
+        self.assertIn("sys.exit(module.git_tool(sys.argv[2:]))", SOURCES["effects.py"])
+        self.assertIn('effects.owner_git_argv(self.py, "commit"', SOURCES["flow.py"])
 
     def test_every_git_call_with_paths_is_literal(self) -> None:
         """Replaces SetupScriptTests.test_every_git_call_with_paths_is_literal (W5.2)."""

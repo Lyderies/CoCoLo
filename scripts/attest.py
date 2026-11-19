@@ -525,9 +525,20 @@ def copy_input(source: Path, destination: Path, limit: int = 1024 * 1024) -> Non
     except OSError as exc:
         raise AttestError("the private copy could not be created") from exc
     try:
-        os.write(out, data)
-    finally:
+        view = memoryview(data)
+        while view:  # os.write may write fewer bytes than it was given (review 040-s5-wizard-2 c)
+            written = os.write(out, view)
+            if written <= 0:
+                raise AttestError("the private copy could not be written")
+            view = view[written:]
+    except BaseException:
         os.close(out)
+        out = -1
+        Path(destination).unlink(missing_ok=True)
+        raise
+    finally:
+        if out >= 0:
+            os.close(out)
 
 
 # --- provider sign-in checks ------------------------------------------------------------
@@ -576,6 +587,11 @@ def client_status(name: str, project: Path | None = None) -> tuple[int, bytes]:
         except (providers.BoundedReadError, subprocess.TimeoutExpired, OSError):
             providers.stop_process_group(process)
             return CLIENT_FAILED, b""
+        except BaseException:
+            # Stopped from outside (a signal turned into SystemExit): the client runs in a session of
+            # its own, so its group is stopped here too (review 040-s5-wizard-2 a).
+            providers.stop_process_group(process)
+            raise
         finally:
             process.stdout.close()
     finally:
@@ -704,7 +720,11 @@ def owner_tool(argv: list[str]) -> int:
                 raise AttestError("the owner key record could not be read") from exc
             return 0
         if len(argv) in (2, 3) and argv[0] == "client-status" and argv[1] in CLIENT_COMMANDS:
-            code, output = client_status(argv[1], Path(argv[2]) if len(argv) == 3 else None)
+            previous = _install_handlers()  # SIGTERM or SIGHUP unwinds, stopping the client's group.
+            try:
+                code, output = client_status(argv[1], Path(argv[2]) if len(argv) == 3 else None)
+            finally:
+                _restore_handlers(previous)
             if argv[1] == "claude":
                 sys.stdout.buffer.write(output)
                 sys.stdout.flush()
@@ -900,12 +920,34 @@ REASON_HELP = {
 }
 
 
+ROUTING_READ_LIMIT = 1024 * 1024  # A routing file is read whole up to this; a larger one is refused.
+
+
 def enabled_providers(target: Path) -> list[str]:
+    """The providers the project's routing enables: only Codex without a routing file. The file is read
+    without following a link, only as a regular file and whole up to ROUTING_READ_LIMIT; anything else
+    is refused (review 040-s5-wizard-2 c)."""
     path = target / ROUTING_RELATIVE
-    if not path.is_file():
+    if not os.path.lexists(path):
         return ["codex"]
     try:
-        providers = json.loads(path.read_text())["providers"]
+        handle = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        raise AttestError("provider-routing.json is unreadable") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(handle).st_mode):
+            raise AttestError("provider-routing.json is unreadable")
+        data = b""
+        while len(data) <= ROUTING_READ_LIMIT and (chunk := os.read(handle, 65536)):
+            data += chunk
+    except OSError as exc:
+        raise AttestError("provider-routing.json is unreadable") from exc
+    finally:
+        os.close(handle)
+    if len(data) > ROUTING_READ_LIMIT:
+        raise AttestError("provider-routing.json is larger than 1 MiB")
+    try:
+        providers = json.loads(data)["providers"]
         return [name for name in ("codex", "claude") if providers.get(name, {}).get("enabled") is True]
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise AttestError("provider-routing.json is unreadable") from exc

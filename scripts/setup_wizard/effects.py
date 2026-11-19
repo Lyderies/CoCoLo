@@ -177,21 +177,39 @@ def git_changes(project, paths: list[str], why: list | None = None) -> list[str]
             why.append(str(exc))
         return None
     except (OSError, subprocess.SubprocessError, ValueError):
+        if why is not None:
+            why.append("Git could not be run")
         return None
 
 
-def git_commit(project, message: str, detail: str, paths: list[str]) -> tuple[str, str]:
+# setup.sh's owner_git loader, word for word: install.py loaded by path, its git_tool run.
+OWNER_GIT = ("import importlib.util, sys\n"
+             "spec = importlib.util.spec_from_file_location(\"agent_orchestration_install\", sys.argv[1])\n"
+             "module = importlib.util.module_from_spec(spec)\n"
+             "spec.loader.exec_module(module)\n"
+             "sys.exit(module.git_tool(sys.argv[2:]))")
+PYF = ["-I", "-B", "-S", "-X", "pycache_prefix=/dev/null"]
+
+
+def owner_git_argv(python: str, *args: str) -> list[str]:
+    """setup.sh's owner_git: the installer's plumbing-only git tool, in the trusted Python, isolated.
+    `commit PROJECT MESSAGE DETAIL PATH...` exits 0 committed, 3 nothing to commit, 2 refused (the
+    reason on standard error), 1 failed."""
+    return [python, *PYF, "-c", OWNER_GIT, str(CLONE / "scripts" / "install.py"), *args]
+
+
+def git_commit(project, message: str, detail: str, paths: list[str], python: str | None = None) -> tuple[str, str]:
     """W5.3-W5.5: commit exactly `paths` with the installer's plumbing (no hook, filter or signing
-    program runs): ("committed", ""), ("nothing", "") when no path changed (W5.4: not a failure), or
-    ("failed", the installer's fixed refusal, or "")."""
-    install = installer()
-    try:
-        result = install.commit_paths(Path(project), message, detail, list(paths))
-    except install.InstallRefused as exc:
-        return "failed", str(exc)
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return "failed", ""
-    return (result, "") if result in ("committed", "nothing") else ("failed", "")
+    program runs), as a process (the wizard runs the same argv under its runner): ("committed", ""),
+    ("nothing", "") when no path changed (W5.4: not a failure), or ("failed", the refusal, or "")."""
+    import sys
+    done = subprocess.run(owner_git_argv(python or sys.executable, "commit", str(project), message, detail, *paths),
+                          capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    if done.returncode == 0:
+        return "committed", ""
+    if done.returncode == 3:
+        return "nothing", ""
+    return "failed", done.stderr.strip() if done.returncode == 2 else ""
 
 
 _ATTEST = None
@@ -292,7 +310,7 @@ def plan_entries(reply, target, bundle) -> list[tuple[str, str | None]]:
             out.append(("UNSAFE", None))
         elif not os.path.lexists(target / rel):
             out.append(("ADD", rel))
-        elif _digest(target / rel) == _digest(bundle / rel):
+        elif (found := _digest(target / rel)) is not None and found == _digest(bundle / rel):
             out.append(("KEEP", rel))
         else:
             out.append(("UPDATE", rel))
@@ -461,12 +479,14 @@ def project_in_temp(project) -> bool:
 
 def create_profile(folder, content: str) -> bool:
     """W8.1, step 7: create `orchestrator.config.toml` in the Codex home, new only (an existing file is
-    never overwritten), mode 0600, its folder made owner-only when it is new. All or nothing: a write
-    that fails part-way removes the new file (review 040-s5-wizard c)."""
+    never overwritten), mode 0600; every folder it creates is owner-only. All or nothing: a write that
+    fails or is interrupted removes the new file (review 040-s5-wizard c, 040-s5-wizard-2 a)."""
     folder = Path(folder)
     path = folder / "orchestrator.config.toml"
     try:
-        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for missing in reversed([part for part in (folder, *folder.parents) if not os.path.lexists(part)]):
+            missing.mkdir(mode=0o700)
+            os.chmod(missing, 0o700)
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except OSError:
         return False
@@ -476,10 +496,15 @@ def create_profile(folder, content: str) -> bool:
             handle.flush()
             os.fchmod(handle.fileno(), 0o600)
         return True
-    except OSError:
+    except BaseException as exc:
         try:
             os.close(descriptor)
         except OSError:
             pass
-        path.unlink(missing_ok=True)
-        return False
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if isinstance(exc, OSError):
+            return False
+        raise

@@ -928,11 +928,10 @@ class Wizard:
             self.failure_detail("Not committed", self.git_helpers_text(helpers) + " Commit the files yourself, then run "
                                 "./setup.sh again and choose Verify.")
             return False
-        self.last_reply, self.last_fixed = None, False  # As setup.sh's quiet run: no earlier reply is shown.
-        state, _ = effects.git_commit(project, COMMIT_MSG_1, COMMIT_MSG_2, self.commit_paths)
-        self.last_rc = 0 if state == "committed" else 1
-        self.t.log_step("Committing", self.last_rc)
-        if state == "committed":
+        # As setup.sh: the installer's git tool, under the runner, quiet (Git's output can name you).
+        status = self.run("Committing", effects.owner_git_argv(self.py, "commit", project, COMMIT_MSG_1, COMMIT_MSG_2,
+                                                               *self.commit_paths), quiet=True)
+        if status == 0:
             self.commit_state = "committed"
             return True
         self.failure_detail("The commit did not go through", steps.COMMIT_REFUSED_HINT)
@@ -1517,9 +1516,8 @@ class Wizard:
                     t.list_sub(line)
         network = steps.profile_network_on(effects.read_owned_file(self.codex_profile_path()))
         command, why = steps.codex_hint(self.profile_wanted, self.profile_ready, network)
-        c = t.c
         t.list_plain("")
-        t.list_plain(f"{c['bold']}How to use it{c['reset']}")
+        t.list_heading("How to use it")
         t.list_plain(" - In Claude Code, open the project and use the agent-orchestration skill.")
         t.list_plain(f" - In Codex, start a session in the project's root folder with: {command}")
         t.list_sub(why)
