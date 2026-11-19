@@ -72,7 +72,32 @@ jobs:
         # One runner at two jobs per core took 8-9 minutes, and its tests that start real CLI
         # processes ran into their time bounds under that load (PLAN T4). Three shards balanced by
         # recorded time, one job per core: less work and less load on each.
-        run: python scripts/parallel_tests.py --stage integration --shard "${{ matrix.shard }}/3" --jobs "$(getconf _NPROCESSORS_ONLN)"
+        run: python scripts/parallel_tests.py --stage integration --shard "${{ matrix.shard }}/3" --jobs "$(getconf _NPROCESSORS_ONLN)" | tee "$RUNNER_TEMP/integration.txt"
+      - name: Keep the failed modules' work
+        # A failure seen only on these runners can be read from the kept folders (PLAN T4c). Only
+        # synthetic fixtures and test keys are in them.
+        if: failure()
+        run: |
+          python - "$RUNNER_TEMP/integration.txt" > "$RUNNER_TEMP/failed.txt" <<'EOF'
+          import json, sys
+          text = open(sys.argv[1]).read()
+          report = json.loads(text[text.rindex("\n{") + 1:])
+          print("\n".join(sorted({unit.split("#")[0] for unit in report["failed_units"]})))
+          EOF
+          mkdir -p "$RUNNER_TEMP/kept"
+          while read -r module; do
+            [ -n "$module" ] || continue
+            python scripts/parallel_tests.py --keep --module "$module" --jobs "$(getconf _NPROCESSORS_ONLN)" > "$RUNNER_TEMP/kept/rerun-${module//[^A-Za-z0-9_.]/_}.txt" 2>&1 || true
+            logs=$(python -c 'import json,sys; t=open(sys.argv[1]).read(); print(json.loads(t[t.rindex("\n{")+1:])["logs"])' "$RUNNER_TEMP/kept/rerun-${module//[^A-Za-z0-9_.]/_}.txt" 2>/dev/null || true)
+            [ -n "$logs" ] && tar --warning=no-file-ignored -czf "$RUNNER_TEMP/kept/${module//[^A-Za-z0-9_.]/_}.tgz" -C "$logs" . 2>/dev/null || true
+          done < "$RUNNER_TEMP/failed.txt"
+      - name: Upload the kept work
+        if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: integration-shard-${{ matrix.shard }}-kept
+          path: ${{ runner.temp }}/kept
+          retention-days: 7
 
   full:
     if: github.event_name != 'pull_request'
