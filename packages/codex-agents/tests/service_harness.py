@@ -61,6 +61,33 @@ class ServiceHarness:
             patcher = mock.patch.object(module, '_start_collector_locked', self.start_collector)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # How each result-persistence lane started, for the failure message (0.4.0 O5): on GitHub's
+        # runners a project service sometimes refused to start with history_service_unavailable, which
+        # the lane reports both for a writer not ready in time and for a fault while opening the store.
+        from codex_agents import result_persistence
+        self.lane_starts = []
+        original_init, original_open = (result_persistence.ResultPersistenceLane.__init__,
+                                        result_persistence.ResultPersistenceLane._history)
+
+        def init(lane, *arguments, **options):
+            began = time.monotonic()
+            try:
+                return original_init(lane, *arguments, **options)
+            except BaseException as error:
+                self.lane_starts.append(('lane refused', round(time.monotonic() - began, 2),
+                                         'fault' if getattr(lane, '_fault', False) else 'not ready', repr(error)))
+                raise
+
+        def opened(lane, *arguments, **options):
+            try:
+                return original_open(lane, *arguments, **options)
+            except BaseException as error:
+                self.lane_starts.append(('store open failed', type(error).__name__, getattr(error, 'reason_code', '')))
+                raise
+        for name, value in (('__init__', init), ('_history', opened)):
+            patcher = mock.patch.object(result_persistence.ResultPersistenceLane, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         # Where a run stopped, for the failure message; the driver itself keeps only a reason code.
         self.stopped_runs, original_fail = [], project_driver.RunDriver._fail
 
@@ -199,7 +226,7 @@ class ServiceHarness:
                 report = serve_project(self.state.root, project, stopped=stopped, bundle_root=self.bundle,
                                        **({} if self.liveness is None else {'liveness': self.liveness}))
                 if not report.get('ready'):
-                    self.failures.append('project host refused: %r' % (report,))
+                    self.failures.append('project host refused: %r; lane starts: %r' % (report, self.lane_starts))
             except BaseException as error:
                 self.failures.append(repr(error))
 
