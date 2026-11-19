@@ -41,6 +41,7 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.native_context = object()
         self.authorized = True
         self.requests = []
+        self.on_account_request = None  # called as each account request arrives
 
         def authorize(request, context):
             if not self.authorized or context is not self.native_context or request.project_id != self.project_id:
@@ -100,6 +101,8 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
                         raw += chunk
                         self.assertLessEqual(len(raw), 16_384)
                     self.requests.append(json.loads(raw))
+                    if self.on_account_request is not None:
+                        self.on_account_request()
                     response = self.account.handle(raw[:-1], self.native_context)
                     connection.sendall(response + b'\n')
             stdout, stderr = process.communicate(timeout=2)
@@ -153,16 +156,13 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.assertEqual('starting', report['account_services'])
 
     def test_ST2_a_ready_status_never_reports_health_from_before_the_account_came_up(self):
-        from codex_agents.account_api import AccountClient
         self.collector.account_services = 'starting'
-        original = AccountClient.owner_key
 
-        def came_up_meanwhile(client, **options):
+        def came_up_meanwhile():  # the account answers, and its host has meanwhile finished starting
             self.collector.account_services = 'running'
             self.collector.startup_phases = {'ledger_open': 1, 'collector': 2, 'account': 3}
-            return original(client, **options)
-        with mock.patch.object(AccountClient, 'owner_key', came_up_meanwhile):
-            code, stdout, stderr = self.command()
+        self.on_account_request = came_up_meanwhile
+        code, stdout, stderr = self.command()
         self.assertEqual(0, code, stdout + stderr)
         report = json.loads(stdout)
         self.assertTrue(report['ready'])

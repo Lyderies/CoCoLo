@@ -390,6 +390,15 @@ def status_client(state_root, project_root):
         owner = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=1).owner_key()
         report['owner_key'] = {name: owner[name] for name in ('state', 'fingerprint', 'replacements', 'last_replaced_at_ms')}
         owner_ready = True
+        if report.get('account_services') == 'starting':
+            # O10 ST2: health was read before the account came up; read it once more so a ready
+            # status shows the services running and the host's start-up timings.
+            try:
+                health = CollectorClient(state.socket, timeout=1).health(project_root)
+                report.update(_status_collector_fields(health))
+                report['account_capacity'] = _status_account_capacity(health.get('account_capacity'))
+            except (CollectorError, OSError, KeyError, TypeError, ValueError):
+                pass  # The first reading stands.
         if not collector_ready and report['ingestion']['registered_project_state'] == 'unavailable':
             report['ingestion']['registered_project_state'] = 'active'
     except AccountError as error:
