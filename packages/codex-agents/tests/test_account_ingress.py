@@ -105,6 +105,23 @@ class AccountIngressTests(unittest.TestCase):
         self.assertEqual(b"", trailing)
         return decode_account_response(frame, request)
 
+    def test_H1a_a_descriptor_kept_after_a_failed_cleanup_is_published_by_the_front(self):
+        ingress = self.start()
+        self.pair()
+        self.wait(lambda: ingress.snapshot()['ordinary'] == 1)
+        with mock.patch.object(ingress, '_drop', side_effect=OSError('a secret descriptor detail')):
+            ingress.request_close()
+            end = time.monotonic() + 8
+            while ingress.health.view()['kept'] < 1:  # published by the front, not the owner
+                self.assertLess(time.monotonic(), end)
+                time.sleep(.002)
+        view = ingress.health.view()
+        self.assertEqual((True, 'ingress_cleanup_failed', 'OSError'),
+                         (view['faulted'], view['last_failure']['cause'], view['last_failure']['type']))
+        self.assertNotIn('secret', repr(view))
+        self.ingress = None  # its descriptor is kept for an explicit shutdown: nothing to drain here
+        self.jobs.request_close()
+
     def test_partial_request_saturation_keeps_reserved_health_off_owner(self):
         self.start(ordinary=2, timeout_ns=300_000_000)
         first, second = self.pair(), self.pair()
