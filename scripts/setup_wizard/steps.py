@@ -360,3 +360,31 @@ def left_uncommitted(uncommitted: str, state: str) -> list[str]:
     if not paths or state == "committed":
         return []
     return ["Left uncommitted in the project:"] + first_ten(paths, "  ")
+
+
+_SESSION_HOLDS = {
+    "clone": "Codex was opened on a folder that holds this setup folder",
+    "state": "Codex was opened on a folder that holds the orchestrator's learning state",
+    "project": "Codex was opened on a folder that contains a set-up project",
+}
+
+
+def session_warnings(scan) -> list[str]:
+    """W2.1-W2.4: one warning per session in the runtime's scan (its date, folder and why: the runtime's
+    own message, else what the folder holds), then the advice once. Control characters are removed. A
+    failed or empty scan warns about nothing; a session opened on a project itself is never in it."""
+    items = scan.get("warnings") if isinstance(scan, dict) else None
+    lines = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        date, holds, folder, message = (_CONTROL.sub("", str(item.get(key, "")))
+                                        for key in ("date", "holds", "folder", "message"))
+        if not folder:
+            continue
+        message = message or _SESSION_HOLDS.get(holds, "Codex was opened on a folder that holds your home folder")
+        lines.append(f"A Codex session on {date} could write to {folder}. {message}.")
+    if lines:
+        lines.append("Open Codex on the project itself: never on a folder that contains a set-up project, this "
+                     "setup folder, your home folder, a folder above it or /.")
+    return lines
