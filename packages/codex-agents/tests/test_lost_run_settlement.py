@@ -474,6 +474,41 @@ class LostRunAfterStopTests(LostRunHarness):
             self.start_host()
             self.closes_after_restart(run_handle, orchestration)
 
+    def test_O10_E1_an_account_that_stops_mid_fence_does_not_use_up_the_refusal_retries(self):
+        from codex_agents.account_api import AccountError
+        orchestration, run_handle = self.leave_a_refused_claim_unfenced()
+        original, calls = AccountClient.fence_claim, []
+        stops = ('account_closed_without_reply', 'service_refused_busy', 'service_refused_unavailable',
+                 'service_refused_late')
+
+        def stopping(client, fence, **options):
+            calls.append(1)
+            if len(calls) <= project_driver.MAX_FENCE_ATTEMPTS + 1:
+                raise AccountError(stops[len(calls) % len(stops)])
+            return original(client, fence, **options)
+        with mock.patch.object(project_driver, 'FENCE_RETRY_SECONDS', 0.01), \
+                mock.patch.object(project_driver, 'FENCE_RETRY_MAX_SECONDS', 0.05), \
+                mock.patch.object(AccountClient, 'fence_claim', autospec=True, side_effect=stopping):
+            self.start_host()
+            self.closes_after_restart(run_handle, orchestration)
+
+    def test_O10_E2_a_lease_the_listing_could_not_read_yet_is_listed_again_and_fenced(self):
+        from codex_agents.history_contracts import HistoryError
+        from codex_agents.orchestration_store import OrchestrationOwner
+        self.leave_a_refused_claim_unfenced(count=2)
+        original, calls = OrchestrationOwner.metadata_for, []
+
+        def not_yet(owner, binding):
+            calls.append(1)
+            if len(calls) <= 3:
+                raise HistoryError('history_service_unavailable')
+            return original(owner, binding)
+        with mock.patch.object(project_driver, 'FENCE_RETRY_SECONDS', 0.01), \
+                mock.patch.object(project_driver, 'FENCE_RETRY_MAX_SECONDS', 0.05), \
+                mock.patch.object(OrchestrationOwner, 'metadata_for', autospec=True, side_effect=not_yet):
+            self.start_host()
+            self.wait_for(lambda: self.bindings() == ['abandoned', 'abandoned'], seconds=60)
+
     def test_C3d_a_run_still_being_closed_says_so(self):
         import threading as threads
         orchestration, run_handle = self.leave_a_refused_claim_unfenced()
