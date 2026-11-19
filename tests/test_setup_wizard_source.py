@@ -29,100 +29,180 @@ def launches(source: str):
             yield ast.get_source_segment(source, node.args[0])
 
 
-# Functions that may pass an argument list along in a variable: the runner and the hand-off. Every
-# call to them, and every other launch, must spell its list out (review 040-s5-wizard-2 b).
-PASS_THROUGH = {("Terminal", "run_cmd"), ("Terminal", "call"), ("Wizard", "run"), ("Wizard", "handoff"),
-                (None, "git_commit")}
-LAUNCHERS = {"run", "Popen", "call", "run_cmd", "handoff"}
-TRUSTED_FIRST = {"self.py", "self.git"}
+# Review 040-s5-wizard-3 (b): one audited way to start a process. Only these functions may use
+# subprocess, and each passes its argument list through unchanged; every launch in the flow takes its
+# list from a builder that adds the isolation flags or Git's safety settings.
+SUBPROCESS_USERS = {("terminal.py", "Terminal", "run_cmd"), ("terminal.py", "Terminal", "call"),
+                    ("effects.py", None, "git_commit"), ("flow.py", "Wizard", "handoff")}
+BUILDERS = {"self.python_argv", "self.git_argv", "effects.owner_git_argv"}
+LAUNCH_POSITION = {"run": 1, "run_cmd": 1, "call": 0, "handoff": 0}
+GIT_CALLS = {"self.g", "self.git_argv", "install._git_run"}
+PORCELAIN = {"status", "add", "commit", "diff"}
 
 
-def launch_problems(source: str) -> list[str]:
-    """Every process launch whose argument list is not spelled out starting with the trusted interpreter
-    or git (or built by effects.owner_git_argv from the trusted interpreter), outside PASS_THROUGH."""
+def _functions(tree):
+    """(class, function, node) for every function, with its enclosing class."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef):
+                    yield node.name, item.name, item
+        elif isinstance(node, ast.Module):
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef):
+                    yield None, item.name, item
+
+
+def launch_problems(source: str, name: str = "flow.py") -> list[str]:
     tree = ast.parse(source)
     problems = []
-
-    def visit(node, owner, function):
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, ast.ClassDef):
-                visit(child, child.name, function)
-            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                visit(child, owner, child.name)
-            else:
-                if (isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
-                        and child.func.attr in LAUNCHERS):
-                    check(child, owner, function)
-                visit(child, owner, function)
-
-    def check(call, owner, function):
-        # subprocess.run/Popen, Terminal.call and Wizard.handoff take the list first; Wizard.run and
-        # Terminal.run_cmd take a label first, then the list.
-        is_subprocess = isinstance(call.func.value, ast.Name) and call.func.value.id == "subprocess"
-        position = 1 if call.func.attr == "run_cmd" or (call.func.attr == "run" and not is_subprocess) else 0
-        if len(call.args) <= position:
-            return
-        argv = call.args[position]
-        text = ast.get_source_segment(source, argv) or ""
-        if isinstance(argv, ast.List):
-            first = ast.get_source_segment(source, argv.elts[0]) if argv.elts else ""
-            if first not in TRUSTED_FIRST:
-                problems.append(text)
-        elif isinstance(argv, ast.Call) and ast.get_source_segment(source, argv.func) == "effects.owner_git_argv":
-            if not argv.args or ast.get_source_segment(source, argv.args[0]) != "self.py":
-                problems.append(text)
-        elif (owner, function) not in PASS_THROUGH:
-            problems.append(text)
-
-    visit(tree, None, None)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [alias for alias in node.names]
+            module = getattr(node, "module", None)
+            if module == "subprocess" or any(a.name == "subprocess" and a.asname for a in names):
+                problems.append(ast.get_source_segment(source, node))
+    permitted = set()
+    for owner, function, node in _functions(tree):
+        if (name, owner, function) in SUBPROCESS_USERS:
+            permitted.update(id(n) for n in ast.walk(node))
+    starters = {"run", "Popen", "call", "check_call", "check_output", "getoutput", "getstatusoutput"}
+    for node in ast.walk(tree):  # Anywhere, module level included, except inside a permitted function.
+        starts = (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                  and node.value.id == "subprocess" and node.attr in starters)
+        aliased = (isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Name)
+                   and node.value.id == "subprocess")
+        if (starts or aliased) and id(node) not in permitted:
+            problems.append(f"subprocess started or aliased at line {node.lineno}")
+    for owner, function, node in _functions(tree):
+        if (name, owner, function) in SUBPROCESS_USERS:
+            for inner in ast.walk(node):
+                if isinstance(inner, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+                    targets = inner.targets if isinstance(inner, ast.Assign) else [inner.target]
+                    if any(isinstance(t, ast.Name) and t.id == "argv" for t in targets):
+                        problems.append(f"argv reassigned in {owner}.{function}")
+    if name == "flow.py":
+        forwarded = set()  # Wizard.run forwards its own argv parameter, unchanged, to the runner.
+        for owner, function, node in _functions(tree):
+            if (owner, function) == ("Wizard", "run"):
+                assigned = any(isinstance(t, ast.Name) and t.id == "argv" for inner in ast.walk(node)
+                               if isinstance(inner, ast.Assign) for t in inner.targets)
+                if not assigned:
+                    forwarded.update(id(inner) for inner in ast.walk(node)
+                                     if isinstance(inner, ast.Name) and inner.id == "argv")
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in LAUNCH_POSITION):
+                continue
+            receiver = ast.get_source_segment(source, node.func.value)
+            if receiver not in ("self", "self.t"):
+                continue
+            argv = next((k.value for k in node.keywords if k.arg in ("argv", "args")), None)
+            position = LAUNCH_POSITION[node.func.attr]
+            if argv is None and len(node.args) > position:
+                argv = node.args[position]
+            if argv is None:
+                continue
+            if id(argv) in forwarded:
+                continue
+            builder = ast.get_source_segment(source, argv.func) if isinstance(argv, ast.Call) else ""
+            if builder not in BUILDERS or (builder == "effects.owner_git_argv"
+                                           and ast.get_source_segment(source, argv.args[0]) != "self.py"):
+                problems.append(ast.get_source_segment(source, node))
     return problems
 
 
-def ls_files_problems(source: str) -> list[str]:
-    """Every "ls-files" that is not an argument of install._git_run (which passes --literal-pathspecs)."""
+def git_problems(source: str) -> list[str]:
+    """Git arguments are literal (no variable, concatenation or f-string after the project); ls-files only
+    through install._git_run; no porcelain command."""
     tree = ast.parse(source)
-    allowed = set()
+    problems, allowed = [], set()
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Call) and ast.get_source_segment(source, node.func) == "install._git_run"):
-            allowed.update(id(arg) for arg in node.args)
-    return [ast.get_source_segment(source, node) for node in ast.walk(tree)
-            if isinstance(node, ast.Constant) and node.value == "ls-files" and id(node) not in allowed]
+        if isinstance(node, ast.Call) and ast.get_source_segment(source, node.func) in GIT_CALLS:
+            func = ast.get_source_segment(source, node.func)
+            rest = node.args[1:] if func != "self.git_argv" else node.args
+            for arg in rest:
+                if isinstance(arg, ast.Constant) and arg.value == "--":
+                    break  # Paths follow, as literal pathspecs.
+                if isinstance(arg, ast.Starred) and func == "install._git_run":
+                    continue
+                if isinstance(arg, ast.Starred) and isinstance(arg.value, ast.Name) and arg.value.id == "args":
+                    continue  # self.g forwarding its own literal-checked arguments
+                if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                    problems.append(ast.get_source_segment(source, node))
+                    break
+                if arg.value in PORCELAIN:
+                    problems.append(ast.get_source_segment(source, node))
+            if func == "install._git_run":
+                allowed.update(id(arg) for arg in node.args)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and "ls-files" in node.value:
+            if id(node) not in allowed:
+                problems.append(ast.get_source_segment(source, node))
+    return problems
 
 
 class WizardSourceTests(unittest.TestCase):
-    def test_the_launch_and_literal_path_checks_reject_the_reviews_bypasses(self) -> None:
-        """Review 040-s5-wizard-2 (b): the mutations that passed the earlier checks now fail them."""
-        for bypass in ("program = 'python3'\nargv = [program, '-c', 'x']\nsubprocess.run(argv)\n",
-                       "argv = ['git', 'status']\nsubprocess.run(argv)\n",
-                       "subprocess.run(['python3', '-c', 'x'])\n",
-                       "class Wizard:\n    def other(self):\n        self.t.call(['git', 'status'])\n"):
-            with self.subTest(bypass=bypass):
-                self.assertTrue(launch_problems(bypass))
-        for bypass in ("self.g(project, 'ls-files', '--', name)\n",
-                       "install._git_run(project, 'log')\nself.g(project, \"ls-files\", name)\n"):
-            with self.subTest(bypass=bypass):
-                self.assertTrue(ls_files_problems(bypass))
-        self.assertEqual([], ls_files_problems("install._git_run(Path(p), 'ls-files', '-z', '--', rel)\n"))
+    def test_the_checks_reject_every_reviewed_bypass(self) -> None:
+        """Reviews 040-s5-wizard-2 and -3 (b): each bypass a review built is rejected."""
+        launches = {
+            "variable argv": "program = 'python3'\nargv = [program]\nsubprocess.run(argv)\n",
+            "aliased module": "sp = subprocess\nsp.run(['git'])\n",
+            "keyword args": "def f():\n    subprocess.run(args=['git', 'status'])\n",
+            "aliased import": "import subprocess as sp\nsp.run(['git'])\n",
+            "from import": "from subprocess import run\n",
+            "replaced argv in a wrapper": ("class Terminal:\n    def call(self, argv):\n"
+                                            "        argv = ['git', 'status']\n        subprocess.Popen(argv)\n"),
+            "git list without the builder": ("class Wizard:\n    def f(self, project):\n"
+                                              "        self.t.call([self.git, '-C', project, 'status'])\n"),
+            "python list without the builder": "class Wizard:\n    def f(self):\n        self.run('x', [ self.py, '-c', 'pass'])\n",
+            "keyword argv without the builder": "class Wizard:\n    def f(self):\n        self.t.call(argv=[self.py])\n",
+            "a forwarder that rewrites argv": ("class Wizard:\n    def run(self, label, argv):\n        argv = ['git']\n"
+                                               "        return self.t.run_cmd(label, argv)\n"),
+        }
+        for case, source in launches.items():
+            with self.subTest(case=case):
+                self.assertTrue(launch_problems(source, "flow.py"))
+        gits = {
+            "concatenated ls-files": "self.g(project, 'ls-' + 'files', '--', name)\n",
+            "variable command": "command = 'commit'\nself.g(str(project), command)\n",
+            "porcelain": "self.g(project, 'status')\n",
+            "f-string": "self.g(project, f'{x}')\n",
+            "ls-files outside the installer": "self.g(project, 'ls-files')\n",
+        }
+        for case, source in gits.items():
+            with self.subTest(case=case):
+                self.assertTrue(git_problems(source))
+        self.assertEqual([], git_problems("install._git_run(Path(p), 'ls-files', '-z', '--', *candidates)\n"))
 
-    def test_every_launch_spells_out_a_trusted_argument_list(self) -> None:
+    def test_every_launch_uses_the_audited_builders(self) -> None:
         for name, source in SOURCES.items():
             with self.subTest(source=name):
-                self.assertEqual([], launch_problems(source))
+                self.assertEqual([], launch_problems(source, name))
 
-    def test_every_ls_files_goes_through_the_installers_literal_pathspecs(self) -> None:
+    def test_every_git_call_is_literal_and_never_porcelain(self) -> None:
         for name, source in SOURCES.items():
             with self.subTest(source=name):
-                self.assertEqual([], ls_files_problems(source))
+                self.assertEqual([], git_problems(source))
+
+    def test_the_builders_add_the_isolation_flags_and_gits_safety_settings(self) -> None:
+        from types import SimpleNamespace
+        from setup_wizard import flow
+        wizard = SimpleNamespace(py="/trusted/python3", git="/trusted/git")
+        self.assertEqual(["/trusted/python3", "-I", "-B", "-S", "-X", "pycache_prefix=/dev/null", "a.py", "x"],
+                         flow.Wizard.python_argv(wizard, "a.py", "x"))
+        self.assertEqual(["/trusted/git", "-C", "/p", *flow.GIT_SAFE, "rev-parse"],
+                         flow.Wizard.git_argv(wizard, "rev-parse", project="/p"))
+        self.assertEqual(["/trusted/git", *flow.GIT_SAFE, "--version"], flow.Wizard.git_argv(wizard, "--version"))
 
     def test_every_python_the_wizard_starts_is_isolated(self) -> None:
         """Replaces SetupScriptTests.test_every_python_the_wizard_starts_is_isolated (W1.3, W1.6)."""
         # Every argument list that starts with the trusted interpreter, whether it goes to subprocess
         # directly or through the runner (self.run, handoff).
-        python_launches = [match.group(0) for match in re.finditer(r"\[self\.py\b[^\]]*", ALL)]
-        self.assertGreaterEqual(len(python_launches), 8)
-        for arg in python_launches:
-            with self.subTest(launch=arg):
-                self.assertTrue(arg.startswith("[self.py, *PYF,"), arg)
+        # Since review 040-s5-wizard-3 every Python launch goes through the one builder, which adds the
+        # flags (test_the_builders_add_...); the only list naming the interpreter is the builder's own.
+        self.assertGreaterEqual(SOURCES["flow.py"].count("self.python_argv("), 8)
+        self.assertEqual(["[self.py, *PYF, *args]"], re.findall(r"\[self\.py\b[^\]]*\]", ALL))
         self.assertIn('PYF = ["-I", "-B", "-S", "-X", "pycache_prefix=/dev/null"]', SOURCES["flow.py"])
         self.assertIn('exec "$PY" "${PYF[@]}" "$ROOT_DIR/scripts/setup-wizard.py" "$@"', LAUNCHER)
         self.assertIn("PYF=(-I -B -S -X pycache_prefix=/dev/null)", LAUNCHER)
@@ -144,7 +224,7 @@ class WizardSourceTests(unittest.TestCase):
                     with self.subTest(launch=first):
                         self.assertIn(first, ("self.py", "self.git"))
         # Owner commands run this clone's CLI, never the project's copy.
-        self.assertIn("[self.py, *PYF, str(CLONE_CLI), *args]", SOURCES["flow.py"])
+        self.assertIn("self.python_argv(str(CLONE_CLI), *args)", SOURCES["flow.py"])
         self.assertNotIn('".codex", "orchestration", "cli.py")]', ALL)
 
     def test_every_git_call_uses_the_trusted_binary_with_helpers_off(self) -> None:
@@ -153,7 +233,8 @@ class WizardSourceTests(unittest.TestCase):
             for arg in launches(source):
                 with self.subTest(launch=arg):
                     self.assertFalse(re.match(r'\[\s*"git"', arg), arg)
-        self.assertIn("[self.git, \"-C\", project, *GIT_SAFE, *args]", SOURCES["flow.py"])
+        self.assertIn('[self.git, *(["-C", project] if project is not None else []), *GIT_SAFE, *args]',
+                      SOURCES["flow.py"])
         from setup_wizard import flow
         self.assertEqual(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "commit.gpgSign=false",
                           "-c", "tag.gpgSign=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false"], flow.GIT_SAFE)
@@ -235,7 +316,7 @@ class WizardSourceTests(unittest.TestCase):
         for text in ("Nothing to commit: the project already has these files committed", "The install can be updated.",
                      "A fresh install is possible.", "Profile: exists with the same settings", "network_access is off",
                      '"Change the owner key passphrase"', '"Replace a lost owner key"',
-                     '"--target", self.project, "--replace-owner-key"]', '"--change-passphrase"]',
+                     '"--target", self.project, "--replace-owner-key")', '"--change-passphrase")',
                      'f"{self.home}/agent-orchestration-setup-summary.txt"'):
             with self.subTest(text=text):
                 self.assertIn(text, ALL)
