@@ -110,6 +110,43 @@ class SignatureWorkerPoolTests(unittest.TestCase):
             time.sleep(0.002)
         return list(received.values())
 
+    def started_on_a_worker(self, pool):
+        handle = self.capture(0)
+        started = time.monotonic()
+        while pool.health.view()['busy'] < 1:  # the owner hands it to a worker
+            pool.poll()
+            self.assertLess(time.monotonic() - started, 10)
+            time.sleep(0.002)
+        return handle
+
+    def test_H1a_an_internal_failure_is_noted_with_its_type_and_no_fault(self):
+        pool = self.make_pool()
+        with mock.patch.object(execution, '_execute_signature_job', side_effect=RuntimeError('a secret')):
+            self.started_on_a_worker(pool)
+            started = time.monotonic()
+            while pool.health.view()['last_failure'] is None:
+                self.assertLess(time.monotonic() - started, 10)
+                time.sleep(0.002)
+        view = pool.health.view()
+        self.assertEqual(('signature_worker_failed', 'RuntimeError', False, 0),
+                         (view['last_failure']['cause'], view['last_failure']['type'], view['faulted'], view['kept']))
+        self.assertNotIn('secret', repr(view))
+
+    def test_H1a_an_unconfirmed_job_is_kept_by_its_worker_while_the_owner_does_not_poll(self):
+        pool = self.make_pool()
+        with mock.patch.object(execution, '_execute_signature_job',
+                               side_effect=execution.SignatureExecutionUnconfirmed(object())):
+            self.started_on_a_worker(pool)
+            started = time.monotonic()
+            while pool.health.view()['kept'] < 1:  # no poll: the worker publishes it
+                self.assertLess(time.monotonic() - started, 10)
+                time.sleep(0.002)
+        self.assertEqual('signature_execution_unconfirmed', pool.health.view()['last_failure']['cause'])
+        self.assertFalse(pool.health.view()['faulted'])
+        pool.poll()  # the owner acknowledges it: still counted once
+        self.assertEqual(1, pool.health.view()['kept'])
+        self.pool = None  # its worker keeps custody for good; nothing to drain here
+
     def test_two_actual_jobs_keep_returned_fields_until_consumed_with_no_owner_external_waits(self):
         attest_provider(self.fixture.ledger, self.fixture.projects[1], self.fixture.key, "codex", "b" * 64)
         pool = self.make_pool()
