@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -106,6 +107,46 @@ class RoutingWriteTests(unittest.TestCase):
         with self.assertRaises(effects.EffectRefused):
             effects.write_project_routing(linked, "{}\n")
         self.assertEqual([], list((other / "orchestration").iterdir()))
+
+
+
+class OwnerToolTests(unittest.TestCase):
+    """W1.6-W1.8: the owner checks come from this clone's attest.py, loaded by path."""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(os.path.realpath(directory.name))
+        attest = effects.attest()
+        for patcher in (mock.patch.object(attest, "SCRATCH_BASE", str(self.base)),
+                        mock.patch.object(attest, "temp_roots", lambda: [])):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_attest_is_this_clones_own_file(self) -> None:
+        self.assertEqual(ROOT / "scripts" / "attest.py", Path(effects.attest().__file__))
+
+    def test_the_working_folder_is_private_and_removed_at_the_end(self) -> None:
+        """W1.7."""
+        folder = effects.make_scratch("wizard-")
+        self.assertTrue(folder.is_dir())
+        self.assertEqual(0o700, folder.stat().st_mode & 0o777)
+        self.assertTrue(str(folder).startswith(str(self.base)))
+        (folder / "work").write_text("x")
+        self.assertTrue(effects.remove_scratch(folder))
+        self.assertFalse(folder.exists())
+
+    def test_a_working_folder_that_cannot_be_made_is_a_fixed_refusal(self) -> None:
+        with mock.patch.object(effects.attest(), "SCRATCH_BASE", "relative"):
+            with self.assertRaises(effects.EffectRefused):
+                effects.make_scratch("wizard-")
+
+    def test_a_project_without_this_release_installed_is_refused(self) -> None:
+        """W1.6: owner commands run only once the installed copy is this release byte for byte."""
+        project = self.base / "project"
+        project.mkdir()
+        problem = effects.runtime_problem(project)
+        self.assertIn("not an exact copy of this setup's version", problem)
 
 
 if __name__ == "__main__":
