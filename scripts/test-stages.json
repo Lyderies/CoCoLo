@@ -197,6 +197,7 @@
  "root:test_owner_tool_bounds": "integration",
  "root:test_setup_sh": "e2e",
  "root:test_setup_wizard_effects": "unit",
+ "root:test_setup_wizard_flow": "integration",
  "root:test_setup_wizard_git": "integration",
  "root:test_setup_wizard_progress": "integration",
  "root:test_setup_wizard_source": "unit",
