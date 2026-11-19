@@ -19,6 +19,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - Setup starts the project's own service once the collector is ready, so it closes what an earlier
   service left at once, not when the next child runs. `learning-start-project-service` does the same
   from the command line.
+- An orchestration opened under an earlier service or version is refused
+  `history_orchestration_other_scope`, no longer reported as `host_client_mismatch`.
 - A refused run open now says why instead of `open_unavailable`: the account is still starting
   (`open_account_starting`) or closing (`open_account_closing`), its database stayed busy
   (`open_account_busy`), the project's service is not running (`open_service_not_running`), is an

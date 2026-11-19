@@ -27,6 +27,8 @@ HISTORY_REASON_CODES = frozenset({
     "history_execution_consumed", "history_execution_not_ready",
     "history_orchestration_unavailable", "history_orchestration_state",
     "history_orchestration_pending", "history_orchestration_full",
+    # R8a: opened under another session, service or version (an update changes the service's scope).
+    "history_orchestration_other_scope",
     "history_learning_capacity", "history_learning_incomplete", "history_learning_reconciliation",
 })
 
