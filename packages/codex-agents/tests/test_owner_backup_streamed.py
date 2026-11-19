@@ -25,21 +25,27 @@ from codex_agents import learning_store, project_backup
 
 SCRIPT = REPOSITORY_ROOT / "scripts" / "backup_installed_project.py"
 TOOL = runpy.run_path(str(SCRIPT))
+# The script's own globals (run_path returns a copy), for patching what its functions read.
+SCRIPT_GLOBALS = TOOL["backup_partition"].__globals__
 RECORDS = 16_000  # About 11 MB of records (test_large_project_backups).
 
 
 class OwnerBackupStreamedTests(unittest.TestCase):
     setUp = legacy.LearningSourceImageLegacyTests.setUp
 
-    def backup(self, file_id="owner_backup", schema_version=None):
+    def owner_backup(self, file_id="owner_backup", schema_version=None):
+        if not hasattr(self, "earlier_files"):  # the fixture keeps backups of its own there
+            self.earlier_files = self.partition_files(all_files=True)
         schema = int(self.source._connection.execute("PRAGMA user_version").fetchone()[0])
         return TOOL["backup_partition"](self.source, self.project, file_id,
                                         schema_version=schema if schema_version is None else schema_version,
                                         expires_at_ms=self.source._clock_ms() + 3_600_000)
 
-    def partition_files(self):
+    def partition_files(self, all_files=False):
+        """The files this test's backups left in the project's backup folder."""
         folder = self.source.state.backups / self.project
-        return sorted(path.name for path in folder.iterdir()) if folder.exists() else []
+        names = sorted(path.name for path in folder.iterdir()) if folder.exists() else []
+        return names if all_files else [name for name in names if name not in self.earlier_files]
 
     def registered(self, file_id):
         return self.source._connection.execute(
@@ -47,7 +53,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
             (self.project, file_id)).fetchone()
 
     def test_F3_1_the_backup_is_a_registered_format_three_copy_equal_to_the_records(self):
-        report = self.backup()
+        report = self.owner_backup()
         path = self.source.state.backups / self.project / "owner_backup.sqlite3"
         self.assertEqual(str(path), report["path"])
         self.assertEqual(3, report["format"])
@@ -70,7 +76,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         downgrade_ledger_to_six(self.source)
         tracemalloc.start()
         try:
-            report = self.backup("schema_six")
+            report = self.owner_backup("schema_six")
             peak = tracemalloc.get_traced_memory()[1]
         finally:
             tracemalloc.stop()
@@ -89,14 +95,14 @@ class OwnerBackupStreamedTests(unittest.TestCase):
             launched.append(list(argv))
             return real_run(argv, *args, **kwargs)
         with mock.patch.object(subprocess, "run", run):
-            self.backup()
+            self.owner_backup()
         [argv] = launched
         self.assertEqual([sys.executable, "-I", "-B", "-S", str(SCRIPT), "--stream-child"], argv[:6])
 
     def test_F3_3_a_partition_over_the_limit_is_refused_and_nothing_is_left(self):
         add_events(self.source, self.project, 2_000)
-        with mock.patch.dict(TOOL, {"BACKUP_LIMIT_BYTES": 256 * 1024}), self.assertRaises(RuntimeError):
-            self.backup("too_big")
+        with mock.patch.dict(SCRIPT_GLOBALS, {"BACKUP_LIMIT_BYTES": 256 * 1024}), self.assertRaises(RuntimeError):
+            self.owner_backup("too_big")
         self.assertEqual([], self.partition_files())
         self.assertIsNone(self.registered("too_big"))
 
@@ -107,23 +113,23 @@ class OwnerBackupStreamedTests(unittest.TestCase):
             done = real_run(argv, *args, **kwargs)
             partial = self.source.state.backups / self.project / ".checked_badly.partial"
             with open(partial, "r+b") as handle:  # the copy changes after the child checked it
-                handle.seek(200)
-                handle.write(b"\0" * 16)
+                handle.seek(0, os.SEEK_END)
+                handle.write(b"\xff" * 16)
             return done
         with mock.patch.object(subprocess, "run", broken), self.assertRaises(RuntimeError):
-            self.backup("checked_badly")
+            self.owner_backup("checked_badly")
         self.assertEqual([], self.partition_files())
         self.assertIsNone(self.registered("checked_badly"))
 
     def test_F3_3_an_existing_backup_of_that_name_is_refused_and_kept(self):
-        first = self.backup("same_name")
+        first = self.owner_backup("same_name")
         with self.assertRaises(RuntimeError):
-            self.backup("same_name")
+            self.owner_backup("same_name")
         self.assertEqual(["same_name.sqlite3"], self.partition_files())
         self.assertEqual(first["backup_sha256"], self.registered("same_name")["content_digest"])
 
     def test_F3_5_the_report_keeps_its_fields_and_adds_the_format(self):
-        report = self.backup()
+        report = self.owner_backup()
         self.assertEqual({"ready", "project_id", "file_id", "path", "format", "ledger_schema_version",
                           "backup_sha256", "manifest_sha256", "counts", "isolated_restore_integrity",
                           "isolated_restore_foreign_keys"}, set(report))

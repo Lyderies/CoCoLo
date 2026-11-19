@@ -1,17 +1,37 @@
 #!/usr/bin/env python3
-"""Create and verify a project-partition backup with the installed runtime."""
+"""Create and verify a project-partition backup with the installed runtime.
+
+The backup is the streamed format-3 file (one private SQLite copy of the
+partition) that the ledger itself writes before an upgrade (PLAN F3). It is
+written and checked by this clone's own project_backup in a separate isolated
+Python, so a runtime without a streamed writer (0.2.x, 0.3.0) can be backed up
+at any size; the installed runtime holds the collector's maintenance lock
+throughout and registers the finished file in its own ledger.
+"""
 
 from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import hashlib
 import json
 import os
+import re
 import secrets
+import stat
+import subprocess
 import sys
 import time
+import urllib.parse
 from pathlib import Path
+
+SCRIPT = Path(__file__).resolve()
+# This clone's runtime package: its project_backup writes and checks the copy.
+CLONE_PACKAGE = SCRIPT.parents[1] / "native-package" / ".codex" / "orchestration"
+# The ledger's own limit for one project's backup (learning_store.MAX_PROJECT_BACKUP_BYTES).
+BACKUP_LIMIT_BYTES = 16 * 1024 ** 3
+_FILE_ID = re.compile(r"[A-Za-z0-9_]{1,160}")
 
 
 def _canonical_json(value: object) -> bytes:
@@ -370,6 +390,124 @@ def _verify_relational_restore(
         restored.close()
 
 
+def _file_digest(path: Path) -> str:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        hasher = hashlib.sha256()
+        while chunk := os.read(descriptor, 1_048_576):
+            hasher.update(chunk)
+        return hasher.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: int,
+                     expires_at_ms: int) -> dict[str, object]:
+    """Write, check and register one partition's format-3 backup (PLAN F3-1 to F3-3, F3-5).
+
+    `ledger` is the installed runtime's open ledger, whose collector the caller
+    holds stopped. The copy is made in a separate isolated Python with this
+    clone's project_backup; it must pass that package's checks and equal the live
+    partition before it is renamed into place and registered. On any failure
+    nothing is registered and no file is left.
+    """
+    if not _FILE_ID.fullmatch(file_id):
+        raise RuntimeError("backup file id must be 1 to 160 letters, digits or underscores")
+    partition = ledger.state.backups / project_id
+    partition.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = os.lstat(partition)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise RuntimeError("the project's backup folder is not a private folder of this account")
+    path = partition / f"{file_id}.sqlite3"
+    partial = partition / f".{file_id}.partial"
+    if os.path.lexists(path):
+        raise RuntimeError("a backup with this file id already exists")
+    with contextlib.suppress(FileNotFoundError):
+        partial.unlink()  # Left by a backup that was stopped; never registered.
+    os.close(os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600))
+    try:
+        done = subprocess.run(
+            [sys.executable, "-I", "-B", "-S", str(SCRIPT), "--stream-child", str(ledger.state.database),
+             str(partial), project_id, str(schema_version), str(BACKUP_LIMIT_BYTES)],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
+        try:
+            child = json.loads(done.stdout)
+        except ValueError:
+            child = {}
+        if done.returncode != 0 or not isinstance(child, dict) or "backup_sha256" not in child:
+            raise RuntimeError(str(child.get("error") if isinstance(child, dict) and child.get("error")
+                                   else "the backup copy could not be written or checked"))
+        # The file registered is the one the child checked.
+        if _file_digest(partial) != child["backup_sha256"]:
+            raise RuntimeError("the backup copy changed after it was checked")
+        os.replace(partial, path)
+        directory = os.open(partition, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            partial.unlink()
+        raise
+    try:
+        ledger._register_stored_file(project_id, file_id=file_id, kind="backup", path=path,
+                                     digest=child["backup_sha256"], expires_at_ms=expires_at_ms)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            path.unlink()
+        raise
+    return {
+        "ready": True,
+        "project_id": project_id,
+        "file_id": file_id,
+        "path": str(path),
+        "format": 3,
+        "ledger_schema_version": schema_version,
+        "backup_sha256": child["backup_sha256"],
+        "manifest_sha256": child["manifest_sha256"],
+        "counts": child["counts"],
+        "isolated_restore_integrity": "ok",
+        "isolated_restore_foreign_keys": "ok",
+    }
+
+
+def _stream_child(argv: list[str]) -> int:
+    """`--stream-child DATABASE PARTIAL PROJECT SCHEMA LIMIT`: copy and check with this clone's package.
+
+    Runs as `python -I -B -S`; reads the ledger read-only while the installed
+    collector is stopped, writes the copy into the empty PARTIAL file, checks it
+    completely and against the live partition, and prints its digest, manifest
+    digest and counts.
+    """
+    database, partial, project_id, schema, limit = argv
+    sys.path.insert(0, str(CLONE_PACKAGE))
+    import sqlite3
+
+    from codex_agents import project_backup  # noqa: PLC0415
+
+    connection = sqlite3.connect("file:" + urllib.parse.quote(database) + "?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        schema_version = int(schema)
+        project_backup.write(connection, Path(partial), project_id, schema_version, limit_bytes=int(limit))
+        if os.stat(partial, follow_symlinks=False).st_size > int(limit):  # The plan is an estimate.
+            raise RuntimeError("the project's backup is over the ledger's backup limit")
+        descriptor = os.open(partial, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            os.fsync(descriptor)
+            digest = project_backup.file_digest(descriptor)
+        finally:
+            os.close(descriptor)
+        result = project_backup.verify(Path(partial), project_id=project_id, schema_version=schema_version,
+                                       compare=connection)
+    finally:
+        connection.close()
+    print(json.dumps({"backup_sha256": digest, "manifest_sha256": result["manifest_sha256"],
+                      "counts": result["counts"]}, sort_keys=True))
+    return 0
+
+
 def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True, type=Path)
@@ -394,10 +532,6 @@ def _main() -> int:
         raise RuntimeError("installed orchestration runtime is unavailable")
     sys.path.insert(0, str(orchestration_root))
 
-    from codex_agents.learning_contracts import (  # noqa: PLC0415
-        content_digest,
-        validate_learning_record,
-    )
     from codex_agents.learning_store import (  # noqa: PLC0415
         CollectorMaintenance,
         LearningLedger,
@@ -428,8 +562,8 @@ def _main() -> int:
         ).fetchone()
         if project is None:
             raise RuntimeError("project binding is not active")
-        tables: dict[str, list[dict[str, object]]] = {}
-        columns_manifest: dict[str, list[str]] = {}
+        # The installed ledger must hold exactly the tables and columns its schema has, so the
+        # copy (written by this clone's package for that schema) represents it exactly.
         for table in _tables(schema_version):
             exists = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
@@ -446,83 +580,15 @@ def _main() -> int:
                 raise RuntimeError(
                     f"project backup cannot represent {table} exactly"
                 )
-            columns_manifest[table] = columns
-            if not columns:
-                tables[table] = []
-                continue
-            ordering = ",".join(name for name in _TABLE_ORDER[table] if name in available)
-            query = (
-                f"SELECT {','.join(columns)} FROM {table} WHERE project_id=?"
-                + (f" ORDER BY {ordering}" if ordering else "")
-            )
-            values = []
-            for row in connection.execute(query, (project_id,)).fetchall():
-                value = {column: _encode(row[column]) for column in columns}
-                values.append(value)
-            tables[table] = values
-
-        body = {
-            "schema_version": 2,
-            "ledger_schema_version": schema_version,
-            "project": {column: _encode(project[column]) for column in _PROJECT_COLUMNS},
-            "columns": columns_manifest,
-            "tables": tables,
-            "counts": {name: len(rows) for name, rows in tables.items()},
-        }
-        body_bytes = _canonical_json(body)
-        payload = _canonical_json(
-            {
-                "backup_sha256": hashlib.sha256(body_bytes).hexdigest(),
-                "body": body,
-            }
-        )
-        if len(payload) > 128 * 1024 * 1024:
-            raise RuntimeError("project backup is oversized")
         expires_at_ms = (
             time.time_ns() // 1_000_000 + args.expires_in_seconds * 1000
         )
-        path = ledger._write_owner_file("backup", project_id, args.file_id, payload)
-        try:
-            ledger._register_stored_file(
-                project_id,
-                file_id=args.file_id,
-                kind="backup",
-                path=path,
-                digest=hashlib.sha256(payload).hexdigest(),
-                expires_at_ms=expires_at_ms,
-            )
-        except Exception:
-            path.unlink(missing_ok=True)
-            raise
-
-        decoded = json.loads(path.read_bytes())
-        if (
-            hashlib.sha256(_canonical_json(decoded["body"])).hexdigest()
-            != decoded["backup_sha256"]
-        ):
-            raise RuntimeError("project backup verification failed")
-        _verify_relational_restore(
-            connection,
-            decoded["body"],
-            validate_learning_record=validate_learning_record,
-            content_digest=content_digest,
-        )
+        report = backup_partition(ledger, project_id, args.file_id, schema_version=schema_version,
+                                  expires_at_ms=expires_at_ms)
         if args.leave_quiesced:
             _quiesce_collector_authorization(state.collector_authorization)
         operation_completed = True
-        print(json.dumps({
-            "ready": True,
-            "project_id": project_id,
-            "file_id": args.file_id,
-            "path": str(path),
-            "ledger_schema_version": schema_version,
-            "backup_sha256": hashlib.sha256(payload).hexdigest(),
-            "manifest_sha256": decoded["backup_sha256"],
-            "counts": body["counts"],
-            "isolated_restore_integrity": "ok",
-            "isolated_restore_foreign_keys": "ok",
-            "collector_quiesced": args.leave_quiesced,
-        }, indent=2, sort_keys=True))
+        print(json.dumps({**report, "collector_quiesced": args.leave_quiesced}, indent=2, sort_keys=True))
         return 0
     finally:
         if ledger is not None:
@@ -538,6 +604,12 @@ def _main() -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--stream-child"]:
+        try:
+            raise SystemExit(_stream_child(sys.argv[2:]))
+        except Exception as exc:
+            print(json.dumps({"error": str(exc)}))
+            raise SystemExit(2)
     try:
         raise SystemExit(_main())
     except Exception as exc:
