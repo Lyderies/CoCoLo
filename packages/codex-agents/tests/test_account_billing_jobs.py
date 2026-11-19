@@ -408,6 +408,24 @@ class AccountBillingJobTests(unittest.TestCase):
         self.until(lambda: not self.billing._jobs)
         self.assertEqual([], [s for s in self.workers._slots if s.current is not None])
 
+    def test_C7_a_failed_cleanup_request_is_noted_with_its_type(self):
+        self._fail_launch_once()
+        real, calls = self.billing._executions.discard, []
+
+        def failing_once(*args):
+            calls.append(1)
+            if len(calls) == 1:
+                raise OSError('a secret path')
+            return real(*args)
+        notes = mock.Mock(wraps=self.billing.health.note_failure)
+        self.enterContext(mock.patch.object(self.billing._executions, 'discard', side_effect=failing_once))
+        self.enterContext(mock.patch.object(self.billing.health, 'note_failure', notes))
+        with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
+            self.take(self.begin())
+        self.until(lambda: not self.billing._jobs)
+        noted = [(call.args[1], type(call.args[2]).__name__) for call in notes.call_args_list]
+        self.assertIn(('probe_cleanup_failed', 'OSError'), noted)
+
     def test_C9d_a_cleanup_request_that_always_fails_still_answers(self):
         self._fail_launch_once()
         discard = self.enterContext(mock.patch.object(self.billing._executions, 'discard',
