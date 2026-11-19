@@ -205,9 +205,11 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         upgrade = {"FAKE_REGISTER": "", "FAKE_UPGRADE": '{"ready": true, "state_moved": null}'}
         project, checks = self.make_project()
         code, screen = self.scripted(self.answers_for(project, checks), upgrade)  # upgrade_records false
-        self.assertEqual(1, code)
+        # Declined as answered: skipped as chosen (exit 0), never upgraded, and the summary says so.
+        self.assertEqual(0, code, screen[-1500:])
         self.assertNotIn("--upgrade-ledger", (self.base / "register.log").read_text())
-        self.assertEqual(0, self.attested())  # stopped at the collector step: nothing after it ran
+        self.assertIn("The records were not upgraded", screen)
+        self.assertRegex(screen, r"SKIP\s+5\. Collector: records not upgraded")
         self._reap()
         project2, checks2 = self.make_project("second")
         code, screen = self.scripted(self.answers_for(project2, checks2, upgrade_records=True), upgrade)

@@ -185,14 +185,18 @@ answer is refused by name (exit 2).
   "operational_checks": "/path/to/operational-checks.json",
   "providers": {"codex": "on", "claude": "on", "claude_models": "claude-sonnet-5-5", "bridge": "off"},
   "commit": true,
-  "commands_rule": false
+  "commands_rule": false,
+  "move_records": false,
+  "upgrade_records": false
 }
 ```
 
 - `operational_checks` is needed only when the project has none yet.
 - `codex_profile` (`"create"` or `"skip"`) is needed when `bridge` is `"on"`.
-- `move_records` and `upgrade_records` (true or false) are needed only if setup finds earlier records
-  that must be moved or upgraded; without them the run stops there and names the answer.
+- `move_records` and `upgrade_records` (true or false) are always required, so every consent is stated
+  before anything changes; they are used only if setup finds earlier records to move or upgrade.
+- The run stops at the first step that fails, with that step's reason and the summary; nothing after
+  it runs. `./setup.sh --update` does the same.
 - `commit: false` leaves the install for you to commit; it cannot be verified until you do, so the
   run ends with exit status 1 and says so.
 

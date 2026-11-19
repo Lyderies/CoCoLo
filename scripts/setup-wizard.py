@@ -45,9 +45,9 @@ _PROVIDER_KEYS = ("codex", "claude", "claude_models", "bridge")
 def read_answers(path: str) -> dict:
     """`--answers FILE`: every answer a fresh install reaches, checked before anything changes.
 
-    Required: project, providers (codex, claude, claude_models, bridge), commit and commands_rule;
-    operational_checks unless the project already has one; codex_profile when bridging is on.
-    move_records and upgrade_records are needed only when setup reaches that question.
+    Required: project, providers (codex, claude, claude_models, bridge), commit, commands_rule,
+    move_records and upgrade_records; operational_checks (a non-empty path) unless the project already
+    has one; codex_profile when bridging is on.
     """
     def refuse(key: str, why: str) -> AnswersRefused:
         return AnswersRefused(f"answers file: {key}: {why}. Nothing was changed.")
@@ -66,14 +66,15 @@ def read_answers(path: str) -> dict:
     for key in answers:
         if key not in _ANSWER_KEYS:
             raise refuse(key, "not a setup answer")
-    for key in ("project", "providers", "commit", "commands_rule"):
+    # Every consent is stated up front, so nothing is refused after a change (review 040-s1-update).
+    for key in ("project", "providers", "commit", "commands_rule", "move_records", "upgrade_records"):
         if key not in answers:
             raise refuse(key, "missing")
     if not isinstance(answers["project"], str) or not answers["project"]:
         raise refuse("project", "must be a path")
     project = answers["project"]
     if not os.path.isfile(os.path.join(project, ".codex", "orchestration", "operational-checks.json")):
-        if not isinstance(answers.get("operational_checks"), str):
+        if not isinstance(answers.get("operational_checks"), str) or not answers["operational_checks"]:
             raise refuse("operational_checks", "missing" if "operational_checks" not in answers else "must be a path")
     providers = answers["providers"]
     if not isinstance(providers, dict):

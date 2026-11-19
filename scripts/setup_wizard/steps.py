@@ -105,6 +105,17 @@ def codex_hint(wanted: bool, ready: bool, network_on: bool) -> tuple[str, str]:
     return "codex", "Codex-to-Claude bridging was not chosen, so no profile is needed."
 
 
+def routing_bridges(raw: bytes | None) -> bool:
+    """Whether a provider-routing.json lets Codex sessions bridge to Claude, read as JSON (review
+    040-s1-update: whitespace never decides it). Not valid JSON is no."""
+    try:
+        import json
+        data = json.loads(raw)
+        return isinstance(data, dict) and data.get("codex_primary_may_bridge_to_claude") is True
+    except Exception:
+        return False
+
+
 def codex_primary(raw: bytes | None) -> bool:
     """W4.5: whether a Codex session may orchestrate: no routing file means only Codex is enabled (yes);
     otherwise Codex children enabled, or Codex sessions allowed to bridge to Claude. A file that is

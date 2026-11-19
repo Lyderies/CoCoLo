@@ -151,6 +151,13 @@ class Wizard:
     def mark_step(self, number: int, state: str, note: str) -> None:
         self.t.stat[number] = state
         self.note[number] = note
+        if self.update:  # No menu draws it, so each step's screen is shown as the step is settled.
+            self.t.render()
+        if state == "fail":
+            self.failed_any = True  # A failed step is a failed run, whatever else it records.
+            if self.update:  # S1: the first failed step ends an update; nothing after it runs.
+                name = self.t.names[number - 1] if 0 < number <= len(self.t.names) else ""
+                raise Stop(1, f"The update stopped at step {number} ({name}): {note}.")
 
     def stopped(self, code: int) -> Stop:
         return Stop(code, "Stopped.")
@@ -442,6 +449,7 @@ class Wizard:
                     continue
                 if choice == 2:
                     raise Stop(1, "Stopped.")
+                self.checks_failed = True  # An update from the menu needs every check passed.
                 self.mark_step(1, "ok", "checks done with warnings")
             elif warned:
                 t.body("Read the warning above, then continue.")
@@ -610,7 +618,8 @@ class Wizard:
             self.install_exists = False
             if os.path.isfile(os.path.join(folder, ".codex", "orchestration", "install-manifest.json")):
                 self.install_exists = True
-                self.remember_project(folder)
+                if not self.update:  # Offered first next time once chosen; an update remembers it only once accepted.
+                    self.remember_project(folder)
                 t.list_add("ok", f"Project: {folder}")
                 self.owner_key_notice()
                 if not self.update:
@@ -624,7 +633,10 @@ class Wizard:
                         continue
                     if choice == 7:
                         raise Stop(0, "Stopped.")
-                    # S1-U2: the first entry is the update with no menu.
+                    # S1-U2: the first entry is the update with no menu; it needs every check passed.
+                    if choice == 0 and getattr(self, "checks_failed", False):
+                        raise Stop(1, "The update stopped: it needs every check passed, and a check failed in "
+                                      "step 1. Fix it and run ./setup.sh again. Nothing was changed.")
                     self.update = t.no_pauses = choice == 0
                     self.mode = ("full", "full", "verify", "attest", "passphrase", "replace")[choice]
                     t.screen_reset()
@@ -645,6 +657,8 @@ class Wizard:
                 self.choose_another()
                 default = folder
                 continue
+            if self.install_exists and self.update:  # Accepted: remembered now (review 040-s1-update).
+                self.remember_project(folder)
             self.prepare_project_inputs(folder)
             t.screen_reset()
             self.begin_step(2)
@@ -728,8 +742,7 @@ class Wizard:
             if self.ask(["Keep the existing configuration", "Choose providers again"]) == 0:
                 self.routing_write = False
                 self.routing_content = raw_routing.decode("utf-8", "replace")
-                import re
-                if re.search(r'"codex_primary_may_bridge_to_claude": *true', self.routing_content):
+                if steps.routing_bridges(raw_routing):
                     self.profile_wanted = True
                 if steps.codex_primary(raw_routing):
                     self.codex_primary = True
@@ -1745,6 +1758,15 @@ class Wizard:
         if _resolve_dir(start) == _resolve_dir(str(CLONE)):
             start = ""
         self.t.term_size()
+        try:
+            self.run_steps(start)
+        except Stop:
+            if self.update and self.t.step > 1:  # S1: the summary of what was and was not done
+                self.summary_screen()
+                self.t.render()
+            raise
+
+    def run_steps(self, start: str) -> None:
         self.step_checks()
         self.init_logdir()
         while True:
