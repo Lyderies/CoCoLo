@@ -274,6 +274,17 @@ class RunnerTests(unittest.TestCase):
             self.assertIsNotNone(started[0].returncode)  # stopped and reaped
 
 
+    def test_a_started_process_has_no_signal_held(self):
+        """Review 040-s5-wizard-5 (a): the parent holds termination signals while it starts and records a
+        process, but the process itself starts with none held, so a stop's SIGTERM reaches it."""
+        code = "import signal; print(sorted(int(s) for s in signal.pthread_sigmask(signal.SIG_BLOCK, [])))"
+        term = terminal.Terminal(out=io.StringIO(), read=lambda count, timeout: b"", colours=terminal.NO_COLOURS,
+                                 size=lambda: (80, 24))
+        self.assertEqual(b"[]\n", term.call(python(code)).stdout)
+        term.run_cmd("x", python(code), logdir=self.logdir, width=lambda: 80)
+        self.assertEqual("[]\n", Path(term.last_out).read_text())
+
+
 class WidthTests(unittest.TestCase):
     """S3-P9a and S3-P5 on terminal_width itself: (COLUMNS, the terminal's size, the terminfo answer)."""
 

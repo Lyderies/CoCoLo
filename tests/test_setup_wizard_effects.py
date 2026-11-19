@@ -380,6 +380,22 @@ class CancellationKeptTests(unittest.TestCase):
                     effects.create_profile(home, "content")
             self.assertIn("orchestrator.config.toml", err.getvalue())
 
+    def test_the_warning_shows_no_control_character(self) -> None:
+        """Review 040-s5-wizard-5 (b): the named path is stripped of control characters."""
+        import io
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(os.path.realpath(directory)) / "co\x1b[2Jdex"
+
+            def interrupted(*args, **kwargs):
+                raise KeyboardInterrupt
+            with mock.patch.object(effects.os, "fdopen", interrupted), \
+                    mock.patch.object(effects.Path, "unlink", side_effect=PermissionError("no")), \
+                    mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                with self.assertRaises(KeyboardInterrupt):
+                    effects.create_profile(home, "content")
+            self.assertNotIn("\x1b", err.getvalue())
+            self.assertIn("co[2Jdex", err.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

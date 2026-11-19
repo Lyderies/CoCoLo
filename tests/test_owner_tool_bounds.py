@@ -221,6 +221,24 @@ class AttestBoundsTests(unittest.TestCase):
         else:
             self.fail("the client is still running")
 
+    def test_a_status_client_starts_with_no_signal_held(self) -> None:
+        """Review 040-s5-wizard-5 (a): the client does not inherit the check's held signals."""
+        marker = self.base / "mask"
+        client = self.base / "codex"
+        client.write_text(f"#!{sys.executable}\nimport signal\n"
+                          f"open({str(marker)!r}, 'w').write(repr(sorted(int(s) for s in signal.pthread_sigmask("
+                          "signal.SIG_BLOCK, []))))\n")
+        client.chmod(0o755)
+        providers = attest.clone_module("providers")
+        scratch = self.base / "scratch"
+        scratch.mkdir(mode=0o700)
+        with mock.patch.object(providers, "trusted_search_path", lambda: str(self.base)), \
+                mock.patch.object(providers, "resolve_client", lambda name, untrusted=(): (str(client), "0" * 64)), \
+                mock.patch.object(attest, "make_scratch", lambda prefix, project=None: scratch), \
+                mock.patch.object(attest, "remove_scratch", lambda path: True):
+            attest.client_status("codex")
+        self.assertEqual("[]", marker.read_text())
+
     def test_a_stopped_status_check_stops_the_clients_group(self) -> None:
         """The client runs in its own session; when the check is stopped, its whole group goes too."""
         marker = self.base / "client-pid"
