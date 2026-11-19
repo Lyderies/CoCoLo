@@ -64,5 +64,33 @@ class TestStageTests(unittest.TestCase):
         self.assertEqual("e2e", stages["root:test_setup_sh"])
 
 
+class ShardTests(unittest.TestCase):
+    """PLAN T4a: one of N shards, deterministic and balanced by recorded time."""
+
+    def queue(self):
+        return sorted(((float(seconds), "codex", f"tests.m{index}", [f"tests.m{index}"])
+                       for index, seconds in enumerate([90, 70, 60, 40, 30, 30, 20, 10, 5, 1])), reverse=True)
+
+    def test_every_unit_is_in_exactly_one_shard_and_the_split_is_stable(self):
+        queue = self.queue()
+        shards = [parallel_tests.shard(queue, index, 3) for index in (1, 2, 3)]
+        names = [unit[2] for part in shards for unit in part]
+        self.assertEqual(sorted(unit[2] for unit in queue), sorted(names))
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(shards, [parallel_tests.shard(list(reversed(queue)), index, 3) for index in (1, 2, 3)])
+        self.assertEqual(queue, parallel_tests.shard(queue, 1, 1))
+
+    def test_no_shard_has_more_than_its_share_plus_the_longest_unit(self):
+        queue = self.queue()
+        total, longest = sum(unit[0] for unit in queue), max(unit[0] for unit in queue)
+        for index in (1, 2, 3):
+            self.assertLessEqual(sum(unit[0] for unit in parallel_tests.shard(queue, index, 3)), total / 3 + longest)
+
+    def test_shard_is_refused_unless_k_of_n(self):
+        for bad in ("0/3", "4/3", "1/0", "x", "1/17"):
+            with self.subTest(bad=bad), self.assertRaises(SystemExit):
+                parallel_tests.main(["--shard", bad, "--stage", "unit"])
+
+
 if __name__ == "__main__":
     unittest.main()

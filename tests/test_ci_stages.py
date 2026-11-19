@@ -56,5 +56,13 @@ class CiStageTests(unittest.TestCase):
                         self.assertIn("--jobs", line)
 
 
+    def test_integration_runs_in_three_shards_at_one_job_per_core(self):
+        """PLAN T4b: three shards, each with --jobs equal to its cores."""
+        integration = self.jobs["integration"]
+        self.assertRegex(integration, r"shard: \[1, 2, 3\]")
+        self.assertIn('--shard "${{ matrix.shard }}/3"', integration)
+        self.assertIn('--jobs "$(getconf _NPROCESSORS_ONLN)"', integration)
+
+
 if __name__ == "__main__":
     unittest.main()
