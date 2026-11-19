@@ -211,6 +211,30 @@ class SetupProgressTests(unittest.TestCase):
         self.assertTrue(all(len(frame) < 80 for frame in frames), max(map(len, frames)))
         self.assertTrue(any(len(frame) > 70 for frame in frames), max(map(len, frames)))
 
+    def test_S3_P9a_terminal_width_for_every_size_answer(self):
+        """Fifth review (040-s3p3-fifth): every case of S3-P9a and S3-P5, on terminal_width itself."""
+        cases = [
+            # (stty answer, tput body, COLUMNS or None, expected width)
+            ('0 0', 'echo 0', None, '80'),
+            ('0 0', 'echo 00', None, '80'),
+            ('0 0', 'return 1', None, '80'),
+            ('0 0', 'echo', None, '80'),                 # tput succeeds but prints nothing
+            ('0 0', 'echo 42; return 1', None, '80'),    # tput fails yet prints a number: not trusted
+            ('0 0', 'echo 100', None, '100'),            # tput knows the size
+            ('24 120', 'echo 100', None, '120'),         # stty knows it first
+            ('24 120', 'echo 100', '0', '0'),            # explicit COLUMNS=0: no frame (S3-P5)
+            ('24 120', 'echo 100', '08', '8'),           # explicit COLUMNS keeps its value
+        ]
+        for stty, tput, columns, expected in cases:
+            with self.subTest(stty=stty, tput=tput, columns=columns):
+                script = "\n".join([
+                    f'stty() {{ echo "{stty}"; }}', f"tput() {{ {tput}; }}",
+                    "unset COLUMNS" if columns is None else f"COLUMNS={columns}",
+                    function("terminal_width"), "terminal_width"])
+                done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10,
+                                      check=True, stdin=subprocess.DEVNULL)
+                self.assertEqual(expected, done.stdout)
+
     def test_S3_P9b_each_redraw_erases_the_last_frame_even_when_too_narrow(self):
         # A frame is drawn at 80 columns; then the terminal becomes 4 columns wide, too narrow for
         # a frame: each redraw still erases the line, so the earlier frame does not stay.
