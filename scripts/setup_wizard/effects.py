@@ -230,3 +230,127 @@ def client_status(name: str, project=None) -> tuple[int, bytes]:
         return attest().client_status(name, Path(project) if project is not None else None)
     except Exception:
         return 1, b""
+
+
+def unsafe_name(rel) -> bool:
+    """A managed file name must be a plain, printable, relative UTF-8 path (setup.sh's helper)."""
+    import unicodedata
+    if not isinstance(rel, str) or not rel or rel[0] == " " or rel[-1] == " ":
+        return True
+    try:
+        rel.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    if any(unicodedata.category(char) in ("Cc", "Cs") for char in rel):
+        return True
+    return rel.startswith(("-", "/")) or ".." in rel.split("/")
+
+
+def _digest(path) -> str | None:
+    import hashlib
+    try:
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def _manifest(target: Path):
+    import json
+    try:
+        with open(target / ".codex" / "orchestration" / "install-manifest.json", encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+
+def plan_entries(reply, target, bundle) -> list[tuple[str, str | None]]:
+    """Step 4's per-path plan from the install preview (setup.sh's `pj plan`): ADD, UPDATE, KEEP,
+    LOCAL (written for this checkout only), REMOVE and UNTRACK (from the earlier manifest), CONFIG;
+    ("UNSAFE", None) for a name that may not reach the screen."""
+    target, bundle = Path(target), Path(bundle)
+    reply = reply if isinstance(reply, dict) else {}
+    codex, claude = reply.get("codex") or {}, reply.get("claude") or {}
+    out: list[tuple[str, str | None]] = []
+    files = codex.get("files") or []
+    for rel in files:
+        if unsafe_name(rel):
+            out.append(("UNSAFE", None))
+        elif not os.path.lexists(target / rel):
+            out.append(("ADD", rel))
+        elif _digest(target / rel) == _digest(bundle / rel):
+            out.append(("KEEP", rel))
+        else:
+            out.append(("UPDATE", rel))
+    local = [rel for rel in (codex.get("local_files") or []) if isinstance(rel, str)]
+    out.extend(("UNSAFE", None) if unsafe_name(rel) else ("LOCAL", rel) for rel in local)
+    manifest = _manifest(target)
+    old = manifest.get("files") if isinstance(manifest, dict) else None
+    if isinstance(old, dict):
+        for rel in sorted(set(old) - {name for name in files if isinstance(name, str)}):
+            out.append(("UNSAFE", None) if unsafe_name(rel) else ("UNTRACK" if rel in local else "REMOVE", rel))
+    settings = reply.get("claude_settings") or {}
+    for rel in (claude.get("changed_paths") or []) + (settings.get("changed_paths") or []):
+        if unsafe_name(rel):
+            out.append(("UNSAFE", None))
+        else:
+            out.append(("UPDATE" if os.path.lexists(target / rel) else "ADD", rel))
+    import re
+    for rel, action in sorted((codex.get("project_configuration") or {}).items()):
+        word = re.sub(r"[^A-Za-z0-9_ .+-]", "", str(action or ""))[:30] or "unknown"
+        out.append(("UNSAFE", None) if unsafe_name(rel) else ("CONFIG", f"{rel} -> {word}"))
+    return out
+
+
+def plan_paths(entries) -> list[str] | None:
+    """setup.sh's `pj planpaths`: the added, updated, removed and untracked paths, sorted; None when
+    any name was unsafe."""
+    if any(kind == "UNSAFE" for kind, _ in entries):
+        return None
+    return sorted({rel for kind, rel in entries if kind in ("ADD", "UPDATE", "REMOVE", "UNTRACK")})
+
+
+def git_ignored(project, candidates: list[str]) -> list[str] | None:
+    """W5.7: the candidates that exist untracked but are ignored by .gitignore (which a commit made by
+    hand would refuse); None when Git could not answer, never read as "nothing is ignored"."""
+    if not candidates:
+        return []
+    install = installer()
+    try:
+        result = install._git_run(Path(project), "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
+                                  "--", *candidates, text=False)
+    except (OSError, subprocess.SubprocessError, install.InstallRefused):
+        return None
+    if result.returncode != 0:
+        return None
+    wanted = set(candidates)
+    names = [item.decode("utf-8", "surrogateescape") for item in result.stdout.split(b"\0") if item]
+    return [name for name in names if name in wanted]
+
+
+def commit_candidates(project, reply, planned: list[str]) -> list[str]:
+    """setup.sh's `pj paths`: what may be committed after the install: the planned paths, project
+    configuration written (not preserved), Claude's changed paths, the manifest and the routing, each
+    kept when it exists or is tracked. EffectRefused for an unsafe name or when Git cannot answer."""
+    project = Path(project)
+    reply = reply if isinstance(reply, dict) else {}
+    codex, claude = reply.get("codex") or {}, reply.get("claude") or {}
+    found = set(planned)
+    found.update(rel for rel, action in (codex.get("project_configuration") or {}).items() if action != "preserve")
+    found.update(claude.get("changed_paths") or [])
+    found.update((reply.get("claude_settings") or {}).get("changed_paths") or [])
+    found.update((".codex/orchestration/install-manifest.json", ".codex/orchestration/provider-routing.json"))
+    if any(unsafe_name(rel) for rel in found):
+        raise EffectRefused("unsafe file name in managed paths")
+    install = installer()
+    keep = []
+    for rel in sorted(found):
+        try:
+            result = install._git_run(project, "ls-files", "-z", "--", rel, text=False)
+        except (OSError, subprocess.SubprocessError, install.InstallRefused) as exc:
+            raise EffectRefused("the path list could not be built") from exc
+        if result.returncode != 0:
+            raise EffectRefused("the path list could not be built")
+        if os.path.lexists(project / rel) or result.stdout:
+            keep.append(rel)
+    return keep
