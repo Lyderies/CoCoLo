@@ -146,5 +146,49 @@ class MenuTests(unittest.TestCase):
         self.assertIn("   > " + "x" * 22 + "\n", out.getvalue())
 
 
+
+class TextPromptTests(unittest.TestCase):
+    """W3.1, W3.3: setup.sh's ask_text: a default, home markers expanded, q asks to quit."""
+
+    def test_nothing_typed_takes_the_default_and_typed_text_is_expanded(self) -> None:
+        term, out = make("\n")
+        self.assertEqual(("/Users/<you>/projects", "/Users/<you>/projects"),
+                         term.ask_text("Project path", "/Users/<you>/projects", home="/Users/<you>"))
+        self.assertIn("  Project path [/Users/<you>/projects]\n  > ", out.getvalue())
+        term, out = make(" '~/Code/app' \n")
+        self.assertEqual(("/Users/<you>/Code/app", " '~/Code/app' "),
+                         term.ask_text("Project path", "", home="/Users/<you>"))
+        self.assertIn("  Project path (type or paste the full path)\n  > ", out.getvalue())
+
+    def test_q_asks_to_quit_then_asks_again(self) -> None:
+        term, out = make("q\n", "n", "/p\n")
+        self.assertEqual(("/p", "/p"), term.ask_text("Project path", "", home="/h"))
+        self.assertEqual(2, out.getvalue().count("Project path (type or paste the full path)"))
+        term, _ = make("Q\n", "y")
+        with self.assertRaises(terminal.Stop) as stopped:
+            term.ask_text("Project path", "", home="/h")
+        self.assertEqual(130, stopped.exception.code)
+
+    def test_closed_input_stops_with_1(self) -> None:
+        term, _ = make("/half")
+        with self.assertRaises(terminal.Stop) as stopped:
+            term.ask_text("Project path", "", home="/h")
+        self.assertEqual((1, "Input closed; stopping."), (stopped.exception.code, stopped.exception.message))
+
+    def test_tab_completes_paths_with_folders_ending_in_a_slash(self) -> None:
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            base = os.path.realpath(directory)
+            os.mkdir(os.path.join(base, "project"))
+            open(os.path.join(base, "projects.txt"), "w").close()
+            found = terminal.complete_path(os.path.join(base, "proj"), home="/h")
+            self.assertEqual([os.path.join(base, "project") + "/", os.path.join(base, "projects.txt")], found)
+            self.assertEqual([], terminal.complete_path(os.path.join(base, "zzz"), home="/h"))
+            os.mkdir(os.path.join(base, "home"))
+            os.mkdir(os.path.join(base, "home", "Code"))
+            self.assertEqual(["~/Code/"], terminal.complete_path("~/Co", home=os.path.join(base, "home")))
+
+
 if __name__ == "__main__":
     unittest.main()
