@@ -216,6 +216,14 @@ class WizardSourceTests(unittest.TestCase):
                                                    "        argv[:] = ['git', 'status']\n        return self.t.run_cmd(label, argv)\n"),
             "os.system imported": "from os import system\nsystem('git status')\n",
             "os aliased": "import os as o\no.system('git status')\n",
+            "an annotated alias of argv changed in a wrapper": ("class Terminal:\n    def call(self, argv):\n"
+                                                                "        same: list = argv\n        same[:] = ['git']\n"
+                                                                "        subprocess.Popen(argv)\n"),
+            "a forwarder replacing argv by annotation": ("class Wizard:\n    def run(self, label, argv):\n"
+                                                          "        argv: list = ['git', 'status']\n"
+                                                          "        return self.t.run_cmd(label, argv)\n"),
+            "os held in a variable": "import os\nm = os\nm.system('git status')\n",
+            "os wildcard import": "from os import *\nsystem('git status')\n",
             "an aliased runner": "class Wizard:\n    def f(self):\n        runner = self.t.call\n        runner(['git'])\n",
             "os.system": "import os\nos.system('git status')\n",
             "os.execv": "import os\nos.execv('/usr/bin/git', ['git'])\n",
@@ -226,7 +234,7 @@ class WizardSourceTests(unittest.TestCase):
         }
         terminal_cases = {"replaced argv in a wrapper", "argv changed in place in a wrapper",
                           "a wrapper launching its own list", "a wrapper appending to argv",
-                          "an alias of argv changed in a wrapper"}
+                          "an alias of argv changed in a wrapper", "an annotated alias of argv changed in a wrapper"}
         for case, source in launches.items():
             with self.subTest(case=case):
                 # Each fixture under the file its class lives in, so the wrapper rules themselves are tested.
