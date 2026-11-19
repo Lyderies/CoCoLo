@@ -31,6 +31,17 @@ from test_setup_sh import KEPT_TERMINAL_RUNS, TOKEN, TRUSTED_PY  # noqa: E402
 _EOF = object()
 
 
+def _status(code: int) -> int:
+    """A process's status as the wizard reports it: a signal is 128 + its number."""
+    return code if code >= 0 else 128 - code
+
+
+def _bash_version() -> str:
+    """BASH_VERSION up to its first "(", as setup.sh passes it on."""
+    done = subprocess.run(["/bin/bash", "-c", 'echo "${BASH_VERSION%%(*}"'], capture_output=True, text=True)
+    return done.stdout.strip()
+
+
 class _Output:
     """The wizard's terminal output, read as a pty would be."""
 
@@ -60,25 +71,34 @@ class _DirectTerminal(terminal.Terminal):
         self.driver = driver
 
     def run_cmd(self, label, argv, *, logdir, slow_seconds=10, width=None, quiet=False, reason=None, draw=None):
-        if draw is not None:
-            draw()
+        """Terminal.run_cmd's order and environment (log files first, COCOLO_PHASES=1, the redraw after
+        the start); its live spinner and process group are the kept terminal runs' to show."""
         self.command_count = getattr(self, "command_count", 0) + 1
-        status, out, err = self.driver.emulate(list(argv))
         if quiet:
             self.last_out = self.last_err = None
         else:
             self.last_out = str(Path(logdir) / f"cmd{self.command_count}.out")
             self.last_err = str(Path(logdir) / f"cmd{self.command_count}.err")
+            for path in (self.last_out, self.last_err):
+                os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600))
+        status, out, err = self.driver.emulate(list(argv), {"env": {**os.environ, "COCOLO_PHASES": "1"}},
+                                               after_start=draw)
+        if not quiet:
             Path(self.last_out).write_bytes(out)
             Path(self.last_err).write_bytes(err)
+        self.write("\r\033[K")
+        self.show_cursor()
         self.last_rc = status
         self.log_step(label, status, reason(self.last_out) if reason and status and not quiet else "")
         return status
 
     def call(self, argv, **options):
+        unsupported = set(options) - {"text", "env"}
+        if unsupported:
+            raise AssertionError(f"options the driver does not emulate: {sorted(unsupported)}")
         status, out, err = self.driver.emulate(list(argv), options)
-        if options.get("text"):
-            out, err = out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+        if options.get("text"):  # subprocess's text mode: locale encoding, universal newlines
+            out, err = (io.TextIOWrapper(io.BytesIO(data)).read() for data in (out, err))
         return subprocess.CompletedProcess(argv, status, out, err)
 
 
@@ -104,13 +124,18 @@ class DirectDriverMixin:
         with open(self.py_full, "a") as log:
             log.write(" ".join(args) + "\n")
 
-    def emulate(self, argv: list[str], options: dict | None = None) -> tuple[int, bytes, bytes]:
-        """What the fake python3 (or, for git, the real git) does with this argument list."""
-        if argv[0] != self.wrapper:  # Git, run for real with the wizard's environment and options.
-            done = subprocess.run(argv, capture_output=True, env=(options or {}).get("env"),
-                                  stdin=subprocess.DEVNULL)
-            return done.returncode, done.stdout, done.stderr
-        args = argv[1:]
+    def emulate(self, argv: list[str], options: dict | None = None, after_start=None) -> tuple[int, bytes, bytes]:
+        """What the fake python3 (or, for git, the real git) does with this argument list, with the
+        environment the wizard gives it; `after_start` is the caller's redraw once it has started."""
+        env = (options or {}).get("env") or dict(os.environ)
+        if after_start is not None:
+            after_start()
+        if argv[0] != self.wrapper:  # Git, run for real with the wizard's environment.
+            return self._process(argv, env)
+        with mock.patch.dict(os.environ, env, clear=True):
+            return self._wrapper(argv[1:])
+
+    def _wrapper(self, args: list[str]) -> tuple[int, bytes, bytes]:
         self._log_launch(args)
         joined = " ".join(args)
         env = os.environ
@@ -138,9 +163,9 @@ class DirectDriverMixin:
         if env.get("FAKE_UNTRUSTED") and matches("*host-command*"):
             return 2, b'{"ready": false, "error": "the Python interpreter cannot be trusted: x"}\n', b""
         if env.get("FAKE_RULE") and (matches("*cli.py host-command*") or matches("*cli.py install-codex-rule*")):
-            return self._process([TRUSTED_PY, str(self.fakes / "fake_rule.py"), *args])
+            return self._process([TRUSTED_PY, str(self.fakes / "fake_rule.py"), *args], env)
         if env.get("FAKE_CLIENT_DIRS") and matches("*attest.py client-status *"):
-            return self._process([TRUSTED_PY, "-I", "-B", "-S", str(self.fakes / "fake_client_tool.py"), *args])
+            return self._process([TRUSTED_PY, "-I", "-B", "-S", str(self.fakes / "fake_client_tool.py"), *args], env)
         if env.get("FAKE_SCAN") and matches("*cli.py codex-session-scan *"):
             return 0, (env["FAKE_SCAN"] + "\n").encode(), b""
         if env.get("FAKE_UPGRADE"):
@@ -166,8 +191,9 @@ class DirectDriverMixin:
                     reason = env.get("FAKE_STATUS_REASON") or "status_collector_transport_unavailable"
                     return 2, f'{{"ready": false, "reason_code": "{reason}"}}\n'.encode(), b""
                 return 0, b'{"ready": true, "collector_runtime_version": "0.0.0"}\n', b""
-        if matches('*attest.py scratch setup-*'):
+        if matches('*attest.py scratch setup-*'):  # out=$(...): trailing newlines dropped, one printed
             status, out, err = self._real(args)
+            out = out.rstrip(b"\n") + b"\n"
             self._append(self.scratch_log, out.decode().rstrip("\n"))
             return status, out, err
         return self._real(args)
@@ -178,9 +204,10 @@ class DirectDriverMixin:
             log.write(line + "\n")
 
     @staticmethod
-    def _process(argv: list[str]) -> tuple[int, bytes, bytes]:
-        done = subprocess.run(argv, capture_output=True, stdin=subprocess.DEVNULL)
-        return done.returncode, done.stdout, done.stderr
+    def _process(argv: list[str], env: dict | None = None) -> tuple[int, bytes, bytes]:
+        done = subprocess.run(argv, capture_output=True, stdin=subprocess.DEVNULL, env=env or dict(os.environ),
+                              start_new_session=True, timeout=120)
+        return _status(done.returncode), done.stdout, done.stderr
 
     def _real(self, args: list[str]) -> tuple[int, bytes, bytes]:
         """`exec TRUSTED_PY "$@"`: the installer, its git tool, the owner tool and the path helper run
@@ -195,41 +222,56 @@ class DirectDriverMixin:
             return self._in_process(effects.attest().owner_tool, rest[3:])
         if rest[:2] == [str(ROOT / "scripts" / "setup-wizard.py"), "--helper"]:
             return self._helper(rest[2:])
-        return self._process([TRUSTED_PY, *args])
+        return self._process([TRUSTED_PY, *args], dict(os.environ))
 
     @staticmethod
     def _in_process(function, args) -> tuple[int, bytes, bytes]:
+        """function(args) as `sys.exit(function(args))` in a process: its exit status and both streams."""
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
-                status = function(list(args))
-            except SystemExit as exit:  # As a process: no code is 0; a message goes to stderr and is 1.
-                if exit.code is None:
-                    status = 0
-                elif isinstance(exit.code, int):
-                    status = exit.code
-                else:
-                    print(exit.code, file=sys.stderr)
-                    status = 1
-        return status or 0, out.getvalue().encode(), err.getvalue().encode()
+                code = function(list(args))
+            except SystemExit as exit:
+                code = exit.code
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                code = 1
+            if code is None:
+                status = 0
+            elif isinstance(code, int):
+                status = code & 0xFF
+            else:  # sys.exit("message"): the message on stderr, status 1
+                print(code, file=sys.stderr)
+                status = 1
+        return status, out.getvalue().encode(), err.getvalue().encode()
 
-    @staticmethod
-    def _helper(args) -> tuple[int, bytes, bytes]:
+    def _helper(self, args) -> tuple[int, bytes, bytes]:
+        """setup-wizard.py --helper ARGS through its own main, with binary stdout and stderr captured."""
         import importlib.util
         spec = importlib.util.spec_from_file_location("setup_wizard_entry", ROOT / "scripts" / "setup-wizard.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         out = io.BytesIO()
-        fake_stdout = mock.Mock(buffer=out, write=lambda text: out.write(text.encode()), flush=lambda: None)
-        with mock.patch.object(module.sys, "stdout", fake_stdout):
-            status = module.helper(list(args))
-        return status, out.getvalue(), b""
+        stdout = io.TextIOWrapper(out, encoding="utf-8", write_through=True)
+
+        def main(argv):  # _in_process captures text stdout; the helper writes NUL-separated bytes too
+            with mock.patch.object(sys, "stdout", stdout):
+                try:
+                    return module.main(["--helper", *argv])
+                finally:
+                    stdout.flush()
+        status, text, err = self._in_process(main, args)
+        return status, text + out.getvalue(), err
 
     # The driver: WizardTerminalTests' start, expect, settle, send and finish -----------------
 
     def start(self, cwd: Path, extra_env: dict | None = None, *, direct: bool = False) -> None:
-        # setup.sh exports PYTHONDONTWRITEBYTECODE=1 for everything it starts.
-        env = dict(self.env, **(extra_env or {}), PYTHONDONTWRITEBYTECODE="1")
+        # The environment setup.sh gives the wizard (its lines 48-51 and 152): system folders only on
+        # PATH, the owner's PATH kept aside, bytecode off, and the launcher's three COCOLO_ values.
+        env = dict(self.env, **(extra_env or {}))
+        env.update(PATH="/usr/bin:/bin:/usr/sbin:/sbin", PYTHONDONTWRITEBYTECODE="1",
+                   COCOLO_PYTHON=self.wrapper, COCOLO_OWNER_PATH=env["PATH"], COCOLO_BASH_VERSION=_bash_version())
         environment = mock.patch.dict(os.environ, env, clear=True)
         environment.start()
         self.addCleanup(environment.stop)
@@ -241,7 +283,8 @@ class DirectDriverMixin:
         trusted = mock.patch.object(effects.installer().attest, "trusted_python", lambda: TRUSTED_PY)
         trusted.start()
         self.addCleanup(trusted.stop)
-        # What setup.sh's launcher logs before the wizard: its version check and its exec.
+        # Simulated, not evidence of isolation: the two lines setup.sh's launcher would log before the
+        # wizard (its version check and its exec). The real launcher runs in KEPT_TERMINAL_RUNS.
         self._log_launch(["-I", "-B", "-S", "-X", "pycache_prefix=/dev/null", "-c",
                           "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"])
         self._log_launch(["-I", "-B", "-S", "-X", "pycache_prefix=/dev/null",
@@ -272,12 +315,13 @@ class DirectDriverMixin:
             return chunk
         term = _DirectTerminal(self, out=self.output, read=read, colours=terminal.terminal_colours(),
                                size=lambda: (100, 30))
-        wizard = flow.Wizard(term, start=str(cwd), python=os.path.realpath(self.wrapper),
-                             owner_path=env.get("PATH", ""), bash_version="3.2.57")
+        wizard = flow.Wizard(term, start=str(cwd), python=env["COCOLO_PYTHON"],
+                             owner_path=env["COCOLO_OWNER_PATH"], bash_version=env["COCOLO_BASH_VERSION"])
 
         def handoff(argv):  # flow.Wizard.handoff, with attest.py's run emulated (its output on the terminal)
             term.show_cursor()
             term.write("\033[H\033[2J")
+            # The FAKE_ATTEST stub prints only to stdout; a kept terminal run hands over the real terminal.
             status, out, err = self.emulate(list(argv))
             term.write((out + err).decode("utf-8", "replace"))
             term.write(f"\n  attest.py finished (exit code {status}). Press Enter to continue. ")
@@ -346,6 +390,11 @@ class DirectDriverMixin:
         return self.result[0]
 
     def _reap(self) -> None:
+        """Input closed, as when the terminal goes; the wizard must then end before anything it uses is
+        restored (this runs before the environment, folder and trust patches are undone)."""
         if self.thread is not None and self.thread.is_alive():
             self.keys.put(_EOF)
-            self.thread.join(15)
+            self.thread.join(30)
+            if self.thread.is_alive():
+                print(f"{self.id()}: the wizard thread did not end; stopping the test process", file=sys.stderr)
+                os._exit(1)

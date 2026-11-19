@@ -906,10 +906,14 @@ class SetupScriptTests(unittest.TestCase):
 
 
 # T8h: the wizard terminal tests that stay real terminal runs, because what they prove needs a real
-# process, terminal or signal: the full run's isolation and clean-up, a slow child stopped by SIGTERM,
-# PATH-planted programs, the real attest.py hand-off, the failure summary's process isolation, the
-# runtime-folder rule for clients, the first screen's quit, a summary path written by a real process,
-# reads split into 16-byte pieces, and an update installed by a real process. The rest run in-process (test_setup_wizard_direct).
+# process, terminal or signal: the launcher, the full run's isolation and clean-up, a slow child stopped
+# by SIGTERM, PATH-planted programs and a module planted in the orchestration folder (fresh
+# interpreters), the real attest.py hand-off (passphrase, and ordinary billing back to the menu), the
+# failure summary's process isolation, the client runtime-folder rule, the first screen's quit, a
+# summary path written by a real process, reads split into 16-byte pieces, updates installed by real
+# processes (nothing changed; an obsolete wildcard file), the collector through the real wrapper
+# (still starting; move and upgrade) and a typed project path through the real terminal. The rest run
+# in-process with the same bodies (test_setup_wizard_direct).
 KEPT_TERMINAL_RUNS = frozenset({
     "test_changing_the_passphrase_hands_over_retries_and_backing_out_runs_nothing",
     "test_clients_outside_the_runtimes_folders_are_refused_and_never_run",
@@ -921,6 +925,13 @@ KEPT_TERMINAL_RUNS = frozenset({
     "test_summary_path_with_a_control_character_is_refused",
     "test_a_helper_planted_during_the_run_stops_git_and_the_commit",
     "test_commit_stages_updated_files_and_provider_routing",
+    "test_an_update_that_changes_nothing_offers_no_commit",
+    "test_wildcard_named_obsolete_file_is_removed_without_touching_its_neighbour",
+    "test_a_file_planted_in_the_orchestration_folder_stops_the_install",
+    "test_C6_setup_waits_for_a_collector_that_is_still_starting",
+    "test_old_records_that_also_need_the_upgrade_get_both_questions_before_anything_moves",
+    "test_back_to_the_main_menu_after_a_failure_then_another_option_works",
+    "test_a_lost_tilde_is_reported_exactly_and_offered_back",
 })
 
 
