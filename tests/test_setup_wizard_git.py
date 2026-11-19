@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 import unittest
 from pathlib import Path
 
@@ -123,6 +124,27 @@ class GitQueryTests(GitEffectTests):
         (self.project / ".claude" / "settings.json").write_text("{}\n")
         found = effects.commit_candidates(self.project, reply, [".codex/kept", ".codex/never-existed"])
         self.assertEqual([".claude/settings.json", ".codex/config-new", ".codex/kept"], found)
+
+    def test_commit_candidates_ask_git_once_however_many_paths(self) -> None:
+        """T8h (W13): one ls-files for all candidates, not one per path; a tracked folder still counts."""
+        for n in range(40):
+            (self.project / ".codex" / f"f{n}").write_text("x\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "more")
+        (self.project / ".codex" / "f0").unlink()  # tracked, now removed: still a candidate
+        install = effects.installer()
+        real = install._git_run
+        calls = []
+
+        def counting(*args, **kwargs):
+            calls.append(args[1:3])
+            return real(*args, **kwargs)
+        with mock.patch.object(install, "_git_run", counting):
+            found = effects.commit_candidates(self.project, {}, [f".codex/f{n}" for n in range(40)] + [".codex"])
+        self.assertEqual(1, sum(1 for call in calls if "ls-files" in call))
+        self.assertIn(".codex/f0", found)
+        self.assertIn(".codex/f39", found)
+        self.assertIn(".codex", found)
 
     def test_an_unsafe_candidate_name_refuses_the_whole_list(self) -> None:
         with self.assertRaises(effects.EffectRefused):
