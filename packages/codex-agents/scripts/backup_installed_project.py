@@ -105,13 +105,22 @@ def _write_authorization(path: Path, content: bytes) -> None:
                 restore.chmod(0o600)
                 os.replace(restore, path)
             except BaseException as failed:
-                raise QuiesceLeftStopped(f"{error}; the earlier authorization could not be put back: {failed}") \
-                    from error
-            finally:
+                outcome = QuiesceLeftStopped(f"{error}; the earlier authorization could not be put back: {failed}")
+                try:
+                    restore.unlink(missing_ok=True)
+                except OSError as stuck:
+                    outcome = QuiesceLeftStopped(f"{outcome}; {stuck}: {restore} remains")
+                raise outcome from error
+            try:
                 restore.unlink(missing_ok=True)  # F3-17: no temporary copy left behind
+            except OSError:
+                pass  # The rollback itself succeeded; a stray copy is harmless
             raise
     finally:
-        temporary.unlink(missing_ok=True)
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass  # Never replaces the outcome above; a stray copy changes nothing the collector reads.
 
 
 _BYTES_KEY = "$codex_agents_bytes_base64"
@@ -512,8 +521,8 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
                 f"{created[0]}:{created[1]}"]
         child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, text=True)
-        signal.pthread_sigmask(signal.SIG_UNBLOCK, _STOP_SIGNALS)  # The one window a stop acts in.
         try:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, _STOP_SIGNALS)  # The one window a stop acts in.
             out, err = child.communicate(timeout=CHILD_SECONDS)
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"the backup copy was stopped at its time limit ({CHILD_SECONDS} s)") from None
@@ -577,6 +586,7 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
             "isolated_restore_foreign_keys": "ok",
         }
     except BaseException as error:
+        signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # A second stop cannot cut cleanup short.
         if child is not None and child.poll() is None:
             child.kill()
             child.wait()
@@ -599,10 +609,14 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
             raise RuntimeError("the backup was stopped by a signal; nothing was kept") from None
         raise
     finally:
-        os.close(folder)
-        for number, handler in previous.items():
-            signal.signal(number, handler)
-        signal.pthread_sigmask(signal.SIG_SETMASK, found_mask)
+        try:
+            os.close(folder)
+        except OSError:
+            pass  # A folder descriptor that will not close changes nothing on disk.
+        finally:
+            for number, handler in previous.items():
+                signal.signal(number, handler)
+            signal.pthread_sigmask(signal.SIG_SETMASK, found_mask)
 
 
 def finish_backup(report: dict[str, object], *, leave_quiesced: bool, quiesce) -> tuple[dict[str, object], int]:
@@ -636,13 +650,13 @@ def conclude(*, report: dict[str, object] | None, code: int, error: BaseExceptio
         code = 2
     try:
         close()
-    except Exception as exc:
-        final["close_error"] = str(exc)
+    except BaseException as exc:  # An interrupt here still lets the collector restart (F3-16).
+        final["close_error"] = str(exc) or type(exc).__name__
         code = code or 3
     if not final.get("collector_quiesced"):
         try:
             resume()
-        except Exception as exc:
+        except BaseException as exc:
             final["restart_error"] = f"the installed collector did not restart: {exc}"
             code = code or 3
     return final, code
@@ -682,7 +696,7 @@ def _stream_child(argv: list[str]) -> int:
     the live partition, confirms the path is still that file, and prints its
     identity, digest, manifest digest, counts and this process's peak memory.
     """
-    signal.pthread_sigmask(signal.SIG_SETMASK, [])  # The script held its stop signals while starting this.
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, _STOP_SIGNALS)  # Held by the script; nothing else changed.
     database, partial, project_id, schema, limit, expected = argv
     expected_identity = [int(part) for part in expected.split(":")]
     sys.path.insert(0, str(CLONE_PACKAGE))
@@ -825,12 +839,14 @@ def _main() -> int:
             report, code = finish_backup(
                 report, leave_quiesced=args.leave_quiesced,
                 quiesce=lambda: _quiesce_collector_authorization(state.collector_authorization))
-        except Exception as exc:
+        except BaseException as exc:  # Every exit after the preflight goes through the one ending.
             error = exc
         # F3-16: one ending, then one report.
         final, code = conclude(report=report, code=code, error=error,
                                close=ledger.close if ledger is not None else (lambda: None),
                                resume=maintenance.resume)
+        if set(signal.sigpending()) & set(_STOP_SIGNALS):  # It acts once the report is out.
+            final["stopped_after_registration" if report is not None else "stopped"] = True
         print(json.dumps(final, indent=2, sort_keys=True))
         return code
     finally:
