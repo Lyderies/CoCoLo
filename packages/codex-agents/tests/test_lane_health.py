@@ -64,15 +64,18 @@ class LaneHealthTests(unittest.TestCase):
         self.assertNotEqual('not a fixed cause!', (self.lane.view()['last_failure'] or {}).get('cause'))
 
     def test_H1a_2_one_held_episode_keeps_its_onset_until_every_contributor_has_left(self):
-        times = iter([1000, 2000, 3000, 4000])
-        with mock.patch.object(lane_health, '_wall_ms', lambda: next(times)):
+        clock = [1000]
+        with mock.patch.object(lane_health, '_wall_ms', lambda: clock[0]):
             self.lane.enter_held()   # A at 1000
+            clock[0] = 2000
             self.lane.enter_held()   # B at 2000
             self.assertEqual(1000, self.lane.view()['held_since_ms'])
+            clock[0] = 500           # the wall clock steps back
             self.lane.leave_held()   # A leaves first
             self.assertEqual(1000, self.lane.view()['held_since_ms'])
             self.lane.leave_held()   # B leaves
             self.assertIsNone(self.lane.view()['held_since_ms'])
+            clock[0] = 3000
             self.lane.enter_held()   # a new episode
             self.assertEqual(3000, self.lane.view()['held_since_ms'])
 
