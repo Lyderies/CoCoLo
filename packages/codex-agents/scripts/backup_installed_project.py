@@ -803,10 +803,10 @@ def _main() -> int:
         )
         report = backup_partition(ledger, project_id, args.file_id, schema_version=schema_version,
                                   expires_at_ms=expires_at_ms)
+        backup_made = True  # Registered: from here every exit restarts or reports the collector.
         final, code = finish_backup(
             report, leave_quiesced=args.leave_quiesced,
             quiesce=lambda: _quiesce_collector_authorization(state.collector_authorization))
-        backup_made = True
         ledger.close()
         ledger = None
         # F3-13: maintenance is settled first, so the one report says how it ended.
@@ -817,6 +817,9 @@ def _main() -> int:
         if ledger is not None:
             ledger.close()
         if not backup_made:  # Refused before the backup was made: the collector is restarted.
+            with contextlib.suppress(Exception):
+                maintenance.resume()
+        elif sys.exc_info()[0] is not None:  # Interrupted after it was made, before the report.
             with contextlib.suppress(Exception):
                 maintenance.resume()
 
