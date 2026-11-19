@@ -97,6 +97,27 @@ class ProjectOrchestrationTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
             self.call('open', context={'role': 'host', 'active': True})
 
+    def test_R6_registration_is_recorded_once_and_a_failure_before_open_never_changes(self):
+        handle = self.opened()['orchestration_handle']
+        run = ('hrn_' + 'a' * 48, 'run-r6', 1)
+        self.store.record_registered_run(handle, *run, now_ms=self.now)
+        self.store.record_registered_run(handle, *run, now_ms=self.now + 5)  # a replay: no change
+        with self.assertRaisesRegex(HistoryError, 'history_conflict'):
+            self.store.record_registered_run(handle, run[0], 'another-run', 1, now_ms=self.now)
+        self.store.record_run_failed_before_open(run[0], 1, 'preparation_export_failed', now_ms=self.now + 10)
+        self.store.record_run_failed_before_open(run[0], 1, 'preparation_export_failed', now_ms=self.now + 20)
+        with self.assertRaisesRegex(HistoryError, 'history_conflict'):
+            self.store.record_run_failed_before_open(run[0], 1, 'preparation_full', now_ms=self.now + 30)
+        with self.assertRaisesRegex(HistoryError, 'history_not_found'):
+            self.store.record_run_failed_before_open('hrn_' + 'b' * 48, 1, 'preparation_full', now_ms=self.now)
+        with self.assertRaisesRegex(HistoryError, 'history_invalid_input'):
+            self.store.record_run_failed_before_open(run[0], 1, 'free text with a path /x', now_ms=self.now)
+        rows = self.store._connection.execute(
+            'SELECT orchestration_handle,run_id,attempt,registered_at_ms,failed_reason,failed_at_ms '
+            'FROM project_registered_runs').fetchall()
+        self.assertEqual([(handle, 'run-r6', 1, self.now, 'preparation_export_failed', self.now + 10)],
+                         [tuple(row) for row in rows])
+
     def test_R8a_an_orchestration_opened_under_another_scope_says_so(self):
         snapshot = self.opened()
         # After an update the service runs under a new generation; the caller is authorized for it.

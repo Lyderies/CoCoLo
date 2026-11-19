@@ -356,6 +356,30 @@ class ProjectDriverTests(DriverHarness):
         with mock.patch.object(ledger, '_clock_ms', return_value=expires + 1):
             self.assertTrue(ledger.drained())                                            # D2, after expiry
 
+    def report_for(self, handle):
+        store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3'))) + '?mode=ro',
+                                uri=True)
+        try:
+            for (content,) in store.execute('SELECT content FROM project_orchestration_checkpoints ORDER BY sequence DESC'):
+                snapshot = json.loads(content)['snapshot']
+                if snapshot['orchestration_handle'] == handle:
+                    return self.cli('learning-orchestration-report', '--orchestration-id', snapshot['orchestration_id'])
+        finally:
+            store.close()
+        self.fail('orchestration not found')
+
+    def test_R6_a_run_that_fails_before_its_open_is_in_the_report_as_abandoned_with_its_reason(self):
+        context, route_path, handle, run_handle = self.open_run()
+        with mock.patch.object(codex_preparation.bridge, 'codex_managed_configuration_present', return_value=True):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('preparation_managed_configuration', refused['reason_code'], refused)
+        report = self.report_for(handle)
+        runs = report['runs']
+        self.assertEqual((0, 1, 1, 1, 0, 0), (runs['opened'], runs['admitted'], runs['failed_before_open'],
+                                              runs['abandoned'], runs['pending'], runs['terminal']), report)
+        self.assertEqual({'preparation_managed_configuration': 1}, runs['failed_before_open_reasons'])
+        self.assertEqual(0, report['qa']['passed'] + report['qa']['failed'] + report['qa']['pending'])
+
     def test_a_run_refused_before_or_inside_preparation_names_the_refusal(self):
         # local-routing's 0.8.17 test still saw only run_unavailable, 0.3 s after dispatch.
         cases = (
