@@ -318,6 +318,12 @@ class ResultPromptContractTests(unittest.TestCase):
         self.assertEqual("completed", guidance["completed_status_by_verdict"]["not-ready"])
         self.assertEqual("blocked", guidance["completed_status_by_verdict"]["blocked"])
 
+    def test_CR2_the_prompt_says_a_finished_review_is_completed_whatever_its_verdict(self) -> None:
+        prompt = " ".join(bridge.child_prompt(assignment()).split())
+        self.assertIn("A review you finished is status completed and execution_state completed, whatever its "
+                      "verdict, a negative one included; failed means you could not do the work.", prompt)
+        self.assertIn("Set execution_state, semantic_verdict and admission_state; never leave them null.", prompt)
+
     def test_prompt_examples_validate_without_weakening_negative_fences(self) -> None:
         assigned = assignment()
         guidance, template = self.prompt_objects(assigned)
