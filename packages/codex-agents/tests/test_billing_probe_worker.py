@@ -344,6 +344,20 @@ class BillingProbeWorkerTests(unittest.TestCase):
                          (view['last_failure']['cause'], view['last_failure']['type']))
         self.assertNotIn('secret', repr(view))
 
+    def test_H1a_a_worker_fault_is_published_while_the_registry_lock_is_held(self):
+        # Round-5 verifier: the note must not wait for a lock a blocked owner may hold.
+        started = threading.Event()
+
+        def failing(payload):
+            started.set()
+            raise RuntimeError('fixture')
+        with mock.patch.object(workers, '_prepare', side_effect=failing):
+            with self.registry._lock:
+                self.pool.prepare(self.payload())
+                started.wait(5)
+                self.until(lambda: self.pool.health.view()['faulted'])
+                self.assertEqual(1, self.pool.health.view()['kept'])
+
     def test_unbound_preparation_holds_slot_until_actual_discard(self):
         handle, prepared = self.prepare()
         with self.assertRaisesRegex(workers.ProbeWorkerError, 'probe_worker_full'):
