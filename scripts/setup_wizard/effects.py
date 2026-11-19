@@ -413,3 +413,49 @@ def copy_input(source, destination) -> bool:
         return True
     except (module.AttestError, OSError):
         return False
+
+
+def legacy_report() -> dict | None:
+    """W6.2: the old macOS records' report (attest.legacy_state_report), None when it cannot be read."""
+    try:
+        report = attest().legacy_state_report()
+    except Exception:
+        return None
+    return report if isinstance(report, dict) else None
+
+
+def owner_key_report() -> dict | None:
+    """W7.3: the records' owner key report, None when the record cannot be read."""
+    module = attest()
+    try:
+        store = module.clone_module("learning_store")
+        return store.LearningState(module.default_state_root(), create=False).owner_key_report()
+    except Exception:
+        return None
+
+
+def project_in_temp(project) -> bool:
+    """Step 8: whether the project lies in a temporary folder a Codex session can write, decided with
+    this clone's own host_paths, never the project's copy."""
+    try:
+        host_paths = attest().clone_module("host_paths")
+        real = Path(os.path.realpath(project))
+        return any(host_paths.within(real, root) for root in host_paths.temp_roots())
+    except Exception:
+        return False
+
+
+def create_profile(folder, content: str) -> bool:
+    """W8.1, step 7: create `orchestrator.config.toml` in the Codex home, new only (an existing file is
+    never overwritten), mode 0600, its folder made owner-only when it is new."""
+    folder = Path(folder)
+    try:
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(folder / "orchestrator.config.toml", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600)
+    except OSError:
+        return False
+    with os.fdopen(descriptor, "w") as handle:
+        handle.write(content + "\n")
+    os.chmod(folder / "orchestrator.config.toml", 0o600)
+    return True

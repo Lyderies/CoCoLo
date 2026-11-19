@@ -131,5 +131,15 @@ class GitQueryTests(GitEffectTests):
             effects.commit_candidates(self.project, {}, [".codex/bad\nname"])
 
 
+
+class TemporaryFolderTests(unittest.TestCase):
+    """Step 8: the runtime's temporary roots start getconf on macOS, so this runs as integration."""
+
+    def test_a_project_in_a_temporary_folder_is_found_with_the_runtimes_own_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertTrue(effects.project_in_temp(directory))
+        self.assertFalse(effects.project_in_temp(str(ROOT)) and not str(ROOT).startswith(tempfile.gettempdir()))
+
+
 if __name__ == "__main__":
     unittest.main()

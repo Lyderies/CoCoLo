@@ -251,11 +251,6 @@ class ProjectListTests(unittest.TestCase):
 class LaterStepEffectTests(unittest.TestCase):
     """Steps 5, 7 and 8: the old records report, the profile file and the temporary-folder check."""
 
-    def test_a_project_in_a_temporary_folder_is_found_with_the_runtimes_own_roots(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            self.assertTrue(effects.project_in_temp(directory))
-        self.assertFalse(effects.project_in_temp(str(ROOT)) and not str(ROOT).startswith(tempfile.gettempdir()))
-
     def test_the_profile_is_created_new_and_private_and_never_overwritten(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(os.path.realpath(directory)) / "codex"

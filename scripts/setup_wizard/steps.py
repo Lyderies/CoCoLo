@@ -538,3 +538,19 @@ def shell_quote(value: str) -> str:
                               for char in value) + "'"
     return "".join("\\" + char if char in _QUOTED or (index == 0 and char == "#") else char
                    for index, char in enumerate(value))
+
+
+def owner_key_notice(report) -> str:
+    """W7.3: "mismatch" when the owner key file does not match its record, the time it was last
+    replaced ("YYYY-MM-DD HH:MM"), or "" (setup.sh's owner_key_notice)."""
+    if not isinstance(report, dict):
+        return ""
+    if report.get("state") == "mismatch":
+        return "mismatch"
+    if report.get("replacements"):
+        try:
+            import datetime
+            return datetime.datetime.fromtimestamp(report["last_replaced_at_ms"] / 1000).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return ""
+    return ""
