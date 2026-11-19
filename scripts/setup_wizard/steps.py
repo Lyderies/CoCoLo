@@ -174,3 +174,38 @@ def registration_outcome(reply: dict, moved: str | None) -> tuple[bool, list[str
         lines.append("Moved your orchestrator records once to a protected folder, ~/.local/state/codex-agents. "
                      f"The old copy at {moved} can be deleted once you're happy.")
     return True, lines
+
+
+def project_choices(lines, default, orchestrator, has_install, is_git_top) -> tuple[list[str], list[str]]:
+    """W3.2: the remembered projects that still hold an install (absolute, no control character), then
+    this folder unless it is listed already, is the orchestrator itself, or is not a Git top folder.
+    Returns ([], []) when nothing is remembered, and the wizard asks for a path instead."""
+    paths = [line for line in lines
+             if line.startswith("/") and not _CONTROL.search(line) and has_install(line)]
+    if not paths:
+        return [], []
+    items = list(paths)
+    if default and default not in paths and default != orchestrator and is_git_top(default):
+        paths.append(default)
+        items.append(f"{default} (this folder)")
+    return paths, items + ["Another folder...", "Quit"]
+
+
+def remembered(lines, chosen) -> list[str] | None:
+    """W3.2: the remembered list with `chosen` first and at most nine others; None when `chosen` is not
+    an absolute path free of control characters (it is then not remembered)."""
+    if not chosen.startswith("/") or _CONTROL.search(chosen):
+        return None
+    return [chosen] + [line for line in lines if line != chosen][:9]
+
+
+def cannot_open(expanded: str, typed: str, guess: str | None) -> list[str]:
+    """W3.4: what a path that cannot be opened says: the path, what was typed when it differs, how to
+    type one, and the home-folder path when the leading ~ was lost and that path exists."""
+    lines = [f"Cannot open: [{expanded}]"]
+    if typed != expanded:
+        lines.append(f"You typed: [{typed}]")
+    lines.append("Type the full path, for example /Users/<you>/projects/app. Tab completes paths.")
+    if guess:
+        lines.append(f"That path does not exist, but this one does: {guess}")
+    return lines
