@@ -321,8 +321,11 @@ class AccountClaimJobs:
                     try:
                         job.signature_handle = self._intake.capture_admission(
                             job.context.project_id, job.provider, self._work_limits, claim_anchor_ms(job.context))
+                    except ClaimError as error:
+                        job.reason, job.state = error.reason_code, "ready"  # Its own reason, as a first capture.
+                        continue
                     except Exception:
-                        job.reason, job.state = "claim_preparation_stale", "ready"
+                        job.reason, job.state = "claim_unavailable", "ready"
                         continue
                     self._signatures[job.signature_handle] = ticket
                     continue
