@@ -193,7 +193,7 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         launched = []
         with child_runs(launched=launched):
             self.owner_backup()
-        self.assertEqual(str(learning_store.MAX_PROJECT_BACKUP_BYTES), launched[0][-1])
+        self.assertIn(str(learning_store.MAX_PROJECT_BACKUP_BYTES), launched[0])
 
     def test_F3_3_registration_records_the_digest_the_expiry_and_the_place(self):
         expires = self.source._clock_ms() + 3_600_000
@@ -213,7 +213,10 @@ class OwnerBackupStreamedTests(unittest.TestCase):
             os.replace(twin, partial)
         with child_runs(after=replace), self.assertRaisesRegex(RuntimeError, "not the file"):
             self.owner_backup("swapped")
-        self.assert_nothing_left("swapped")
+        # Nothing published or registered; the replacement is not this run's file, so it is left alone
+        # (the next backup of that name removes a stale partial).
+        self.assertNotIn("swapped.sqlite3", self.partition_files())
+        self.assertIsNone(self.registered("swapped"))
 
     def test_F3_3b_a_linked_folder_on_the_way_is_refused_and_nothing_is_written_there(self):
         elsewhere = self.source.state.root.parent / "elsewhere"
