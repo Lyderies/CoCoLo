@@ -69,6 +69,29 @@ class ResultPersistenceTests(unittest.TestCase):
         self.addCleanup(self.stop_lane, lane)
         return lane
 
+    def test_R6_7_reporting_writes_have_their_own_room_and_never_take_the_writers(self):
+        release = threading.Event()
+
+        def slow_history():
+            release.wait(10)
+            return self.open_history()
+
+        lane = ResultPersistenceLane(self.fixture.owner, self.fixture.pool, mock.Mock(side_effect=slow_history),
+                                     max_entries=1, retained_bytes=MAX_PERSISTENCE_ENTRY_BYTES,
+                                     allow_local_execution_reference=True)
+        try:
+            for _ in range(result_persistence.REPORT_SLOTS):
+                lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
+            with self.assertRaisesRegex(HistoryError, 'history_service_busy'):  # waits; fails nothing
+                lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
+            # Room is left for the lane's one job and its close marker.
+            self.assertGreaterEqual(lane._incoming.maxsize - lane._incoming.qsize(), 2)
+            lane.close()
+        finally:
+            release.set()
+        lane._writer.join(6)
+        self.assertFalse(lane._writer.is_alive())
+
     def stop_lane(self, lane):
         lane.close()
         lane._writer.join(6)

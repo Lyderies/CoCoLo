@@ -380,7 +380,7 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual({'preparation_managed_configuration': 1}, runs['failed_before_open_reasons'])
         self.assertEqual(0, report['qa']['passed'] + report['qa']['failed'] + report['qa']['pending'])
 
-    def test_R6_a_run_that_fails_after_its_lease_but_before_its_open_is_reported_with_its_reason(self):
+    def test_R6_a_run_that_fails_reserving_its_lease_is_reported_with_its_reason(self):
         from codex_agents import project_history
         from codex_agents.history_contracts import HistoryError
         context, route_path, handle, run_handle = self.open_run()
@@ -392,6 +392,65 @@ class ProjectDriverTests(DriverHarness):
         self.assertEqual((0, 1, 1, 1, 0), (runs['opened'], runs['admitted'], runs['failed_before_open'],
                                            runs['abandoned'], runs['pending']), runs)
         self.assertEqual({'result_capacity_full': 1}, runs['failed_before_open_reasons'])
+
+    def registered_rows(self):
+        store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3'))) + '?mode=ro',
+                                uri=True)
+        try:
+            return store.execute('SELECT run_id,attempt,failed_reason FROM project_registered_runs').fetchall()
+        finally:
+            store.close()
+
+    def test_R6_6_a_run_whose_registration_cannot_be_written_is_refused_before_preparation(self):
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        with mock.patch.object(project_history.ProjectHistory, 'record_registered_run',
+                               side_effect=HistoryError('history_service_unavailable')), \
+                mock.patch.object(codex_preparation.CodexPreparationLane, 'submit') as submit:
+            context, route_path, _, run_handle = self.open_run()
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('run_failed', refused['reason_code'], refused)
+        submit.assert_not_called()
+        self.assertEqual([], self.registered_rows())
+
+    def test_R6_a_run_that_fails_with_its_lease_armed_before_its_open_is_reported_with_its_reason(self):
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        context, route_path, handle, run_handle = self.open_run()
+        with mock.patch.object(project_history.ProjectHistory, 'record_host_open',
+                               side_effect=HistoryError('history_service_unavailable')):
+            refused = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.assertEqual('run_failed', refused['reason_code'], refused)
+        runs = self.report_for(handle)['runs']
+        self.assertEqual((0, 1, 1, 1, 0), (runs['opened'], runs['admitted'], runs['failed_before_open'],
+                                           runs['abandoned'], runs['pending']), runs)
+        self.assertEqual({'run_failed': 1}, runs['failed_before_open_reasons'])
+
+    def test_R6_10_a_failure_after_the_open_committed_is_not_recorded_as_before_the_open(self):
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        original = project_history.ProjectHistory.record_host_open
+
+        def committed_then_failed(store, *args, **kwargs):
+            original(store, *args, **kwargs)
+            raise HistoryError('history_service_unavailable')
+
+        context, route_path, handle, run_handle = self.open_run()
+        with mock.patch.object(project_history.ProjectHistory, 'record_host_open', committed_then_failed):
+            self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle, expected=2)
+        self.wait_for(lambda: self.registered_rows() and True, seconds=10)
+        self.assertEqual([None], [row[2] for row in self.registered_rows()])
+        runs = self.report_for(handle)['runs']
+        self.assertEqual((1, 1, 0), (runs['opened'], runs['admitted'], runs['failed_before_open']), runs)
+
+    def test_R6_a_run_that_opens_is_counted_once_by_its_open(self):
+        context, route_path, handle, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        runs = self.report_for(handle)['runs']
+        self.assertEqual((1, 1, 0, {}), (runs['opened'], runs['admitted'], runs['failed_before_open'],
+                                         runs['failed_before_open_reasons']), runs)
 
     def test_a_run_refused_before_or_inside_preparation_names_the_refusal(self):
         # local-routing's 0.8.17 test still saw only run_unavailable, 0.3 s after dispatch.

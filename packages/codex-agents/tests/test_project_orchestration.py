@@ -100,10 +100,10 @@ class ProjectOrchestrationTests(unittest.TestCase):
     def test_R6_registration_is_recorded_once_and_a_failure_before_open_never_changes(self):
         handle = self.opened()['orchestration_handle']
         run = ('hrn_' + 'a' * 48, 'run-r6', 1)
-        self.store.record_registered_run(handle, *run, now_ms=self.now)
-        self.store.record_registered_run(handle, *run, now_ms=self.now + 5)  # a replay: no change
+        self.store.record_registered_run(handle, *run, instance='supervisor', now_ms=self.now)
+        self.store.record_registered_run(handle, *run, instance='supervisor', now_ms=self.now + 5)  # a replay: no change
         with self.assertRaisesRegex(HistoryError, 'history_conflict'):
-            self.store.record_registered_run(handle, run[0], 'another-run', 1, now_ms=self.now)
+            self.store.record_registered_run(handle, run[0], 'another-run', 1, instance='supervisor', now_ms=self.now)
         self.store.record_run_failed_before_open(run[0], 1, 'preparation_export_failed', now_ms=self.now + 10)
         self.store.record_run_failed_before_open(run[0], 1, 'preparation_export_failed', now_ms=self.now + 20)
         with self.assertRaisesRegex(HistoryError, 'history_conflict'):
@@ -117,6 +117,97 @@ class ProjectOrchestrationTests(unittest.TestCase):
             'FROM project_registered_runs').fetchall()
         self.assertEqual([(handle, 'run-r6', 1, self.now, 'preparation_export_failed', self.now + 10)],
                          [tuple(row) for row in rows])
+
+    def r6_report(self, snapshot):
+        from codex_agents.project_orchestration_report import orchestration_report
+        return orchestration_report(self.store, snapshot['orchestration_id'])['runs']
+
+    def test_R6_9_only_listed_reasons_are_stored(self):
+        handle = self.opened()['orchestration_handle']
+        run = 'hrn_' + 'c' * 48
+        self.store.record_registered_run(handle, run, 'run-c', 1, instance='supervisor', now_ms=self.now)
+        for reason in ('customer_private_project_name', 'open_failed_somewhere'):
+            with self.subTest(reason=reason), self.assertRaisesRegex(HistoryError, 'history_invalid_input'):
+                self.store.record_run_failed_before_open(run, 1, reason, now_ms=self.now)
+        for reason in ('preparation_managed_configuration', 'result_capacity_full', 'run_failed', 'service_stopped'):
+            with self.subTest(reason=reason):
+                self.store._connection.execute('UPDATE project_registered_runs SET failed_reason=NULL')
+                self.store.record_run_failed_before_open(run, 1, reason, now_ms=self.now)
+
+    def test_R6_8_an_earlier_services_unresolved_registrations_are_marked_service_stopped(self):
+        handle = self.opened()['orchestration_handle']
+        runs = ['hrn_' + str(i) * 48 for i in range(1, 4)]
+        self.store.record_registered_run(handle, runs[0], 'run-1', 1, instance='earlier', now_ms=self.now)
+        self.store.record_registered_run(handle, runs[1], 'run-2', 1, instance='earlier', now_ms=self.now)
+        self.store.record_run_failed_before_open(runs[1], 1, 'run_failed', now_ms=self.now)
+        self.store.record_registered_run(handle, runs[2], 'run-3', 1, instance='current', now_ms=self.now)
+        self.assertEqual(1, self.store.settle_earlier_registrations('current', now_ms=self.now + 7))
+        self.assertEqual(0, self.store.settle_earlier_registrations('current', now_ms=self.now + 8))
+        rows = dict(self.store._connection.execute('SELECT run_id,failed_reason FROM project_registered_runs'))
+        self.assertEqual({'run-1': 'service_stopped', 'run-2': 'run_failed', 'run-3': None}, rows)
+
+    def test_R6_12_registrations_are_bounded_per_orchestration_and_a_replay_at_the_limit_is_kept(self):
+        from codex_agents.project_orchestration_report import MAX_RUNS
+        handle = self.opened()['orchestration_handle']
+        for i in range(MAX_RUNS):
+            self.store.record_registered_run(handle, 'hrn_' + format(i, '048x'), f'run-{i}', 1, instance='s',
+                                             now_ms=self.now)
+        self.store.record_registered_run(handle, 'hrn_' + format(0, '048x'), 'run-0', 1, instance='s', now_ms=self.now)
+        with self.assertRaisesRegex(HistoryError, 'history_learning_capacity'):
+            self.store.record_registered_run(handle, 'hrn_' + format(MAX_RUNS, '048x'), 'run-x', 1, instance='s',
+                                             now_ms=self.now)
+
+    def test_R6_11_attempts_of_one_run_are_combined_the_same_whatever_the_row_order(self):
+        snapshot = self.opened()
+        handle = snapshot['orchestration_handle']
+        a, b = 'hrn_' + 'd' * 48, 'hrn_' + 'e' * 48
+        for order in ((1, 2), (2, 1)):
+            with self.subTest(order=order):
+                self.store._connection.execute('DELETE FROM project_registered_runs')
+                for attempt in order:  # run-d: attempt 1 failed, attempt 2 unresolved
+                    self.store.record_registered_run(handle, a, 'run-d', attempt, instance='s', now_ms=self.now)
+                    self.store.record_registered_run(handle, b, 'run-e', attempt, instance='s', now_ms=self.now)
+                self.store.record_run_failed_before_open(a, 1, 'run_failed', now_ms=self.now)
+                self.store.record_run_failed_before_open(b, 1, 'run_failed', now_ms=self.now)
+                self.store.record_run_failed_before_open(b, 2, 'result_capacity_full', now_ms=self.now)
+                runs = self.r6_report(snapshot)
+                self.assertEqual((2, 1, 1), (runs['admitted'], runs['pending'], runs['failed_before_open']), runs)
+                self.assertEqual({'result_capacity_full': 1}, runs['failed_before_open_reasons'])
+
+    def test_R6_a_populated_schema_16_store_gains_the_table_only_by_explicit_upgrade(self):
+        import sqlite3
+        from tests.project_schema_fixtures import legacy_registered_run_layout
+        self.opened()
+        legacy_registered_run_layout(self.store)
+        self.store._connection.execute('PRAGMA user_version=16')
+        before = self.store._connection.execute('SELECT * FROM project_orchestration_checkpoints').fetchall()
+        self.store.close()
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            self.open_history()
+        connection = sqlite3.connect(self.directory / 'history.sqlite3')
+        connection.execute('CREATE TRIGGER unexpected AFTER INSERT ON project_learning_activation BEGIN SELECT 1; END')
+        connection.commit()
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            ProjectHistory(self.directory, PROJECT_A, result_key=KEY, allow_schema_upgrade=True,
+                           result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000),
+                           result_clock_ms=lambda: self.now, orchestration_limits=self.limits)
+        connection.execute('DROP TRIGGER unexpected')
+        connection.commit()
+        connection.close()
+        self.store = ProjectHistory(self.directory, PROJECT_A, result_key=KEY, allow_schema_upgrade=True,
+                                    result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000),
+                                    result_clock_ms=lambda: self.now, orchestration_limits=self.limits)
+        self.assertEqual(17, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(before, self.store._connection.execute('SELECT * FROM project_orchestration_checkpoints').fetchall())
+        self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0])
+
+    def test_R6_13_retiring_an_attempt_removes_its_registration(self):
+        handle = self.opened()['orchestration_handle']
+        run = 'hrn_' + 'f' * 48
+        self.store.record_registered_run(handle, run, 'run-f', 1, instance='s', now_ms=self.now)
+        with self.store._transaction():
+            self.store._delete_attempt_rows(run, 1, None)
+        self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0])
 
     def test_R8a_an_orchestration_opened_under_another_scope_says_so(self):
         snapshot = self.opened()
