@@ -426,6 +426,25 @@ class AccountBillingJobTests(unittest.TestCase):
         noted = [(call.args[1], type(call.args[2]).__name__) for call in notes.call_args_list]
         self.assertIn(('probe_cleanup_failed', 'OSError'), noted)
 
+    def test_C6_a_probe_worker_held_by_a_kept_billing_job_is_held_in_the_probe_lane(self):
+        from types import SimpleNamespace
+        from codex_agents import lane_health
+        handle, token = object(), lane_health.new_token()
+        self.workers._jobs[handle] = SimpleNamespace(token=token)
+        self.addCleanup(self.workers._jobs.pop, handle, None)
+        kept_job = SimpleNamespace(state='unknown', preparation='its preparation', reason=None, noted=True,
+                                   token=lane_health.new_token())
+        self.billing._jobs[object()] = kept_job
+        self.enterContext(mock.patch.object(self.billing._executions, 'worker_of', return_value=handle))
+        self.billing._publish_health()
+        view = self.workers.health.view()
+        self.assertEqual(1, view['kept'])
+        self.assertIs(int, type(view['held_since_ms']))
+        self.billing._jobs = {ticket: job for ticket, job in self.billing._jobs.items() if job is not kept_job}
+        self.billing._publish_health()  # the kept parent is gone: the worker is no longer held by it
+        view = self.workers.health.view()
+        self.assertEqual((0, None), (view['kept'], view['held_since_ms']))
+
     def test_C9d_a_cleanup_request_that_always_fails_still_answers(self):
         self._fail_launch_once()
         discard = self.enterContext(mock.patch.object(self.billing._executions, 'discard',
