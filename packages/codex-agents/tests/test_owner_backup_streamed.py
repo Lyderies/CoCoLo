@@ -219,8 +219,6 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         self.assertIsNone(self.registered("swapped"))
 
     def test_F3_3b_a_linked_folder_on_the_way_is_refused_and_nothing_is_written_there(self):
-        elsewhere = self.source.state.root.parent / "elsewhere"
-        elsewhere.mkdir(mode=0o700)
         backups = self.source.state.backups
         moved = backups.with_name("backups-real")
         os.replace(backups, moved)

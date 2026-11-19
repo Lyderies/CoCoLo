@@ -72,10 +72,10 @@ def _quiesce_collector_authorization(path: Path) -> None:
     if quiesced:  # Already as asked: nothing to change (F3-17).
         return
     value["quiesced_for_upgrade"] = True
-    _write_authorization(path, _canonical_json(value) + b"\n", [])
+    _write_authorization(path, _canonical_json(value) + b"\n")
 
 
-def _write_authorization(path: Path, content: bytes, replaced: list) -> None:
+def _write_authorization(path: Path, content: bytes) -> None:
     """Replace the authorization file with `content`; a failure after the replacement puts the previous
     file back (F3-12), and if that fails too, says the collector is left stopped."""
     previous = path.read_bytes()
@@ -91,7 +91,6 @@ def _write_authorization(path: Path, content: bytes, replaced: list) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-        replaced.append(True)
         try:
             os.chmod(path, 0o600)
             root_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
