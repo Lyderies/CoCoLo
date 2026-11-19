@@ -243,8 +243,26 @@ class AccountClaimJobTests(unittest.TestCase):
             bridge = self.fixture.fixture.fixture
             attest_provider(self.ledger, self.project, bridge.owner_key, "codex",
                             self.fixture.identity["account_fingerprint"], issued_at=2)
-            gate.set()
-            self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
+            captures = mock.patch.object(self.jobs._intake, "capture_admission",
+                                         wraps=self.jobs._intake.capture_admission)
+            with captures as captured:
+                gate.set()
+                result = decode_account_response(self.pump(ticket), self.request())
+        # Corrected for 0.4.0 FR1 (owner, 2026-11-19): a stale preparation is captured and verified again
+        # instead of refused for good, so the new statement is checked by the worker like any other and the
+        # claim goes on. Until then this test expected the claim_preparation_stale refusal.
+        self.assertEqual("claimed", result["state"], result)
+        self.assertEqual(1, captured.call_count)  # One more capture: the retry.
+
+    def test_FR1_a_preparation_that_stays_stale_is_refused_after_its_last_retry(self):
+        from codex_agents import account_claim_jobs
+        from codex_agents.account_claim_contracts import ClaimError
+        captures = mock.patch.object(self.jobs._intake, "capture_admission", wraps=self.jobs._intake.capture_admission)
+        with mock.patch.object(self.views, "_claim_from_signature_job",
+                               side_effect=ClaimError("claim_preparation_stale")) as commits, captures as captured:
+            self.assert_wire_error(self.pump(self.begin()), self.request(), "claim_preparation_stale")
+        self.assertEqual(account_claim_jobs.MAX_STALE_PREPARATIONS + 1, commits.call_count)
+        self.assertEqual(account_claim_jobs.MAX_STALE_PREPARATIONS + 1, captured.call_count)
         self.fixture.assert_no_claim()
 
     def test_invalid_actual_signature_cannot_become_an_affirmative_claim(self):
