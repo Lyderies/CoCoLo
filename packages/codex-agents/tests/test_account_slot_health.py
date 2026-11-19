@@ -47,6 +47,14 @@ class AccountSlotHealthTests(unittest.TestCase):
         self.assertTrue(self.ledger.account_slot_health(self.project)['available'])
         self.assertEqual(1, self.ledger._connection.execute('SELECT 1').fetchone()[0])
 
+    def test_C8_a_progress_handler_already_installed_is_left_alone(self):
+        calls = []
+        self.ledger._connection.set_progress_handler(lambda: calls.append(1) or 0, 1)
+        self.addCleanup(self.ledger._connection.set_progress_handler, None, 0)
+        self.assertEqual({'available': False, 'reason': 'ledger_busy'}, self.ledger.account_slot_health(self.project))
+        self.ledger._connection.execute('SELECT 1').fetchone()
+        self.assertTrue(calls)  # the existing handler is still the one installed
+
     def test_reading_changes_nothing(self):
         before = self.ledger._connection.total_changes
         self.ledger.account_slot_health(self.project)

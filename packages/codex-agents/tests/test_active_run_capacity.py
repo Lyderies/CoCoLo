@@ -272,6 +272,17 @@ class ActiveRunCapacityTests(unittest.TestCase):
                                               digest=hashlib.sha256(raw).hexdigest(), expires_at_ms=self.case.stamp + 60_000)
         self.ledger.close()
 
+    def test_C8_an_earlier_versions_slot_is_held_until_it_ages_out_by_the_capacity_rule(self):
+        from codex_agents.active_run_capacity import LEGACY_RUN_MAX_MS
+        self.schema_eight(backup=True)
+        self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients, allow_schema_upgrade=True)
+        self.addCleanup(self.case.ledger.close)
+        row = self.rows()[0]
+        self.assertEqual(1, self.ledger.account_slot_health(self.project)['runs_held_without_deadline'])
+        aged = (row['claimed_at_ms'] + LEGACY_RUN_MAX_MS + 1) * 1_000_000
+        with mock.patch.object(learning_store.time, 'time_ns', return_value=aged):
+            self.assertEqual(0, self.ledger.account_slot_health(self.project)['runs_held_without_deadline'])
+
     def test_schema_eight_requires_verified_backup_and_stays_unmodified_on_refusal(self):
         self.schema_eight(backup=False)
         with self.assertRaisesRegex(LedgerError, "registered verified schema 8"):
