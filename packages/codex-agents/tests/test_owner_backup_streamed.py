@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tracemalloc
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from tests import test_learning_source_image_legacy as legacy
@@ -489,6 +490,46 @@ class OwnerBackupStreamedTests(unittest.TestCase):
                 self.assertRaises(SCRIPT_GLOBALS["QuiesceLeftStopped"]):
             TOOL["_quiesce_collector_authorization"](path)
         self.assertEqual([], [p.name for p in path.parent.glob(".collector-authorization.*")])
+
+
+    # Review 040-f3-owner-backup-4 ------------------------------------------------------------------
+
+    def test_F3_12_left_stopped_survives_a_temporary_file_that_cannot_be_removed(self):
+        path = self.authorization()
+        real_chmod, real_replace, real_unlink = os.chmod, os.replace, Path.unlink
+        replaced = []
+
+        def chmod(target, mode, *args, **kwargs):
+            if str(target) == str(path):
+                raise OSError("chmod failed")
+            return real_chmod(target, mode, *args, **kwargs)
+
+        def replace(source, target, *args, **kwargs):
+            replaced.append(target)
+            if len(replaced) > 1:
+                raise OSError("restore failed")
+            return real_replace(source, target, *args, **kwargs)
+
+        def unlink(self_path, *args, **kwargs):
+            if self_path.name.startswith(".collector-authorization."):
+                raise OSError("temporary file stuck")
+            return real_unlink(self_path, *args, **kwargs)
+        with mock.patch.object(os, "chmod", chmod), mock.patch.object(os, "replace", replace), \
+                mock.patch.object(Path, "unlink", unlink), \
+                self.assertRaises(SCRIPT_GLOBALS["QuiesceLeftStopped"]) as caught:
+            TOOL["_quiesce_collector_authorization"](path)
+        self.assertIn("temporary file stuck", str(caught.exception))
+
+    def test_F3_16_an_interrupt_while_closing_still_restarts_the_collector(self):
+        resumed = []
+
+        def interrupted():
+            raise KeyboardInterrupt
+        final, code = TOOL["conclude"](report={"ready": True, "collector_quiesced": False}, code=0, error=None,
+                                       close=interrupted, resume=lambda: resumed.append(True))
+        self.assertEqual([True], resumed)
+        self.assertEqual(3, code)
+        self.assertIn("KeyboardInterrupt", final["close_error"])
 
 
 if __name__ == "__main__":
