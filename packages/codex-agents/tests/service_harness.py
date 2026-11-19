@@ -90,7 +90,7 @@ class ServiceHarness:
             self.addCleanup(patcher.stop)
         # The checks serve_project makes before the lane, which it reports only as unavailable.
         from codex_agents import project_service
-        from codex_agents.collector_paths import CollectorPaths
+        from codex_agents.collector_paths import CollectorPaths as StatePaths
 
         def recorded(label, function):
             def call(*arguments, **options):
@@ -100,7 +100,7 @@ class ServiceHarness:
                     self.lane_starts.append((label, type(error).__name__, str(error)[:160]))
                     raise
             return call
-        for owner, name in ((project_service, '_owned_directory'), (CollectorPaths, 'digest_key')):
+        for owner, name in ((project_service, '_owned_directory'), (StatePaths, 'digest_key')):
             patcher = mock.patch.object(owner, name, recorded(name, getattr(owner, name)))
             patcher.start()
             self.addCleanup(patcher.stop)
