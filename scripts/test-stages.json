@@ -189,7 +189,7 @@
  "root:test_attest": "integration",
  "root:test_check_identifiers": "unit",
  "root:test_ci_stages": "unit",
- "root:test_e2e_requirements": "unit",
+ "root:test_e2e_requirements": "e2e",
  "root:test_e2e_strictness": "unit",
  "root:test_install": "e2e",
  "root:test_measure_test_behaviour": "unit",
