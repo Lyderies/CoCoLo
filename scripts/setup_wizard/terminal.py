@@ -103,6 +103,8 @@ def live_width(fd: int = 0) -> int:
 
 _PHASE_PREFIX = b"cocolo-phase: "
 _SPINNER = "|/-\\"
+# Termination signals (and SIGALRM, which tests use as one) wait while a process starts or stops.
+_HELD_SIGNALS = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGALRM}
 
 
 def phase_of(path) -> str:
@@ -511,16 +513,22 @@ class Terminal:
             self.last_err = str(Path(logdir) / f"cmd{self.command_count}.err")
             stdout = os.open(self.last_out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             stderr = os.open(self.last_err, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, _HELD_SIGNALS)  # Registered before any stop acts.
         try:
-            process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
-                                       start_new_session=True, env={**os.environ, "COCOLO_PHASES": "1"})
-        finally:
-            if not quiet:
-                os.close(stdout)
-                os.close(stderr)
-        self.active = process
+            try:
+                process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                                           start_new_session=True, env={**os.environ, "COCOLO_PHASES": "1"})
+            finally:
+                if not quiet:
+                    os.close(stdout)
+                    os.close(stderr)
+            self.active = process
+        except BaseException:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+            raise
         started, frame = time.monotonic(), 0
         try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)  # A held signal acts here, inside the guard.
             if draw is not None:
                 draw()  # After the start: a redraw that blocks never holds the command back.
             self.hide_cursor()
@@ -551,10 +559,16 @@ class Terminal:
     def call(self, argv: list[str], **options) -> subprocess.CompletedProcess:
         """A helper the wizard waits on without a spinner, in its own process group: when the wizard
         stops (a signal, an error), the whole group is stopped and reaped (review 040-s5-wizard c)."""
-        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   start_new_session=True, **options)
-        self.active = process
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, _HELD_SIGNALS)  # Registered before any stop acts.
         try:
+            process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       start_new_session=True, **options)
+            self.active = process
+        except BaseException:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+            raise
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)  # A held signal acts here, inside the guard.
             stdout, stderr = process.communicate()
         except BaseException:
             self.stop_active()
@@ -570,8 +584,7 @@ class Terminal:
         process = getattr(self, "active", None)
         if process is None:
             return
-        held = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGALRM}
-        previous = signal.pthread_sigmask(signal.SIG_BLOCK, held)
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, _HELD_SIGNALS)
         try:
             for sig, pause in ((signal.SIGTERM, 0.3), (signal.SIGKILL, 0)):
                 try:

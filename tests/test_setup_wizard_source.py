@@ -79,8 +79,34 @@ def launch_problems(source: str, name: str = "flow.py") -> list[str]:
             for inner in ast.walk(node):
                 if isinstance(inner, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
                     targets = inner.targets if isinstance(inner, ast.Assign) else [inner.target]
-                    if any(isinstance(t, ast.Name) and t.id == "argv" for t in targets):
-                        problems.append(f"argv reassigned in {owner}.{function}")
+                    for target in targets:
+                        base = target.value if isinstance(target, ast.Subscript) else target
+                        if isinstance(base, ast.Name) and base.id == "argv":
+                            problems.append(f"argv changed in {owner}.{function}")
+                if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
+                        and isinstance(inner.func.value, ast.Name) and inner.func.value.id == "argv"):
+                    problems.append(f"argv changed in place in {owner}.{function}")
+                # The wrapper launches exactly the list it was given (effects.git_commit: the git tool's).
+                if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
+                        and isinstance(inner.func.value, ast.Name) and inner.func.value.id == "subprocess"
+                        and inner.func.attr in starters):
+                    given = next((k.value for k in inner.keywords if k.arg == "args"), inner.args[0] if inner.args else None)
+                    plain_argv = isinstance(given, ast.Name) and given.id == "argv"
+                    git_tool = (isinstance(given, ast.Call)
+                                and ast.get_source_segment(source, given.func) == "owner_git_argv")
+                    if not (plain_argv or git_tool):
+                        problems.append(f"{owner}.{function} launches something other than its argv")
+    # No other way to start a process, and no launcher held under another name.
+    other_apis = {("os", "system"), ("os", "popen"), ("os", "fork"), ("os", "forkpty"), ("pty", "spawn"),
+                  ("pty", "fork")}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            if (node.value.id, node.attr) in other_apis or (node.value.id == "os" and node.attr.startswith(
+                    ("exec", "spawn", "posix_spawn"))):
+                problems.append(f"{node.value.id}.{node.attr} at line {node.lineno}")
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Attribute) \
+                and node.value.attr in set(LAUNCH_POSITION) | starters:
+            problems.append(f"a launcher held under another name at line {node.lineno}")
     if name == "flow.py":
         forwarded = set()  # Wizard.run forwards its own argv parameter, unchanged, to the runner.
         for owner, function, node in _functions(tree):
@@ -218,8 +244,8 @@ class WizardSourceTests(unittest.TestCase):
         wizard = SimpleNamespace(py="/trusted/python3", git="/trusted/git")
         self.assertEqual(["/trusted/python3", "-I", "-B", "-S", "-X", "pycache_prefix=/dev/null", "a.py", "x"],
                          flow.Wizard.python_argv(wizard, "a.py", "x"))
-        self.assertEqual(["/trusted/git", "-C", "/p", *flow.GIT_SAFE, "rev-parse"],
-                         flow.Wizard.git_argv(wizard, "rev-parse", project="/p"))
+        self.assertEqual(["/trusted/git", "-C", "/p", *flow.GIT_SAFE, "rev-parse", "--show-toplevel"],
+                         flow.Wizard.git_argv(wizard, "rev-parse", "--show-toplevel", project="/p"))
         self.assertEqual(["/trusted/git", *flow.GIT_SAFE, "--version"], flow.Wizard.git_argv(wizard, "--version"))
 
     def test_every_python_the_wizard_starts_is_isolated(self) -> None:

@@ -21,6 +21,8 @@ ATTEST = CLONE / "scripts" / "attest.py"
 PYF = ["-I", "-B", "-S", "-X", "pycache_prefix=/dev/null"]
 GIT_SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "commit.gpgSign=false",
             "-c", "tag.gpgSign=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false"]
+# The only Git the wizard starts itself; everything else is the installer's plumbing (install.py).
+GIT_READ_ONLY = {("--version",), ("rev-parse", "--show-toplevel"), ("rev-parse", "--is-inside-work-tree")}
 GIT_ENV = {"xcrun_nocache": "1", "GIT_ALLOW_PROTOCOL": "", "GIT_NO_LAZY_FETCH": "1"}
 CLAUDE_MODELS_ALL = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
 FAIL_HINT_DEFAULT = "Press ? to see what ran in this step and why it stopped."
@@ -182,7 +184,11 @@ class Wizard:
 
     def git_argv(self, *args: str, project: str | None = None) -> list[str]:
         """The trusted git with every helper and maintenance setting off (W1.4): the one way the wizard
-        starts Git directly."""
+        starts Git directly, and only for the read-only invocations it needs, so nothing can follow the
+        safety settings and override them (review 040-s5-wizard-4 b). Everything else goes through
+        the installer's plumbing."""
+        if tuple(args) not in GIT_READ_ONLY:
+            raise ValueError("not a Git invocation the wizard runs")
         return [self.git, *(["-C", project] if project is not None else []), *GIT_SAFE, *args]
 
     def run_installer(self, label: str, *args: str, draw=None) -> int:

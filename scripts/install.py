@@ -670,7 +670,7 @@ def _write_new(directory: int, name: str, content: bytes, mode: int) -> None:
         try:
             os.unlink(name, dir_fd=directory)  # No partial file is left behind (review 040-s5-wizard-3 d).
         except OSError:
-            pass
+            print(f"Warning: a partial file, {name}, could not be removed; delete it.", file=sys.stderr)
         raise
     finally:
         if handle >= 0:

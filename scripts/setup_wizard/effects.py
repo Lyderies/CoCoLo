@@ -502,6 +502,10 @@ def create_profile(folder, content: str) -> bool:
         try:
             path.unlink(missing_ok=True)
         except OSError as kept:
+            if not isinstance(exc, OSError):  # A stop stays a stop; the kept file is still named.
+                import sys
+                print(f"Warning: {path} may be incomplete and could not be removed; delete it.", file=sys.stderr)
+                raise exc from None
             raise EffectRefused(f"{path} may be incomplete and could not be removed; delete it, then run setup "
                                 "again") from kept
         if isinstance(exc, OSError):

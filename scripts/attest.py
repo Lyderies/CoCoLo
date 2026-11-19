@@ -397,6 +397,8 @@ def _read_below(root_fd: int, relative: str, limit: int = 8 * 1024 * 1024) -> by
             return b""  # never equal to a real file's bytes; a symlink or other type refuses
         handle = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
         try:
+            if not stat.S_ISREG(os.fstat(handle).st_mode):
+                return b""  # Swapped after the check (review 040-s5-wizard-4 a): refused like any non-file.
             chunks, size = [], 0
             while size <= limit:
                 chunk = os.read(handle, 65536)
