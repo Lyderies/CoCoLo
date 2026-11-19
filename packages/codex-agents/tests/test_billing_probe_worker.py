@@ -308,6 +308,42 @@ class BillingProbeWorkerTests(unittest.TestCase):
             self.pool.packet(handle)
         self.assertEqual(workers.PROBE_SLOT_BYTES, self.pool._charged)
 
+    def payload(self):
+        return workers.probe_payload(self.fixture.project_id, 'a'*64, self.fixture.project, self.identity,
+                                     deadline_ns=time.monotonic_ns()+30_000_000_000,
+                                     created_at_ms=time.time_ns()//1_000_000)
+
+    def test_H1a_normal_work_is_busy_and_never_kept_or_held(self):
+        handle, _ = self.prepare()
+        view = self.pool.health.view()
+        self.assertEqual((1, 0, False, None), (view['busy'], view['kept'], view['faulted'], view['held_since_ms']))
+        self.pool.discard(handle)
+        self.until(lambda: self.pool.snapshot(handle)['state'] == 'cleaned')
+        self.pool.retire(handle)
+        view = self.pool.health.view()
+        self.assertEqual((0, 0, None), (view['busy'], view['kept'], view['held_since_ms']))
+
+    def test_H1a_an_unknown_preparation_is_kept_and_held_without_a_fault(self):
+        with mock.patch.object(workers, '_prepare', return_value=(None, None, True)):
+            handle = self.pool.prepare(self.payload())
+            self.until(lambda: self.pool.snapshot(handle)['state'] == 'unknown')
+        view = self.pool.health.view()
+        self.assertEqual((1, False), (view['kept'], view['faulted']))
+        self.assertIs(int, type(view['held_since_ms']))
+        self.assertEqual(('probe_preparation_unknown', 'invariant'),
+                         (view['last_failure']['cause'], view['last_failure']['type']))
+
+    def test_H1a_a_worker_exception_is_faulted_kept_and_held_with_its_type(self):
+        with mock.patch.object(workers, '_prepare', side_effect=RuntimeError('a secret path /x')):
+            handle = self.pool.prepare(self.payload())
+            self.until(lambda: self.pool.snapshot(handle)['state'] == 'unknown')
+        view = self.pool.health.view()
+        self.assertEqual((True, 1), (view['faulted'], view['kept']))
+        self.assertIs(int, type(view['held_since_ms']))
+        self.assertEqual(('probe_worker_failed', 'RuntimeError'),
+                         (view['last_failure']['cause'], view['last_failure']['type']))
+        self.assertNotIn('secret', repr(view))
+
     def test_unbound_preparation_holds_slot_until_actual_discard(self):
         handle, prepared = self.prepare()
         with self.assertRaisesRegex(workers.ProbeWorkerError, 'probe_worker_full'):
