@@ -508,5 +508,21 @@ class OwnerKeyNoticeTests(unittest.TestCase):
                 self.assertEqual("", steps.owner_key_notice(report))
 
 
+
+class CommitStatusTests(unittest.TestCase):
+    """Review 040-s5-wizard-2 (verifier): the git tool's exit status, including a commit made whose index
+    update failed, which is committed (with what to do), never reported as not committed."""
+
+    def test_each_exit_status_has_its_commit_state(self) -> None:
+        self.assertEqual(("committed", ""), steps.commit_status(0))
+        self.assertEqual(("nothing", ""), steps.commit_status(3))
+        state, line = steps.commit_status(4)
+        self.assertEqual("committed", state)
+        self.assertIn("Git could not update the project's index", line)
+        self.assertIn("git status", line)
+        for status in (1, 2, 130):
+            self.assertEqual(("failed", ""), steps.commit_status(status))
+
+
 if __name__ == "__main__":
     unittest.main()

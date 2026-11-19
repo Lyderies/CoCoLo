@@ -65,6 +65,17 @@ class InstallBoundsTests(unittest.TestCase):
         self.assertEqual(str(project), install._git(project, "rev-parse", "--show-toplevel"))
 
 
+class GitToolTests(unittest.TestCase):
+    def test_a_commit_whose_index_update_failed_exits_4_with_its_reason(self) -> None:
+        def made_but_stale(*args):
+            raise install.CommittedIndexStale("the commit was made, but Git could not update the project's index")
+        with mock.patch.object(install, "commit_paths", made_but_stale), \
+                mock.patch.object(install.sys, "stderr", new_callable=__import__("io").StringIO) as err:
+            self.assertEqual(4, install.git_tool(["commit", "/p", "m", "d", ".codex/a"]))
+        self.assertIn("could not update the project's index", err.getvalue())
+        self.assertTrue(issubclass(install.CommittedIndexStale, install.InstallRefused))
+
+
 class AttestBoundsTests(unittest.TestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
