@@ -643,6 +643,19 @@ def settle_maintenance(final: dict[str, object], code: int, *, resume) -> tuple[
     return final, code
 
 
+def _peak_memory_bytes(resource) -> int:
+    """This process's own peak memory. Linux keeps ru_maxrss across fork and exec, so it would report
+    the parent's peak; VmHWM belongs to this address space alone."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as status:
+            for line in status:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
+
+
 def _stream_child(argv: list[str]) -> int:
     """`--stream-child DATABASE PARTIAL PROJECT SCHEMA LIMIT DEV:INO`: copy and check with this clone's package.
 
@@ -705,7 +718,7 @@ def _stream_child(argv: list[str]) -> int:
         if connection.in_transaction:
             connection.execute("ROLLBACK")
         connection.close()
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
+    peak = _peak_memory_bytes(resource)
     print(json.dumps({"backup_sha256": digest, "manifest_sha256": result["manifest_sha256"],
                       "counts": result["counts"], "identity": expected_identity, "peak_rss_bytes": peak,
                       "columns": manifest["columns"]},
