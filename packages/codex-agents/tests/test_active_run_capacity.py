@@ -141,6 +141,25 @@ class ActiveRunCapacityTests(unittest.TestCase):
             with self.ledger._account_transaction(), self.assertRaisesRegex(ClaimError, "claim_busy"):
                 self.ledger._check_active_capacity_locked("codex", "f" * 64)
 
+    def test_H1a_3_slot_health_counts_a_slot_past_its_deadline_by_the_two_clock_rule(self):
+        self.case.claim()
+        row = self.rows()[0]
+        grace = learning_store.CRASHED_CLAIM_GRACE_MS
+        ended = row["execution_deadline_ns"] + 1
+        for wall, monotonic, past in (
+                (row["deadline_at_ms"] - 1, row["clock_reference_ns"] + 1, 0),       # before it
+                (row["deadline_at_ms"], ended, 0),                                     # exactly at it
+                (row["deadline_at_ms"] + 1, row["execution_deadline_ns"] - 1, 0),      # wall clock only
+                (row["deadline_at_ms"] + 1, ended, 1),                                 # both clocks past
+                (row["deadline_at_ms"] + 1, row["clock_reference_ns"] - 1, 1),         # rebooted
+                (row["deadline_at_ms"] + grace + 1, ended + grace * 1_000_000, 0)):    # crashed: not counted
+            with self.subTest(wall=wall, monotonic=monotonic), \
+                    mock.patch.object(learning_store.time, "time_ns", return_value=wall * 1_000_000), \
+                    mock.patch.object(learning_store.time, "monotonic_ns", return_value=monotonic):
+                health = self.ledger.account_slot_health(self.project)
+                self.assertEqual(past, health["runs_past_deadline"], health)
+        self.assertIsNone(self.rows()[0]["released_at_ms"])  # reading released nothing
+
     def test_an_unsettled_claim_long_past_its_hard_deadline_stops_counting_but_stays_unreleased(self):
         self.case.claim()
         row = self.rows()[0]
