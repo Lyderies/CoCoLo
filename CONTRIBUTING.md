@@ -27,7 +27,11 @@ python3 scripts/parallel_tests.py            # all three suites, in parallel
 
 CI runs the identifier guard and Ruff, then the tests by stage: a pull request runs the unit tests on
 Linux and macOS and the integration tests on Linux; `main`, tags and a nightly run add the end-to-end
-tests on both systems and the integration tests on macOS.
+tests on both systems and the integration tests on macOS. The integration tests run in six shards,
+balanced by `scripts/test-timings.json`, each at half the runner's cores
+(`parallel_tests.py --shard K/6`). Measured on GitHub's runners (November 2026), a pull request's
+checks take about 4 minutes, its slowest shard about 2 to 5 minutes. A failing shard uploads its failed
+units' logs as an artifact for 7 days.
 
 `python3 -B scripts/parallel_tests.py` runs all three suites in parallel and prints one summary; a
 failed unit's log tail is shown. Never run them one after another except to debug: that takes over half
