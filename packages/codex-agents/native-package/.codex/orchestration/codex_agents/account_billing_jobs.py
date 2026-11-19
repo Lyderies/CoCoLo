@@ -88,6 +88,17 @@ class AccountBillingJobs:
                     self.health.note_failure(self._note, job.reason, None)
             self._note.publish(kept=frozenset(job.token for job in jobs if job.state == 'unknown'),
                                busy=sum(job.state != 'unknown' for job in jobs))
+            # S1-H1a C6: a probe worker a kept job still holds is held in the probe lane (its own
+            # slot there, written only by this owner).
+            handles = {self._executions.worker_of(job.preparation) for job in jobs
+                       if job.state == 'unknown' and job.preparation is not None} - {None}
+            tokens = frozenset(self._workers._jobs[handle].token for handle in handles if handle in self._workers._jobs)
+            for _ in tokens - self._parent_held:
+                self._workers.health.enter_held()
+            for _ in self._parent_held - tokens:
+                self._workers.health.leave_held()
+            self._parent_held = tokens
+            self._parent_note.publish(kept=tokens)
         except Exception:
             pass
 
@@ -111,6 +122,8 @@ class AccountBillingJobs:
         self._jobs, self._requests, self._counts, self._signatures = {}, {}, {}, {}
         self.health = lane_health.Lane('billing')  # S1-H1a: published notes, reporting only
         self._note = self.health.slot('owner')
+        self._parent_note = workers.health.slot('billing-parent')
+        self._parent_held = frozenset()
         self._rotation = deque()
         self._queues = {}
         self._ingress_owner, self._closing, self._faulted = None, False, False
