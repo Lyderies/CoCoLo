@@ -211,8 +211,10 @@ class AccountClaimJobs:
         from .account_original_open import preflight_open
         self._guard()
         self._delivery(_ingress)
-        if not self._started or self._closing or self._open_limits is None:
-            raise OpenError('open_unavailable')
+        if self._closing:
+            raise OpenError('open_account_closing')  # S1-U10a
+        if not self._started or self._open_limits is None:
+            raise OpenError('open_account_starting')
         if (not matches(project_id, _PROJECT) or not matches(runtime_digest, _DIGEST)
                 or not matches(caller_scope, _DIGEST) or not matches(request_id, _ID)
                 or type(request) is not AccountOpenInput or type(context) is not AccountOpenContext
@@ -258,7 +260,7 @@ class AccountClaimJobs:
             try:
                 if job.signature_handle is not None:
                     if self._pool.cancel(job.signature_handle) != 'released':
-                        raise OpenError('open_unavailable')
+                        raise OpenError('open_failed')
                     self._signatures.pop(job.signature_handle, None)
                 self._open_requests.pop(key, None)
                 self._jobs.pop(ticket, None)
@@ -309,8 +311,9 @@ class AccountClaimJobs:
                                  and not getattr(error, "run_changed", False)
                                  and job.provider is not None and job.stale_preparations < MAX_STALE_PREPARATIONS)
                         job.reason = None if again else error.reason_code
-                    except Exception:
-                        job.reason = 'open_unavailable' if job.kind == 'open' else "claim_unavailable"
+                    except Exception as error:  # S1-U10b/f
+                        job.reason = (("open_account_busy" if getattr(error, "reason_code", None) == "sql_read_busy"
+                                       else "open_failed") if job.kind == 'open' else "claim_unavailable")
                 if again:
                     # Captured and prepared again from the run's open, verified in full as the first was
                     # (0.4.0 FR1); the job keeps its place, quota and identity.

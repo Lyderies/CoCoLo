@@ -363,7 +363,7 @@ def status_client(state_root, project_root):
 
 class RuntimeOpenError(RuntimeError):
     def __init__(self, reason):
-        self.reason_code = reason if type(reason) is str and reason in ACCOUNT_REASON_CODES | HISTORY_REASON_CODES else 'open_unavailable'
+        self.reason_code = reason if type(reason) is str and reason in ACCOUNT_REASON_CODES | HISTORY_REASON_CODES else 'open_failed'
         super().__init__(self.reason_code)
 
 
@@ -887,9 +887,16 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
         raise RuntimeOpenError('open_not_authorized')
     try:
         state = CollectorPaths(state_root)
-        scope, endpoints = _read_runtime_endpoints(state, project_root, account=True)
-        if len(endpoints) != 3:
-            raise RuntimeOpenError('open_unavailable')
+        try:
+            scope, endpoints = _read_runtime_endpoints(state, project_root, account=True)
+        except DispatchError:  # S1-U10c: no hint means no service of this project is running yet
+            try:
+                hinted = os.path.lexists(runtime_hint_path(state, _canonical_project_root(project_root)))
+            except Exception:
+                hinted = False
+            raise RuntimeOpenError('open_service_unreachable' if hinted else 'open_service_not_running') from None
+        if len(endpoints) != 3:  # a version-1 hint: an earlier version's service, which cannot open
+            raise RuntimeOpenError('open_service_other_version')
         contexts = enroll_clients(state, project_root, scope, endpoints[:2], account=endpoints[2], host_client=host_client)
         prospective = OrchestrationScope(**vars(scope))
         digest = open_inputs_digest(assignment, task, route, parent_grant)
@@ -916,7 +923,7 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
         reply = AccountClient(endpoints[2], scope.project_id, scope.runtime_digest, timeout=10).open_host_run(
             opening, request_id=identity)
     except DispatchError:
-        raise RuntimeOpenError('open_unavailable') from None
+        raise RuntimeOpenError('open_service_unreachable') from None
     except (AccountError, HistoryError, OpenError) as error:
         raise RuntimeOpenError(error.reason_code) from None
     opened = reply['state'] == 'opened'

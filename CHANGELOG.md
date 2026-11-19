@@ -16,6 +16,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - `./setup.sh --answers FILE` installs a project with no menu from a JSON answers file
   (docs/setup-wizard.md); a missing, unknown or invalid answer is refused by name before anything
   changes.
+- A refused run open now says why instead of `open_unavailable`: the account is still starting
+  (`open_account_starting`) or closing (`open_account_closing`), its database stayed busy
+  (`open_account_busy`), the project's service is not running (`open_service_not_running`), is an
+  earlier version's (`open_service_other_version`) or cannot be reached (`open_service_unreachable`), the
+  project is not active (`open_project_inactive`), stored open records disagree
+  (`open_state_inconsistent`), or something else failed (`open_failed`). Codex package 0.8.33.
 - Tests are sorted into stages: `unit`, `integration` and `e2e` (`scripts/test-stages.json`).
   `scripts/parallel_tests.py --stage unit` runs only the unit tests; a unit test that starts a
   process, opens a socket or sleeps fails. `scripts/measure_test_behaviour.py` measures each module.

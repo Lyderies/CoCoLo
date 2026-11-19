@@ -16,7 +16,12 @@ from .account_claim_contracts import _HANDLE, _RUN
 MAX_ACCOUNT_OPEN_CONTEXT_BYTES = MAX_OPEN_SCOPE_CONTEXT_BYTES + MAX_OPEN_SCOPE_BYTES + 1024
 MAX_ACCOUNT_OPEN_RECEIPT_BYTES = 16_384
 OPEN_REASON_CODES = frozenset({'open_invalid_request', 'open_not_authorized', 'open_unavailable',
-                             'open_conflict', 'open_busy', 'open_preparation_failed', 'open_preparation_stale', 'open_cancelled'})
+                             'open_conflict', 'open_busy', 'open_preparation_failed', 'open_preparation_stale', 'open_cancelled',
+                             # S1-U10: each cause of a refused open names itself; open_unavailable is only read
+                             # from an earlier service.
+                             'open_account_starting', 'open_account_closing', 'open_account_busy',
+                             'open_service_not_running', 'open_service_other_version', 'open_service_unreachable',
+                             'open_project_inactive', 'open_state_inconsistent', 'open_failed'})
 
 
 class OpenError(RuntimeError):

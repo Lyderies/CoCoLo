@@ -891,8 +891,9 @@ class AccountService:
                     return raw
             except OpenError as error:
                 return self._reply(labels, reason=error.reason_code)
-            except Exception:
-                return self._reply(labels, reason='open_unavailable')
+            except Exception as error:  # S1-U10b/f
+                return self._reply(labels, reason='open_account_busy' if getattr(error, 'reason_code', None)
+                                   == 'sql_read_busy' else 'open_failed')
         return raw
 
     def _handle(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
@@ -1032,8 +1033,10 @@ class AccountService:
                 return self._observation_jobs.submit(project, runtime, caller, identity, observation,
                     context, authorize_observation, _ingress=ingress)
             elif operation == 'account.open_host_run':
-                if not deferred or self._claim_jobs is None or self._claim_jobs._open_limits is None:
-                    raise OpenError('open_unavailable')
+                if not deferred:  # An open is always deferred; a synchronous call is a misuse (S1-U10f).
+                    raise OpenError('open_failed')
+                if self._claim_jobs is None or self._claim_jobs._open_limits is None:
+                    raise OpenError('open_account_starting')  # S1-U10a
                 self._provenance_live()
                 if authorization.open_context is None:
                     raise OpenError('open_not_authorized')
