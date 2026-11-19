@@ -102,6 +102,37 @@ class InstallBoundsTests(unittest.TestCase):
         self.assertNotIn(seen["hup"], (signal.SIG_DFL, signal.SIG_IGN, None))
         self.assertEqual(before, signal.getsignal(signal.SIGTERM))
 
+    def test_a_commit_stores_every_blob_with_one_git_call(self) -> None:
+        """T8h (W13): commit_paths writes all blobs with one hash-object, each checked against the bytes
+        it read; the committed files are exactly those bytes (a symlink as its link text)."""
+        project = self.base / "proj"
+        project.mkdir()
+        subprocess.run(["git", "init", "-q", str(project)], check=True)
+        environ = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
+                   "GIT_COMMITTER_EMAIL": "t@example.invalid", "GIT_CONFIG_GLOBAL": "/dev/null"}
+        (project / ".codex").mkdir()
+        paths = []
+        for n in range(30):
+            (project / ".codex" / f"f{n}").write_bytes(f"content {n}\n".encode() * (n + 1))
+            paths.append(f".codex/f{n}")
+        (project / ".codex" / "link").symlink_to("f1")
+        paths.append(".codex/link")
+        real = install._git_run
+        calls = []
+
+        def counting(*args, **kwargs):
+            calls.append(args[1])
+            return real(*args, **kwargs)
+        with mock.patch.dict(os.environ, environ), mock.patch.object(install, "_git_run", counting):
+            self.assertEqual("committed", install.commit_paths(project, "m", "d", paths))
+        self.assertEqual(1, calls.count("hash-object"))
+        for n in (0, 29):
+            shown = subprocess.run(["git", "-C", str(project), "show", f"HEAD:.codex/f{n}"], capture_output=True).stdout
+            self.assertEqual(f"content {n}\n".encode() * (n + 1), shown)
+        tree = subprocess.run(["git", "-C", str(project), "ls-tree", "HEAD", ".codex/link"], capture_output=True,
+                              text=True).stdout
+        self.assertTrue(tree.startswith("120000 "), tree)
+
     def test_the_git_root_keeps_its_trailing_spaces(self) -> None:
         project = self.base / "proj "
         project.mkdir()
