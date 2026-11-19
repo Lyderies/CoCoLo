@@ -373,16 +373,17 @@ def commit_candidates(project, reply, planned: list[str]) -> list[str]:
     if any(unsafe_name(rel) for rel in found):
         raise EffectRefused("unsafe file name in managed paths")
     install = installer()
-    keep = []
-    for rel in sorted(found):
-        try:
-            result = install._git_run(project, "ls-files", "-z", "--", rel, text=False)
-        except (OSError, subprocess.SubprocessError, install.InstallRefused) as exc:
-            raise EffectRefused("the path list could not be built") from exc
-        if result.returncode != 0:
-            raise EffectRefused("the path list could not be built")
-        if os.path.lexists(project / rel) or result.stdout:
-            keep.append(rel)
+    ordered = sorted(found)
+    try:  # One ls-files for every candidate (literal pathspecs), not one Git per path.
+        result = install._git_run(project, "ls-files", "-z", "--", *ordered, text=False)
+    except (OSError, subprocess.SubprocessError, install.InstallRefused) as exc:
+        raise EffectRefused("the path list could not be built") from exc
+    if result.returncode != 0:
+        raise EffectRefused("the path list could not be built")
+    tracked = [item.decode("utf-8", "surrogateescape") for item in result.stdout.split(b"\0") if item]
+    keep = [rel for rel in ordered
+            if os.path.lexists(project / rel)
+            or any(entry == rel or entry.startswith(rel + "/") for entry in tracked)]
     return keep
 
 
