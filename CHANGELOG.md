@@ -31,6 +31,12 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   project is not active (`open_project_inactive`), stored open records disagree
   (`open_state_inconsistent`), or something else failed (`open_failed`). Codex package 0.8.33.
 - `learning-status` shows how long each collector start-up phase took (`collector_startup_ms`).
+- `learning-status` shows the account's own health (`account_health`): `ok`, `degraded` (work kept
+  after an error, a held probe worker, or a slot past its deadline), `faulted` (a lane that failed,
+  with its fixed cause and error type), or `unknown` with the reason, and an `attention` list in
+  plain words. It is read from notes each account lane publishes, so a stuck lane or a busy account
+  cannot stop it; `ready` keeps its meaning. While the account services start, status says
+  `status_account_starting`.
 - An orchestration report counts a run that failed before its open: `runs.admitted`,
   `runs.failed_before_open` and `failed_before_open_reasons` (fixed reasons only), and such a run is
   `abandoned`, no longer missing. `runs.opened` still counts real opens. The project's records gain

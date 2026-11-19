@@ -4,6 +4,7 @@ These private metadata files do not authenticate a native peer or confer launch
 authority. Reviewed native bootstrap must supply/authorize the endpoints; this
 client never creates state, starts a runtime or falls back to a database.
 """
+import re
 import os
 from pathlib import Path
 import signal
@@ -334,6 +335,9 @@ def _status_collector_fields(health):
         raise ValueError()
     return {'collector_previous_exit': None if previous is None else checked_exit(previous),
             'account_services': services,  # O10 ST1: from the collector host, or None
+            # S1-H1a: passed through as read; checked only when account_health is built, so a
+            # malformed new field never costs the collector its ready.
+            'account_lanes': health.get('account_lanes'), 'account_slots': health.get('account_slots'),
             'collector_startup_ms': phases,  # S1-U9a: milliseconds per start-up phase, or None
             'collector_schema_version': health['schema_version'],
             'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
@@ -411,7 +415,75 @@ def status_client(state_root, project_root):
         else:
             report.update(reason_code='status_account_unavailable', error='Account status is unavailable.')
     report['ready'] = collector_ready and owner_ready
+    report['account_health'] = _account_health(report)
     return report
+
+
+_LANE_KEYS = {'faulted', 'kept', 'busy', 'queued', 'last_failure', 'held_since_ms'}
+_LANE_LABELS = {'signature': 'signature', 'claims': 'claims', 'observations': 'observations',
+                'ingress': 'connections', 'billing': 'billing', 'probe_worker': 'probe worker'}
+_HEALTH_CODE = re.compile(r'[a-z][a-z_]{2,63}')
+_TYPE_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
+
+
+def _checked_lanes(lanes):
+    """The lane notes, closed and content-free, or None when missing or malformed (S1-H1a)."""
+    if type(lanes) is not dict or not lanes or lanes.keys() - _LANE_LABELS.keys():
+        return None
+    for lane in lanes.values():
+        failure = lane.get('last_failure') if type(lane) is dict else None
+        if (type(lane) is not dict or lane.keys() != _LANE_KEYS or type(lane['faulted']) is not bool
+                or not all(account_integer(lane[name]) for name in ('kept', 'busy', 'queued'))
+                or (lane['held_since_ms'] is not None and not account_integer(lane['held_since_ms']))
+                or (failure is not None and (
+                    type(failure) is not dict or failure.keys() != {'cause', 'type', 'at_ms'}
+                    or not matches(failure['cause'], _HEALTH_CODE) or not matches(failure['type'], _TYPE_NAME)
+                    or not account_integer(failure['at_ms'])))):
+            return None
+    return lanes
+
+
+def _checked_slots(slots):
+    names = ('runs_past_deadline', 'runs_held_without_deadline', 'probes_held', 'probes_past_deadline')
+    if type(slots) is dict and slots.get('available') is True and all(account_integer(slots.get(n)) for n in names):
+        return {name: slots[name] for name in names}
+    return None
+
+
+def _account_health(report):
+    """S1-H1a-4: the account's own state from the collector's reply; `ready` is not changed."""
+    from datetime import datetime, timezone
+    lanes = _checked_lanes(report.pop('account_lanes', None))
+    raw_slots = report.pop('account_slots', None)
+    slots = _checked_slots(raw_slots)
+    attention, faulted, reason = [], False, None
+    for name, lane in sorted((lanes or {}).items()):
+        label = _LANE_LABELS[name]
+        if lane['faulted']:
+            faulted = True
+            failure = lane['last_failure']
+            cause = f": {failure['cause']} ({failure['type']})" if failure else ''
+            attention.append(f"the {label} lane is faulted{cause} (account-wide)")
+        if lane['kept']:
+            attention.append(f"{lane['kept']} job(s) kept in the {label} lane (account-wide)")
+        if lane['held_since_ms'] is not None:
+            since = datetime.fromtimestamp(lane['held_since_ms'] / 1000, timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+            attention.append(f"the {label} has been held since {since} (account-wide)")
+    if slots is not None:
+        for name, text in (('runs_past_deadline', 'run slot(s) still counted past their deadline'),
+                           ('runs_held_without_deadline', 'run slot(s) from an earlier version still held'),
+                           ('probes_past_deadline', 'probe slot(s) past their deadline (wall clock)')):
+            if slots[name]:
+                attention.append(f"{slots[name]} {text} in this project")
+    if lanes is None:
+        reason = ('account_health_starting' if report.get('account_services') == 'starting'
+                  else 'account_health_unsupported' if report.get('collector_runtime_digest') not in (
+                      None, COLLECTOR_RUNTIME_DIGEST) else 'account_health_unavailable')
+    elif slots is None and raw_slots is not None:
+        reason = 'account_slots_' + (raw_slots.get('reason') if type(raw_slots) is dict and raw_slots.get(
+            'reason') in {'ledger_busy', 'budget_spent'} else 'unavailable')
+    state = 'faulted' if faulted else 'degraded' if attention else 'unknown' if reason else 'ok'
+    return {'state': state, 'reason_code': reason, 'lanes': lanes, 'slots': slots, 'attention': attention}
 
 
 class RuntimeOpenError(RuntimeError):
