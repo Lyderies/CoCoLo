@@ -388,3 +388,60 @@ def session_warnings(scan) -> list[str]:
         lines.append("Open Codex on the project itself: never on a folder that contains a set-up project, this "
                      "setup folder, your home folder, a folder above it or /.")
     return lines
+
+
+_RULE_STATUSES = ("installed", "missing", "stale", "unsupported")
+
+
+def rule_status(value) -> str:
+    """The host-command check's `codex_rule`, or "" for anything else."""
+    return value if value in _RULE_STATUSES else ""
+
+
+def commands_body(rule_file: str, status: str) -> list[str]:
+    """W8.2, W8.4: what the commands-rule screen says before offering the rule."""
+    lines = [
+        "Codex runs each command in a sandbox, and that sandbox blocks the orchestrator's background service, so "
+        "a Codex session cannot orchestrate this project on its own. This rule lets only the orchestrator's "
+        "everyday commands for this project run outside the sandbox; owner commands, such as registration, "
+        "billing attestation and promotion, stay blocked. To undo it later, use the remove command shown at "
+        "the end of setup.",
+        f"Every Codex session on this machine loads this rule from {rule_file} (mode 0600). It runs a protected "
+        "copy of the orchestrator in ~/.codex that sessions opened on a project cannot change. Never open Codex "
+        "on the orchestrator clone, a folder that contains a set-up project, your home folder, its parent or / "
+        "while the rule exists.",
+    ]
+    if status == "stale":
+        lines.append(
+            "A rule for this project already exists and differs from this one, for example after a Python "
+            "upgrade (the rule names the exact Python build) or a package update. It stays unchanged unless you "
+            "replace it; until then Codex sessions may not reach the orchestrator.")
+    return lines
+
+
+def unsupported_home(reason: str) -> list[str]:
+    """W8.6: why the rule cannot be used with this Codex home, and the fix."""
+    return [
+        "The Codex commands rule cannot be used with this Codex setup",
+        "Reason: " + _CONTROL.sub(" ", reason or "")[:200],
+        "The rule and its protected copy of the orchestrator work only in your account's own ~/.codex folder. "
+        "Fix: run setup with HOME set to your own home folder, unset CODEX_HOME (or point it at ~/.codex), "
+        "replace a symbolic link at ~/.codex with a real folder, then run ./setup.sh again.",
+    ]
+
+
+def verify_rule(status: str, reason: str) -> tuple[str, str, list[str]]:
+    """W8.5, W8.6: what "Verify the install only" reports for the rule: step 8's mark and note, and
+    its lines. It never writes the rule."""
+    if status == "installed":
+        return "ok", "installed", ["Codex commands rule: installed"]
+    if status in ("missing", "stale"):
+        return "skip", status, [
+            f"Codex commands rule: {status}",
+            "Codex sessions cannot reach the orchestrator without it. Run ./setup.sh, choose 'Update the "
+            "install and walk through every step', and allow it in step 8."]
+    if status == "unsupported":
+        return "fail", "Codex home unsupported", unsupported_home(reason)
+    return "fail", "not checked", [
+        "Could not check the Codex commands rule",
+        "The installed orchestrator may be older than this check. Update the install, then verify again."]
