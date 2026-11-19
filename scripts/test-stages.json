@@ -53,6 +53,7 @@
  "codex:tests.test_cli_ledger_boundary": "unit",
  "codex:tests.test_cli_observation_runtime": "integration",
  "codex:tests.test_cli_open_client_runtime": "integration",
+ "codex:tests.test_client_hint_cause": "unit",
  "codex:tests.test_cli_reports": "unit",
  "codex:tests.test_cli_status_client_boundary": "integration",
  "codex:tests.test_codex_activity": "unit",

@@ -141,27 +141,6 @@ class CliOpenClientRuntimeTests(unittest.TestCase):
                              {**refused, 'seconds': took, 'version': version})
             self.assertEqual(before, self.fixture.ledger._connection.execute('SELECT COUNT(*) FROM account_open_receipts').fetchone()[0])
             self.assertFalse((child['root']/'launches').exists())
-        # S1-U10c: the hint's own cause, decided before any socket is checked.
-        state = CollectorPaths(self.bridge.state.root)
-        path = runtime_hint_path(state, self.bridge.project)
-        good = path.read_bytes()
-        for label, content, mode, expected in (
-                ('malformed', b'not json', 0o600, 'open_service_not_running'),
-                ('readable by others', good, 0o644, 'open_service_hint_refused'),
-                ('version 1, sockets gone', None, 0o600, 'open_service_other_version')):
-            with self.subTest(hint=label):
-                if content is None:
-                    value = json.loads(good)
-                    value.update(schema_version=1, dispatch_endpoint=str(state.root / 'gone-d.sock'),
-                                 result_endpoint=str(state.root / 'gone-r.sock'))
-                    value.pop('account_endpoint', None)
-                    content = canonical_json(value)
-                path.write_bytes(content)
-                path.chmod(mode)
-                code, refused = self.invoke_open(original)
-                self.assertEqual((2, expected), (code, refused.get('reason_code')), refused)
-        path.write_bytes(good)
-        path.chmod(0o600)
         code, wrong_host = self.invoke_open(original, host='claude' if self.parent_host == 'codex' else 'codex')
         self.assertEqual(2, code)
         self.assertEqual('host_client_mismatch', wrong_host['reason_code'])
