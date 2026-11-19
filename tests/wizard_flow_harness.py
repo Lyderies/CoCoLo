@@ -24,6 +24,18 @@ if str(ROOT / "scripts") not in sys.path:
 
 from setup_wizard import effects, flow, terminal  # noqa: E402
 
+ENTER, DOWN = "\r", "\x1b[B"
+
+
+def to_commit(checks: Path) -> list[str]:
+    """The keys of test_setup_sh's drive_to_commit_menu: to the commit screen of a fresh install."""
+    return [ENTER, ENTER, f"{checks}\r", ENTER, ENTER, ENTER, ENTER]
+
+
+# test_setup_sh's finish_after_install from its Continue: skip register, attestation, the profile, the
+# temporary-folder rule refusal, then Exit.
+FINISH = [ENTER, DOWN + ENTER, DOWN + ENTER, ENTER, ENTER, ENTER]
+
 CLAUDE_SIGNED_IN = b'{"loggedIn": true, "subscriptionType": "max", "authMethod": "x"}'
 PLAIN = __import__("re").compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B")
 
@@ -177,6 +189,55 @@ class Harness:
         with mock.patch.object(module.sys, "stdout", fake_stdout):
             status = module.helper(list(args))
         return status, out.getvalue(), b""
+
+    # CLI stand-ins, each equal to its FAKE_* wrapper in test_setup_sh ------------------------
+
+    def fake_register(self, answer: str) -> None:
+        """FAKE_REGISTER: learning-register answers `answer`; every call is logged."""
+        self.register_log: list[list[str]] = []
+
+        def register(args):
+            self.register_log.append(list(args))
+            return 0, (answer + "\n").encode()
+        self.cli["learning-register"] = register
+        self.fake_status()
+
+    def fake_upgrade(self, upgraded: str) -> None:
+        """FAKE_UPGRADE: registering is refused (ledger_upgrade_required) until --upgrade-ledger is
+        given, then answers `upgraded` (exit 2 when it says ready false)."""
+        self.register_log = []
+
+        def register(args):
+            self.register_log.append(list(args))
+            if "--upgrade-ledger" in args:
+                return (2 if '"ready": false' in upgraded else 0), (upgraded + "\n").encode()
+            return 2, (b'{"ready": false, "reason_code": "ledger_upgrade_required", "ledger_schema_version": 6,'
+                       b' "state_moved": null}\n')
+        self.cli["learning-register"] = register
+        self.fake_status()
+
+    def fake_status(self, starting: int = 0, reason: str = "status_collector_transport_unavailable") -> None:
+        """FAKE_STATUS_STARTING/REASON: learning-status answers `reason` `starting` times, then ready."""
+        self.status_count = 0
+
+        def status(args):
+            self.status_count += 1
+            if self.status_count <= starting:
+                return 2, json.dumps({"ready": False, "reason_code": reason}).encode()
+            return 0, b'{"ready": true, "collector_runtime_version": "0.0.0"}\n'
+        self.cli["learning-status"] = status
+
+    def plant_legacy_records(self) -> str:
+        """An old-format records folder in the test home, as a session on ~/Library could make."""
+        import hashlib
+        legacy = self.home / "Library" / "Application Support" / "codex-agents"
+        legacy.mkdir(parents=True, mode=0o700)
+        subprocess.run(["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(self.base / "k")],
+                       check=True, capture_output=True)
+        fields = (self.base / "k.pub").read_text().split()
+        signers = f"codex-agents-owner {fields[0]} {fields[1]}\n".encode()
+        (legacy / "owner-allowed-signers").write_bytes(signers)
+        return hashlib.sha256(signers).hexdigest()
 
     def remembered(self, *projects: Path) -> None:
         """Projects setup already set up, as it lists them in the records' installer folder."""

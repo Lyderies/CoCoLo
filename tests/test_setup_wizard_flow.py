@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from wizard_flow_harness import ROOT, Harness  # noqa: E402
+from wizard_flow_harness import ROOT, Harness, to_commit  # noqa: E402
 
 ENTER, DOWN = "\r", "\x1b[B"
 
@@ -162,6 +162,161 @@ class ChecksTests(unittest.TestCase):
         self.assertIn("known limitation", screen)
         self.assertNotIn("FAIL", screen)
         self.assertEqual(130, code)
+
+
+class CollectorTests(unittest.TestCase):
+    """W6: the collector step (setup.sh step 5), after a real install and commit."""
+
+    def setUp(self) -> None:
+        self.h = Harness(self)
+        self.project, self.checks = self.h.make_project()
+
+    def to_register(self, *after: str) -> tuple[int, str]:
+        """A fresh install, committed, then Register now, then `after`."""
+        return self.h.run(*to_commit(self.checks), ENTER, ENTER, ENTER, *after, start=self.project)
+
+    @staticmethod
+    def flat(screen: str) -> str:
+        return re.sub(r"\s+", " ", screen)
+
+    def test_the_one_time_move_of_the_records_is_explained(self) -> None:
+        """Replaces WizardTerminalTests.test_the_one_time_move_of_the_records_is_explained (W6.2)."""
+        self.h.fake_register('{"ready": true, "state_moved": "/somewhere/old\x7f copy", '
+                             '"state_root": "/elsewhere/codex-agents"}')
+        _, screen = self.to_register()
+        flat = self.flat(screen)
+        self.assertIn("Collector status: ready", flat)
+        self.assertIn("Moved your orchestrator records once to a protected folder, ~/.local/state/codex-agents. "
+                      "The old copy at /somewhere/old copy can be deleted once you're happy.", flat)
+        self.assertNotIn("\x7f", screen)
+        self.assertNotIn("/elsewhere", flat)
+
+    def test_no_move_no_records_sentence(self) -> None:
+        """Replaces WizardTerminalTests.test_no_move_no_records_sentence (W6.2)."""
+        self.h.fake_register('{"ready": true, "state_moved": null}')
+        _, screen = self.to_register()
+        self.assertIn("Collector status: ready", screen)
+        self.assertNotIn("Moved your orchestrator records", screen)
+
+    @unittest.skipUnless(sys.platform == "darwin", "the old records folder was macOS's")
+    def test_old_records_are_shown_and_moved_only_when_approved(self) -> None:
+        """Replaces WizardTerminalTests.test_old_records_are_shown_and_moved_only_when_approved (W6.2)."""
+        digest = self.h.plant_legacy_records()
+        self.h.fake_register('{"ready": true, "state_moved": "/somewhere/old copy", "state_root": "/x"}')
+        _, screen = self.to_register(ENTER)  # Yes, move them
+        # The screen draws the question (its body), then the details (its list), then the menu.
+        question = self.flat(screen.split("Move these records to the protected folder?", 1)[1].split("Yes, move them", 1)[0])
+        self.assertIn("still in the old folder ~/Library/Application Support/codex-agents (created 2", question)
+        self.assertRegex(question, r"Owner key in those records: ssh-ed25519 SHA256:[A-Za-z0-9+/]+")
+        self.assertIn("Your owner key file ~/.ssh/codex-agents-owner.pub:", question)
+        self.assertTrue(any(line in question for line in ("They match", "They do not match", "cannot compare")))
+        self.assertIn("Collector status: ready", screen)
+        self.assertIn(f"--move-legacy-state {digest}", " ".join(" ".join(args) for args in self.h.register_log))
+
+    @unittest.skipUnless(sys.platform == "darwin", "the old records folder was macOS's")
+    def test_declining_the_move_registers_nothing(self) -> None:
+        """Replaces WizardTerminalTests.test_declining_the_move_registers_nothing (W6.2)."""
+        self.h.plant_legacy_records()
+        self.h.fake_register('{"ready": true, "state_moved": "/somewhere/old copy", "state_root": "/x"}')
+        _, screen = self.to_register(DOWN + ENTER)  # No
+        self.assertIn("The old records were not moved", screen)
+        self.assertEqual([], self.h.register_log)
+
+    def test_an_earlier_versions_records_are_upgraded_only_when_approved(self) -> None:
+        """Replaces WizardTerminalTests.test_an_earlier_versions_records_are_upgraded_only_when_approved (W6.3)."""
+        self.h.fake_upgrade('{"ready": true, "state_moved": null, "ledger_upgraded_from": 6, '
+                            '"ledger_copy": "/kept/old ledger"}')
+        _, screen = self.to_register(ENTER)  # Yes, upgrade them
+        question = self.flat(screen.split("Upgrade the records now?", 1)[1].split("Yes, upgrade them", 1)[0])
+        self.assertIn("written by an earlier version of the orchestrator", question)
+        self.assertIn("keeps a checked copy of everything as it is", question)
+        self.assertIn("until you run this setup for each of them", question)
+        self.assertIn("Upgraded your orchestrator records. A copy of them as they were is at /kept/old ledger",
+                      self.flat(screen))
+        self.assertIn("Collector status: ready", screen)
+        self.assertEqual(2, len(self.h.register_log))
+        self.assertNotIn("--upgrade-ledger", self.h.register_log[0])
+        self.assertIn("--upgrade-ledger", self.h.register_log[1])
+
+    def failed_upgrade(self, reason: str, said: str, never: str) -> None:
+        self.h.fake_upgrade('{"ready": false, "reason_code": "%s", "ledger_copy": "/kept/old ledger",'
+                            ' "state_moved": "/somewhere/old copy"}' % reason)
+        _, screen = self.to_register(ENTER)  # Yes, upgrade them
+        last = self.flat(screen[screen.rindex("Collector registration failed"):])
+        self.assertIn(said, last)
+        self.assertIn("A copy of the records as they were before the upgrade is at /kept/old ledger", last)
+        self.assertIn("stay there; the old copy is at /somewhere/old copy", last)
+        self.assertNotIn(never, last)
+
+    def test_an_upgrade_that_failed_before_changing_anything_says_so(self) -> None:
+        """Replaces WizardTerminalTests.test_an_upgrade_that_failed_before_changing_anything_says_so (W6.5)."""
+        self.failed_upgrade("ledger_upgrade_failed",
+                            "Your records were not upgraded: they are as the earlier version left them.",
+                            "were upgraded, but")
+
+    def test_a_failure_after_the_upgrade_is_never_described_as_records_left_unchanged(self) -> None:
+        """Replaces WizardTerminalTests.test_a_failure_after_the_upgrade_is_never_described_as_records_left_unchanged
+        (W6.5)."""
+        self.failed_upgrade("registration_incomplete_after_upgrade",
+                            "Your records were upgraded, but registering this project did not",
+                            "as the earlier version left them")
+
+    def test_a_collector_that_did_not_start_after_registration_is_not_called_an_unfinished_registration(self) -> None:
+        """Replaces WizardTerminalTests.test_a_collector_that_did_not_start_after_registration_is_not_called_an_
+        unfinished_registration (W6.5)."""
+        self.failed_upgrade("collector_not_started_after_registration",
+                            "This project is registered, but the collector", "did not finish")
+
+    def test_an_upgrade_whose_outcome_cannot_be_read_tells_the_owner_to_keep_everything(self) -> None:
+        """Replaces WizardTerminalTests.test_an_upgrade_whose_outcome_cannot_be_read_tells_the_owner_to_keep_everything
+        (W6.5)."""
+        self.failed_upgrade("ledger_upgrade_unknown", "could not be read afterwards. Delete nothing",
+                            "as the earlier version left them")
+
+    def test_declining_the_upgrade_changes_nothing(self) -> None:
+        """Replaces WizardTerminalTests.test_declining_the_upgrade_changes_nothing (W6.3)."""
+        self.h.fake_upgrade('{"ready": true}')
+        _, screen = self.to_register(DOWN + ENTER)  # No
+        self.assertIn("The records were not upgraded", screen)
+        self.assertIn("install the earlier version here again", self.flat(screen))
+        self.assertEqual(1, len(self.h.register_log))
+        self.assertNotIn("--upgrade-ledger", self.h.register_log[0])
+
+    @unittest.skipUnless(sys.platform == "darwin", "the old records folder was macOS's")
+    def test_old_records_that_also_need_the_upgrade_get_both_questions_before_anything_moves(self) -> None:
+        """Replaces WizardTerminalTests.test_old_records_that_also_need_the_upgrade_get_both_questions_before_anything_
+        moves (W6.4)."""
+        digest = self.h.plant_legacy_records()
+        self.h.fake_upgrade('{"ready": true, "state_moved": "/somewhere/old copy", "ledger_upgraded_from": 6,'
+                            ' "ledger_copy": "/kept/old ledger"}')
+        _, screen = self.to_register(ENTER, ENTER)  # Yes, move them; Yes, upgrade them
+        self.assertLess(screen.index("Move these records to the protected folder?"),
+                        screen.index("Upgrade the records now?"))
+        flat = self.flat(screen)
+        self.assertIn("Upgraded your orchestrator records. A copy of them as they were is at /kept/old ledger", flat)
+        self.assertIn("Moved your orchestrator records once to a protected folder", flat)
+        self.assertIn("Collector status: ready", flat)
+        self.assertEqual(2, len(self.h.register_log))
+        self.assertNotIn("--upgrade-ledger", self.h.register_log[0])  # refused before moving
+        self.assertIn("--upgrade-ledger", self.h.register_log[1])
+        self.assertIn(f"--move-legacy-state {digest}", " ".join(self.h.register_log[1]))
+
+    def test_C6_setup_waits_for_a_collector_that_is_still_starting(self) -> None:
+        """Replaces WizardTerminalTests.test_C6_setup_waits_for_a_collector_that_is_still_starting (W6.6)."""
+        self.h.fake_register('{"ready": true, "state_moved": null}')
+        self.h.fake_status(starting=3)
+        _, screen = self.to_register()
+        self.assertIn("Collector status: ready", screen)
+        self.assertEqual(4, self.h.status_count)
+        self.assertNotIn("not ready", screen)
+
+    def test_C6_any_other_reason_still_fails_at_once(self) -> None:
+        """Replaces WizardTerminalTests.test_C6_any_other_reason_still_fails_at_once (W6.6)."""
+        self.h.fake_register('{"ready": true, "state_moved": null}')
+        self.h.fake_status(starting=3, reason="status_owner_key_missing")
+        _, screen = self.to_register()
+        self.assertIn("not ready", screen)
+        self.assertEqual(1, self.h.status_count)
 
 
 if __name__ == "__main__":
