@@ -144,8 +144,9 @@ class OriginalAccountOpenPendingTests(unittest.TestCase):
     def test_tampered_original_window_is_refused_without_resealing_or_refresh(self):
         captured, _ = self.preflight()
         self.ledger._connection.execute('UPDATE account_open_requests SET observation_deadline_at_ms=observation_deadline_at_ms+1')
+        # S1-U10e: a stored journal whose seal no longer verifies is inconsistent, not a conflicting request.
         with (mock.patch.object(self.ledger, '_clock_ms', side_effect=AssertionError('new clock')),
-                self.assertRaisesRegex(OpenError, 'open_conflict')):
+                self.assertRaisesRegex(OpenError, 'open_state_inconsistent')):
             self.preflight()
         self.assertEqual(captured.observation_deadline_at_ms+1, self.pending()[0]['observation_deadline_at_ms'])
 
@@ -232,14 +233,15 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
             known = self.jobs.take(self.submit())
         self.assertEqual({**reply.result, 'known': True}, known.result)
 
-    def wire_service(self, *, configured=True, authorizer=True):
+    def wire_service(self, *, configured=True, authorizer=True, open_context=True):
         self.enabled = True
         self.token = object()
         def authorize(request, token):
             if token is not self.token or not self.enabled:
                 return None
             return AccountAuthorization(request.project_id, request.runtime_digest, account_request_digest(request),
-                'host', frozenset({'account.open_host_run'}), 'a'*64, open_context=self.reference.context)
+                'host', frozenset({'account.open_host_run'}), 'a'*64,
+                open_context=self.reference.context if open_context else None)
         service = AccountService(self.reference.base.scope.runtime_digest, self.jobs._views,
             authorizer=authorize if authorizer else None, claim_jobs=self.jobs if configured else None)
         self.addCleanup(service.close)
@@ -438,6 +440,14 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
             decode_account_response(service.handle(raw, self.token), request)
         self.assertEqual([], self.reference.pending())
         self.assertEqual(0, self.jobs.snapshot()['tickets'])
+
+    def test_S1_U10a_an_open_without_its_authorization_context_is_refused_before_readiness_is_told(self):
+        request = self.wire_command()
+        for configured in (True, False):
+            service, _ = self.wire_service(configured=configured, open_context=False)
+            with self.subTest(configured=configured), self.assertRaisesRegex(AccountError, '^open_not_authorized$'):
+                decode_account_response(self.pump_wire(service, service.begin(encode_account_request(request), self.token)),
+                                        request)
 
     def test_S1_U10a_an_account_that_is_closing_says_so(self):
         request = self.wire_command()
