@@ -50,6 +50,9 @@ class ResultPersistenceHandle:
     __slots__ = ("__weakref__",)
 
 
+REPORT_SLOTS = 8  # S1-R6-7: reporting writes queued at once, beside the lane's own room
+
+
 @dataclass(repr=False)
 class _EarlierLeases:
     """One request on the writer for leases an earlier service left armed (0.3.3, C3).
@@ -157,8 +160,11 @@ class ResultPersistenceLane:
         self._requests = None if request_limits is None else ProjectRequestQueue(request_limits)
         self._api_ingress_owner = None
         self._service_authorizers = (history_authorizer, result_authorizer, orchestration_authorizer)
-        # API requests cannot consume one slot per result entry or the close marker.
-        self._incoming = queue.Queue(maxsize=max_entries + 1 + (0 if request_limits is None else request_limits.requests))
+        # API requests cannot consume one slot per result entry or the close marker, and reporting
+        # writes have their own REPORT_SLOTS (S1-R6-7).
+        self._incoming = queue.Queue(maxsize=max_entries + 1 + REPORT_SLOTS
+                                     + (0 if request_limits is None else request_limits.requests))
+        self._reporting = 0  # reporting writes queued or being written (at most REPORT_SLOTS)
         self._ready = threading.Event()
         self._closed = self._fault = False
         self._store = None
@@ -997,19 +1003,35 @@ class ResultPersistenceLane:
         return self._queue_earlier(_EarlierLeases('expire'))
 
     def report_registered_run(self, orchestration_handle, run_handle, run_id, attempt):
-        """S1-R6: record that the driver registered this run (reporting only); poll its `state`."""
-        return self._queue_earlier(_EarlierLeases('register', arguments=(orchestration_handle, run_handle, run_id,
-                                                                         attempt)))
+        """S1-R6: record that the driver registered this run, under this service's supervisor instance;
+        poll its `state`. `history_writer_busy` when every reporting slot is in use: ask again later."""
+        return self._queue_report(_EarlierLeases('register', arguments=(
+            orchestration_handle, run_handle, run_id, attempt, self._service_scope.supervisor_instance_id)))
 
     def report_failed_before_open(self, run_handle, attempt, reason):
         """S1-R6: record that a registered run failed before its host open (reporting only)."""
-        return self._queue_earlier(_EarlierLeases('failed_before_open', arguments=(run_handle, attempt, reason)))
+        return self._queue_report(_EarlierLeases('failed_before_open', arguments=(run_handle, attempt, reason)))
+
+    def _queue_report(self, request):
+        with self._lock:
+            if self._reporting >= REPORT_SLOTS:
+                raise HistoryError('history_writer_busy')
+            self._reporting += 1
+        try:
+            return self._queue_earlier(request)
+        except BaseException:
+            with self._lock:
+                self._reporting -= 1
+            raise
 
     def _queue_earlier(self, request):
         with self._lock:
             if self._closed or self._fault:
                 raise HistoryError('history_service_unavailable')
-            self._incoming.put_nowait(('earlier', request))
+            try:
+                self._incoming.put_nowait(('earlier', request))
+            except queue.Full:
+                raise HistoryError('history_writer_busy') from None  # never queue.Full out of a step
         return request
 
     def _earlier(self, request):
@@ -1021,9 +1043,14 @@ class ResultPersistenceLane:
                 # A failure here never stops the result cleanup below (review 034-r10).
                 with contextlib.suppress(HistoryError, sqlite3.Error):
                     history._orchestration_owner().end_earlier(self._service_scope, 10)
+                with contextlib.suppress(HistoryError, sqlite3.Error):  # S1-R6-8, reporting only
+                    history.settle_earlier_registrations(self._service_scope.supervisor_instance_id,
+                                                         now_ms=history._result_now())
                 result = history.expire_results(limit=10)
             elif request.kind == 'register':
-                result = history.record_registered_run(*request.arguments, now_ms=history._result_now())
+                handle, run_handle, run_id, attempt, instance = request.arguments
+                result = history.record_registered_run(handle, run_handle, run_id, attempt, instance=instance,
+                                                       now_ms=history._result_now())
             elif request.kind == 'failed_before_open':
                 result = history.record_run_failed_before_open(*request.arguments, now_ms=history._result_now())
             elif request.kind == 'list':
@@ -1053,6 +1080,8 @@ class ResultPersistenceLane:
             reason = HistoryError(error.reason_code).reason_code if type(error) is HistoryError else 'history_service_unavailable'
         with self._lock:
             request.result, request.reason, request.state = result, reason, state
+            if request.kind in {'register', 'failed_before_open'}:
+                self._reporting -= 1
 
     def _run(self):
         operations = {"prepare": self._prepare, "publish": self._publish,

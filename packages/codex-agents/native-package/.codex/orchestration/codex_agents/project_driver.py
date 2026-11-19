@@ -43,6 +43,7 @@ import time
 
 from .account_api import ACCOUNT_PROTOCOL_VERSION, AccountClient, AccountError, AccountRequest, account_request_digest
 from .account_claim_contracts import CLAIM_DENIAL_CODES, LaunchClaimInput
+from .run_failure_reasons import FAILED_BEFORE_OPEN_REASONS
 from .claim_denial import CloseDeniedInput, FenceClaimInput
 from .preparation_reasons import PREPARATION_STAGE_REASONS
 from .codex_preparation import (
@@ -135,7 +136,7 @@ REASON_CODES = frozenset({
 _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 'assignment', 'task', 'route',
                     'parent_grant'}
 _PREPARE_FIELDS = {'purpose', 'expected_export_commit'}
-_ACTIVE = frozenset({'reading', 'preparing', 'observing', 'leasing', 'arming', 'recording_open', 'claiming', 'binding',
+_ACTIVE = frozenset({'recording_registration', 'reading', 'preparing', 'observing', 'leasing', 'arming', 'recording_open', 'claiming', 'binding',
                      'registering', 'provenance', 'consuming', 'closing', 'settling', 'withdrawing', 'fencing'})
 # A run that can never launch closes itself through these, then ends 'failed' and closed.
 _CLOSING = frozenset({'closing', 'settling', 'withdrawing', 'fencing'})
@@ -151,6 +152,7 @@ class _Run:
     run_id: str
     inputs_digest: str
     state: str = 'registered'
+    registration: object = None  # S1-R6: its reporting registration on the writer (polled)
     reason: str | None = None
     preparation: object = None
     prepared: object = None
@@ -526,8 +528,8 @@ class RunDriver:
         prospective = OpenScopeContext(self._scope, value['orchestration_handle'], value['assignment'], value['task'],
                                        value['route'], value['parent_grant'], worker)
         prospective.snapshot()
-        self._runs[key] = _Run(key, self._scope, host_client, prospective, value['run_id'], inputs_digest)
-        self._report('register', value['orchestration_handle'], key[0], value['run_id'], key[1])
+        run = self._runs[key] = _Run(key, self._scope, host_client, prospective, value['run_id'], inputs_digest)
+        self._submit_registration(run)
 
     def _prepare(self, key, inputs_digest, value, host_client):
         run = self._runs.get(key)
@@ -542,6 +544,29 @@ class RunDriver:
         if value.keys() != _PREPARE_FIELDS or value['purpose'] != 'prepare':
             raise HistoryError('history_invalid_input')
         run.commit = value['expected_export_commit']
+        # S1-R6-6: preparation starts only once its registration has committed.
+        run.state = 'recording_registration'
+        self._after_registration(run)
+
+    def _submit_registration(self, run):
+        try:
+            run.registration = self._runtime.persistence.report_registered_run(
+                run.prospective.orchestration_handle, run.key[0], run.run_id, run.key[1])
+        except HistoryError:
+            run.registration = None  # No reporting room yet, or the lane is closing: asked again next step.
+
+    def _after_registration(self, run):
+        if run.registration is None:
+            self._submit_registration(run)
+        request = run.registration
+        if request is None or request.state == 'queued':
+            return
+        if request.state != 'done':
+            self._fail(run, 'run_failed')  # Not written: refused before preparation, nothing else held.
+            return
+        self._begin(run)
+
+    def _begin(self, run):
         if run.prospective.worker is None:
             self._start_preparation(run, None)
             return
@@ -603,30 +628,24 @@ class RunDriver:
             connection.close()
 
     def _report(self, kind, *arguments):
-        """Queue one reporting write (S1-R6); it never holds up the run, and a failed one is retried."""
-        self._reports.append([kind, arguments, None, 0])
-        self._send_reports()  # at once: a report asked for next is read after it (the writer's queue is FIFO)
+        """Queue one failure report (S1-R6); it never holds up the run, and a failed write is asked again
+        while the service runs (R6-8)."""
+        self._reports.append([kind, arguments, None])
+        self._send_reports()  # at once when there is room, so a report read next comes after it
 
     def _send_reports(self):
-        """Owner step: send queued reporting writes one at a time, in order; retry a failed one a few
-        times, then drop it (the report then shows that run as it otherwise would)."""
+        """Owner step: hand queued failure reports to the writer while it has reporting room; drop each
+        once written, and ask again for one whose write failed."""
         lane = self._runtime.persistence
-        while self._reports:
-            entry = self._reports[0]
-            kind, arguments, request, tries = entry
-            if request is None:
+        for entry in list(self._reports):
+            request = entry[2]
+            if request is not None and request.state == 'done':
+                self._reports.remove(entry)
+            elif request is None or request.state == 'failed':
                 try:
-                    entry[2] = (lane.report_registered_run(*arguments) if kind == 'register'
-                                else lane.report_failed_before_open(*arguments))
-                except Exception:
-                    return  # the lane is closing or faulted: try again next step
-                return
-            if request.state == 'queued':
-                return
-            if request.state == 'failed' and tries < 3:
-                entry[2], entry[3] = None, tries + 1
-                return
-            self._reports.pop(0)
+                    entry[2] = lane.report_failed_before_open(*entry[1])
+                except HistoryError:
+                    return  # No room now, or closing: asked again next step.
 
     def _fail(self, run, reason):
         """Stop a run; one that can provably never launch then closes by itself.
@@ -649,10 +668,13 @@ class RunDriver:
                 self._fence_later(run)  # Its claim may still be admitted: only the account can say.
             return
         run.state, run.reason = 'failed', reason
-        if not run.claim_sent and run.receipt is None and run.binding is None:
-            # S1-R6: the host open is recorded just before the claim is sent, so this run never had
-            # one: the report shows it with its reason. Reporting only; the closing below is unchanged.
-            self._report('failed_before_open', run.key[0], run.key[1], reason)
+        if (not run.claim_sent and run.receipt is None and run.binding is None and run.registration is not None
+                and run.registration.state == 'done'):
+            # S1-R6: the host open is recorded just before the claim is sent, so this run (most likely)
+            # never had one; the store checks its own open rows (R6-10). Reporting only: the closing
+            # below is unchanged.
+            self._report('failed_before_open', run.key[0], run.key[1],
+                         reason if reason in FAILED_BEFORE_OPEN_REASONS else 'run_failed')
         if run.persistence is None:
             self._give_back(run)
             run.closed = run.prepared is None and run.lease is None
@@ -885,6 +907,8 @@ class RunDriver:
             if run.fence_at is not None and self._clock() >= run.fence_at:
                 run.fence_at = None
                 self._fence(run)  # A refused fence, asked again (see `_fence_later`).
+        elif run.state == 'recording_registration':
+            self._after_registration(run)
         elif run.state == 'reading':
             worker_result = self._result(run)
             if worker_result is not None:

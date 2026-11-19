@@ -8,7 +8,6 @@ The installed CLI does not use it until the service/enrollment/migration gates p
 
 from __future__ import annotations
 
-import re
 
 import contextlib
 import fcntl
@@ -36,6 +35,7 @@ from .history_contracts import (
 )
 from .host_result_contracts import HostResultReference, decode_host_result_reference
 from .orchestration_api import OrchestrationLimits
+from .run_failure_reasons import FAILED_BEFORE_OPEN_REASONS, MAX_REGISTERED_RUNS
 from .orchestration_schema import ORCHESTRATION_SCHEMA, ORCHESTRATION_COLUMNS
 from .project_qa_checks import CHECK_SCHEMA, CHECK_COLUMNS
 from .project_qa_commit import QA_SCHEMA, QA_COLUMNS
@@ -168,7 +168,8 @@ _SCHEMA_V16 = _SCHEMA_V15 + ACTIVATION_SCHEMA
 REGISTERED_RUN_SCHEMA = """
 CREATE TABLE project_registered_runs(
  project_id TEXT NOT NULL,run_handle TEXT NOT NULL,attempt INTEGER NOT NULL,
- orchestration_handle TEXT NOT NULL,run_id TEXT NOT NULL,registered_at_ms INTEGER NOT NULL,
+ orchestration_handle TEXT NOT NULL,run_id TEXT NOT NULL,service_instance TEXT NOT NULL,
+ registered_at_ms INTEGER NOT NULL,
  failed_reason TEXT,failed_at_ms INTEGER,
  PRIMARY KEY(project_id,run_handle,attempt),
  FOREIGN KEY(project_id) REFERENCES history_identity(project_id));
@@ -176,9 +177,8 @@ CREATE INDEX project_registered_runs_orchestration ON project_registered_runs(pr
 """
 REGISTERED_RUN_COLUMNS = {
     "project_registered_runs": ("project_id", "run_handle", "attempt", "orchestration_handle", "run_id",
-                                "registered_at_ms", "failed_reason", "failed_at_ms"),
+                                "service_instance", "registered_at_ms", "failed_reason", "failed_at_ms"),
 }
-_FIXED_REASON = re.compile(r"[a-z][a-z_]{2,63}")
 _SCHEMA = _SCHEMA_V16 + REGISTERED_RUN_SCHEMA
 _COLUMNS = {
     **ACTIVATION_COLUMNS,
@@ -1477,11 +1477,12 @@ class ProjectHistory:
         return actual
 
     @_operation
-    def record_registered_run(self, orchestration_handle, run_handle, run_id, attempt, *, now_ms):
-        """S1-R6: the driver registered this run (before its preparation). A replay is a no-op; another
-        run under the same (run handle, attempt) is refused. Reporting only."""
+    def record_registered_run(self, orchestration_handle, run_handle, run_id, attempt, *, instance, now_ms):
+        """S1-R6: the driver registered this run (before its preparation), under its supervisor
+        instance. A replay is a no-op; another run under the same (run handle, attempt) is refused, and
+        so is a new one past the orchestration's limit (R6-12). Reporting only."""
         if (not matches(orchestration_handle, _ID) or not matches(run_handle, _RUN) or not matches(run_id, _ID)
-                or not valid_integer(attempt, minimum=1) or not valid_integer(now_ms)):
+                or not valid_integer(attempt, minimum=1) or not matches(instance, _ID) or not valid_integer(now_ms)):
             raise HistoryError("history_invalid_input")
         with self._transaction():
             known = self._connection.execute(
@@ -1491,18 +1492,28 @@ class ProjectHistory:
                 if tuple(known) != (orchestration_handle, run_id):
                     raise HistoryError("history_conflict")
                 return
+            held = self._connection.execute(
+                "SELECT COUNT(*) FROM project_registered_runs WHERE project_id=? AND orchestration_handle=?",
+                (self.project_id, orchestration_handle)).fetchone()[0]
+            if held >= MAX_REGISTERED_RUNS:
+                raise HistoryError("history_learning_capacity")
             self._connection.execute(
-                "INSERT INTO project_registered_runs VALUES(?,?,?,?,?,?,NULL,NULL)",
-                (self.project_id, run_handle, attempt, orchestration_handle, run_id, now_ms))
+                "INSERT INTO project_registered_runs VALUES(?,?,?,?,?,?,?,NULL,NULL)",
+                (self.project_id, run_handle, attempt, orchestration_handle, run_id, instance, now_ms))
 
     @_operation
     def record_run_failed_before_open(self, run_handle, attempt, reason, *, now_ms):
         """S1-R6: a registered run failed before its host open, with its fixed reason. Recorded once and
-        never changed; only a fixed reason code is stored. Reporting only: nothing is freed here."""
+        never changed; only a listed reason is stored (R6-9), and nothing is recorded for an attempt
+        whose host open has committed (R6-10). Reporting only: nothing is freed here."""
         if (not matches(run_handle, _RUN) or not valid_integer(attempt, minimum=1)
-                or type(reason) is not str or not _FIXED_REASON.fullmatch(reason) or not valid_integer(now_ms)):
+                or reason not in FAILED_BEFORE_OPEN_REASONS or not valid_integer(now_ms)):
             raise HistoryError("history_invalid_input")
         with self._transaction():
+            if self._connection.execute(
+                    "SELECT 1 FROM project_host_opens WHERE project_id=? AND run_handle=? AND attempt=?",
+                    (self.project_id, run_handle, attempt)).fetchone() is not None:
+                return
             known = self._connection.execute(
                 "SELECT failed_reason FROM project_registered_runs WHERE project_id=? AND run_handle=? AND attempt=?",
                 (self.project_id, run_handle, attempt)).fetchone()
@@ -1515,6 +1526,20 @@ class ProjectHistory:
             self._connection.execute(
                 "UPDATE project_registered_runs SET failed_reason=?,failed_at_ms=? WHERE project_id=? AND run_handle=? "
                 "AND attempt=?", (reason, now_ms, self.project_id, run_handle, attempt))
+
+    @_operation
+    def settle_earlier_registrations(self, instance, *, now_ms, limit=64):
+        """S1-R6-8: registrations an earlier service left with neither an open nor a failure can no
+        longer open; they are marked `service_stopped`. Returns how many were marked."""
+        if not matches(instance, _ID) or not valid_integer(now_ms) or not valid_integer(limit, minimum=1, maximum=512):
+            raise HistoryError("history_invalid_input")
+        with self._transaction():
+            return self._connection.execute(
+                "UPDATE project_registered_runs SET failed_reason='service_stopped',failed_at_ms=? WHERE rowid IN ("
+                "SELECT r.rowid FROM project_registered_runs r WHERE r.project_id=? AND r.service_instance!=? "
+                "AND r.failed_reason IS NULL AND NOT EXISTS (SELECT 1 FROM project_host_opens o WHERE "
+                "o.project_id=r.project_id AND o.run_handle=r.run_handle AND o.attempt=r.attempt) LIMIT ?)",
+                (now_ms, self.project_id, instance, limit)).rowcount
 
     @_operation
     def expire_result_leases(self, *, limit: int = 10) -> int:
@@ -2066,7 +2091,7 @@ class ProjectHistory:
         """One finished attempt's rows, children first (foreign keys are on)."""
         attempt_key = (self.project_id, run_handle, attempt)
         for table in ("project_cleanup_acknowledgements", "project_cleanup_receipts", "project_cleanup_reservations",
-                      "project_host_opens"):
+                      "project_host_opens", "project_registered_runs"):  # with its registration (R6-13)
             self._connection.execute(f"DELETE FROM {table} WHERE project_id=? AND run_handle=? AND attempt=?",
                                      attempt_key)
         if claim_id is not None:

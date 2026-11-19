@@ -164,6 +164,7 @@ RUNTIME_FILES = (
     "codex_agents/result_read_api.py",
     "codex_agents/result_read_service.py",
     "codex_agents/routing.py",
+    "codex_agents/run_failure_reasons.py",
     "codex_agents/run_provenance.py",
     "codex_agents/runtime_files.py",
     "codex_agents/service_enrollment.py",

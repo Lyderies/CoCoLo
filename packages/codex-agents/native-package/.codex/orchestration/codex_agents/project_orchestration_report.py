@@ -69,11 +69,21 @@ def orchestration_report(history, orchestration_id):
         # S1-R6: runs the driver registered; one with no host open either failed before it (its fixed
         # reason) or is still unresolved. A run with a host open is counted by its open only.
         registered = history._connection.execute(
-            "SELECT run_id,failed_reason FROM project_registered_runs INDEXED BY project_registered_runs_orchestration "
-            "WHERE project_id=? AND orchestration_handle=? LIMIT ?", (history.project_id, handle, MAX_RUNS + 1)).fetchall()
+            "SELECT run_id,attempt,failed_reason FROM project_registered_runs INDEXED BY "
+            "project_registered_runs_orchestration WHERE project_id=? AND orchestration_handle=? LIMIT ?",
+            (history.project_id, handle, MAX_RUNS + 1)).fetchall()
         if len(registered) > MAX_RUNS:
             raise HistoryError("history_learning_capacity")
-        before_open = {run_id: reason for run_id, reason in registered if type(run_id) is str and run_id not in runs}
+        # R6-11: a run's attempts combine the same in any row order: any unresolved attempt keeps it
+        # pending (None); else it failed with its highest attempt's reason.
+        attempts = {}
+        for run_id, attempt, reason in registered:
+            if type(run_id) is str and run_id not in runs:
+                attempts.setdefault(run_id, []).append((attempt, reason))
+        before_open = {run_id: (None if any(reason is None for _, reason in found) else max(found)[1])
+                       for run_id, found in attempts.items()}
+        if len(runs) + len(before_open) > MAX_RUNS:  # R6-12: opens and registrations together
+            raise HistoryError("history_learning_capacity")
         # Every attempt's lease expired: one still open could yet record a result.
         expired = {run_id for run_id, _, _, _ in opens if type(run_id) is str} - {
             run_id for run_id, _, _, state in opens if state != 'expired'}

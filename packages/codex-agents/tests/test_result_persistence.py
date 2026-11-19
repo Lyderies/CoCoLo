@@ -82,7 +82,7 @@ class ResultPersistenceTests(unittest.TestCase):
         try:
             for _ in range(result_persistence.REPORT_SLOTS):
                 lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
-            with self.assertRaisesRegex(HistoryError, 'history_service_busy'):  # waits; fails nothing
+            with self.assertRaisesRegex(HistoryError, 'history_writer_busy'):  # waits; fails nothing
                 lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
             # Room is left for the lane's one job and its close marker.
             self.assertGreaterEqual(lane._incoming.maxsize - lane._incoming.qsize(), 2)
