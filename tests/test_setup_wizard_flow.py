@@ -412,5 +412,113 @@ class InstallCommitTests(unittest.TestCase):
         self.assertEqual("", self.git("diff", "--cached", "--name-only"))
 
 
+class FailureAndSummaryTests(unittest.TestCase):
+    """W9.3, W10: failures never end the wizard; the failure summary and where it is saved."""
+
+    def setUp(self) -> None:
+        self.h = Harness(self)
+        self.project, self.checks = self.h.make_project()
+
+    def failed_install(self, *after: str) -> tuple[int, str]:
+        self.h.apply_fails = True
+        return self.h.run(*to_commit(self.checks), *after, start=self.project)
+
+    def test_failure_summary_is_an_allowlist_and_never_echoes_output(self) -> None:
+        """Replaces WizardTerminalTests.test_failure_summary_is_an_allowlist_and_never_echoes_output (W10.4, W1.7)."""
+        from wizard_flow_harness import TOKEN
+        destination = self.h.base / "summary.txt"
+        code, screen = self.failed_install(DOWN + ENTER, DOWN + ENTER, f"{destination}\r", ENTER, ENTER)
+        self.assertIn("The install failed", screen)
+        self.assertIn("run it manually to see why", screen)
+        self.assertIn("Saved a summary", screen)
+        self.assertEqual(0, code)
+        saved = destination.read_text()
+        self.assertIn("exit code 2", saved)
+        self.assertIn("install failed", saved.lower())
+        for text in (saved, screen):
+            self.assertNotIn(TOKEN, text)
+            self.assertNotIn("user@example.invalid", text)
+        self.assertEqual(0o600, destination.stat().st_mode & 0o777)
+        self.assertEqual([], list(self.h.scratch.iterdir()))  # no working folder left
+        installs = [argv for argv in self.h.launched if str(ROOT / "scripts" / "install.py") in argv
+                    and "install" in argv]
+        self.assertEqual(2, len(installs))  # preview and apply, both from one private snapshot
+        for argv in installs:
+            self.assertNotIn(str(self.checks), argv)
+            self.assertRegex(" ".join(argv), r"/setup-[A-Za-z0-9_]+/inputs/operational-checks\.json")
+
+    def test_summary_defaults_to_the_home_folder(self) -> None:
+        """Replaces WizardTerminalTests.test_summary_defaults_to_the_home_folder (W10.1)."""
+        code, screen = self.failed_install(DOWN + ENTER, DOWN + ENTER, ENTER, ENTER, ENTER)
+        self.assertIn(str(self.h.home / "agent-orchestration-setup-summary.txt"), screen)
+        self.assertIn("Saved a summary", screen)
+        self.assertEqual(0, code)
+        self.assertTrue((self.h.home / "agent-orchestration-setup-summary.txt").is_file())
+        self.assertFalse((self.project / "agent-orchestration-setup-summary.txt").exists())
+        self.assertFalse((ROOT / "agent-orchestration-setup-summary.txt").exists())
+
+    def test_summary_inside_a_git_working_tree_asks_first(self) -> None:
+        """Replaces WizardTerminalTests.test_summary_inside_a_git_working_tree_asks_first (W10.2)."""
+        destination = self.project / "summary.txt"
+        code, screen = self.failed_install(DOWN + ENTER, DOWN + ENTER, f"{destination}\r", DOWN + ENTER, ENTER, ENTER)
+        self.assertIn("inside a Git working tree", screen)
+        self.assertLess(screen.index("Save it here anyway"), screen.index("Saved a summary"))
+        self.assertEqual(0, code)
+        self.assertTrue(destination.is_file())
+
+    def test_failure_menu_defaults_to_the_main_menu_and_the_summary_can_go_back(self) -> None:
+        """Replaces WizardTerminalTests.test_failure_menu_defaults_to_the_main_menu_and_the_summary_can_go_back (W9.3)."""
+        again = [ENTER, f"{self.checks}\r", ENTER, ENTER, ENTER, ENTER]
+        code, screen = self.failed_install(ENTER, *again, DOWN + ENTER, DOWN + DOWN + ENTER, "q\r", "y")
+        self.assertEqual(2, screen.count("Path to operational-checks.json"))  # back went to the project again
+        self.assertIn("Save a summary of what failed", screen)
+        self.assertIn("Project path", screen.split("Save a summary of what failed")[-1])  # back from the summary
+        self.assertEqual(130, code)  # only an explicit quit ends it
+
+    def failed_billing(self, fails: int, *after: str) -> tuple[int, str]:
+        self.h.attest = [1] * fails
+        return self.h.run(*to_commit(self.checks), ENTER, ENTER, DOWN + ENTER, ENTER, ENTER, *after,
+                          start=self.project)
+
+    def test_a_failed_attestation_offers_try_again_and_succeeds_on_retry(self) -> None:
+        """Replaces WizardTerminalTests.test_a_failed_attestation_offers_try_again_and_succeeds_on_retry (W7.2)."""
+        _, screen = self.failed_billing(1, ENTER, ENTER)
+        retry = screen.split("attest stub run 1", 1)[1].split("attest stub run 2", 1)[0]
+        self.assertIn("Try again", retry)
+        self.assertIn("Skip for now", retry)
+        self.assertIn("Back to the main menu", retry)
+        self.assertIn("attest.py ran", screen.split("attest stub run 2", 1)[1])
+
+    def test_back_to_the_main_menu_after_a_failure_then_another_option_works(self) -> None:
+        """Replaces WizardTerminalTests.test_back_to_the_main_menu_after_a_failure_then_another_option_works (W9.3)."""
+        code, screen = self.failed_billing(1, DOWN + DOWN + ENTER, ENTER, DOWN + DOWN + ENTER, ENTER, ENTER, ENTER,
+                                           ENTER)
+        menu = screen.split("attest stub run 1", 1)[1].split("Start the attestation", 1)[0]
+        self.assertIn("Update the install", menu)  # the existing-install menu, not the summary
+        self.assertNotIn("Exit", menu)
+        self.assertIn("attest.py ran", screen.split("attest stub run 2", 1)[1])
+        self.assertEqual(0, code)
+
+    def test_the_wizard_only_ends_on_quit_after_failures(self) -> None:
+        """Replaces WizardTerminalTests.test_the_wizard_only_ends_on_quit_after_failures (W9.3)."""
+        code, screen = self.failed_billing(2, DOWN + DOWN + ENTER, ENTER, DOWN + DOWN + ENTER, ENTER, ENTER,
+                                           DOWN + ENTER, ENTER, DOWN * 6 + ENTER)
+        retry = screen.split("attest stub run 2", 1)[1]
+        self.assertIn("Try again", retry)
+        self.assertNotIn("Skip for now", retry)  # attestation only has nothing to skip to
+        self.assertIn("Update the install", retry)  # back to the main menu again
+        self.assertIn("Stopped.", screen)
+        self.assertEqual(0, code)
+
+    def test_question_mark_shows_what_ran_in_the_step(self) -> None:
+        """Replaces WizardTerminalTests.test_question_mark_shows_what_ran_in_the_step (W9.5)."""
+        self.h.remembered(self.project)
+        _, screen = self.h.run("?", ENTER, start=self.project)
+        self.assertIn("What ran in this step, in order:", screen)
+        self.assertIn("Command output is kept private", screen)
+        self.assertIn("Everything looks good", screen.split("Command output is kept private", 1)[1])
+        self.assertNotIn("? what ran", screen.split("Everything looks good")[0])
+
+
 if __name__ == "__main__":
     unittest.main()

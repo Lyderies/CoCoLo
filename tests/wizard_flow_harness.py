@@ -36,6 +36,7 @@ def to_commit(checks: Path) -> list[str]:
 # temporary-folder rule refusal, then Exit.
 FINISH = [ENTER, DOWN + ENTER, DOWN + ENTER, ENTER, ENTER, ENTER]
 
+TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789SECRETTOKEN"  # As test_setup_sh's FAKE_FAIL.
 CLAUDE_SIGNED_IN = b'{"loggedIn": true, "subscriptionType": "max", "authMethod": "x"}'
 PLAIN = __import__("re").compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B")
 
@@ -105,6 +106,7 @@ class Harness:
         self.cli = {}  # subcommand -> callable(args) -> (status, stdout bytes)
         self.attest = []  # exit statuses for successive hand-offs; 0 when run out
         self.helper_fails = False  # FAKE_PJ_FAIL: the path helper exits 1
+        self.apply_fails = False  # FAKE_FAIL: the install's --apply prints a secret and exits 2
         self.launched: list[list[str]] = []
         self.handoffs: list[list[str]] = []
 
@@ -142,6 +144,8 @@ class Harness:
             return done.returncode, done.stdout, done.stderr
         rest = argv[len(flow.PYF) + 1:] if argv[1:len(flow.PYF) + 1] == flow.PYF else argv
         if rest[:1] == [str(flow.INSTALLER)]:
+            if self.apply_fails and "--apply" in rest:
+                return 2, ('{"error": "boom %s user@example.invalid"}\n' % TOKEN).encode(), (TOKEN + "\n").encode()
             return self._in_process(effects.installer().main, rest[1:])
         if rest[:1] == [str(flow.CLONE_CLI)]:
             command = rest[1] if len(rest) > 1 else ""
