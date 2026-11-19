@@ -269,7 +269,9 @@ class DirectDriverMixin:
 
     # The driver: WizardTerminalTests' start, expect, settle, send and finish -----------------
 
-    def start(self, cwd: Path, extra_env: dict | None = None, *, direct: bool = False) -> None:
+    def start(self, cwd: Path, extra_env: dict | None = None, *, direct: bool = False,
+              argv: list[str] | None = None) -> None:
+        """As WizardTerminalTests.start; `argv` is what follows ./setup.sh (S1: ["--update", PROJECT])."""
         if getattr(self, "_undo", None):  # started again: the earlier wizard ends and is undone first
             self._reap()
         # The environment setup.sh gives the wizard (its lines 48-51 and 152): system folders only on
@@ -288,6 +290,8 @@ class DirectDriverMixin:
         trusted = mock.patch.object(effects.installer().attest, "trusted_python", lambda: TRUSTED_PY)
         trusted.start()
         self._undo = [trusted.stop, lambda: os.chdir(here), environment.stop]
+        self.thread = None
+        self.addCleanup(self._reap)  # Registered at once: a start that fails later is still undone.
         # Simulated, not evidence of isolation: the two lines setup.sh's launcher would log before the
         # wizard (its version check and its exec). The real launcher runs in KEPT_TERMINAL_RUNS.
         self._log_launch(["-I", "-B", "-S", "-X", "pycache_prefix=/dev/null", "-c",
@@ -320,8 +324,10 @@ class DirectDriverMixin:
             return chunk
         term = _DirectTerminal(self, out=self.output, read=read, colours=terminal.terminal_colours(),
                                size=lambda: (100, 30))
-        wizard = flow.Wizard(term, start=str(cwd), python=env["COCOLO_PYTHON"],
-                             owner_path=env["COCOLO_OWNER_PATH"], bash_version=env["COCOLO_BASH_VERSION"])
+        update = list(argv or [])[:1] == ["--update"]
+        wizard = flow.Wizard(term, start=argv[1] if update else str(cwd), python=env["COCOLO_PYTHON"],
+                             owner_path=env["COCOLO_OWNER_PATH"], bash_version=env["COCOLO_BASH_VERSION"],
+                             **({"update": True} if update else {}))
 
         def handoff(argv):  # flow.Wizard.handoff, with attest.py's run emulated (its output on the terminal)
             term.show_cursor()
@@ -356,7 +362,6 @@ class DirectDriverMixin:
         self.thread = threading.Thread(target=main, daemon=True)
         self.pid = 1
         self.thread.start()
-        self.addCleanup(self._reap)
 
     def _pull(self) -> None:
         text = self.output.take()

@@ -199,6 +199,7 @@
  "root:test_setup_sh": "e2e",
  "root:test_setup_wizard_effects": "unit",
  "root:test_setup_wizard_direct": "integration",
+ "root:test_setup_update": "integration",
  "root:test_setup_wizard_git": "integration",
  "root:test_setup_wizard_progress": "integration",
  "root:test_setup_wizard_source": "unit",
