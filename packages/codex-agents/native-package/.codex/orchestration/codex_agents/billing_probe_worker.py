@@ -12,6 +12,7 @@ import queue
 import threading
 import time
 
+from . import lane_health
 from . import bridge
 from .admission_metadata import _headroom_state
 from .history_contracts import _DIGEST, _PROJECT, matches, valid_integer
@@ -82,6 +83,21 @@ class _Job:
     packet_snapshot: tuple | None = None
     workspace: Path | None = None
     cancelled: bool = False
+    token: int = 0  # S1-H1a: counts this job once in the lane's health notes
+    held: bool = False  # S1-H1a: this job has entered the lane's held episode
+
+
+def _held(slot, job, cause, error=None, *, faulted=False):
+    """S1-H1a: this worker publishes its own unknown job (and fault) as kept and held. Reporting only."""
+    changes = {'faulted': True} if faulted else {}
+    if job is not None:
+        changes['kept'] = frozenset({job.token})
+    slot.note.publish(**changes)
+    slot.lane.note_failure(slot.note, cause, error)
+    if job is None or not job.held:
+        if job is not None:
+            job.held = True
+        slot.lane.enter_held()
 
 
 class _Slot:
@@ -249,6 +265,10 @@ def _worker(slot, registry):
                     job.state = 'discarding' if discard else 'prepared' if prepared is not None else 'unknown' if unknown else 'failed'
                     if prepared is not None:
                         job.snapshot = _prepared_snapshot(prepared)
+                    if job.state == 'unknown':
+                        _held(slot, job, 'probe_preparation_unknown')
+                    elif job.state == 'failed':
+                        slot.lane.note_failure(slot.note, 'probe_preparation_failed', None)
                 if not discard:
                     job = handle = item = prepared = None
                     continue
@@ -259,6 +279,8 @@ def _worker(slot, registry):
                     job.workspace = None if removed else job.workspace
                     job.prepared = None
                     job.state = 'cleaned' if removed and job.ticket is None else 'unknown'
+                    if job.state == 'unknown':
+                        _held(slot, job, 'cleanup_incomplete')
                 if slot.stop.is_set():
                     return
             elif operation == 'execute':
@@ -274,11 +296,12 @@ def _worker(slot, registry):
                 if slot.stop.is_set():
                     return
             job = handle = item = None
-    except BaseException:
+    except BaseException as error:
         with registry._lock:
             slot.fault = True
             if job is not None:
                 job.state = 'unknown'
+            _held(slot, job, 'probe_worker_failed', error, faulted=True)
 
 
 class BillingProbeWorkers:
@@ -289,6 +312,11 @@ class BillingProbeWorkers:
         self._registry, self._limits = registry, ProbeWorkerLimits(limits.workers, limits.retained_bytes)
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._jobs, self._slots, self._closed, self._charged = {}, [_Slot() for _ in range(limits.workers)], False, 0
+        # S1-H1a: published health notes, one slot for this owner and one per worker (reporting only).
+        self.health = lane_health.Lane('probe_worker')
+        self._note = self.health.slot('owner')
+        for index, slot in enumerate(self._slots):
+            slot.lane, slot.note = self.health, self.health.slot(f'worker-{index}')
         registry._register_probe_worker_pool(self)
         try:
             for slot in self._slots:
@@ -333,9 +361,10 @@ class BillingProbeWorkers:
             if slot is None or self._charged+PROBE_SLOT_BYTES > self._limits.retained_bytes:
                 raise ProbeWorkerError('probe_worker_full')
             handle = ProbeWorkerHandle()
-            job = _Job(payload, slot)
+            job = _Job(payload, slot, token=lane_health.new_token())
             self._jobs[handle], slot.current = job, handle
             self._charged += PROBE_SLOT_BYTES
+            self._note.publish(busy=len(self._jobs))
             slot.incoming.put_nowait(('prepare', handle, job))
             return handle
 
@@ -360,8 +389,13 @@ class BillingProbeWorkers:
             job.ticket, job.state = ticket, 'reserved'
             try:
                 self._registry._handoff_worker(ticket, self, handle)
-            except BaseException:
+            except BaseException as error:
                 job.state = 'unknown'
+                self._note.publish(kept=self._note.note.kept | {job.token})  # S1-H1a, reporting only
+                self.health.note_failure(self._note, 'probe_handoff_failed', error)
+                if not job.held:
+                    job.held = True
+                    self.health.enter_held()
                 raise
 
     def submit(self, handle):
@@ -422,6 +456,7 @@ class BillingProbeWorkers:
             self._jobs.pop(handle)
             job.slot.current = None
             self._charged -= PROBE_SLOT_BYTES
+            self._note.publish(busy=len(self._jobs))
 
     def close(self):
         self._owner()
