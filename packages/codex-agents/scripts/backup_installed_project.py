@@ -38,6 +38,11 @@ CHILD_SECONDS = 4 * 3600
 _FILE_ID = re.compile(r"[A-Za-z0-9_]{1,160}")
 
 
+class QuiesceLeftStopped(RuntimeError):
+    """Quiescing failed after the authorization file was replaced, and the earlier one could not be put
+    back: the collector stays stopped (F3-12)."""
+
+
 def _canonical_json(value: object) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -65,6 +70,13 @@ def _quiesce_collector_authorization(path: Path) -> None:
     ):
         raise RuntimeError("collector runtime authorization is invalid")
     value["quiesced_for_upgrade"] = True
+    _write_authorization(path, _canonical_json(value) + b"\n", [])
+
+
+def _write_authorization(path: Path, content: bytes, replaced: list) -> None:
+    """Replace the authorization file with `content`; a failure after the replacement puts the previous
+    file back (F3-12), and if that fails too, says the collector is left stopped."""
+    previous = path.read_bytes()
     temporary = path.parent / f".collector-authorization.{secrets.token_hex(8)}.tmp"
     descriptor = os.open(
         temporary,
@@ -73,16 +85,28 @@ def _quiesce_collector_authorization(path: Path) -> None:
     )
     try:
         with os.fdopen(descriptor, "wb") as handle:
-            handle.write(_canonical_json(value) + b"\n")
+            handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-        os.chmod(path, 0o600)
-        root_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        replaced.append(True)
         try:
-            os.fsync(root_descriptor)
-        finally:
-            os.close(root_descriptor)
+            os.chmod(path, 0o600)
+            root_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(root_descriptor)
+            finally:
+                os.close(root_descriptor)
+        except BaseException as error:
+            try:
+                restore = path.parent / f".collector-authorization.{secrets.token_hex(8)}.tmp"
+                restore.write_bytes(previous)
+                restore.chmod(0o600)
+                os.replace(restore, path)
+            except BaseException as failed:
+                raise QuiesceLeftStopped(f"{error}; the earlier authorization could not be put back: {failed}") \
+                    from error
+            raise
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -458,21 +482,33 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
     created = published = None
     child = None
     previous = {}
+    held_at_start = signal.pthread_sigmask(signal.SIG_BLOCK, [])  # The mask to leave as it was found.
+    committed = []  # Set once the backup is registered: from then on a stop signal is only noted (F3-11).
+    late_stop = []
+    held = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # Until the handlers are in place.
     if threading.current_thread() is threading.main_thread():
         def stop(signum, frame):
+            if committed:
+                late_stop.append(signum)
+                return
             raise _Stopped()
         previous = {number: signal.signal(number, stop) for number in _STOP_SIGNALS}
+    signal.pthread_sigmask(signal.SIG_SETMASK, held)
     try:
         if os.path.lexists(partition / final_name):
             raise RuntimeError("a backup with this file id already exists")
         with contextlib.suppress(FileNotFoundError):
             os.unlink(partial_name, dir_fd=folder)  # Left by a backup that was stopped; never registered.
-        descriptor = os.open(partial_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                             0o600, dir_fd=folder)
+        held = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # Created and recorded, or neither.
         try:
-            created = _identity(os.fstat(descriptor))
+            descriptor = os.open(partial_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                                 0o600, dir_fd=folder)
+            try:
+                created = _identity(os.fstat(descriptor))
+            finally:
+                os.close(descriptor)
         finally:
-            os.close(descriptor)
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)
         argv = [sys.executable, "-I", "-B", "-S", str(SCRIPT), "--stream-child", str(ledger.state.database),
                 str(partition / partial_name), project_id, str(schema_version), str(BACKUP_LIMIT_BYTES),
                 f"{created[0]}:{created[1]}"]
@@ -516,17 +552,25 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
         finally:
             os.close(descriptor)
         # Published by a new name for the same file: never replaces anything that appeared meanwhile.
+        held = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # Linked and recorded, or neither.
         try:
             os.link(partial_name, final_name, src_dir_fd=folder, dst_dir_fd=folder, follow_symlinks=False)
+            published = created
         except FileExistsError:
             raise RuntimeError("a backup with this file id appeared while it was written") from None
-        published = created
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)
         os.unlink(partial_name, dir_fd=folder)
         os.fsync(folder)
         path = partition / final_name
-        ledger._register_stored_file(project_id, file_id=file_id, kind="backup", path=path,
-                                     digest=report["backup_sha256"], expires_at_ms=expires_at_ms)
-        return {
+        held = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # Registered and committed, or neither.
+        try:
+            ledger._register_stored_file(project_id, file_id=file_id, kind="backup", path=path,
+                                         digest=report["backup_sha256"], expires_at_ms=expires_at_ms)
+            committed.append(True)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)  # A signal held meanwhile is now only noted.
+        return {**({"stopped_after_registration": True} if late_stop else {}),
             "ready": True,
             "project_id": project_id,
             "file_id": file_id,
@@ -540,16 +584,25 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
             "isolated_restore_foreign_keys": "ok",
         }
     except BaseException as error:
+        signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # Cleanup runs to its end (F3-11).
         if child is not None and child.poll() is None:
             child.kill()
             child.wait()
         # Remove only what this run created: a name whose file is still ours.
+        remaining = []
         for name, ours in ((final_name, published), (partial_name, created)):
             if ours is None:
                 continue
-            with contextlib.suppress(OSError):
+            try:
                 if _identity(os.stat(name, dir_fd=folder, follow_symlinks=False)) == ours:
                     os.unlink(name, dir_fd=folder)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                remaining.append(str(partition / name))
+        if remaining:  # F3-14: say what is left rather than claim nothing was kept.
+            raise RuntimeError(f"{'stopped by a signal' if isinstance(error, _Stopped) else error}; these files "
+                               f"could not be removed: {', '.join(remaining)}") from None
         if isinstance(error, _Stopped):
             raise RuntimeError("the backup was stopped by a signal; nothing was kept") from None
         raise
@@ -557,6 +610,7 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
         os.close(folder)
         for number, handler in previous.items():
             signal.signal(number, handler)
+        signal.pthread_sigmask(signal.SIG_SETMASK, held_at_start)
 
 
 def finish_backup(report: dict[str, object], *, leave_quiesced: bool, quiesce) -> tuple[dict[str, object], int]:
@@ -570,9 +624,23 @@ def finish_backup(report: dict[str, object], *, leave_quiesced: bool, quiesce) -
         return {**report, "collector_quiesced": False}, 0
     try:
         quiesce()
+    except QuiesceLeftStopped as exc:  # F3-12: replaced and not put back, so it is stopped
+        return {**report, "collector_quiesced": True, "quiesce_error": str(exc)}, 3
     except Exception as exc:
         return {**report, "collector_quiesced": False, "quiesce_error": str(exc)}, 3
     return {**report, "collector_quiesced": True}, 0
+
+
+def settle_maintenance(final: dict[str, object], code: int, *, resume) -> tuple[dict[str, object], int]:
+    """F3-13: restart the collector unless it stays stopped as asked, before the one report is printed;
+    a restart that fails is in that report (status 3), the backup still made and registered."""
+    if final.get("collector_quiesced"):
+        return final, code
+    try:
+        resume()
+    except Exception as exc:
+        return {**final, "restart_error": f"the installed collector did not restart: {exc}"}, 3
+    return final, code
 
 
 def _stream_child(argv: list[str]) -> int:
@@ -678,7 +746,7 @@ def _main() -> int:
     state = LearningState(args.state_root, create=False)
     maintenance = CollectorMaintenance.acquire(state, cli_path, target)
     ledger = None
-    backup_made = stay_stopped = False
+    backup_made = False
     try:
         ledger = LearningLedger(state)
         project_id = ledger.project_for_root(target)
@@ -726,21 +794,18 @@ def _main() -> int:
             report, leave_quiesced=args.leave_quiesced,
             quiesce=lambda: _quiesce_collector_authorization(state.collector_authorization))
         backup_made = True
-        # The collector stays stopped only when it was quiesced as asked.
-        stay_stopped = final["collector_quiesced"]
+        ledger.close()
+        ledger = None
+        # F3-13: maintenance is settled first, so the one report says how it ended.
+        final, code = settle_maintenance(final, code, resume=maintenance.resume)
         print(json.dumps(final, indent=2, sort_keys=True))
         return code
     finally:
         if ledger is not None:
             ledger.close()
-        if not stay_stopped:
-            try:
+        if not backup_made:  # Refused before the backup was made: the collector is restarted.
+            with contextlib.suppress(Exception):
                 maintenance.resume()
-            except Exception:
-                if backup_made:
-                    raise RuntimeError(
-                        "backup completed but the installed collector did not restart"
-                    )
 
 
 if __name__ == "__main__":
