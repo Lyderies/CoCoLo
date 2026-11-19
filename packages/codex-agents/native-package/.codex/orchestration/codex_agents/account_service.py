@@ -1035,11 +1035,11 @@ class AccountService:
             elif operation == 'account.open_host_run':
                 if not deferred:  # An open is always deferred; a synchronous call is a misuse (S1-U10f).
                     raise OpenError('open_failed')
+                self._provenance_live()
+                if authorization.open_context is None:  # Authorization before anything about readiness.
+                    raise OpenError('open_not_authorized')
                 if self._claim_jobs is None or self._claim_jobs._open_limits is None:
                     raise OpenError('open_account_starting')  # S1-U10a
-                self._provenance_live()
-                if authorization.open_context is None:
-                    raise OpenError('open_not_authorized')
                 original_context, captured = authorization.open_context.snapshot()
                 expected_context = AccountOpenContext.from_snapshot(captured)
                 caller = authorization.caller_scope
@@ -1062,8 +1062,16 @@ class AccountService:
                     except Exception:
                         raise OpenError('open_not_authorized') from None
 
-                return self._claim_jobs.submit_open(project, runtime_digest=runtime, caller_scope=caller,
-                    request_id=identity, request=opening, context=expected_context, before_commit=authorize_open, _ingress=ingress)
+                try:
+                    return self._claim_jobs.submit_open(project, runtime_digest=runtime, caller_scope=caller,
+                        request_id=identity, request=opening, context=expected_context, before_commit=authorize_open,
+                        _ingress=ingress)
+                except SQLReadError as error:  # S1-U10b: the database, as the open's own reason
+                    raise OpenError('open_account_busy' if error.reason_code == 'sql_read_busy' else 'open_failed') from None
+                except Exception as error:
+                    if type(getattr(error, 'reason_code', None)) is str:
+                        raise  # a refusal with its own public reason (admission capture, claims) stays as it is
+                    raise OpenError('open_failed') from None  # S1-U10f: nothing unexplained is account_unavailable
             elif operation == "account.claim_launch":
                 from .claim_storage import capture_storage_evidence
 

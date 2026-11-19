@@ -21,6 +21,7 @@ OPEN_REASON_CODES = frozenset({'open_invalid_request', 'open_not_authorized', 'o
                              # from an earlier service.
                              'open_account_starting', 'open_account_closing', 'open_account_busy',
                              'open_service_not_running', 'open_service_other_version', 'open_service_unreachable',
+                             'open_service_hint_refused',
                              'open_project_inactive', 'open_state_inconsistent', 'open_failed'})
 
 

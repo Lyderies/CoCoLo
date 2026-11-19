@@ -129,6 +129,38 @@ def _read_runtime_endpoints(state, project_root, *, account=False, account_only=
             os.close(descriptor)
 
 
+def _hint_cause(state, project_root):
+    """S1-U10c: why the project's runtime hint cannot serve an open, decided before any socket is
+    checked; None when it is a current hint. Content-free reasons only."""
+    try:
+        path = runtime_hint_path(state, _canonical_project_root(project_root))
+    except Exception:
+        return 'open_service_not_running'
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return 'open_service_not_running'
+    except OSError:
+        return 'open_service_hint_refused'
+    try:
+        _assert_no_symlink_components(path)
+        _check_owner_mode(path.parent, directory=True)
+        _check_owner_mode(path, directory=False)
+    except Exception:
+        return 'open_service_hint_refused'  # not this account's private file: never trusted
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not 0 < info.st_size <= 8192:
+        return 'open_service_hint_refused'
+    try:
+        value = parse_bounded_json(path.read_bytes(), max_bytes=8192)
+    except Exception:
+        return 'open_service_not_running'  # unreadable or half written: no service has published it
+    if not isinstance(value, dict):
+        return 'open_service_not_running'
+    if value.get('schema_version') == 1:
+        return 'open_service_other_version'
+    return None
+
+
 def read_runtime_hint(state, project_root):
     scope, endpoints = _read_runtime_endpoints(state, project_root)
     return scope, endpoints[0], endpoints[1]
@@ -887,14 +919,13 @@ def open_codex_client(state_root, project_root, orchestration_handle, task, rout
         raise RuntimeOpenError('open_not_authorized')
     try:
         state = CollectorPaths(state_root)
+        cause = _hint_cause(state, project_root)
+        if cause is not None:
+            raise RuntimeOpenError(cause)
         try:
             scope, endpoints = _read_runtime_endpoints(state, project_root, account=True)
-        except DispatchError:  # S1-U10c: no hint means no service of this project is running yet
-            try:
-                hinted = os.path.lexists(runtime_hint_path(state, _canonical_project_root(project_root)))
-            except Exception:
-                hinted = False
-            raise RuntimeOpenError('open_service_unreachable' if hinted else 'open_service_not_running') from None
+        except DispatchError:  # A valid hint whose services cannot be reached.
+            raise RuntimeOpenError('open_service_unreachable') from None
         if len(endpoints) != 3:  # a version-1 hint: an earlier version's service, which cannot open
             raise RuntimeOpenError('open_service_other_version')
         contexts = enroll_clients(state, project_root, scope, endpoints[:2], account=endpoints[2], host_client=host_client)
