@@ -264,5 +264,41 @@ class ProjectChoiceTests(unittest.TestCase):
         self.assertFalse(any("but this one does" in line for line in lines))
 
 
+
+class FailureSummaryTests(unittest.TestCase):
+    """W10.4 and W5.5: the summary and the installer's refusals hold fixed text only, never output."""
+
+    def test_a_failure_line_holds_the_step_label_exit_code_and_hint(self) -> None:
+        self.assertEqual("step 4 (Install): The install failed | exit code 2 | Press ? to see what ran",
+                         steps.failure_line(4, "Install", "The install failed", 2, "Press ? to see what ran"))
+        self.assertEqual("COCOLO setup: what failed\nstep 4 (Install): x | exit code 2 | y\n",
+                         steps.summary_text(["step 4 (Install): x | exit code 2 | y"]))
+
+    def test_a_known_installer_refusal_becomes_its_fixed_message_and_never_echoes(self) -> None:
+        secret = "SECRET-TOKEN user@example.invalid"
+        for raw, expected in (
+            (f"{secret}: Managed paths have uncommitted changes", "Managed paths (.codex, .agents, .claude)"),
+            (f"error {secret}: rebase in progress", "A Git operation (merge, rebase, cherry-pick or similar)"),
+            (f"{secret} holds files the orchestrator does not install", "holds files the orchestrator does not install"),
+            (f"{secret}: not a usable git checkout", "The path is not the top folder of a Git working tree."),
+            (f"{secret}: target differs", "collides with a managed file"),
+        ):
+            with self.subTest(expected=expected):
+                message, known = steps.installer_refusal(raw, "python3 install.py install --target /p")
+                self.assertTrue(known)
+                self.assertIn(expected, message)
+                self.assertNotIn("SECRET", message)
+                self.assertNotIn("user@example.invalid", message)
+
+    def test_an_unknown_refusal_points_to_the_manual_command_and_never_echoes(self) -> None:
+        message, known = steps.installer_refusal("SECRET-TOKEN something new", "python3 install.py install --target /p")
+        self.assertFalse(known)
+        self.assertEqual("The installer refused: run it manually to see why:", message)
+
+    def test_a_summary_destination_with_a_control_character_is_refused(self) -> None:
+        self.assertIsNotNone(steps.summary_destination_refusal("/x/sum\x01mary.txt"))
+        self.assertIsNone(steps.summary_destination_refusal("/x/summary.txt"))
+
+
 if __name__ == "__main__":
     unittest.main()
