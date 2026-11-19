@@ -133,6 +133,10 @@ class Harness:
         if rest[:1] == [str(flow.CLONE_CLI)]:
             command = rest[1] if len(rest) > 1 else ""
             if command == "codex-session-scan":
+                if self.scan == "real":  # The runtime's own scan of this home's Codex sessions.
+                    done = subprocess.run([sys.executable, *flow.PYF, *rest], capture_output=True,
+                                          stdin=subprocess.DEVNULL)
+                    return done.returncode, done.stdout, done.stderr
                 return 0, json.dumps(self.scan).encode(), b""
             if command in self.cli:
                 status, out = self.cli[command](rest[2:])
@@ -185,6 +189,20 @@ class Harness:
             manifest.parent.mkdir(parents=True, exist_ok=True)
             manifest.write_text("{}\n")
         (installer / "setup-projects").write_text("".join(f"{p}\n" for p in projects) + "relative/is-skipped\n")
+
+    def write_codex_session(self, workspace: Path, thread: str) -> None:
+        """A synthetic Codex 0.164 session record for a session opened on `workspace` (as test_setup_sh)."""
+        folder = self.home / ".codex" / "sessions" / "2026" / "11" / "01"
+        folder.mkdir(parents=True, exist_ok=True)
+        entries = [{"path": {"type": "special", "value": {"kind": "root"}}, "access": "read"},
+                   {"path": {"type": "path", "path": str(workspace)}, "access": "write"}]
+        lines = [{"timestamp": "2026-11-01T10:00:00Z", "type": "session_meta", "payload": {
+                     "id": thread, "cwd": str(workspace), "runtime_workspace_roots": [str(workspace)]}},
+                 {"timestamp": "2026-11-01T10:00:01Z", "type": "turn_context", "payload": {
+                     "cwd": str(workspace), "sandbox_policy": {"type": "workspace-write"},
+                     "file_system_sandbox_policy": {"entries": entries}}}]
+        (folder / f"rollout-2026-11-01T10-00-00-{thread}.jsonl").write_text(
+            "".join(json.dumps(line) + "\n" for line in lines))
 
     def project_under_home(self) -> tuple[Path, Path]:
         project, checks = self.make_project("staging")
