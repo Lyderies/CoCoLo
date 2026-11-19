@@ -306,6 +306,7 @@ class AccountClaimJobs:
                         job.reason = error.reason_code
                     except ClaimError as error:
                         again = (error.reason_code == "claim_preparation_stale" and job.kind == 'claim'
+                                 and not getattr(error, "run_changed", False)
                                  and job.provider is not None and job.stale_preparations < MAX_STALE_PREPARATIONS)
                         job.reason = None if again else error.reason_code
                     except Exception:

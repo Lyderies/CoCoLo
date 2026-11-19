@@ -233,6 +233,14 @@ class RetentionPolicy:
     summary_keep_ms: int
 
 
+def _run_changed():
+    """A stale claim whose own run rows changed: a new admission capture cannot mend it, so the claim
+    job does not prepare it again (0.4.0 FR1, review 040-fr-stale). Same public reason code."""
+    error = ClaimError("claim_preparation_stale")
+    error.run_changed = True
+    return error
+
+
 def load_retention_policy(path: Path = INSTALLED_RETENTION_POLICY) -> RetentionPolicy:
     """The installed retention policy; one that misses, repeats or invents a code is refused."""
     from .learning_contracts import EVENT_CODES
@@ -7312,10 +7320,10 @@ class LearningLedger:
                 raise ClaimError("claim_preparation_stale")
             rows = self._claim_run_rows_locked(context.project_id, context.handle)
             if context.run_context != tuple(None if row is None else tuple(row) for row in rows):
-                raise ClaimError("claim_preparation_stale")
+                raise _run_changed()
             # The capture kept history from the run's open on; only that anchor is sound.
             if rows[0] is None or snapshot.anchor_ms != rows[0]["created_at_ms"]:
-                raise ClaimError("claim_preparation_stale")
+                raise _run_changed()
             state = self._claim_scalar_context_locked(
                 context.project_id, context.handle, context.launch, current.captured_at_ms, rows=rows,
             )
@@ -7381,7 +7389,7 @@ class LearningLedger:
             if admission is None and work_limits is None and early_reason is None:
                 rows = self._claim_run_rows_locked(project_id, handle)
                 if context.run_context != tuple(None if row is None else tuple(row) for row in rows):
-                    raise ClaimError('claim_preparation_stale')
+                    raise _run_changed()
             if admission is not None:
                 reason, binding, inputs, identity, admitted, fresh_timestamp = self._claim_admission_context(
                     context, admission, work_limits,
