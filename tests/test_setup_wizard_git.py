@@ -92,5 +92,44 @@ class GitEffectTests(unittest.TestCase):
         self.assertEqual(ROOT / "scripts" / "install.py", Path(effects.installer().__file__))
 
 
+
+class GitQueryTests(GitEffectTests):
+    """W5.1 and W5.7: which installed files .gitignore hides, and which candidates may be committed."""
+
+    test_changes_name_only_changed_candidates_and_both_names_of_a_rename = None
+    test_paths_are_literal = None
+    test_a_helper_in_the_project_settings_stops_git = None
+    test_commit_takes_exactly_the_paths_given_and_runs_no_hook = None
+    test_nothing_to_commit_commits_nothing = None
+    test_the_installer_is_this_clones_own_file = None
+
+    def test_ignored_installed_files_are_named(self) -> None:
+        (self.project / ".gitignore").write_text(".codex/hidden\n")
+        (self.project / ".codex" / "hidden").write_text("x\n")
+        (self.project / ".codex" / "shown").write_text("x\n")
+        self.assertEqual([".codex/hidden"],
+                         effects.git_ignored(self.project, [".codex/hidden", ".codex/shown", ".codex/kept"]))
+        self.assertEqual([], effects.git_ignored(self.project, []))
+
+    def test_commit_candidates_are_what_exists_or_is_tracked_from_the_reply(self) -> None:
+        """setup.sh's `pj paths`: the plan's paths, configuration written, Claude's changed paths, the
+        manifest and the routing, kept when present or tracked (a removed tracked file still counts)."""
+        (self.project / ".codex" / "kept").unlink()  # Tracked, now removed: still a candidate.
+        reply = {"codex": {"project_configuration": {".codex/config-new": "create", ".codex/config-old": "preserve"}},
+                 "claude": {"changed_paths": [".claude/agents/a.md"]},
+                 "claude_settings": {"changed_paths": [".claude/settings.json"]}}
+        (self.project / ".codex" / "config-new").write_text("x\n")
+        (self.project / ".claude").mkdir()
+        (self.project / ".claude" / "settings.json").write_text("{}\n")
+        found = effects.commit_candidates(self.project, reply, [".codex/kept", ".codex/never-existed"])
+        self.assertEqual([".claude/settings.json", ".codex/config-new", ".codex/kept"], found)
+
+    def test_an_unsafe_candidate_name_refuses_the_whole_list(self) -> None:
+        with self.assertRaises(effects.EffectRefused):
+            effects.commit_candidates(self.project, {"claude": {"changed_paths": ["../outside"]}}, [])
+        with self.assertRaises(effects.EffectRefused):
+            effects.commit_candidates(self.project, {}, [".codex/bad\nname"])
+
+
 if __name__ == "__main__":
     unittest.main()

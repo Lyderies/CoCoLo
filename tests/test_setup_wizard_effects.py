@@ -169,5 +169,40 @@ class SessionScanTests(unittest.TestCase):
             self.assertIsNone(effects.session_scan(ROOT))
 
 
+
+class PlanTests(unittest.TestCase):
+    """Step 4's per-path plan (setup.sh's `pj plan` and `pj planpaths`), from the preview reply."""
+
+    def test_each_file_is_added_updated_kept_removed_or_local(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(os.path.realpath(directory))
+            target, bundle = base / "project", base / "bundle"
+            for folder in (target / ".codex" / "orchestration", bundle / ".codex"):
+                folder.mkdir(parents=True)
+            for name, here, there in (("same", "a", "a"), ("changed", "a", "b"), ("new", None, "n")):
+                (bundle / ".codex" / name).write_text(there)
+                if here is not None:
+                    (target / ".codex" / name).write_text(here)
+            (target / ".codex" / "orchestration" / "install-manifest.json").write_text(
+                '{"files": {".codex/gone": "x", ".codex/hook": "y", ".codex/same": "z"}}')
+            reply = {"codex": {"files": [".codex/same", ".codex/changed", ".codex/new"],
+                               "local_files": [".codex/hook"],
+                               "project_configuration": {".codex/routing.json": "create <x>"}},
+                     "claude": {"changed_paths": [".claude/agents/a.md"]}}
+            entries = effects.plan_entries(reply, target, bundle)
+            self.assertEqual([("KEEP", ".codex/same"), ("UPDATE", ".codex/changed"), ("ADD", ".codex/new"),
+                              ("LOCAL", ".codex/hook"), ("REMOVE", ".codex/gone"), ("UNTRACK", ".codex/hook"),
+                              ("ADD", ".claude/agents/a.md"), ("CONFIG", ".codex/routing.json -> create x")], entries)
+            self.assertEqual([".claude/agents/a.md", ".codex/changed", ".codex/gone", ".codex/hook", ".codex/new"],
+                             effects.plan_paths(entries))
+
+    def test_an_unsafe_name_is_marked_and_refuses_the_path_list(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            entries = effects.plan_entries({"codex": {"files": ["/abs", "a/../b", " edge", "-dash", "ok"]}},
+                                           Path(directory), Path(directory))
+            self.assertEqual(4, sum(kind == "UNSAFE" for kind, _ in entries))
+            self.assertIsNone(effects.plan_paths(entries))
+
+
 if __name__ == "__main__":
     unittest.main()
