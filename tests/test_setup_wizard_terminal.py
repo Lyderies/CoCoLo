@@ -190,5 +190,26 @@ class TextPromptTests(unittest.TestCase):
             self.assertEqual(["~/Code/"], terminal.complete_path("~/Co", home=os.path.join(base, "home")))
 
 
+
+class ViewTests(unittest.TestCase):
+    """setup.sh's view_plan: a scrollable list, a page at a time, q, Enter or Esc to go back."""
+
+    def test_the_view_pages_scrolls_clamps_and_returns(self) -> None:
+        text = "\n".join(f"line {n}" for n in range(1, 31))
+        term, out = make("j", "\033[6~", "\033[6~", "\033[6~", "k", "q")
+        term.view_text(text, "Full plan")
+        frames = out.getvalue().split("\033[H\033[2J")[1:]
+        self.assertEqual(6, len(frames))
+        self.assertIn("\n  Full plan: lines 1-15 of 30\n\n    line 1\n", frames[0])  # 24 rows: 15 a page.
+        self.assertIn("Full plan: lines 2-16 of 30", frames[1])
+        self.assertIn("Full plan: lines 16-30 of 30", frames[3])  # Clamped at the end.
+        self.assertIn("Full plan: lines 15-29 of 30", frames[5])
+        self.assertTrue(frames[0].endswith("\n  Up/Down scroll   PageUp/PageDown page   q back\n"))
+
+    def test_closed_input_just_returns(self) -> None:
+        term, _ = make()
+        term.view_text("a", "Title")
+
+
 if __name__ == "__main__":
     unittest.main()
