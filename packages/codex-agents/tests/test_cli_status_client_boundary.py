@@ -157,6 +157,38 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.collector.account_lanes = lambda: 1 / 0  # a failing view never breaks health
         self.assertEqual({'available': False}, self.client.health(self.project)['account_lanes'])
 
+    @staticmethod
+    def lane(**changes):
+        return {'faulted': False, 'kept': 0, 'busy': 0, 'queued': 0, 'last_failure': None,
+                'held_since_ms': None, **changes}
+
+    def status_with(self, lanes):
+        self.collector.account_lanes = (lambda: lanes) if lanes is not None else None
+        code, stdout, stderr = self.command()
+        return code, json.loads(stdout)
+
+    def test_H1a_4_account_health_states_and_ready_is_unchanged(self):
+        clean = {name: self.lane() for name in ('signature', 'claims', 'observations', 'ingress', 'billing',
+                                                 'probe_worker')}
+        code, report = self.status_with(clean)
+        self.assertEqual((0, True, 'ok'), (code, report['ready'], report['account_health']['state']))
+        self.assertEqual([], report['account_health']['attention'])
+        held = {**clean, 'probe_worker': self.lane(kept=1, held_since_ms=1_700_000_000_000)}
+        code, report = self.status_with(held)
+        health = report['account_health']
+        self.assertEqual((0, True, 'degraded'), (code, report['ready'], health['state']))
+        self.assertTrue(any('probe worker' in line and 'held since' in line for line in health['attention']), health)
+        failed = {**held, 'ingress': self.lane(faulted=True, last_failure={
+            'cause': 'ingress_cleanup_failed', 'type': 'OSError', 'at_ms': 1_700_000_000_000})}
+        code, report = self.status_with(failed)
+        health = report['account_health']
+        self.assertEqual(('faulted', True), (health['state'], report['ready']))
+        self.assertTrue(any('ingress_cleanup_failed' in line for line in health['attention']), health)
+        self.assertTrue(all('account-wide' in line for line in health['attention'] if 'slot' not in line))
+        code, report = self.status_with(None)  # no notes (a collector started otherwise)
+        self.assertEqual(('unknown', 'account_health_unavailable'),
+                         (report['account_health']['state'], report['account_health']['reason_code']))
+
     def test_ST1_account_services_still_starting_say_starting(self):
         self.collector.account_services = 'starting'
         self.hint.unlink()
