@@ -276,6 +276,9 @@ def _worker(slot, registry):
                         job = handle = item = None
                         continue
                 prepared, workspace, unknown = _prepare(job.payload)
+                if prepared is None and unknown:
+                    # S1-H1a C6: published before waiting for the registry lock a blocked owner may hold.
+                    _held(slot, job, 'probe_preparation_unknown', _take_caught())
                 with registry._lock:
                     job.prepared, job.workspace = prepared, workspace
                     discard = job.cancelled or slot.stop.is_set()
@@ -284,7 +287,7 @@ def _worker(slot, registry):
                         job.snapshot = _prepared_snapshot(prepared)
                     state = job.state
                 # S1-H1a notes are published outside the registry lock (a blocked owner may hold it).
-                if state == 'unknown':
+                if state == 'unknown' and not job.held:
                     _held(slot, job, 'probe_preparation_unknown', _take_caught())
                 elif state == 'failed':
                     slot.lane.note_failure(slot.note, 'probe_preparation_failed', _take_caught())
@@ -294,12 +297,14 @@ def _worker(slot, registry):
                 operation = 'discard'
             if operation == 'discard':
                 removed = _remove(job.workspace)
+                if not removed:
+                    _held(slot, job, 'cleanup_incomplete', _take_caught())  # S1-H1a C6: before the lock
                 with registry._lock:
                     job.workspace = None if removed else job.workspace
                     job.prepared = None
                     job.state = 'cleaned' if removed and job.ticket is None else 'unknown'
                     state = job.state
-                if state == 'unknown':
+                if state == 'unknown' and not job.held:
                     _held(slot, job, 'cleanup_incomplete', _take_caught())
                 if slot.stop.is_set():
                     return
