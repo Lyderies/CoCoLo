@@ -325,7 +325,12 @@ def _status_collector_fields(health):
         raise ValueError()
     from .collector_exit import checked as checked_exit
     previous = health.get('previous_exit')
+    phases = health.get('startup_phases')
+    if phases is not None and (type(phases) is not dict or phases.keys() - {'ledger_open', 'collector', 'account'}
+                               or any(not account_integer(v) for v in phases.values())):
+        raise ValueError()
     return {'collector_previous_exit': None if previous is None else checked_exit(previous),
+            'collector_startup_ms': phases,  # S1-U9a: milliseconds per start-up phase, or None
             'collector_schema_version': health['schema_version'],
             'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
             'started_at_ms': health['started_at_ms'], 'collector_health': counters,

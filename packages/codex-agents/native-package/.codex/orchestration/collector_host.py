@@ -47,7 +47,11 @@ def main(argv: list[str] | None = None) -> int:
 
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, terminate)
+    # S1-U9a: how long each start-up phase takes, reported by learning-status (milliseconds only).
+    phase_start = time.monotonic()
     ledger = LearningLedger(state)
+    phases = {"ledger_open": int((time.monotonic() - phase_start) * 1000)}
+    phase_start = time.monotonic()
     try:
         server = CollectorServer(ledger)
     except BaseException as error:
@@ -64,10 +68,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         server.previous_exit = read_exit(state.root)
         server.start()
+        phases["collector"] = int((time.monotonic() - phase_start) * 1000)
+        phase_start = time.monotonic()
         try:
             account = AccountServiceHost(ledger, CollectorPaths(state.root))
         except HistoryError:
             account = None  # Hooks keep working; account clients report unavailable.
+        phases["account"] = int((time.monotonic() - phase_start) * 1000)
+        server.startup_phases = phases
         checked = time.monotonic()
         while not server.wait(0.002 if account is not None else 0.5):
             if account is not None:

@@ -11719,6 +11719,7 @@ class CollectorServer:
         self._started_at_ms: int | None = None
         # How the previous collector stopped, and an error that ended this one's thread (0.3.3, C10).
         self.previous_exit: dict | None = None
+        self.startup_phases: dict | None = None  # S1-U9a, set by collector_host once started
         self.thread_error: BaseException | None = None
         self._clients = client_capabilities or load_client_capabilities(
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
@@ -11974,6 +11975,7 @@ class CollectorServer:
                     "runtime_digest": COLLECTOR_RUNTIME_DIGEST,
                     "started_at_ms": self._started_at_ms,
                     "previous_exit": self.previous_exit,
+                    "startup_phases": self.startup_phases,
                 }
                 if "project_root" in request:
                     project_root = Path(request["project_root"])
