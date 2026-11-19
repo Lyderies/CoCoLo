@@ -11,6 +11,7 @@ import queue
 import threading
 import time
 
+from . import lane_health
 from .account_observation import AccountObservationOwner, ObservationContext, ProbeCompletion, run_observation_probe
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches
 from .provider_observation_contracts import ObservationError, ObservationInput
@@ -61,8 +62,10 @@ def _worker(slot):
             else:
                 reply = run_observation_probe(capture)
             slot.outgoing.put_nowait((ticket, reply))
-        except BaseException:
+        except BaseException as error:
             # No completion is manufactured after unknown worker/cleanup state.
+            slot.note.publish(faulted=True, kept=frozenset({slot.health_token}))  # S1-H1a, by this worker
+            slot.lane.note_failure(slot.note, 'observation_worker_failed', error)
             slot.fault.set()
             return
         if slot.stop.is_set():
@@ -108,6 +111,14 @@ class AccountObservationJobs:
         self._queues, self._active, self._active_projects = {}, {}, set()
         self._rotation = deque()
         self._slots = [_Slot() for _ in range(limits.workers)]
+        # S1-H1a: published notes (reporting only); a slot kept after a fault or an invalid reply
+        # holds its one job for good, so one token per slot counts it once.
+        self.health = lane_health.Lane('observations')
+        self._note = self.health.slot('owner')
+        self._mismatched = set()
+        for index, slot in enumerate(self._slots):
+            slot.lane, slot.note = self.health, self.health.slot(f'worker-{index}')
+            slot.health_token = lane_health.new_token()
         self._slot_rotation = deque(self._slots)
         self._started = self._closing = self._faulted = self._busy = False
         self._ingress_owner = None
@@ -232,7 +243,30 @@ class AccountObservationJobs:
         else:
             job.state, job.result, job.reason = 'ready', result, reason
 
+    def _reply_mismatch(self, slot):
+        """S1-H1a: an invalid reply keeps its slot; noted once, with no exception."""
+        if slot not in self._mismatched:
+            self._mismatched.add(slot)
+            self.health.note_failure(self._note, 'reply_mismatch', None)
+
+    def _publish_health(self):
+        """S1-H1a: this owner's note: active slots busy, faulted or mismatched ones kept, queued jobs.
+        Reporting only; never raises."""
+        try:
+            kept = {slot.health_token for slot in self._active
+                    if slot.fault.is_set() or slot in self._mismatched}
+            self._note.publish(kept=frozenset(kept), busy=len(self._active) - len(kept),
+                               queued=sum(len(queue_) for queue_ in self._queues.values()))
+        except Exception:
+            pass
+
     def _drive(self):
+        try:
+            self._drive_steps()
+        finally:
+            self._publish_health()
+
+    def _drive_steps(self):
         now = time.monotonic_ns()
         for ticket, job in tuple(self._jobs.items()):
             if job.state == 'queued' and (self._closing or job.cancelled or now >= job.deadline_ns):
@@ -257,10 +291,12 @@ class AccountObservationJobs:
                 continue
             if actual is not ticket:
                 self._faulted = True
+                self._reply_mismatch(slot)
                 continue
             job = self._job(ticket)
             if type(reply) is not ProbeCompletion or reply.capture is not job.reservation.capture:
                 self._faulted = True
+                self._reply_mismatch(slot)
                 continue
             completed += 1
             del self._active[slot]
