@@ -12,7 +12,7 @@ from pathlib import Path
 from .history_contracts import (HistoryError, HISTORY_REASON_CODES, MAX_SEQUENCE, _ID, _PROJECT, _DIGEST, _ORCHESTRATION,
                                 matches, valid_integer)
 from .learning_contracts import canonical_json, parse_bounded_json
-from .service_transport import MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
+from .service_transport import MAX_TIMEOUT_SECONDS, SERVICE_REFUSALS, ServiceTransportError, exchange_frame
 
 ORCHESTRATION_PROTOCOL_VERSION = 1
 MAX_ORCHESTRATION_FRAME_BYTES = 16_384
@@ -254,12 +254,12 @@ class OrchestrationClient:
         request = OrchestrationRequest(1, operation, request_id, self._scope, payload)
         raw = encode_orchestration_request(request)
         request = decode_orchestration_request(raw)
-        failed = False
+        failed = None
         try:
             reply = exchange_frame(self._endpoint, raw, timeout=self._timeout, request_limit=MAX_ORCHESTRATION_FRAME_BYTES,
                                    response_limit=MAX_ORCHESTRATION_FRAME_BYTES)
-        except ServiceTransportError:
-            failed = True
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failed = error.reason_code if error.reason_code in SERVICE_REFUSALS else 'history_service_unavailable'
         if failed:
-            raise HistoryError('history_service_unavailable')
+            raise HistoryError(failed)
         return decode_orchestration_response(reply, request)

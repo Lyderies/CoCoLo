@@ -31,6 +31,7 @@ from .learning_contracts import canonical_json, keyed_digest
 from .orchestration_api import ORCHESTRATION_OPERATIONS, OrchestrationScope, orchestration_request_digest
 from .orchestration_service import OrchestrationAuthorization
 from .control_api import ControlScope, encode_control_request
+from .service_transport import refusal_frame
 from .control_service import ControlAuthorization
 from .service_protocol import service_request_digest
 from .history_api import history_request_digest
@@ -81,6 +82,7 @@ class _Pending:
     connection: socket.socket
     kind: str
     deadline_ns: int
+    refusal: str | None = None  # R7b: the fixed reason sent before the close, if any
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,17 @@ def _peer_is_owner(connection):
     except (OSError, struct.error):
         return False
     return uid == os.getuid()
+
+
+def _refuse(pending):
+    """Best effort, never blocking: the refusal line, if any, before the close (R7b). Only a peer of
+    this account reached this point (checked at accept); a write that does not fit is simply dropped."""
+    if pending.refusal is None:
+        return
+    try:
+        pending.connection.send(refusal_frame(pending.refusal))
+    except OSError:
+        pass
 
 
 def runtime_directory(state, project_root):
@@ -210,6 +223,7 @@ class EnrolledFrontend:
         """Return True once this connection has been attached or must be closed."""
         connection = pending.connection
         if self._clock_ns() >= pending.deadline_ns:
+            pending.refusal = 'service_refused_late'
             return True  # Absolute: a line that completes late is still late.
         try:
             seen = connection.recv(MAX_PREAMBLE_BYTES, socket.MSG_PEEK)
@@ -220,6 +234,8 @@ class EnrolledFrontend:
         newline = seen.find(b'\n')
         if newline < 0:
             # Bytes without a line end never extend the absolute deadline.
+            if seen and len(seen) >= MAX_PREAMBLE_BYTES:
+                pending.refusal = 'service_refused_enrollment'
             return not seen or len(seen) >= MAX_PREAMBLE_BYTES
         try:
             # Consume exactly the preamble; the request frame stays queued for the service.
@@ -227,21 +243,27 @@ class EnrolledFrontend:
             if line != seen[:newline + 1]:
                 return True
             enrolled = self._verifier.verify(line[:-1])
-        except (EnrollmentError, OSError):
+        except EnrollmentError:
+            pending.refusal = 'service_refused_enrollment'  # never why: the reason is fixed
+            return True
+        except OSError:
             return True
         token = object()
         now = self._clock_ns()
         with self._lock:
             self._release_locked(now)
             if self._closed or len(self._contexts) >= self._limits.contexts:
+                pending.refusal = 'service_refused_unavailable' if self._closed else 'service_refused_busy'
                 return True
             self._contexts[token] = EnrolledContext(enrolled, pending.kind, now + self._limits.context_lifetime_ns,
                                                     connection)
         try:
             self._attach(pending.kind, connection, token)
-        except Exception:
+        except Exception as error:
             with self._lock:
                 self._contexts.pop(token, None)
+            pending.refusal = ('service_refused_busy' if getattr(error, 'reason_code', None) == 'account_busy'
+                               else 'service_refused_unavailable')
             return True
         pending.connection = None  # Custody moved to the service.
         self.last_enrolled_ns = now
@@ -266,6 +288,7 @@ class EnrolledFrontend:
         for pending in self._pending:
             if self._enroll(pending):
                 if pending.connection is not None:
+                    _refuse(pending)
                     pending.connection.close()
             else:
                 remaining.append(pending)
@@ -279,6 +302,8 @@ class EnrolledFrontend:
             self._contexts.clear()
         for pending in self._pending:
             if pending.connection is not None:
+                pending.refusal = 'service_refused_unavailable'
+                _refuse(pending)
                 pending.connection.close()
         self._pending = []
         for listener, _, path in self._listeners:

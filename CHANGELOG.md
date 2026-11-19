@@ -19,6 +19,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - Setup starts the project's own service once the collector is ready, so it closes what an earlier
   service left at once, not when the next child runs. `learning-start-project-service` does the same
   from the command line.
+- A service that will not take a connection now says why before closing it: too late, an enrolment
+  that did not verify, too busy, or unavailable (`service_refused_*`), instead of closing silently.
 - An orchestration opened under an earlier service or version is refused
   `history_orchestration_other_scope`, no longer reported as `host_client_mismatch`.
 - A refused run open now says why instead of `open_unavailable`: the account is still starting

@@ -5,7 +5,7 @@ capability and enrollment step are the only way in. The CLI wrapper used here
 disables the protected-entry and own-roots checks, so those are not exercised;
 `test_project_service_startup` drives the unmodified CLI.
 """
-from tests.support import assert_dropped
+from tests.support import assert_refused
 from dataclasses import asdict
 import hashlib
 import json
@@ -208,8 +208,10 @@ class ServiceHostTests(unittest.TestCase):
         }
         for name, payload in refused.items():
             with self.subTest(name):
-                # R7b: refused by the host with its fixed reason, then closed; never timed out.
-                self.assertEqual(b'{"refused":"service_enrollment_refused"}\n', self.send(endpoint, payload, wait=4))
+                # R7b: refused by the host with its fixed reason, then closed; never timed out. A verified
+                # preamble for another request is refused later, by the service, without a line.
+                expected = b'' if name == 'another request' else b'{"refused":"service_refused_enrollment"}\n'
+                self.assertEqual(expected, self.send(endpoint, payload, wait=4))
         # A verified preamble with no request behind it is held, never answered.
         self.assertIsNone(self.send(endpoint, self.preamble(key, frame, endpoint)+b'\n', wait=1))
 
@@ -220,7 +222,7 @@ class ServiceHostTests(unittest.TestCase):
         self.assertEqual((1, False, 'codex-host-v1'), (reply['result']['current']['snapshot']['sequence'],
             reply['result']['known'], reply['result']['current']['snapshot']['client_version']))
         # Captured bytes cannot be replayed: the spent proof is refused like any other.
-        self.assertEqual(b'{"refused":"service_enrollment_refused"}\n', self.send(endpoint, accepted, wait=4))
+        self.assertEqual(b'{"refused":"service_refused_enrollment"}\n', self.send(endpoint, accepted, wait=4))
         self.assertFalse((proofs/('c'*32)).exists())  # The accepted proof was consumed.
 
         # A correctly enrolled other host class still cannot change this orchestration.
@@ -279,7 +281,7 @@ class ServiceHostTests(unittest.TestCase):
         new = read_capability(self.paths, self.project, 'host')
         self.assertNotEqual(old, new)
         # A capability from before the restart is dead even inside its freshness window.
-        self.assertEqual(b'', self.send(again['project'],
+        self.assertEqual(b'{"refused":"service_refused_enrollment"}\n', self.send(again['project'],
             self.enrolled(old, self.frame('orchestration.open', 'stale-open'), again['project']), wait=4))
         status = self.cli('learning-orchestration-status', '--orchestration-handle', opened['orchestration_handle'])
         self.assertEqual(('active', 1, 'codex-host-v1'), (status['status'], status['sequence'], status['client_version']))
@@ -301,7 +303,7 @@ class ServiceHostTests(unittest.TestCase):
             client.settimeout(3)
             # R7b: told it was late, then dropped (Linux may reset instead, as unread input remains).
             try:
-                self.assertIn(client.recv(64), (b'{"refused":"service_enrollment_late"}\n', b''))
+                self.assertIn(client.recv(64), (b'{"refused":"service_refused_late"}\n', b''))
             except ConnectionResetError:
                 pass
 
@@ -375,7 +377,7 @@ class EnrolledFrontendTests(unittest.TestCase):
         self.frontend.step()
         self.assertEqual([], self.attached)
         client.settimeout(2)
-        assert_dropped(self, client)
+        assert_refused(self, client, 'service_refused_late')
 
     def test_a_closed_connection_releases_its_context_at_once(self):
         for _ in range(5):  # Two context slots; each exchange closes before the next enrolls.
@@ -401,7 +403,7 @@ class EnrolledFrontendTests(unittest.TestCase):
         client.sendall(self.line())
         refusing.step()
         client.settimeout(2)
-        self.assertEqual(b'', client.recv(1))
+        assert_refused(self, client, 'service_refused_unavailable')
         self.assertEqual({}, refusing._contexts)
         accepted = self.connect()
         accepted.sendall(self.line())

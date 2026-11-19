@@ -110,7 +110,7 @@ class AccountIngressTests(unittest.TestCase):
         first, second = self.pair(), self.pair()
         first.sendall(b'{"protocol_version":')
         second.sendall(b"{")
-        with self.assertRaisesRegex(AccountError, "account_unavailable"):
+        with self.assertRaisesRegex(AccountError, "account_busy"):
             self.pair()
         health = self.request("reserved", operation="account.health")
         with mock.patch.object(self.service._views, "project", side_effect=AssertionError("health SQL")), \
@@ -159,7 +159,7 @@ class AccountIngressTests(unittest.TestCase):
                 self.assertEqual(b"", claim.recv(1))
                 self.assertEqual(1, self.ingress.snapshot()["health"])
                 self.assertFalse(self.ingress.snapshot()["faulted"])
-                with self.assertRaisesRegex(AccountError, "account_unavailable"):
+                with self.assertRaisesRegex(AccountError, "account_busy"):
                     self.pair(health=True)
                 resume.set()
                 self.wait(lambda: self.ingress.snapshot()["health"] == 0, pump=False)
@@ -177,7 +177,7 @@ class AccountIngressTests(unittest.TestCase):
         client.close()
         self.wait(lambda: self.ingress.snapshot()["disconnected"] == 1, pump=False)
         self.assertEqual(1, self.ingress.snapshot()["ordinary"])
-        with self.assertRaisesRegex(AccountError, "account_unavailable"):
+        with self.assertRaisesRegex(AccountError, "account_busy"):
             self.pair()
         with mock.patch.object(self.service, "begin", side_effect=AssertionError("disconnected request")):
             self.ingress.pump_owner()
@@ -441,7 +441,7 @@ class AccountIngressTests(unittest.TestCase):
         self.addCleanup(server.close)
         self.addCleanup(client.close)
         server.settimeout(.7)
-        with self.assertRaisesRegex(AccountError, "account_unavailable"):
+        with self.assertRaisesRegex(AccountError, "account_busy"):
             self.ingress.attach(server, self.fixture.token)
         self.assertEqual(.7, server.gettimeout())
         self.assertGreaterEqual(server.fileno(), 0)

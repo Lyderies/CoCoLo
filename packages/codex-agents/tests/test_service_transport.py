@@ -94,17 +94,20 @@ class ServiceTransportTests(unittest.TestCase):
                 self.assertTrue(all(value > 0 for value in client.timeouts))
 
     def test_R7b_a_service_refusal_line_is_its_own_reason(self) -> None:
-        for reason in ("service_enrollment_late", "service_enrollment_refused", "service_busy", "service_unavailable"):
-            for failure in (None, "send_broken"):
-                with self.subTest(reason=reason, failure=failure):
-                    client = FakeSocket([b'{"refused":"%s"}\n' % reason.encode()], failure=failure)
-                    with self.assertRaises(transport.ServiceTransportError) as raised:
-                        self.exchange(client)
-                    self.assertEqual(reason, raised.exception.reason_code)
+        for reason in ("service_refused_late", "service_refused_enrollment", "service_refused_busy", "service_refused_unavailable"):
+            with self.subTest(reason=reason):
+                client = FakeSocket([b'{"refused":"%s"}\n' % reason.encode()])
+                with self.assertRaises(transport.ServiceTransportError) as raised:
+                    self.exchange(client)
+                self.assertEqual(reason, raised.exception.reason_code)
+        # A refusal sent before the request was written is not read: the write failure stays generic.
+        with self.assertRaises(transport.ServiceTransportError) as raised:
+            self.exchange(FakeSocket([b'{"refused":"service_refused_busy"}\n'], failure="send_broken"))
+        self.assertEqual("transport_unavailable", raised.exception.reason_code)
 
     def test_R7b_anything_but_an_exact_known_refusal_stays_an_ordinary_reply(self) -> None:
-        for line in (b'{"refused":"service_other"}', b'{"refused":"service_busy","more":1}',
-                     b'{"refused": 1}', b'{"refused":"service_busy"'):
+        for line in (b'{"refused":"service_other"}', b'{"refused":"service_refused_busy","more":1}',
+                     b'{"refused": 1}', b'{"refused":"service_refused_busy"'):
             with self.subTest(line=line):
                 self.assertEqual(line, self.exchange(FakeSocket([line + b"\n"])))
         with self.assertRaises(transport.ServiceTransportError) as raised:  # a partial line then EOF

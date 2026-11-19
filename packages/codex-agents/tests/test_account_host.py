@@ -3,7 +3,7 @@
 The collector and project host are the product processes, started by the CLI
 itself; the test supplies only a registered disposable state and owner key.
 """
-from tests.support import assert_dropped
+from tests.support import assert_refused
 import base64
 import json
 import os
@@ -216,7 +216,7 @@ class AccountHostTests(unittest.TestCase):
             client.settimeout(5)
             client.connect(endpoint)
             client.sendall(line + b'\n' + frame + b'\n')
-            assert_dropped(self, client)
+            assert_refused(self, client, 'service_refused_enrollment')  # R7b: refused with its fixed reason
 
         for pid in self.processes('collector_host.py'):
             os.kill(pid, signal.SIGTERM)

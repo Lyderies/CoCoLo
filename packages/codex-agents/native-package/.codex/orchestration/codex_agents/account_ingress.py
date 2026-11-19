@@ -153,7 +153,7 @@ class AccountIngress:
                 raise AccountError("account_invalid_request")
             count = sum(p.health == health for p in self._peers.values())
             if count >= (self._limits.health_connections if health else self._limits.ordinary_connections):
-                raise AccountError("account_unavailable")
+                raise AccountError("account_busy")  # R7b: told to the client as service_refused_busy
             self._peers[object()] = peer
 
     @staticmethod

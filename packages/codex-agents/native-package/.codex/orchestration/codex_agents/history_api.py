@@ -24,7 +24,7 @@ from .learning_contracts import SOURCES, canonical_json, parse_bounded_json, val
 from .operational_qa_contracts import checked_operational_qa, checked_qa_summary
 from .open_scope_contracts import checked_open_scope, decode_open_scope_request
 from .result_contracts import MAX_RESULT_BODY_BYTES
-from .service_transport import MAX_FRAME_BYTES, MAX_TIMEOUT_SECONDS, ServiceTransportError, exchange_frame
+from .service_transport import MAX_FRAME_BYTES, MAX_TIMEOUT_SECONDS, SERVICE_REFUSALS, ServiceTransportError, exchange_frame
 
 HISTORY_PROTOCOL_VERSION = 1
 MAX_HISTORY_REPLY_BYTES = 16_384
@@ -535,15 +535,15 @@ class HistoryClient:
         request = HistoryRequest(HISTORY_PROTOCOL_VERSION, operation, identity, self._project, self._runtime, payload)
         encoded = encode_history_request(request)
         request = decode_history_request(encoded)
-        failure = False
+        failure = None
         try:
             raw = exchange_frame(self._endpoint, encoded, timeout=self._timeout,
                                  response_limit=MAX_FRAME_BYTES if operation in LARGE_REPLY_OPERATIONS
                                  else MAX_HISTORY_REPLY_BYTES)
-        except ServiceTransportError:
-            failure = True
+        except ServiceTransportError as error:  # R7b: a service's own refusal reason is kept
+            failure = error.reason_code if error.reason_code in SERVICE_REFUSALS else "history_service_unavailable"
         if failure:
-            raise HistoryError("history_service_unavailable")
+            raise HistoryError(failure)
         return decode_history_response(raw, request)
 
     def _record_call(self, operation: str, record: dict) -> dict:
