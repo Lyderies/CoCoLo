@@ -52,7 +52,7 @@ markers, never set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, and never pass `--ba
      record: pause the orchestration, classify that run abandoned
      (`host_confirmed_gone`), and resume.
      While `dispatch` waits, another command can run
-     `learning-run-status --orchestration-handle <orc> --run-handle <handle>` for the
+     `learning-run-status --project-root <exact-root> --orchestration-handle <orc> --run-handle <handle>` for the
      child's health (`starting`, `active`, `quiet`, `stale`, then `stopping` or
      `terminal`), or `learning-cancel-run` with the same arguments to stop it.
      A cancellation reply is a request, not confirmed cleanup; `dispatch` then returns

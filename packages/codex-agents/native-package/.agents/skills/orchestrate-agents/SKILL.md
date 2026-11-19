@@ -117,7 +117,8 @@ says `dispatch: native`, stop and report it.
    pause the orchestration, confirm the child is gone, classify that run abandoned
    (`host_confirmed_gone`), and resume. Never reconstruct a missing result.
    While `dispatch` waits, a second protected command can run `cli.py
-   learning-run-status --orchestration-handle <orc> --run-handle <handle>` for the
+   learning-run-status --project-root <exact-root> --orchestration-handle <orc>
+   --run-handle <handle>` for the
    child's health (`starting`, `active`, `quiet`, `stale`, then `stopping` or
    `terminal`), or `cli.py learning-cancel-run` with the same arguments to stop it.
    A cancellation reply is a request, not confirmed cleanup; `dispatch` then returns
