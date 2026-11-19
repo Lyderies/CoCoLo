@@ -905,6 +905,25 @@ class SetupScriptTests(unittest.TestCase):
             self.assertIn("claude-haiku-5-5", (target / "provider-routing.json").read_text())
 
 
+# T8h: the wizard terminal tests that stay real terminal runs, because what they prove needs a real
+# process, terminal or signal: the full run's isolation and clean-up, a slow child stopped by SIGTERM,
+# PATH-planted programs, the real attest.py hand-off, the failure summary's process isolation, the
+# runtime-folder rule for clients, the first screen's quit, a summary path written by a real process,
+# reads split into 16-byte pieces, and an update installed by a real process. The rest run in-process (test_setup_wizard_direct).
+KEPT_TERMINAL_RUNS = frozenset({
+    "test_changing_the_passphrase_hands_over_retries_and_backing_out_runs_nothing",
+    "test_clients_outside_the_runtimes_folders_are_refused_and_never_run",
+    "test_failure_summary_is_an_allowlist_and_never_echoes_output",
+    "test_full_run_leaves_no_bytecode_quotes_commands_and_cleans_up",
+    "test_planted_clients_and_tools_earlier_on_path_never_run",
+    "test_quit_on_the_first_screen_changes_nothing",
+    "test_sigterm_during_a_slow_command_leaves_no_child",
+    "test_summary_path_with_a_control_character_is_refused",
+    "test_a_helper_planted_during_the_run_stops_git_and_the_commit",
+    "test_commit_stages_updated_files_and_provider_routing",
+})
+
+
 @unittest.skipUnless(sys.platform != "win32", "needs a pseudo-terminal")
 class WizardTerminalTests(unittest.TestCase):
     def setUp(self) -> None:
