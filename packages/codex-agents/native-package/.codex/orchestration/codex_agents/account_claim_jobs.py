@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import lane_health
 from .account_api import _DIGEST, _ID, _PROJECT, matches
 from .account_claim_contracts import ClaimError, LaunchClaimInput
 from .account_open_contracts import AccountOpenInput, AccountOpenContext, OpenError, OpenOwnerLimits
@@ -83,6 +84,8 @@ class AccountClaimJobs:
         self._intake = SignatureJobIntake(views, intake_limits)
         self._pool = SignatureWorkerPool(self._intake, worker_limits)
         self._jobs: dict[object, _Job] = {}
+        self.health = lane_health.Lane('claims')  # S1-H1a: published notes, reporting only
+        self._note = self.health.slot('owner')
         self._requests: dict[tuple[str, str, str, str], object] = {}
         self._open_requests: dict[tuple[str, str, str, str], object] = {}
         self._counts: dict[str, int] = {}
@@ -109,9 +112,24 @@ class AccountClaimJobs:
         try:
             self._pool.bootstrap()
             self._started = True
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
+
+    def _note_fault(self, error, cause='claim_owner_failed'):
+        """S1-H1a: note a fault with its cause and type only, then republish. Never raises."""
+        self.health.note_failure(self._note, cause, error)
+        self._publish_health()
+
+    def _publish_health(self):
+        """S1-H1a: this owner's note: faulted, and its jobs (kept while faulted, else busy)."""
+        try:
+            tokens = frozenset(id(job) for job in self._jobs.values())
+            self._note.publish(faulted=self._faulted, kept=tokens if self._faulted else frozenset(),
+                               busy=0 if self._faulted else len(tokens))
+        except Exception:
+            pass
 
     def _job(self, ticket):
         if type(ticket) is not object or ticket not in self._jobs:
@@ -127,6 +145,7 @@ class AccountClaimJobs:
         else:
             self._counts[job.key[0]] = count - 1
         del self._jobs[ticket]
+        self._publish_health()
 
     def submit(self, project_id, *, runtime_digest, caller_scope, request_id, launch, _ingress=None,
                storage_binding=None, storage_evidence=None):
@@ -201,8 +220,9 @@ class AccountClaimJobs:
                     self._counts[project_id] = count
                 else:
                     self._counts.pop(project_id, None)
-            except BaseException:
+            except BaseException as error:
                 self._faulted = True
+                self._note_fault(error, 'claim_cleanup_failed')
             raise
 
     def submit_open(self, project_id, *, runtime_digest, caller_scope, request_id, request, context,
@@ -268,8 +288,9 @@ class AccountClaimJobs:
                     self._counts[project_id] = count
                 else:
                     self._counts.pop(project_id, None)
-            except BaseException:
+            except BaseException as error:
                 self._faulted = True
+                self._note_fault(error)
             raise
 
     def drive(self):
@@ -344,8 +365,9 @@ class AccountClaimJobs:
                 for _ in range(self._pool._limits.max_workers):
                     if self._pool.offer_next() is None:
                         break
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
 
     def take(self, ticket, *, _ingress=None):
@@ -359,8 +381,9 @@ class AccountClaimJobs:
                               job.before_commit if job.kind == 'open' else None)
         try:
             self._drop(ticket)
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
         return reply
 
@@ -380,8 +403,9 @@ class AccountClaimJobs:
                 job.signature_handle = None
                 job.reason, job.state = ('open_cancelled' if job.kind == 'open' else "claim_cancelled"), "ready"
             return state
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
 
     def request_close(self):
@@ -396,8 +420,9 @@ class AccountClaimJobs:
             if self._billing is not None:
                 self._billing.request_close()
             self._pool.request_close()
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
 
     def drain(self):
@@ -425,8 +450,9 @@ class AccountClaimJobs:
             self._counts.clear()
             self._signatures.clear()
             return True
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
+            self._note_fault(error)
             raise
 
     def snapshot(self):
