@@ -15,6 +15,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
+from . import lane_health
 from .account_api import MAX_ACCOUNT_FRAME_BYTES, AccountError, decode_account_request
 from .account_service import AccountService
 
@@ -100,6 +101,10 @@ class AccountIngress:
         self._subscriptions: dict[object, object] = {}
         self._rotation: deque[object] = deque()
         self._started = self._closing = self._closed = self._faulted = False
+        # S1-H1a: published notes (reporting only): the front thread's and the owner's.
+        self.health = lane_health.Lane('ingress')
+        self._front_note, self._note = self.health.slot('front'), self.health.slot('owner')
+        self._kept_descriptors = set()  # the front's own record, written only by the front
         self._front_exiting = self._front_stopped = self._pumping = False
         self._thread = threading.Thread(target=self._front, name="account-ingress", daemon=True)
         jobs._ingress_owner = self
@@ -122,9 +127,11 @@ class AccountIngress:
         try:
             self._started = True
             self._thread.start()
-        except BaseException:
+        except BaseException as error:
             with self._lock:
                 self._faulted = self._front_stopped = True
+            self._note.publish(faulted=True)  # S1-H1a
+            self.health.note_failure(self._note, 'ingress_start_failed', error)
             raise
 
     def attach(self, connection: socket.socket, context: object, *, health=False):
@@ -270,7 +277,9 @@ class AccountIngress:
                     rotation.append(token)
                     if token in events:
                         self._front_step(selector, token, active[token], events[token])
-        except BaseException:
+        except BaseException as error:
+            self._front_note.publish(faulted=True)  # S1-H1a, by the front, before its lock
+            self.health.note_failure(self._front_note, 'ingress_front_failed', error)
             with self._lock:
                 self._faulted = True
         finally:
@@ -282,9 +291,12 @@ class AccountIngress:
             for token, peer in peers:
                 try:
                     self._drop(selector, token, peer)
-                except Exception:
+                except Exception as error:
                     # Unknown descriptor state fails closed, never a cleanup
                     # acknowledgement. The slot remains for explicit shutdown.
+                    self._kept_descriptors.add(id(peer))  # S1-H1a, by the front
+                    self._front_note.publish(faulted=True, kept=frozenset(self._kept_descriptors))
+                    self.health.note_failure(self._front_note, 'ingress_cleanup_failed', error)
                     with self._lock:
                         self._faulted = True
             if selector is not None:
@@ -386,7 +398,9 @@ class AccountIngress:
                     del self._subscriptions[token]
                 del self._groups[ticket]
                 self._rotation.remove(ticket)
-        except BaseException:
+        except BaseException as error:
+            self._note.publish(faulted=True)  # S1-H1a
+            self.health.note_failure(self._note, 'ingress_owner_failed', error)
             with self._lock:
                 self._faulted = True
             raise
