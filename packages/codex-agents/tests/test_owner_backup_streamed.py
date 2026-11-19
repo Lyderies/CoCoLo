@@ -305,5 +305,45 @@ class OwnerBackupStreamedTests(unittest.TestCase):
         self.assertEqual((0, False), (code, final["collector_quiesced"]))
 
 
+    # Review 040-f3-owner-backup, verifier (F3-6 to F3-9) --------------------------------------------
+
+    def test_F3_6_columns_the_child_wrote_must_equal_the_installed_schemas(self):
+        def drop_a_column(out):
+            report = json.loads(out)
+            report["columns"]["records"] = report["columns"]["records"][:-1]
+            return json.dumps(report)
+        with child_runs(rewrite=drop_a_column), self.assertRaisesRegex(RuntimeError, "columns"):
+            self.owner_backup("drifted")
+        self.assert_nothing_left("drifted")
+
+    def test_F3_7_a_partition_planned_over_the_limit_is_refused_before_it_is_written(self):
+        add_events(self.source, self.project, 2_000)
+        with mock.patch.dict(SCRIPT_GLOBALS, {"BACKUP_LIMIT_BYTES": 256 * 1024}), \
+                self.assertRaisesRegex(RuntimeError, "planned"):
+            self.owner_backup("planned_too_big")
+        self.assert_nothing_left("planned_too_big")
+
+    def test_F3_9_a_child_past_its_time_limit_is_stopped_and_nothing_is_left(self):
+        add_events(self.source, self.project, 2_000)
+        children = []
+        with mock.patch.dict(SCRIPT_GLOBALS, {"CHILD_SECONDS": 0.01}), \
+                child_runs(started=lambda process: children.append(process.pid)), \
+                self.assertRaisesRegex(RuntimeError, "time limit"):
+            self.owner_backup("too_slow")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(children[0], 0)
+        self.assert_nothing_left("too_slow")
+
+    def test_F3_9_the_childs_error_output_reaches_the_report(self):
+        real = subprocess.Popen
+
+        def crashing(argv, *args, **kwargs):
+            return real([sys.executable, "-I", "-c", "import sys; sys.stderr.write('boom in the child'); sys.exit(3)"],
+                        *args, **kwargs)
+        with mock.patch.object(subprocess, "Popen", crashing), self.assertRaisesRegex(RuntimeError, "boom in the child"):
+            self.owner_backup("crashed")
+        self.assert_nothing_left("crashed")
+
+
 if __name__ == "__main__":
     unittest.main()
