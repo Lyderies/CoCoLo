@@ -365,5 +365,40 @@ class CommitOutcomeTests(unittest.TestCase):
         self.assertIn("Git identity (user.name and user.email)", steps.COMMIT_REFUSED_HINT)
 
 
+
+class SessionWarningTests(unittest.TestCase):
+    """W2.1-W2.4: the warnings from the runtime's Codex session scan, never Codex's files themselves."""
+
+    ADVICE = ("Open Codex on the project itself: never on a folder that contains a set-up project, this setup "
+              "folder, your home folder, a folder above it or /.")
+
+    def test_each_warning_names_the_date_folder_and_why_with_the_advice_once(self) -> None:
+        scan = {"warnings": [
+            {"date": "2026-11-18", "holds": "clone", "folder": "/Users/<you>/Code", "message": ""},
+            {"date": "2026-11-17", "holds": "state", "folder": "/Users/<you>/.local", "message": ""},
+            {"date": "2026-11-16", "holds": "project", "folder": "/Users/<you>/work", "message": ""},
+            {"date": "2026-11-15", "holds": "home", "folder": "/Users/<you>", "message": ""},
+        ]}
+        lines = steps.session_warnings(scan)
+        self.assertEqual("A Codex session on 2026-11-18 could write to /Users/<you>/Code. Codex was opened on a "
+                         "folder that holds this setup folder.", lines[0])
+        self.assertIn("holds the orchestrator's learning state.", lines[1])
+        self.assertIn("contains a set-up project.", lines[2])
+        self.assertIn("holds your home folder.", lines[3])
+        self.assertEqual(self.ADVICE, lines[-1])
+        self.assertEqual(1, lines.count(self.ADVICE))
+
+    def test_the_runtimes_own_message_is_used_without_control_characters(self) -> None:
+        scan = {"warnings": [{"date": "2026-11-18", "holds": "project", "folder": "/p/demo\x1b[2J",
+                              "message": "Its own\x07 reason"}]}
+        line = steps.session_warnings(scan)[0]
+        self.assertEqual("A Codex session on 2026-11-18 could write to /p/demo[2J. Its own reason.", line)
+
+    def test_no_warning_or_a_failed_scan_warns_about_nothing(self) -> None:
+        for scan in ({"warnings": []}, None, {"warnings": "x"}, [], {"warnings": [{"folder": ""}, "x"]}):
+            with self.subTest(scan=scan):
+                self.assertEqual([], steps.session_warnings(scan))
+
+
 if __name__ == "__main__":
     unittest.main()
