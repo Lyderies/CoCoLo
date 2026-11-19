@@ -300,5 +300,26 @@ class FailureSummaryTests(unittest.TestCase):
         self.assertIsNone(steps.summary_destination_refusal("/x/summary.txt"))
 
 
+
+class ChangedPathTests(unittest.TestCase):
+    """W5.1 and W5.2: which paths need a commit, from Git's change records (None when Git failed)."""
+
+    def test_only_candidates_that_really_changed_and_renames_count_both_names(self) -> None:
+        records = [".codex/a", ".codex/new", ".codex/old", "elsewhere"]
+        self.assertEqual([".codex/a", ".codex/new", ".codex/old"],
+                         steps.changed_paths(records, [".codex/a", ".codex/b", ".codex/new", ".codex/old"]))
+        self.assertEqual([], steps.changed_paths([], [".codex/a"]))
+        self.assertEqual([], steps.changed_paths(records, []))
+
+    def test_when_git_cannot_answer_every_candidate_counts(self) -> None:
+        self.assertEqual([".codex/a", ".codex/b"], steps.changed_paths(None, [".codex/a", ".codex/b"]))
+
+    def test_uncommitted_list_for_display_removes_control_characters(self) -> None:
+        self.assertEqual(".codex/a\n.claude/b[2J", steps.uncommitted_display([".codex/a", ".claude/b\x1b[2J"], True))
+        self.assertEqual("(not checked: Git could not read the project)", steps.uncommitted_display(None, True))
+        self.assertEqual("(not checked: the project's Git settings name programs that Git would run)",
+                         steps.uncommitted_display([".codex/a"], False))
+
+
 if __name__ == "__main__":
     unittest.main()
