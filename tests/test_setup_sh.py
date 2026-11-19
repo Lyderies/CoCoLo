@@ -16,6 +16,18 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = ROOT / "setup.sh"
+
+# Retired by mapping when setup.sh became a launcher for the Python wizard (S5, 2026-11-19): these read
+# setup.sh's bash source; each property is now checked on the wizard's source in
+# tests/test_setup_wizard_source.py. SetupScriptTests.<name> -> WizardSourceTests.<name>:
+#   test_commands_and_commit_screens_say_what_the_rule_and_commit_do
+#   test_every_git_call_uses_the_trusted_binary_with_helpers_off
+#   test_every_git_call_with_paths_is_literal
+#   test_every_python_the_wizard_starts_is_isolated
+#   test_header_and_welcome_name_the_product
+#   test_provider_clients_are_never_run_by_name
+#   test_wizard_messages_for_the_polished_screens
+# tests/test_setup_progress.py (bash run_cmd and terminal_width) -> tests/test_setup_wizard_progress.py.
 ORCHESTRATION = ROOT / "packages" / "codex-agents" / "native-package" / ".codex" / "orchestration"
 POLICY = ORCHESTRATION / "config" / "routing-policy.json"
 
@@ -499,30 +511,6 @@ class SetupScriptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, b".codex/ok\0")
 
-    def test_every_git_call_uses_the_trusted_binary_with_helpers_off(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
-        # No git is ever run by name from PATH: only "$GIT", through g() for the project.
-        for line in code:
-            stripped = line.strip()
-            if re.search(r'(^|[;&|]\s*|run_cmd "[^"]*" |\$\()git\s', stripped):
-                self.fail(f"git run from PATH: {stripped}")
-        self.assertIn("xcrun_nocache=1 GIT_ALLOW_PROTOCOL='' GIT_NO_LAZY_FETCH=1 "
-                      '"$GIT" -C "$project" "${GIT_SAFE[@]}" "$@"', text)
-        uses = [line for line in code if re.search(r'\bg "\$', line)]
-        self.assertGreaterEqual(len(uses), 4)
-        # No porcelain: status, add and commit go through the installer's plumbing.
-        for line in uses:
-            self.assertIsNone(re.search(r'\bg "\$[^"]*"( --?[a-z-]+)* (status|add|commit|diff)\b', line), line)
-        self.assertIn('owner_git commit "$PROJECT"', text)
-        self.assertIn('owner_git changes "$1" .codex .agents .claude', text)
-        safe = re.search(r"^GIT_SAFE=\((.*)\)$", text, re.M).group(1).split()
-        self.assertEqual(safe, ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-                                "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false",
-                                "-c", "gc.auto=0", "-c", "maintenance.auto=false"])
-        # The helper's own git call is the trusted binary too.
-        self.assertIn('[git, "-C", project, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",', text)
-
     def test_the_helper_pattern_matches_the_installer(self) -> None:
         import importlib.util
         spec = importlib.util.spec_from_file_location("install_for_pattern", ROOT / "scripts" / "install.py")
@@ -543,29 +531,6 @@ class SetupScriptTests(unittest.TestCase):
             self.assertTrue(os.path.isabs(found))
             if sys.platform == "darwin":
                 self.assertNotEqual(os.path.dirname(found), "/usr/bin")  # the xcrun shim
-
-    def test_provider_clients_are_never_run_by_name(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        # The shell code only: not comments, and not the embedded Python helper.
-        shell = re.sub(r"<<'PY'\n.*?\nPY\n", "\n", text, flags=re.S)
-        self.assertNotIn("data.get(", shell)
-        code = [line for line in shell.splitlines() if not line.lstrip().startswith("#")]
-        for line in code:
-            stripped = line.strip()
-            # A client in command position: at the start, after a separator or in $( ... ).
-            if re.search(r'(^|[;&|]\s*|\$\(|\bthen\s+|\bdo\s+)(codex|claude)\s', stripped):
-                self.fail(f"client run by name: {stripped}")
-            self.assertNotRegex(stripped, r"command -v (codex|claude)")
-        self.assertNotIn("run_identity", text)
-        self.assertIn('owner_tool client-status "$1"', text)
-        # The message naming where the orchestrator runs clients from is the runtime's list.
-        sys.path.insert(0, str(ORCHESTRATION))
-        try:
-            from codex_agents.providers import TRUSTED_SEARCH_DIRECTORIES
-        finally:
-            sys.path.remove(str(ORCHESTRATION))
-        message = re.search(r"The orchestrator runs \$1 only from ([^\"]*)\.\"", text).group(1)
-        self.assertEqual(re.split(r", | or ", message), list(TRUSTED_SEARCH_DIRECTORIES))
 
     def test_the_shell_and_basic_tools_never_come_from_an_earlier_path_entry(self) -> None:
         self.assertTrue(SETUP.read_text(encoding="utf-8").startswith("#!/bin/bash\n"))
@@ -631,37 +596,6 @@ class SetupScriptTests(unittest.TestCase):
                 result = subprocess.run(["bash", str(SETUP), *hook], capture_output=True, env=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(marker.exists())
-
-    def test_every_python_the_wizard_starts_is_isolated(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
-        # Every use of "$PY" either launches it isolated or only inspects the path.
-        inspecting = ("inside_temp ", "inside_dir ", "dirname -- ", "[ -n ", "printf '%s\\n' ",
-                      "python_location_problem ")
-        launches = 0
-        for line in code:
-            for match in re.finditer(r'"\$PY"', line):
-                before, after = line[:match.start()], line[match.end():]
-                if before.endswith(inspecting):
-                    continue
-                launches += 1
-                with self.subTest(line=line.strip()):
-                    self.assertTrue(after.startswith(' "${PYF[@]}" '), line.strip())
-        self.assertGreaterEqual(launches, 12)
-        self.assertIn("PYF=(-I -B -S -X pycache_prefix=/dev/null)", text)
-        # The commands shown to the owner carry the same flags.
-        for line in code:
-            if "python3 -I" in line:
-                self.assertIn("python3 -I -B -S -X pycache_prefix=/dev/null", line)
-        # No bare python3 is ever run: only the resolved, checked "$PY".
-        for line in code:
-            stripped = line.strip()
-            if re.match(r'^(run_cmd "[^"]*" )?python3\b', stripped) or re.search(r'\$\(python3\b', stripped):
-                self.fail(f"bare python3 launch: {stripped}")
-        # Owner commands run this repository's CLI, never the project's copy.
-        self.assertIn('run_cmd "$label" "$PY" "${PYF[@]}" "$CLONE_CLI" "$@"', text)
-        self.assertIn('CLONE_CLI="$ORCH_DIR/cli.py"', text)
-        self.assertNotIn('"$PROJECT/.codex/orchestration/cli.py" "$@"', text)
 
     def python_for(self, path_entry: Path, home: str = "/nonexistent-home-for-tests",
                    cwd: Path | None = None) -> str:
@@ -767,16 +701,6 @@ class SetupScriptTests(unittest.TestCase):
                         report.write_text(json.dumps(sample))
                         result = self.helper("verifyclass", str(report))
                         self.assertEqual(result.stdout.decode().strip(), expected)
-
-    def test_every_git_call_with_paths_is_literal(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        for needle in (" add -A -- ", " commit -m ", '"ls-files"'):
-            lines = [line for line in text.splitlines()
-                     if needle in line and not line.lstrip().startswith("#")]
-            self.assertTrue(lines, needle)
-            for line in lines:
-                with self.subTest(line=line.strip()):
-                    self.assertIn("--literal-pathspecs", line)
 
     def test_changed_paths_lists_only_paths_with_real_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -891,41 +815,6 @@ class SetupScriptTests(unittest.TestCase):
         self.assertGreater(len(padded), 65536)
         self.assertEqual(self.profile_compare(padded), "unreadable")
         self.assertEqual(self.profile_compare(good + "# pad\n" * 100), "same")
-
-    def test_commands_and_commit_screens_say_what_the_rule_and_commit_do(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        self.assertIn("Every Codex session on this machine loads this rule from $RULE_FILE (mode 0600). "
-                      "It runs a protected copy of the orchestrator in ~/.codex that sessions opened on a "
-                      "project cannot change. Never open Codex on the orchestrator clone, a folder that "
-                      "contains a set-up project, your home folder, its parent or / while the rule exists.", text)
-        self.assertNotIn("It applies to Codex sessions started in this project's root folder", text)
-        self.assertIn("Setup commits with Git's plumbing commands only (hash-object, update-index, write-tree, "
-                      "commit-tree, update-ref), which start no hook, filter, signing program, pager or "
-                      "maintenance whatever the project's Git settings say", text)
-        self.assertNotIn("no script in the project runs as you", text)
-        self.assertNotIn("or a commit hook stopped it", text)
-        self.assertIn("Keep this setup folder outside every folder you open in Codex", text)
-        self.assertIn("including the Codex commands rule", text)
-
-    def test_header_and_welcome_name_the_product(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        self.assertIn("printf '%s%s COCOLO setup %s'", text)
-        self.assertNotIn("Agent orchestration setup %s", text)
-        self.assertIn('body "Welcome to COCOLO\nClaude Orchestrator, Codex Orchestrator, Local Orchestrator"', text)
-
-    def test_wizard_messages_for_the_polished_screens(self) -> None:
-        text = SETUP.read_text(encoding="utf-8")
-        self.assertIn("Nothing to commit: the project already has these files committed", text)
-        self.assertIn("The install can be updated.", text)
-        self.assertIn("A fresh install is possible.", text)
-        self.assertIn("Profile: exists with the same settings", text)
-        self.assertIn("network_access is off", text)
-        self.assertIn('"Change the owner key passphrase"', text)
-        self.assertIn('"Replace a lost owner key"', text)
-        self.assertIn('attest.py" --target "$PROJECT" --replace-owner-key', text)
-        self.assertIn("attest.py\" --change-passphrase", text)
-        self.assertIn('"$HOME/agent-orchestration-setup-summary.txt"', text)
-        self.assertNotIn('"$PWD/agent-orchestration-setup-summary.txt"', text)
 
     def test_refuses_without_a_terminal(self) -> None:
         result = subprocess.run(["bash", str(SETUP)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
