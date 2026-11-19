@@ -1979,6 +1979,9 @@ class _ClaimRequest:
     storage_evidence: bytes | None = None
 
 
+# S1-H1a: SQLite VM steps allowed for one slot-health read.
+SLOT_HEALTH_STEPS = 200_000
+
 class LearningLedger:
     """The only SQLite writer. Callers receive scoped repositories, never its connection."""
 
@@ -11209,6 +11212,41 @@ class LearningLedger:
                 "ON CONFLICT(project_id,code) DO UPDATE SET count=count+1, updated_at_ms=excluded.updated_at_ms",
                 (project_id, code, timestamp),
             )
+
+    def account_slot_health(self, project_id: str) -> dict[str, Any]:
+        """S1-H1a: this project's account slots still held, read only. Never waits on the ledger lock
+        (`ledger_busy`), and stops at SLOT_HEALTH_STEPS SQLite steps (`budget_spent`, never a partial
+        count). Run deadlines use the row's wall-clock deadline, as do probe deadlines (stated in the
+        reply); this frees nothing."""
+        if not self._lock.acquire(blocking=False):
+            return {"available": False, "reason": "ledger_busy"}
+        try:
+            interval = max(1, min(100, SLOT_HEALTH_STEPS))
+            steps = [0]
+
+            def budget():
+                steps[0] += interval
+                return 1 if steps[0] >= SLOT_HEALTH_STEPS else 0
+
+            now_ms = time.time_ns() // 1_000_000
+            self._connection.set_progress_handler(budget, interval)
+            try:
+                runs = self._connection.execute(
+                    "SELECT COALESCE(SUM(deadline_at_ms IS NOT NULL AND deadline_at_ms<?),0),"
+                    "COALESCE(SUM(deadline_at_ms IS NULL),0) FROM active_run_capacity "
+                    "WHERE project_id=? AND released_at_ms IS NULL", (now_ms, project_id)).fetchone()
+                probes = self._connection.execute(
+                    "SELECT COUNT(*),COALESCE(SUM(deadline_at_ms<?),0) FROM account_billing_probe_requests "
+                    "WHERE project_id=? AND state='admitted'", (now_ms, project_id)).fetchone()
+            except sqlite3.OperationalError:
+                return {"available": False, "reason": "budget_spent"}
+            finally:
+                self._connection.set_progress_handler(None, 0)
+            return {"available": True, "runs_past_deadline": int(runs[0]), "runs_held_without_deadline": int(runs[1]),
+                    "probes_held": int(probes[0]), "probes_past_deadline": int(probes[1]),
+                    "probe_deadlines": "wall_clock"}
+        finally:
+            self._lock.release()
 
     def account_capacity(self, project_id: str) -> dict[str, dict[str, int]]:
         """How near this project is to each account limit (0.3.4 R9): counts by the rule each limit enforces."""
