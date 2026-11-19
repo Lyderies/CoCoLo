@@ -445,3 +445,96 @@ def verify_rule(status: str, reason: str) -> tuple[str, str, list[str]]:
     return "fail", "not checked", [
         "Could not check the Codex commands rule",
         "The installed orchestrator may be older than this check. Update the install, then verify again."]
+
+
+def get(reply, path: str) -> str:
+    """setup.sh's `pj get`: a dotted path into a reply, formatted as the helper prints it (true, false,
+    a list or object's length, text), "" when absent."""
+    value = reply
+    for key in path.split("."):
+        if not key:
+            continue
+        if isinstance(value, dict) and key in value:
+            value = value[key]
+        else:
+            return ""
+    if value is None:
+        return ""
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, (list, dict)):
+        return str(len(value))
+    return str(value)
+
+
+def reason(reply, fixed: bool) -> str:
+    """setup.sh's `pj reason`: a refusal's reason code when it is a plain identifier, and its message
+    only for the orchestrator CLI (`fixed`), whose messages are fixed strings."""
+    if not isinstance(reply, dict):
+        return ""
+    code = next((reply[key] for key in ("reason_code", "account_reason_code", "code")
+                 if isinstance(reply.get(key), str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", reply[key])), "")
+    error = reply.get("error") if isinstance(reply.get("error"), str) and fixed else ""
+    error = re.sub(r"[^A-Za-z0-9 _.,:;'()/-]", "", error)[:160].strip()
+    return " ".join(part for part in (error, f"({code})" if code else "") if part)
+
+
+def raw(reply) -> str:
+    """setup.sh's `pj raw`: every refusal text in an installer reply, lowercased on one line, only ever
+    matched against fixed patterns, never shown."""
+    reply = reply if isinstance(reply, dict) else {}
+    parts = [reply[key] for key in ("refused", "error") if isinstance(reply.get(key), str)]
+    for name in ("codex", "claude", "claude_settings", "codex_rule"):
+        source = reply.get(name) or {}
+        for key in ("errors", "project_errors", "package_errors"):
+            parts.extend(item for item in source.get(key) or [] if isinstance(item, str))
+        parts.extend(source[key] for key in ("error", "required_action") if isinstance(source.get(key), str))
+    return " ".join(parts).lower().replace("\n", " ")
+
+
+def verify_class(reply) -> str:
+    """setup.sh's `pj verifyclass`: ready, linux-limited (only the operational-check sandbox, which
+    needs macOS today, failed) or failed."""
+    reply = reply if isinstance(reply, dict) else {}
+    codex = reply.get("codex") or {}
+    errors = codex.get("project_errors")
+    limited = (codex.get("package_ready") is True and isinstance(errors, list) and errors
+               and all(isinstance(item, str) and item.startswith("operational check sandbox preflight failed")
+                       for item in errors)
+               and (reply.get("claude") or {}).get("result") == "verified"
+               and (reply.get("claude_settings") or {}).get("ready") is True)
+    return "ready" if reply.get("ready") is True else ("linux-limited" if limited else "failed")
+
+
+def _safe_word(value) -> str:
+    return re.sub(r"[^A-Za-z0-9_ .+-]", "", str(value or ""))[:30] or "unknown"
+
+
+def claude_login(raw_reply: bytes) -> tuple[bool, str, str]:
+    """setup.sh's `pj claude`: whether Claude is signed in, its plan and login method as plain words."""
+    try:
+        import json
+        data = json.loads(raw_reply)
+    except Exception:
+        return False, "", ""
+    if isinstance(data, dict) and data.get("loggedIn") is True:
+        return True, _safe_word(data.get("subscriptionType")), _safe_word(data.get("authMethod"))
+    return False, "", ""
+
+
+_QUOTED = set(" \t'\"\\|&;()<>!{}*[]?^$`,")
+
+
+def shell_quote(value: str) -> str:
+    """bash 3.2's `printf %q`: '' for nothing, $'...' when a control character is in it, else each
+    shell-special character (and a leading #) behind a backslash."""
+    if value == "":
+        return "''"
+    if _CONTROL.search(value):
+        escapes = {"\n": "\\n", "\t": "\\t", "\r": "\\r", "\x1b": "\\E", "'": "\\'", "\\": "\\\\"}
+        return "$'" + "".join(escapes.get(char, f"\\{ord(char):03o}" if _CONTROL.match(char) else char)
+                              for char in value) + "'"
+    return "".join("\\" + char if char in _QUOTED or (index == 0 and char == "#") else char
+                   for index, char in enumerate(value))
