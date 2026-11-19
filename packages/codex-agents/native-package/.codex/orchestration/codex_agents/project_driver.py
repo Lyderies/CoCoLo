@@ -696,12 +696,13 @@ class RunDriver:
             return
         run.state, run.reason = 'failed', reason
         if (not run.claim_sent and run.receipt is None and run.binding is None and run.reporting is not None
-                and run.reporting.state == 'done'):
+                and run.reporting.state in {'done', 'queued'}):
             # S1-R6: the host open is recorded just before the claim is sent, so this run (most likely)
             # never had one; the store checks its own open rows (R6-10). Reporting only: the closing
             # below is unchanged.
             self._report('failed_before_open', run.key[0], run.key[1],
-                         reason if reason in FAILED_BEFORE_OPEN_REASONS else 'run_failed')
+                         reason if reason in FAILED_BEFORE_OPEN_REASONS else 'run_failed',
+                         after=run.reporting)  # sent once its registration commits (round-4 verifier)
         if run.persistence is None:
             self._give_back(run)
             run.closed = run.prepared is None and run.lease is None
