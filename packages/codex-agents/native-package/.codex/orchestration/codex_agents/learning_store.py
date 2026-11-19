@@ -11222,6 +11222,10 @@ class LearningLedger:
         if not self._lock.acquire(blocking=False):
             return {"available": False, "reason": "ledger_busy"}
         try:
+            # C8: another reader's progress handler or budgeted read scope is left alone.
+            if getattr(self._connection, "_sql_foreign_progress", False) or getattr(
+                    self._connection, "_sql_scope", None) is not None:
+                return {"available": False, "reason": "ledger_busy"}
             interval = max(1, min(100, SLOT_HEALTH_STEPS))
             steps = [0]
 
@@ -11238,10 +11242,10 @@ class LearningLedger:
                     "AND (execution_deadline_ns<:mono OR clock_reference_ns>:mono) "
                     "AND NOT (deadline_at_ms+:grace<:now AND (execution_deadline_ns+:grace_ns<=:mono "
                     "OR clock_reference_ns>:mono))),0),"
-                    "COALESCE(SUM(deadline_at_ms IS NULL),0) FROM active_run_capacity "
+                    "COALESCE(SUM(deadline_at_ms IS NULL AND claimed_at_ms>=:legacy),0) FROM active_run_capacity "
                     "WHERE project_id=:project AND released_at_ms IS NULL",
                     {"now": now_ms, "mono": mono, "grace": CRASHED_CLAIM_GRACE_MS, "grace_ns": grace_ns,
-                     "project": project_id}).fetchone()
+                     "legacy": now_ms - LEGACY_RUN_MAX_MS, "project": project_id}).fetchone()
                 probes = self._connection.execute(
                     "SELECT COUNT(*),COALESCE(SUM(deadline_at_ms<?),0) FROM account_billing_probe_requests "
                     "WHERE project_id=? AND state='admitted'", (now_ms, project_id)).fetchone()
