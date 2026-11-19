@@ -493,5 +493,20 @@ class ReplyTests(unittest.TestCase):
                 self.assertEqual(quoted, steps.shell_quote(value))
 
 
+
+class OwnerKeyNoticeTests(unittest.TestCase):
+    """W7.3: the main menu's owner key notice, from the records' owner key report."""
+
+    def test_a_mismatch_or_a_replacement_is_noticed(self) -> None:
+        self.assertEqual("mismatch", steps.owner_key_notice({"state": "mismatch", "replacements": 2}))
+        import datetime
+        when = datetime.datetime(2026, 11, 19, 14, 5)
+        line = steps.owner_key_notice({"replacements": 1, "last_replaced_at_ms": when.timestamp() * 1000})
+        self.assertEqual("2026-11-19 14:05", line)
+        for report in ({"state": "ok"}, {"replacements": 0}, None, "x", {"replacements": 1}):
+            with self.subTest(report=report):
+                self.assertEqual("", steps.owner_key_notice(report))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -247,5 +247,32 @@ class ProjectListTests(unittest.TestCase):
                                            or sys.platform != "darwin"))
 
 
+
+class LaterStepEffectTests(unittest.TestCase):
+    """Steps 5, 7 and 8: the old records report, the profile file and the temporary-folder check."""
+
+    def test_a_project_in_a_temporary_folder_is_found_with_the_runtimes_own_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertTrue(effects.project_in_temp(directory))
+        self.assertFalse(effects.project_in_temp(str(ROOT)) and not str(ROOT).startswith(tempfile.gettempdir()))
+
+    def test_the_profile_is_created_new_and_private_and_never_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(os.path.realpath(directory)) / "codex"
+            self.assertTrue(effects.create_profile(home, "content"))
+            path = home / "orchestrator.config.toml"
+            self.assertEqual("content\n", path.read_text())
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
+            self.assertEqual(0o700, home.stat().st_mode & 0o777)
+            self.assertFalse(effects.create_profile(home, "other"))
+            self.assertEqual("content\n", path.read_text())
+
+    def test_the_reports_never_raise(self) -> None:
+        with mock.patch.object(effects.attest(), "legacy_state_report", side_effect=OSError):
+            self.assertIsNone(effects.legacy_report())
+        with mock.patch.object(effects.attest(), "default_state_root", side_effect=OSError):
+            self.assertIsNone(effects.owner_key_report())
+
+
 if __name__ == "__main__":
     unittest.main()
