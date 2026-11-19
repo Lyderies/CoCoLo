@@ -65,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
             ledger.close()
         raise
     account = None
+    server.account_services = "starting"  # O10 ST1: until the account services listen
     try:
         server.previous_exit = read_exit(state.root)
         server.start()
@@ -72,8 +73,10 @@ def main(argv: list[str] | None = None) -> int:
         phase_start = time.monotonic()
         try:
             account = AccountServiceHost(ledger, CollectorPaths(state.root))
+            server.account_services = "running"
         except HistoryError:
             account = None  # Hooks keep working; account clients report unavailable.
+            server.account_services = "unavailable"
         phases["account"] = int((time.monotonic() - phase_start) * 1000)
         server.startup_phases = phases
         checked = time.monotonic()

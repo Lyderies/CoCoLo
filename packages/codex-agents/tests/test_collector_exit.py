@@ -269,7 +269,9 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         end = time.monotonic() + 20
         while True:
             code, status = self.cli('learning-status', expected=None)
-            if (code, status.get('ready'), status.get('reason_code')) != (1, False, 'status_account_unavailable'):
+            # O10 ST1: a starting account now says so; both are retried.
+            if (code, status.get('ready')) != (1, False) or status.get('reason_code') not in {
+                    'status_account_unavailable', 'status_account_starting'}:
                 self.assertEqual((0, True), (code, status.get('ready')), json.dumps(status))
                 return status
             self.assertLess(time.monotonic(), end, json.dumps(status))  # Retries stop after 20 s.

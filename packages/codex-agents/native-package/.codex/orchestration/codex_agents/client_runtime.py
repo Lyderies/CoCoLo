@@ -329,7 +329,11 @@ def _status_collector_fields(health):
     if phases is not None and (type(phases) is not dict or phases.keys() - {'ledger_open', 'collector', 'account'}
                                or any(not account_integer(v) for v in phases.values())):
         raise ValueError()
+    services = health.get('account_services')
+    if services not in {None, 'starting', 'running', 'unavailable'}:
+        raise ValueError()
     return {'collector_previous_exit': None if previous is None else checked_exit(previous),
+            'account_services': services,  # O10 ST1: from the collector host, or None
             'collector_startup_ms': phases,  # S1-U9a: milliseconds per start-up phase, or None
             'collector_schema_version': health['schema_version'],
             'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
@@ -393,7 +397,10 @@ def status_client(state_root, project_root):
     except (DispatchError, StateError, OSError, ValueError):
         pass
     if not owner_ready and collector_ready:
-        report.update(reason_code='status_account_unavailable', error='Account status is unavailable.')
+        if report.get('account_services') == 'starting':  # O10 ST1
+            report.update(reason_code='status_account_starting', error='The account services are still starting.')
+        else:
+            report.update(reason_code='status_account_unavailable', error='Account status is unavailable.')
     report['ready'] = collector_ready and owner_ready
     return report
 
