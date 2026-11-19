@@ -329,16 +329,12 @@ class DirectDriverMixin:
                              owner_path=env["COCOLO_OWNER_PATH"], bash_version=env["COCOLO_BASH_VERSION"],
                              **({"update": True} if update else {}))
 
-        def handoff(argv):  # flow.Wizard.handoff, with attest.py's run emulated (its output on the terminal)
-            term.show_cursor()
-            term.write("\033[H\033[2J")
+        def run_foreground(argv):  # Wizard.run_foreground: attest.py emulated, its output on the terminal
             # The FAKE_ATTEST stub prints only to stdout; a kept terminal run hands over the real terminal.
             status, out, err = self.emulate(list(argv))
             term.write((out + err).decode("utf-8", "replace"))
-            term.write(f"\n  attest.py finished (exit code {status}). Press Enter to continue. ")
-            term._line()
             return status
-        wizard.handoff = handoff
+        wizard.run_foreground = run_foreground
         self.result: list = []
 
         def main():

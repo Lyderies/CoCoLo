@@ -176,6 +176,7 @@ class Terminal:
         self.step_log: list[str] = []
         self.in_details = False
         self.redraw = False  # Set by the resize handler.
+        self.no_pauses = False
         self.cols = 80
         self.hold = None  # The real terminal's context that keeps it out of line mode for a whole line.
 
@@ -460,6 +461,8 @@ class Terminal:
                 return
 
     def pause(self) -> None:
+        if self.no_pauses:  # S1: an update asks nothing
+            return
         self.menu(0, ["Continue"])
 
     def show_details(self) -> None:

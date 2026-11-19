@@ -8,6 +8,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   runs, as before, then starts the wizard, which shows the same screens, asks the same questions and
   keeps every safeguard. Path prompts take typing, Backspace, Ctrl-U, Ctrl-W, Ctrl-V and Tab to
   complete a path; moving the cursor inside a typed path is no longer offered.
+- `./setup.sh --update <project>` (and the menu's first entry, "Update this project") updates an
+  installed project with no menu: providers, profile and commands rule stay as they were, the install
+  is committed, the collector registered, and attest.py asks for the passphrase. It stops plainly,
+  changing nothing, on a failed check, a client not signed in, uncommitted managed files, or earlier
+  records that need your choice.
 - Tests are sorted into stages: `unit`, `integration` and `e2e` (`scripts/test-stages.json`).
   `scripts/parallel_tests.py --stage unit` runs only the unit tests; a unit test that starts a
   process, opens a socket or sleeps fails. `scripts/measure_test_behaviour.py` measures each module.

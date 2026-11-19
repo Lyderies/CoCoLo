@@ -33,7 +33,7 @@ def launches(source: str):
 # subprocess, and each passes its argument list through unchanged; every launch in the flow takes its
 # list from a builder that adds the isolation flags or Git's safety settings.
 SUBPROCESS_USERS = {("terminal.py", "Terminal", "run_cmd"), ("terminal.py", "Terminal", "call"),
-                    ("effects.py", None, "git_commit"), ("flow.py", "Wizard", "handoff")}
+                    ("effects.py", None, "git_commit"), ("flow.py", "Wizard", "run_foreground")}  # S1: handoff passes its list on
 BUILDERS = {"self.python_argv", "self.git_argv", "effects.owner_git_argv"}
 LAUNCH_POSITION = {"run": 1, "run_cmd": 1, "call": 0, "handoff": 0}
 GIT_CALLS = {"self.g", "self.git_argv", "install._git_run"}

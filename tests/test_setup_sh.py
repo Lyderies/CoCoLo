@@ -1752,7 +1752,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\r")
         self.choose_project()
         self.expect("Update the install")
-        self.send("\r")
+        self.send("\x1b[B\r")  # past "Update this project" (S1-U2)
         for wait in ("install can be updated", "Keep the existing configuration", "Install now"):
             self.expect(wait)
             self.send("\r")
@@ -1827,7 +1827,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\r")
         self.choose_project()
         self.expect("Update the install")
-        self.send("\r")
+        self.send("\x1b[B\r")  # past "Update this project" (S1-U2)
         for wait in ("install can be updated", "Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
@@ -1939,7 +1939,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Update the install")  # the existing-install menu, not the summary
         self.assertNotIn("Exit", self.screen)
-        self.send("\x1b[B\x1b[B\r")  # Re-run the billing attestation only
+        self.send("\x1b[B\x1b[B\x1b[B\r")  # Re-run the billing attestation only
         self.expect("Start the attestation")
         self.send("\r")
         self.expect("attest stub run 2")
@@ -1956,7 +1956,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\x1b[B\x1b[B\r")  # Back to the main menu
         self.choose_project()
         self.expect("Update the install")
-        self.send("\x1b[B\x1b[B\r")  # Re-run the billing attestation only
+        self.send("\x1b[B\x1b[B\x1b[B\r")  # Re-run the billing attestation only
         self.expect("Start the attestation")
         self.send("\r")
         self.expect("attest stub run 2")
@@ -1970,7 +1970,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Update the install")
         self.settle()
         self.assertGreater(self.pid, 0)  # still running: a failure never ended the wizard
-        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
         self.expect("Stopped.")
         self.assertEqual(self.finish(), 0)
 
@@ -2021,13 +2021,13 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\r")
         self.choose_project()
         self.expect("Replace a lost owner key")
-        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\r")
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")
         self.expect("Use this only if you can no longer unlock your owner key")
         self.expect("Replace the owner key")
         self.send("\x1b[B\r")  # Back to the main menu
         self.choose_project()
         self.expect("Update the install")
-        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
         self.expect("Stopped.")
         self.assertEqual(self.finish(), 0)
 
@@ -2049,13 +2049,13 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\r")
         self.choose_project()
         self.expect("Change the owner key passphrase")
-        self.send("\x1b[B\x1b[B\x1b[B\r")
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\r")
         self.expect("this wizard never sees them")
         self.send("\x1b[B\r")  # Back to the main menu: attest.py never ran
         self.choose_project()
         self.expect("Change the owner key passphrase")
         self.assertFalse(count.exists())
-        self.send("\x1b[B\x1b[B\x1b[B\r")
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\r")
         self.expect("Change the passphrase")
         self.send("\r")
         self.expect("attest stub run 1")
@@ -2092,7 +2092,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\r")
         self.choose_project()
         self.expect("Verify the install only")
-        self.send("\x1b[B\r")
+        self.send("\x1b[B\x1b[B\r")
         self.expect("Try again")
         self.send("\r")  # Try again: still failing, so the menu comes back
         self.expect("Try again")
@@ -2102,7 +2102,7 @@ class WizardTerminalTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(project), "commit", "-qm", "install"], check=True, env=self.env)
         self.send("\r")
         self.expect("Verify the install only")
-        self.send("\x1b[B\r")
+        self.send("\x1b[B\x1b[B\r")
         self.expect("Codex commands rule: missing")
         self.expect("Continue")
         self.send("\r")
@@ -2112,7 +2112,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\x1b[B\r")
         self.choose_project()
         self.expect("Update the install")
-        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
+        self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
         self.expect("Stopped.")
         self.assertEqual(self.finish(), 0)
 
@@ -2147,7 +2147,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\x1b[B\x1b[B\r")  # Back to the main menu
         self.choose_project()
         self.expect("Update the install")
-        self.send("\x1b[B\x1b[B\r")  # a different mode: attestation only
+        self.send("\x1b[B\x1b[B\x1b[B\r")  # a different mode: attestation only
         self.expect("Start the attestation")
         self.send("\r")
         self.expect("Press Enter to continue")
@@ -2433,7 +2433,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\r")
         self.choose_project()
         self.expect("Update the install")
-        self.send("\r")
+        self.send("\x1b[B\r")  # past "Update this project" (S1-U2)
         for wait in ("install can be updated", "Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
@@ -2495,7 +2495,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\r")
         self.choose_project()
         self.expect("Update the install")
-        self.send("\x1b[B\x1b[B\r")  # Re-run the billing attestation only
+        self.send("\x1b[B\x1b[B\x1b[B\r")  # Re-run the billing attestation only
         self.expect("Start the attestation")
         self.send("\r")
         self.expect("does not match this setup")
@@ -2575,7 +2575,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\r")
         self.choose_project()
         self.expect("Verify the install only")
-        self.send("\x1b[B\r")
+        self.send("\x1b[B\x1b[B\r")
         self.expect("Codex commands rule: missing")
         self.expect("Continue")
         self.send("\r")
@@ -2609,7 +2609,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.send("\r")
         self.choose_project()
         self.expect("Verify the install only")
-        self.send("\x1b[B\r")
+        self.send("\x1b[B\x1b[B\r")
         self.expect("cannot be used with this Codex setup")
         self.expect("Continue")
         plain = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\(B", "", self.screen))

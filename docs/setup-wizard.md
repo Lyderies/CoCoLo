@@ -25,7 +25,8 @@ details. `NO_COLOR=1` gives plain output. Paths accept a leading `~`,
    kept in the installer folder of your orchestrator records. A project
    that has never been set up needs a prepared `operational-checks.json` (see the
    [recipe](manual-setup.md#operational-checks)); the wizard asks for its path and works from a private
-   snapshot of it. An existing install offers: update the install and walk through every step, verify the
+   snapshot of it. An existing install offers: update this project (every step with no menu, as
+   `./setup.sh --update`), update the install and walk through every step, verify the
    install only, re-run the billing attestation only, change the owner key passphrase, replace a lost
    owner key, choose another path, or quit. The menu warns if the owner key file does not match its record,
    and says when the key was last replaced.

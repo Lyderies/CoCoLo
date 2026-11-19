@@ -207,7 +207,8 @@ def main(argv: list[str]) -> int:
     if answered is not None:
         return answered
     if argv[:1] in (["-h"], ["--help"]):
-        print("Usage: ./setup.sh [PROJECT_PATH]\n\nInteractive wizard that installs COCOLO (Claude Orchestrator, Codex "
+        print("Usage: ./setup.sh [PROJECT_PATH]\n       ./setup.sh --update PROJECT_PATH   (update an installed project "
+              "with no menu; only the owner-key passphrase is asked)\n\nInteractive wizard that installs COCOLO (Claude Orchestrator, Codex "
               "Orchestrator, Local Orchestrator) into a Git project.\nRun it from a terminal in the root of this "
               "repository. Keys: Up/Down move, Enter selects,\nSpace toggles, q quits. Set NO_COLOR=1 for plain output.")
         return 0
@@ -218,13 +219,17 @@ def main(argv: list[str]) -> int:
         return 2
     import shutil
     import signal
-    start = os.getcwd() if not argv or argv[0].startswith("--") else argv[0]
+    update = argv[:1] == ["--update"]
+    if update and len(argv) != 2:
+        print("usage: setup.sh --update PROJECT_PATH", file=sys.stderr)
+        return 2
+    start = argv[1] if update else os.getcwd() if not argv or argv[0].startswith("--") else argv[0]
     term = terminal.Terminal(out=sys.stdout, read=tty_read, colours=terminal.terminal_colours(),
                              size=lambda: tuple(shutil.get_terminal_size((80, 24))))
     term.hold = tty_hold
     wizard = flow.Wizard(term, start=start, python=os.environ.get("COCOLO_PYTHON") or sys.executable,
                          owner_path=os.environ.get("COCOLO_OWNER_PATH", ""),
-                         bash_version=os.environ.get("COCOLO_BASH_VERSION", ""))
+                         bash_version=os.environ.get("COCOLO_BASH_VERSION", ""), update=update)
 
     def on_signal(signum, frame):
         term.write("\n")

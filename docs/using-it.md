@@ -104,6 +104,10 @@ messages and their fixes are in [troubleshooting](troubleshooting.md); nearly ev
 
 ## Keeping it working
 
+- `./setup.sh --update <project>` updates an installed project in one step: it reuses the project's
+  earlier answers and asks only for your owner-key passphrase (for the billing attestation). It stops,
+  changing nothing, if a check fails, a client is not signed in, managed files have uncommitted changes,
+  or earlier records need your choice to move or upgrade them.
 - Run `./setup.sh` again to update the install, verify it, re-run the billing attestation or change the
   owner key passphrase.
 - Re-attest whenever your billing settings change.

@@ -71,8 +71,12 @@ def _inside(path: str, root: str) -> bool:
 
 
 class Wizard:
-    def __init__(self, term, *, start: str, python: str, owner_path: str, bash_version: str) -> None:
+    def __init__(self, term, *, start: str, python: str, owner_path: str, bash_version: str,
+                 update: bool = False) -> None:
         self.t = term
+        # S1: `./setup.sh --update PROJECT` (or the menu's "Update this project"): every step with no menu,
+        # each question answered as DESIGN-0.4.0-S1-update.md says; only attest.py asks, for the passphrase.
+        self.update = term.no_pauses = update
         self.start_dir = start
         self.py = python
         self.owner_path = owner_path
@@ -84,6 +88,15 @@ class Wizard:
         self.collector_ready_seconds = int(os.environ.get("COLLECTOR_READY_SECONDS") or 90)
         self.go_back = False
         self.reset_attempt()
+
+    def ask(self, items: list[str], update: int | str = 0) -> int:
+        """A menu; in update mode no menu: `update` is the answer, or the fixed reason the update stops."""
+        if not self.update:
+            return self.t.menu(0, items)
+        self.t.render()  # No menu draws the screen, so the owner still sees each step as it goes.
+        if isinstance(update, str):
+            raise Stop(1, f"The update stopped: {update}. Nothing further was changed; run ./setup.sh to choose.")
+        return update
 
     # Bookkeeping ----------------------------------------------------------------------------
 
@@ -150,7 +163,8 @@ class Wizard:
         self.t.list_sub(hint)
 
     def failure_menu(self) -> None:
-        choice = self.t.menu(0, ["Back to the main menu", "Continue to the summary", "Quit"])
+        choice = self.ask(["Back to the main menu", "Continue to the summary", "Quit"],
+                          self.fail_reason or "a step failed")
         if choice == 0:
             self.go_back = True
         elif choice == 2:
@@ -158,7 +172,8 @@ class Wizard:
 
     def retry_menu(self) -> str:
         if self.mode == "full":
-            choice = self.t.menu(0, ["Try again", "Skip for now", "Back to the main menu", "Quit"])
+            choice = self.ask(["Try again", "Skip for now", "Back to the main menu", "Quit"],
+                              self.fail_reason or "a step failed")
             if choice == 3:
                 raise Stop(0, "Stopped.")
             return ("try", "skip", "back")[choice]
@@ -259,14 +274,21 @@ class Wizard:
         return (f"This project's Git settings name programs that Git would run ({shown}). Setup runs Git as you, "
                 "so it will not run Git commands that could start them.")
 
+    def run_foreground(self, argv: list[str]) -> int:
+        """attest.py in the foreground with the terminal; its exit status (a signal is 128 + its number)."""
+        status = subprocess.run(argv).returncode
+        return status if status >= 0 else 128 - status
+
     def handoff(self, argv: list[str]) -> int:
         """Hand the terminal to attest.py, then keep its summary on screen until Enter (W7.1)."""
         self.t.show_cursor()
         self.t.write("\033[H\033[2J")
         # In the foreground and the wizard's own group, as setup.sh: attest.py needs the terminal for its
         # passphrase prompts, so it cannot run in a group of its own (review 040-s5-wizard c).
-        status = subprocess.run(argv).returncode
-        status = status if status >= 0 else 128 - status
+        status = self.run_foreground(argv)
+        if self.update:  # Nothing but attest.py's own passphrase prompt is asked (S1-U1).
+            self.t.write(f"\n  attest.py finished (exit code {status}).\n")
+            return status
         self.t.write(f"\n  attest.py finished (exit code {status}). Press Enter to continue. ")
         self.t._line()
         return status
@@ -394,13 +416,14 @@ class Wizard:
                         warned = True
             if hard:
                 t.body("Fix the failures above, then re-check. Setup cannot continue without them.")
-                if t.menu(0, ["Re-check", "Quit"]) == 1:
+                if self.ask(["Re-check", "Quit"], "a check failed (see above)") == 1:
                     raise Stop(1, "Stopped.")
                 continue
             if soft:
                 t.body("Some checks failed. You can continue now, but providers that are not signed in cannot be "
                        "attested or used until fixed.")
-                choice = t.menu(0, ["Re-check", "Continue anyway", "Quit"])
+                choice = self.ask(["Re-check", "Continue anyway", "Quit"],
+                                  "a check failed or a client is not signed in (see above)")
                 if choice == 0:
                     continue
                 if choice == 2:
@@ -408,12 +431,12 @@ class Wizard:
                 self.mark_step(1, "ok", "checks done with warnings")
             elif warned:
                 t.body("Read the warning above, then continue.")
-                if t.menu(0, ["Continue", "Quit"]) == 1:
+                if self.ask(["Continue", "Quit"]) == 1:
                     raise Stop(0, "Stopped.")
                 self.mark_step(1, "ok", "checks passed with a Codex session warning")
             else:
                 t.body("Everything looks good.")
-                if t.menu(0, ["Continue", "Quit"]) == 1:
+                if self.ask(["Continue", "Quit"]) == 1:
                     raise Stop(0, "Stopped.")
                 self.mark_step(1, "ok", "all checks passed")
             return
@@ -489,6 +512,9 @@ class Wizard:
             (inputs / "project-agent-routing.json").write_text('{"version": 1, "roles": {}, "verifiers": {}}\n')
             self.install_opts += ["--project-agent-routing", str(inputs / "project-agent-routing.json")]
         if not os.path.isfile(os.path.join(folder, ".codex", "orchestration", "operational-checks.json")):
+            if self.update:
+                raise Stop(1, "The update stopped: the project has no .codex/orchestration/operational-checks.json. "
+                              "Nothing was changed.")
             while True:
                 self.t.screen_reset()
                 self.begin_step(2)
@@ -512,7 +538,7 @@ class Wizard:
                     raise Stop(1, "Stopped.")
 
     def choose_another(self) -> None:
-        if self.t.menu(0, ["Choose another path", "Quit"]) == 1:
+        if self.ask(["Choose another path", "Quit"], getattr(self, "project_problem", "") or "the project cannot be used") == 1:
             raise Stop(1, "Stopped.")
 
     def step_project(self, default: str) -> None:
@@ -522,7 +548,7 @@ class Wizard:
         while True:
             self.begin_step(2)
             t.body(intro)
-            answer = self.pick_project(default)
+            answer = default if self.update else self.pick_project(default)
             if answer is None:
                 t.screen_reset()
                 self.begin_step(2)
@@ -533,6 +559,8 @@ class Wizard:
             folder = _resolve_dir(answer)
             t.screen_reset()
             self.begin_step(2)
+            if not folder and self.update:
+                raise Stop(1, f"The update stopped: cannot open the project folder {answer}. Nothing was changed.")
             if not folder:
                 guess = _resolve_dir(self.home + "/" + answer.lstrip("/")) if answer else ""
                 for index, line in enumerate(steps.cannot_open(answer, self.answer_raw, guess or None)):
@@ -554,6 +582,7 @@ class Wizard:
             if problem:
                 t.list_add("fail", folder)
                 t.list_sub(problem)
+                self.project_problem = problem
                 self.choose_another()
                 default = folder
                 continue
@@ -564,18 +593,25 @@ class Wizard:
                 self.remember_project(folder)
                 t.list_add("ok", f"Project: {folder}")
                 self.owner_key_notice()
-                t.body("An existing install was found in this project. Choose what to do.")
-                choice = t.menu(0, ["Update the install and walk through every step", "Verify the install only",
-                                    "Re-run the billing attestation only", "Change the owner key passphrase",
-                                    "Replace a lost owner key", "Choose another path", "Quit"])
-                if choice == 5:
-                    default = folder
-                    continue
-                if choice == 6:
-                    raise Stop(0, "Stopped.")
-                self.mode = ("full", "verify", "attest", "passphrase", "replace")[choice]
-                t.screen_reset()
-                self.begin_step(2)
+                if not self.update:
+                    t.body("An existing install was found in this project. Choose what to do.")
+                    choice = t.menu(0, ["Update this project", "Update the install and walk through every step",
+                                        "Verify the install only", "Re-run the billing attestation only",
+                                        "Change the owner key passphrase", "Replace a lost owner key",
+                                        "Choose another path", "Quit"])
+                    if choice == 6:
+                        default = folder
+                        continue
+                    if choice == 7:
+                        raise Stop(0, "Stopped.")
+                    # S1-U2: the first entry is the update with no menu.
+                    self.update = t.no_pauses = choice == 0
+                    self.mode = ("full", "full", "verify", "attest", "passphrase", "replace")[choice]
+                    t.screen_reset()
+                    self.begin_step(2)
+            elif self.update:
+                raise Stop(1, f"The update stopped: {folder} has no COCOLO install to update. Run ./setup.sh to "
+                              "install it. Nothing was changed.")
             if self.mode != "full":
                 self.project = folder
                 self.mark_step(2, "ok", self.project)
@@ -584,6 +620,8 @@ class Wizard:
             if problem:
                 t.list_add("fail", folder)
                 t.list_sub(problem)
+                if self.update:
+                    raise Stop(1, "The update stopped (managed_files_uncommitted): " + problem + " Nothing was changed.")
                 self.choose_another()
                 default = folder
                 continue
@@ -620,7 +658,7 @@ class Wizard:
                 t.body("The install can be updated. Continue to choose providers.")
             else:
                 t.body("A fresh install is possible. Continue to choose providers.")
-            choice = t.menu(0, ["Continue", "Choose another path", "Quit"])
+            choice = self.ask(["Continue", "Choose another path", "Quit"])
             if choice == 1:
                 default = folder
                 continue
@@ -654,7 +692,9 @@ class Wizard:
         if status == "present":
             t.body("This project already has a provider configuration (.codex/orchestration/provider-routing.json). "
                    "Keep it, or choose providers again and replace it.")
-            if t.menu(0, ["Keep the existing configuration", "Choose providers again"]) == 0:
+            if self.update:
+                t.list_add("ok", "Keeping the existing provider configuration")
+            if self.ask(["Keep the existing configuration", "Choose providers again"]) == 0:
                 self.routing_write = False
                 self.routing_content = raw_routing.decode("utf-8", "replace")
                 import re
@@ -664,6 +704,9 @@ class Wizard:
                     self.codex_primary = True
                 self.mark_step(3, "ok", "kept existing configuration")
                 return True
+        if self.update:
+            raise Stop(1, "The update stopped: the project has no provider configuration to keep "
+                          "(.codex/orchestration/provider-routing.json). Run ./setup.sh to choose providers.")
         state, error = "111110", ""
         while True:
             self.begin_step(3)
@@ -765,7 +808,7 @@ class Wizard:
         t.body("This adds or updates files under .codex, .agents and .claude, then writes "
                ".codex/orchestration/provider-routing.json. Nothing outside the project is touched.")
         while True:
-            choice = t.menu(0, ["Install now", "Show the full list of files", "Skip the install", "Quit"])
+            choice = self.ask(["Install now", "Show the full list of files", "Skip the install", "Quit"])
             if choice == 1:
                 self.view_plan()
                 continue
@@ -895,7 +938,7 @@ class Wizard:
         else:
             self.mark_step(4, "ok", f"{base}; {note}")
             self.remember_project(project)
-        t.menu(0, ["Continue"])
+        self.ask(["Continue"])
         return True
 
     def commit_candidates(self, applied) -> tuple[list[str], int]:
@@ -926,7 +969,7 @@ class Wizard:
         for line in steps.first_ten(self.commit_paths):
             t.list_sub(line)
         while True:
-            choice = t.menu(0, ["Commit now (recommended)", "I will commit myself", "Show every path"])
+            choice = self.ask(["Commit now (recommended)", "I will commit myself", "Show every path"])
             if choice != 2:
                 break
             t.view_text("\n".join(self.commit_paths), "Paths to commit")
@@ -1008,7 +1051,8 @@ class Wizard:
         else:
             t.list_add("info", "Setup cannot compare them; check the owner key above yourself.")
         t.body("Move these records to the protected folder? [Y/n]")
-        choice = t.menu(0, ["Yes, move them", "No, leave them where they are"])
+        choice = self.ask(["Yes, move them", "No, leave them where they are"], "records_need_owner_choice: the earlier "
+                          "records can be moved only when you choose to")
         t.screen_reset()
         self.begin_step(5)
         if choice != 0:
@@ -1025,7 +1069,8 @@ class Wizard:
                    "working with the orchestrator until you run this setup for each of them.")
         t.list_sub("Do this while no child agent is running in any project.")
         t.body("Upgrade the records now? [Y/n]")
-        choice = t.menu(0, ["Yes, upgrade them", "No, leave them as they are"])
+        choice = self.ask(["Yes, upgrade them", "No, leave them as they are"], "records_need_owner_choice: the "
+                          "earlier records can be upgraded only when you choose to")
         t.screen_reset()
         self.begin_step(5)
         if choice != 0:
@@ -1068,7 +1113,7 @@ class Wizard:
                "starts it.")
         t.body("Command: this setup's own orchestrator, learning-register --project-root <project>, then "
                "learning-status.")
-        choice = t.menu(0, ["Register now", "Skip this step", "Quit"])
+        choice = self.ask(["Register now", "Skip this step", "Quit"])
         if choice == 1:
             self.mark_step(5, "skip", "skipped")
             return
@@ -1162,7 +1207,7 @@ class Wizard:
                "program, including an AI agent, from signing in your name. The next screens belong to attest.py; this "
                "wizard will not touch them.")
         if self.mode == "full":
-            choice = t.menu(0, ["Start the attestation", "Skip for now", "Quit"])
+            choice = self.ask(["Start the attestation", "Skip for now", "Quit"])
             if choice == 1:
                 self.mark_step(6, "skip", "not attested yet")
                 return
@@ -1307,7 +1352,7 @@ class Wizard:
                 self.mark_step(7, "skip", "exists, differs, left alone")
             t.pause()
             return
-        choice = t.menu(0, ["Create the profile", "Skip", "Quit"])
+        choice = self.ask(["Create the profile", "Skip", "Quit"])
         if choice == 1:
             self.mark_step(7, "skip", "skipped")
             return
@@ -1432,10 +1477,11 @@ class Wizard:
             return
         stale = self.rule_status == "stale"
         while True:
+            # In an update the earlier answer stands: a rule allowed before is refreshed, none stays none.
             if stale:
-                choice = t.menu(0, ["Leave it unchanged", "Replace it", "Show the new rule", "Quit"])
+                choice = self.ask(["Leave it unchanged", "Replace it", "Show the new rule", "Quit"], 1)
             else:
-                choice = t.menu(0, ["No, not now", "Yes, allow these commands", "Show the exact rule", "Quit"])
+                choice = self.ask(["No, not now", "Yes, allow these commands", "Show the exact rule", "Quit"], 0)
             if choice == 0:
                 self.mark_step(8, "skip", "exists, differs, left alone" if stale else "not created")
                 return
@@ -1620,6 +1666,14 @@ class Wizard:
         t.menu(0, ["Continue"])
 
     def step_done(self) -> None:
+        if self.update:
+            self.summary_screen()
+            self.t.render()
+            self.t.show_cursor()
+            self.t.write("\n")
+            if self.failed_any:
+                raise Stop(1, "The update finished with failures; see the summary above.")
+            return
         while True:
             self.summary_screen()
             if self.failed_any and self.failures:
