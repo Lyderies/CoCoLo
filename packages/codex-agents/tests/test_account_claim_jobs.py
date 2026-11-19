@@ -69,6 +69,18 @@ class AccountClaimJobTests(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 10, "disposable workers did not drain")
             time.sleep(.002)
 
+    def test_H1a_a_failed_start_is_faulted_with_its_type(self):
+        jobs = AccountClaimJobs(self.views, SignatureIntakeLimits(2, 2, 128, 262_144, 2),
+                                SignatureWorkerLimits(2, 4 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000),
+                                SQLReadLimits(10_000, 1000, 1_048_576), allow_unleased_claim_reference=True)
+        with mock.patch.object(jobs._pool, 'bootstrap', side_effect=RuntimeError('a secret')), \
+                self.assertRaises(RuntimeError):
+            jobs.bootstrap()
+        view = jobs.health.view()
+        self.assertEqual((True, 'claim_owner_failed', 'RuntimeError'),
+                         (view['faulted'], view['last_failure']['cause'], view['last_failure']['type']))
+        self.assertNotIn('secret', repr(view))
+
     def test_fault_before_offer_can_drain_queued_inputs_without_starting_work(self):
         self.begin()
         with mock.patch.object(self.jobs._pool, "poll", side_effect=RuntimeError("fixture before offer")), \
