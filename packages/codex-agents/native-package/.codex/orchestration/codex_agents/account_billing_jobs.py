@@ -8,6 +8,7 @@ from collections import deque
 from dataclasses import dataclass
 import time
 
+from . import lane_health
 from .account_billing_admission import AccountBillingAdmission, ProbeAdmission, ProbeAdmissionError
 from .account_billing_execution import AccountBillingExecutions
 from .account_observation import ObservationContext
@@ -57,6 +58,8 @@ class _Job:
     cleanup_requested: bool = False  # Its preparation was asked to clean up.
     cancelled: bool = False
     observed_again: bool = False
+    token: int = 0  # S1-H1a: counts this job once in the lane's health notes
+    noted: bool = False  # S1-H1a: its failure reason has been noted
 
 
 @dataclass(frozen=True, repr=False)
@@ -68,7 +71,26 @@ class BillingJobReply:
     context: ObservationContext
 
 
+# S1-H1a: the reasons that are failures (a refusal such as a cooldown is not one).
+_FAILURE_REASONS = frozenset({'probe_preparation_unknown', 'probe_preparation_failed', 'probe_worker_failed',
+                              'probe_step_failed', 'probe_unavailable'})
+
+
 class AccountBillingJobs:
+    def _publish_health(self):
+        """S1-H1a: this owner's note from the job table (unknown jobs kept, the rest busy), and each
+        job's failure reason once. Reporting only; never raises."""
+        try:
+            jobs = list(self._jobs.values())
+            for job in jobs:
+                if job.reason in _FAILURE_REASONS and not job.noted:
+                    job.noted = True
+                    self.health.note_failure(self._note, job.reason, None)
+            self._note.publish(kept=frozenset(job.token for job in jobs if job.state == 'unknown'),
+                               busy=sum(job.state != 'unknown' for job in jobs))
+        except Exception:
+            pass
+
     def __init__(self, claims, observations, workers, limits):
         from .account_claim_jobs import AccountClaimJobs
         if (type(claims) is not AccountClaimJobs or type(observations) is not AccountObservationJobs
@@ -87,6 +109,8 @@ class AccountBillingJobs:
         self._executions = AccountBillingExecutions(self._owner, workers, workers._registry)
         self._limits = BillingJobLimits(limits.max_projects, limits.jobs_per_project, limits.owner_steps)
         self._jobs, self._requests, self._counts, self._signatures = {}, {}, {}, {}
+        self.health = lane_health.Lane('billing')  # S1-H1a: published notes, reporting only
+        self._note = self.health.slot('owner')
         self._rotation = deque()
         self._queues = {}
         self._ingress_owner, self._closing, self._faulted = None, False, False
@@ -128,8 +152,9 @@ class AccountBillingJobs:
         if (self._counts.get(project, 0) >= self._limits.jobs_per_project
                 or project not in self._counts and len(self._counts) >= self._limits.max_projects):
             raise ProbeAdmissionError('probe_full')
-        ticket, job = object(), _Job(key, context, snapshot, before_publish)
+        ticket, job = object(), _Job(key, context, snapshot, before_publish, token=lane_health.new_token())
         self._jobs[ticket], self._requests[key] = job, ticket
+        self._publish_health()
         self._counts[project] = self._counts.get(project, 0)+1
         if project not in self._queues:
             self._queues[project] = deque()
@@ -154,6 +179,7 @@ class AccountBillingJobs:
 
     def _drop(self, ticket):
         job = self._jobs.pop(ticket)
+        self._publish_health()
         self._requests.pop(job.key)
         project = job.key[0]
         self._queues[project].remove(ticket)
@@ -355,8 +381,11 @@ class AccountBillingJobs:
             job = self._jobs[ticket]
             try:
                 self._step(ticket, job)
-            except Exception:
+            except Exception as error:
+                job.noted = True  # S1-H1a: noted here, with the exception's type
+                self.health.note_failure(self._note, 'probe_step_failed', error)
                 self._settle_failed_step(job)
+        self._publish_health()
         if self._closing and not self._jobs:
             self._workers.close()
 
