@@ -356,7 +356,8 @@ class AccountClaimJobs:
                     except ClaimError as error:
                         job.reason, job.state = error.reason_code, "ready"  # Its own reason, as a first capture.
                         continue
-                    except Exception:
+                    except Exception as error:
+                        self.health.note_failure(self._note, 'claim_capture_failed', error)  # S1-H1a C7
                         job.reason, job.state = "claim_unavailable", "ready"
                         continue
                     self._signatures[job.signature_handle] = ticket

@@ -207,7 +207,8 @@ class AccountBillingJobs:
         try:
             self._executions.discard(job.preparation)
             job.cleanup_requested = True
-        except Exception:
+        except Exception as error:
+            self.health.note_failure(self._note, 'probe_cleanup_failed', error)  # S1-H1a C7
             self._discard_fault(job)
 
     def _discard_fault(self, job):

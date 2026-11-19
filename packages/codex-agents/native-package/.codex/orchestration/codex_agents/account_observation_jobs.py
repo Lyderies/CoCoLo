@@ -311,7 +311,8 @@ class AccountObservationJobs:
                 result = self._owner.complete(job.reservation, reply)
             except ObservationError as error:
                 self._finish(ticket, job, reason=error.reason_code)
-            except Exception:
+            except Exception as error:
+                self.health.note_failure(self._note, 'observation_commit_failed', error)  # S1-H1a C7
                 self._finish(ticket, job, reason='observation_unavailable')
             else:
                 self._finish(ticket, job, result=result)
@@ -372,7 +373,8 @@ class AccountObservationJobs:
                                               job.before_publish, job.result)
                 except ObservationError as error:
                     reason = error.reason_code
-                except Exception:
+                except Exception as error:
+                    self.health.note_failure(self._note, 'observation_recheck_failed', error)  # S1-H1a C7
                     reason = 'observation_unavailable'
             reply = ObservationJobReply(job.key, job.request, job.result if reason is None else None,
                                         reason, job.before_publish)
