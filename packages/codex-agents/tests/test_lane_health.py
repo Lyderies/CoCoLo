@@ -92,6 +92,18 @@ class LaneHealthTests(unittest.TestCase):
         self.assertEqual([before], result)
         self.assertEqual(before, self.lane.view())
 
+    def test_C1_publishing_never_raises(self):
+        with mock.patch.object(lane_health, 'replace', side_effect=MemoryError()):
+            self.owner.publish(busy=1)  # dropped, not raised
+        self.assertEqual(0, self.lane.view()['busy'])
+
+    def test_C5_a_job_kept_is_never_also_busy(self):
+        token = lane_health.new_token()
+        self.owner.publish(busy_tokens=frozenset({token}))  # the owner still counts it busy
+        self.worker.publish(kept=frozenset({token}))         # its worker has kept it
+        view = self.lane.view()
+        self.assertEqual((1, 0), (view['kept'], view['busy']))
+
     def test_tokens_are_unique_across_threads(self):
         seen, lock = [], threading.Lock()
 

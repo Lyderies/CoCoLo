@@ -189,6 +189,21 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.assertEqual(('unknown', 'account_health_unavailable'),
                          (report['account_health']['state'], report['account_health']['reason_code']))
 
+    def test_C2_C3_malformed_or_missing_sources_never_stop_status_and_never_say_ok(self):
+        clean = {name: self.lane() for name in ('signature', 'claims', 'observations', 'ingress', 'billing',
+                                                 'probe_worker')}
+        for slots, reason in (({'available': False, 'reason': []}, 'account_health_invalid'),
+                              ([1, 2], 'account_health_invalid')):
+            with self.subTest(slots=slots), mock.patch.object(
+                    self.ledger, 'account_slot_health', return_value=slots):
+                code, report = self.status_with(clean)
+                self.assertEqual((0, True), (code, report['ready']))
+                self.assertEqual(('unknown', reason), (report['account_health']['state'],
+                                                       report['account_health']['reason_code']))
+        code, report = self.status_with({'billing': self.lane()})  # five lanes missing
+        self.assertEqual(('unknown', 'account_health_unavailable'),
+                         (report['account_health']['state'], report['account_health']['reason_code']))
+
     def test_ST1_account_services_still_starting_say_starting(self):
         self.collector.account_services = 'starting'
         self.hint.unlink()
