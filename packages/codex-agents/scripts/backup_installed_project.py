@@ -69,6 +69,8 @@ def _quiesce_collector_authorization(path: Path) -> None:
         or any(character not in "0123456789abcdef" for character in value["runtime_digest"])
     ):
         raise RuntimeError("collector runtime authorization is invalid")
+    if quiesced:  # Already as asked: nothing to change (F3-17).
+        return
     value["quiesced_for_upgrade"] = True
     _write_authorization(path, _canonical_json(value) + b"\n", [])
 
@@ -98,14 +100,16 @@ def _write_authorization(path: Path, content: bytes, replaced: list) -> None:
             finally:
                 os.close(root_descriptor)
         except BaseException as error:
+            restore = path.parent / f".collector-authorization.{secrets.token_hex(8)}.tmp"
             try:
-                restore = path.parent / f".collector-authorization.{secrets.token_hex(8)}.tmp"
                 restore.write_bytes(previous)
                 restore.chmod(0o600)
                 os.replace(restore, path)
             except BaseException as failed:
                 raise QuiesceLeftStopped(f"{error}; the earlier authorization could not be put back: {failed}") \
                     from error
+            finally:
+                restore.unlink(missing_ok=True)  # F3-17: no temporary copy left behind
             raise
     finally:
         temporary.unlink(missing_ok=True)
@@ -481,47 +485,41 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
     final_name, partial_name = f"{file_id}.sqlite3", f".{file_id}.partial"
     created = published = None
     child = None
-    previous = {}
-    held_at_start = signal.pthread_sigmask(signal.SIG_BLOCK, [])  # The mask to leave as it was found.
-    committed = []  # Set once the backup is registered: from then on a stop signal is only noted (F3-11).
-    late_stop = []
-    held = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # Until the handlers are in place.
-    if threading.current_thread() is threading.main_thread():
-        def stop(signum, frame):
-            if committed:
-                late_stop.append(signum)
-                return
-            raise _Stopped()
-        previous = {number: signal.signal(number, stop) for number in _STOP_SIGNALS}
-    signal.pthread_sigmask(signal.SIG_SETMASK, held)
+    # F3-15: stop signals are held throughout and released only while the child runs. A stop held
+    # after registration is taken off the queue and noted instead.
+    found_mask = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
+    committed, late_stop, previous = [], [], {}
     try:
+        if threading.current_thread() is threading.main_thread():
+            def stop(signum, frame):
+                if committed:
+                    late_stop.append(signum)
+                    return
+                raise _Stopped()
+            for number in _STOP_SIGNALS:
+                previous[number] = signal.signal(number, stop)
         if os.path.lexists(partition / final_name):
             raise RuntimeError("a backup with this file id already exists")
         with contextlib.suppress(FileNotFoundError):
             os.unlink(partial_name, dir_fd=folder)  # Left by a backup that was stopped; never registered.
-        held = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # Created and recorded, or neither.
+        descriptor = os.open(partial_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                             0o600, dir_fd=folder)
         try:
-            descriptor = os.open(partial_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                                 0o600, dir_fd=folder)
-            try:
-                created = _identity(os.fstat(descriptor))
-            finally:
-                os.close(descriptor)
+            created = _identity(os.fstat(descriptor))
         finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, held)
+            os.close(descriptor)
         argv = [sys.executable, "-I", "-B", "-S", str(SCRIPT), "--stream-child", str(ledger.state.database),
                 str(partition / partial_name), project_id, str(schema_version), str(BACKUP_LIMIT_BYTES),
                 f"{created[0]}:{created[1]}"]
-        held = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # The child is known before a stop acts.
-        try:
-            child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, text=True)
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, held)
+        child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True)
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, _STOP_SIGNALS)  # The one window a stop acts in.
         try:
             out, err = child.communicate(timeout=CHILD_SECONDS)
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"the backup copy was stopped at its time limit ({CHILD_SECONDS} s)") from None
+        finally:
+            signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
         try:
             report = json.loads(out)
         except ValueError:
@@ -552,24 +550,20 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
         finally:
             os.close(descriptor)
         # Published by a new name for the same file: never replaces anything that appeared meanwhile.
-        held = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # Linked and recorded, or neither.
         try:
             os.link(partial_name, final_name, src_dir_fd=folder, dst_dir_fd=folder, follow_symlinks=False)
             published = created
         except FileExistsError:
             raise RuntimeError("a backup with this file id appeared while it was written") from None
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, held)
         os.unlink(partial_name, dir_fd=folder)
         os.fsync(folder)
         path = partition / final_name
-        held = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # Registered and committed, or neither.
-        try:
-            ledger._register_stored_file(project_id, file_id=file_id, kind="backup", path=path,
-                                         digest=report["backup_sha256"], expires_at_ms=expires_at_ms)
-            committed.append(True)
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, held)  # A signal held meanwhile is now only noted.
+        ledger._register_stored_file(project_id, file_id=file_id, kind="backup", path=path,
+                                     digest=report["backup_sha256"], expires_at_ms=expires_at_ms)
+        committed.append(True)
+        if previous:  # A stop held since the child ended is taken now, and only noted.
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, _STOP_SIGNALS)
+            signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
         return {**({"stopped_after_registration": True} if late_stop else {}),
             "ready": True,
             "project_id": project_id,
@@ -584,7 +578,6 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
             "isolated_restore_foreign_keys": "ok",
         }
     except BaseException as error:
-        signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # Cleanup runs to its end (F3-11).
         if child is not None and child.poll() is None:
             child.kill()
             child.wait()
@@ -610,7 +603,7 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
         os.close(folder)
         for number, handler in previous.items():
             signal.signal(number, handler)
-        signal.pthread_sigmask(signal.SIG_SETMASK, held_at_start)
+        signal.pthread_sigmask(signal.SIG_SETMASK, found_mask)
 
 
 def finish_backup(report: dict[str, object], *, leave_quiesced: bool, quiesce) -> tuple[dict[str, object], int]:
@@ -629,6 +622,31 @@ def finish_backup(report: dict[str, object], *, leave_quiesced: bool, quiesce) -
     except Exception as exc:
         return {**report, "collector_quiesced": False, "quiesce_error": str(exc)}, 3
     return {**report, "collector_quiesced": True}, 0
+
+
+def conclude(*, report: dict[str, object] | None, code: int, error: BaseException | None, close,
+             resume) -> tuple[dict[str, object], int]:
+    """F3-16: the one ending. The ledger is closed and the collector restarted (unless it stays stopped as
+    asked) whatever failed before; every later error goes into the one report. Exit 0 only when all
+    succeeded; 3 when the backup was made but something after it failed; 2 when it was not made."""
+    made = report is not None
+    final = dict(report) if made else {"ready": False, "error": str(error)}
+    if made and error is not None:
+        final["error"], code = str(error), 3
+    elif not made:
+        code = 2
+    try:
+        close()
+    except Exception as exc:
+        final["close_error"] = str(exc)
+        code = code or 3
+    if not final.get("collector_quiesced"):
+        try:
+            resume()
+        except Exception as exc:
+            final["restart_error"] = f"the installed collector did not restart: {exc}"
+            code = code or 3
+    return final, code
 
 
 def settle_maintenance(final: dict[str, object], code: int, *, resume) -> tuple[dict[str, object], int]:
@@ -757,72 +775,67 @@ def _main() -> int:
     )
 
     state = LearningState(args.state_root, create=False)
-    maintenance = CollectorMaintenance.acquire(state, cli_path, target)
-    ledger = None
-    backup_made = False
+    found_mask = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)  # F3-15: held to the end
     try:
-        ledger = LearningLedger(state)
-        project_id = ledger.project_for_root(target)
-        connection = ledger._connection
-        schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14}:
-            raise RuntimeError("installed ledger schema does not support this backup")
-        project_columns = {
-            str(row[1])
-            for row in connection.execute("PRAGMA table_info(projects)").fetchall()
-        }
-        if project_columns != set(_PROJECT_COLUMNS):
-            raise RuntimeError("project backup cannot represent projects exactly")
-        project = connection.execute(
-            f"SELECT {','.join(_PROJECT_COLUMNS)} "
-            "FROM projects WHERE project_id=? AND status='active'",
-            (project_id,),
-        ).fetchone()
-        if project is None:
-            raise RuntimeError("project binding is not active")
-        # The installed ledger must hold exactly the tables and columns its schema has, so the
-        # copy (written by this clone's package for that schema) represents it exactly.
-        for table in _tables(schema_version):
-            exists = connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        maintenance = CollectorMaintenance.acquire(state, cli_path, target)
+        ledger = report = error = None
+        code = 0
+        try:
+            ledger = LearningLedger(state)
+            project_id = ledger.project_for_root(target)
+            connection = ledger._connection
+            schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14}:
+                raise RuntimeError("installed ledger schema does not support this backup")
+            project_columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(projects)").fetchall()
+            }
+            if project_columns != set(_PROJECT_COLUMNS):
+                raise RuntimeError("project backup cannot represent projects exactly")
+            project = connection.execute(
+                f"SELECT {','.join(_PROJECT_COLUMNS)} "
+                "FROM projects WHERE project_id=? AND status='active'",
+                (project_id,),
             ).fetchone()
-            available = (
-                {str(row[1]) for row in connection.execute(
-                    f"PRAGMA table_info({table})"
-                ).fetchall()}
-                if exists is not None else set()
-            )
-            columns = list(_expected_columns(schema_version, table))
-            expected_available = {"project_id", *columns} if columns else set()
-            if available != expected_available:
-                raise RuntimeError(
-                    f"project backup cannot represent {table} exactly"
+            if project is None:
+                raise RuntimeError("project binding is not active")
+            # The installed ledger must hold exactly the tables and columns its schema has, so the
+            # copy (written by this clone's package for that schema) represents it exactly.
+            for table in _tables(schema_version):
+                exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+                ).fetchone()
+                available = (
+                    {str(row[1]) for row in connection.execute(
+                        f"PRAGMA table_info({table})"
+                    ).fetchall()}
+                    if exists is not None else set()
                 )
-        expires_at_ms = (
-            time.time_ns() // 1_000_000 + args.expires_in_seconds * 1000
-        )
-        report = backup_partition(ledger, project_id, args.file_id, schema_version=schema_version,
-                                  expires_at_ms=expires_at_ms)
-        backup_made = True  # Registered: from here every exit restarts or reports the collector.
-        final, code = finish_backup(
-            report, leave_quiesced=args.leave_quiesced,
-            quiesce=lambda: _quiesce_collector_authorization(state.collector_authorization))
-        ledger.close()
-        ledger = None
-        # F3-13: maintenance is settled first, so the one report says how it ended.
-        final, code = settle_maintenance(final, code, resume=maintenance.resume)
+                columns = list(_expected_columns(schema_version, table))
+                expected_available = {"project_id", *columns} if columns else set()
+                if available != expected_available:
+                    raise RuntimeError(
+                        f"project backup cannot represent {table} exactly"
+                    )
+            expires_at_ms = (
+                time.time_ns() // 1_000_000 + args.expires_in_seconds * 1000
+            )
+            report = backup_partition(ledger, project_id, args.file_id, schema_version=schema_version,
+                                      expires_at_ms=expires_at_ms)
+            report, code = finish_backup(
+                report, leave_quiesced=args.leave_quiesced,
+                quiesce=lambda: _quiesce_collector_authorization(state.collector_authorization))
+        except Exception as exc:
+            error = exc
+        # F3-16: one ending, then one report.
+        final, code = conclude(report=report, code=code, error=error,
+                               close=ledger.close if ledger is not None else (lambda: None),
+                               resume=maintenance.resume)
         print(json.dumps(final, indent=2, sort_keys=True))
         return code
     finally:
-        if ledger is not None:
-            ledger.close()
-        if not backup_made:  # Refused before the backup was made: the collector is restarted.
-            with contextlib.suppress(Exception):
-                maintenance.resume()
-        elif sys.exc_info()[0] is not None:  # Interrupted after it was made, before the report.
-            with contextlib.suppress(Exception):
-                maintenance.resume()
-
+        signal.pthread_sigmask(signal.SIG_SETMASK, found_mask)
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--stream-child"]:
