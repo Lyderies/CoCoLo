@@ -212,8 +212,9 @@ class Terminal:
         self.items = ""
 
     def term_size(self) -> None:
-        cols, _lines = self._size()
+        cols, lines = self._size()
         self.cols = max(int(cols or 80), 30)
+        self.lines = int(lines or 24)
 
     def header(self) -> str:
         c, cols, total = self.c, self.cols, len(self.names)
@@ -380,6 +381,34 @@ class Terminal:
                 self.confirm_quit()
                 continue
             return steps.expand_home(answer, home), answer
+
+    def view_text(self, text: str, title: str) -> None:
+        """setup.sh's view_plan: TEXT in a scrollable view headed TITLE."""
+        offset = 0
+        self.hide_cursor()
+        while True:
+            self.term_size()
+            lines = fold(text, self.cols - 6).split("\n")
+            count = len(lines)
+            page = max(self.lines - 9, 3)
+            offset = max(min(offset, count - page), 0)
+            shown = "".join(f"    {line}\n" for line in lines[offset:offset + page])
+            self.write("\033[H\033[2J" + self.header()
+                       + f"\n  {self.c['bold']}{title}: lines {offset + 1}-{min(offset + page, count)} of {count}"
+                         f"{self.c['reset']}\n\n" + shown
+                       + f"\n  {self.c['dim']}Up/Down scroll   PageUp/PageDown page   q back{self.c['reset']}\n")
+            key = self.read_key()
+            if key in ("UP", "k"):
+                offset -= 1
+            elif key in ("DOWN", "j"):
+                offset += 1
+            elif key == "PGUP":
+                offset -= page
+            elif key in ("PGDN", "SPACE"):
+                offset += page
+            elif key in ("q", "Q", "ENTER", "ESC", "EOF"):
+                self.show_cursor()
+                return
 
     def pause(self) -> None:
         self.menu(0, ["Continue"])
