@@ -107,6 +107,7 @@ class Harness:
         self.attest = []  # exit statuses for successive hand-offs; 0 when run out
         self.helper_fails = False  # FAKE_PJ_FAIL: the path helper exits 1
         self.apply_fails = False  # FAKE_FAIL: the install's --apply prints a secret and exits 2
+        self.plant_after_apply = None  # FAKE_PLANT: (project, script) planted as a filter after --apply
         self.launched: list[list[str]] = []
         self.handoffs: list[list[str]] = []
 
@@ -146,7 +147,11 @@ class Harness:
         if rest[:1] == [str(flow.INSTALLER)]:
             if self.apply_fails and "--apply" in rest:
                 return 2, ('{"error": "boom %s user@example.invalid"}\n' % TOKEN).encode(), (TOKEN + "\n").encode()
-            return self._in_process(effects.installer().main, rest[1:])
+            done = self._in_process(effects.installer().main, rest[1:])
+            if self.plant_after_apply is not None and "--apply" in rest:
+                project, script = self.plant_after_apply
+                self.git(project, "config", "filter.planted.clean", str(script))
+            return done
         if rest[:1] == [str(flow.CLONE_CLI)]:
             command = rest[1] if len(rest) > 1 else ""
             if command == "codex-session-scan":

@@ -411,6 +411,107 @@ class InstallCommitTests(unittest.TestCase):
         self.assertEqual(1, self.h.commit_count(self.project))
         self.assertEqual("", self.git("diff", "--cached", "--name-only"))
 
+    def test_a_helper_planted_during_the_run_stops_git_and_the_commit(self) -> None:
+        """Replaces WizardTerminalTests.test_a_helper_planted_during_the_run_stops_git_and_the_commit (W1.4)."""
+        marker = self.h.base / "filter-ran"
+        script = self.h.base / "filter.sh"
+        script.write_text(f"#!/bin/sh\ntouch '{marker}'\ncat\n")
+        script.chmod(0o755)
+        (self.project / ".git" / "info").mkdir(exist_ok=True)
+        (self.project / ".git" / "info" / "attributes").write_text("* filter=planted\n")
+        before = self.h.commit_count(self.project)
+        self.h.plant_after_apply = (self.project, script)
+        _, screen = self.h.run(*to_commit(self.checks), ENTER, *FINISH, start=self.project)
+        commit_screen = screen[:screen.index("Commit now")]
+        self.assertIn("could not check whether installed files are ignored", re.sub(r"\s+", " ", commit_screen))
+        self.assertNotIn("Nothing to commit", commit_screen)
+        after = screen[screen.index("Commit now"):]
+        self.assertIn("Not committed", after)
+        self.assertIn("filter.planted.clean", after)
+        self.assertNotIn("nothing to commit", self.h.final(screen))
+        self.assertEqual(before, self.h.commit_count(self.project))
+        self.assertFalse(marker.exists(), "the planted filter ran")
+
+    def test_helpers_in_the_project_settings_stop_setup_before_any_git_porcelain(self) -> None:
+        """Replaces WizardTerminalTests.test_helpers_in_the_project_settings_stop_setup_before_any_git_porcelain (W1.4)."""
+        self.git("config", "core.pager", "./pager.sh")
+        code, screen = self.h.run(ENTER, ENTER, DOWN + ENTER, start=self.project)
+        flat = re.sub(r"\s+", " ", screen)
+        self.assertIn("core.pager", flat)
+        self.assertIn("will not run Git commands that could start them", flat)
+        self.assertIn("Choose another path", flat)
+        self.assertEqual(1, code)
+
+    def test_wildcard_named_obsolete_file_is_removed_without_touching_its_neighbour(self) -> None:
+        """Replaces WizardTerminalTests.test_wildcard_named_obsolete_file_is_removed_without_touching_its_neighbour (W5.6)."""
+        import hashlib
+        import json
+        import subprocess
+        routing_in = self.h.base / "par.json"
+        routing_in.write_text(json.dumps({"version": 1, "roles": {}, "verifiers": {}}))
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), "install", "--target", str(self.project),
+                        "--project-agent-routing", str(routing_in), "--operational-checks", str(self.checks),
+                        "--apply"], check=True, capture_output=True)
+        (self.project / ".codex" / "local*").write_text("local\n")
+        (self.project / ".codex" / "local-other").write_text("other\n")
+        manifest = self.project / ".codex" / "orchestration" / "install-manifest.json"
+        data = json.loads(manifest.read_text())
+        data["files"][".codex/local*"] = hashlib.sha256(b"local\n").hexdigest()
+        manifest.write_text(json.dumps(data, indent=2))
+        self.git("add", "-A")
+        self.git("commit", "-qm", "adopt")
+        _, screen = self.h.run(ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, *FINISH, start=self.project)
+        self.assertIn(".codex/local*", screen[:screen.index("Commit now")])
+        self.assertIn("; committed", self.h.final(screen))
+        tracked = self.git("ls-files").splitlines()
+        self.assertNotIn(".codex/local*", tracked)
+        self.assertIn(".codex/local-other", tracked)
+        self.assertEqual("other\n", (self.project / ".codex" / "local-other").read_text())
+        self.assertEqual("", self.git("status", "--porcelain"))
+
+    def test_the_commit_never_runs_project_hooks(self) -> None:
+        """Replaces WizardTerminalTests.test_the_commit_never_runs_project_hooks (W5.3)."""
+        ran = self.h.base / "hook-ran"
+        for hooks in (self.project / ".git" / "hooks", self.project / "githooks"):
+            hooks.mkdir(exist_ok=True)
+            for name in ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"):
+                (hooks / name).write_text(f"#!/bin/sh\necho {name} >> '{ran}'\nexit 1\n")
+                (hooks / name).chmod(0o755)
+        self.git("config", "core.hooksPath", "githooks")
+        _, screen = self.h.run(*to_commit(self.checks), ENTER, *FINISH, start=self.project)
+        self.assertIn("Setup commits with Git's plumbing commands only", re.sub(r"\s+", " ", screen))
+        self.assertIn("; committed", self.h.final(screen))
+        self.assertFalse(ran.exists(), "a project hook ran")
+
+    def test_summary_says_commit_failed_when_git_refuses(self) -> None:
+        """Replaces WizardTerminalTests.test_summary_says_commit_failed_when_git_refuses (W10.5)."""
+        import os
+        from unittest import mock
+        self.git("config", "commit.gpgSign", "true")  # signing is off for the commit: never the cause
+        with mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "", "GIT_COMMITTER_NAME": ""}):
+            _, screen = self.h.run(*to_commit(self.checks), ENTER, *FINISH, start=self.project)
+        self.assertIn("Git identity", screen)
+        final = self.h.final(screen)
+        self.assertIn("commit failed", final)
+        self.assertNotIn("not committed", final)
+        self.assertIn("Left uncommitted in the project:", final)
+
+    def test_commit_stages_updated_files_and_provider_routing(self) -> None:
+        """Replaces WizardTerminalTests.test_commit_stages_updated_files_and_provider_routing (W5.3, W8)."""
+        _, screen = self.h.run(*to_commit(self.checks), ENTER, *FINISH, start=self.project)
+        final = re.sub(r"\s+", " ", self.h.final(screen))
+        self.assertIn("8. Commands: project in a temporary folder", final)
+        self.assertIn("This project is in a temporary folder, so Codex sessions cannot", final)
+        self.assertNotIn("to undo only the rule, delete:", final)
+        self.assertFalse((self.h.home / ".codex").exists())
+        self.assertIn("; committed", final)
+        self.assertNotIn("not committed", final)
+        self.assertNotIn("Left uncommitted", final)
+        tracked = self.git("ls-files").split()
+        self.assertIn(".codex/orchestration/provider-routing.json", tracked)
+        self.assertIn(".codex/orchestration/install-manifest.json", tracked)
+        self.assertEqual("", self.git("status", "--porcelain"))
+
 
 class FailureAndSummaryTests(unittest.TestCase):
     """W9.3, W10: failures never end the wizard; the failure summary and where it is saved."""
