@@ -68,6 +68,7 @@ class _EarlierLeases:
     result: object = None
     reason: str | None = None
     arguments: tuple = ()  # `register` / `failed_before_open` (S1-R6)
+    skipped: int = 0  # `list`: leases that could not be read this time (O10 E2)
 
 
 @dataclass(repr=False)
@@ -1070,6 +1071,7 @@ class ResultPersistenceLane:
                             client = history._orchestration_owner().metadata_for(binding)['snapshot']['client_version']
                             found.append((binding, history.attest_pending_result_lease(binding), client))
                         except HistoryError:
+                            request.skipped += 1
                             continue
                 result = found
             else:

@@ -102,6 +102,10 @@ _RETRYING = object()
 FENCE_RETRY_SECONDS = 1.0
 FENCE_RETRY_MAX_SECONDS = 300.0
 MAX_FENCE_ATTEMPTS = 10
+# O10 E1: the account (or its service) stopped or could not take the call; asked again while this
+# service runs, never counted as a refusal.
+FENCE_OUTAGES = frozenset({'account_unavailable', 'account_closed_without_reply', 'service_refused_busy',
+                           'service_refused_unavailable', 'service_refused_late'})
 # A given-back preparation whose cleanup did not finish, and a retired run whose
 # monitor slot was refused, are tried again after this long, doubling up to the cap.
 # A refused forget is tried at most MAX_FORGET_ATTEMPTS times: a live attempt is
@@ -1242,11 +1246,16 @@ class RunDriver:
                 self._earlier_later(now)
                 return
             for binding, evidence, host_client in self._earlier.result:
-                if host_client in HOST_CLIENTS:
+                if (host_client in HOST_CLIENTS and binding.claim_request_id not in self._earlier_fences
+                        and binding.run_handle not in self._fenced):
                     self._earlier_fences[binding.claim_request_id] = {
                         'binding': binding, 'evidence': evidence, 'host_client': host_client, 'future': None,
                         'closure': None, 'settling': None, 'refusals': 0, 'outages': 0, 'at': 0.0}
-            self._earlier, self._earlier_listed = None, True
+            skipped, self._earlier = self._earlier.skipped, None
+            if skipped:
+                self._earlier_later(now)  # O10 E2: some could not be read yet; listed again later.
+            else:
+                self._earlier_listed = True
         for key, entry in list(self._earlier_fences.items()):
             if entry['settling'] is not None:
                 state = entry['settling'].state
@@ -1275,7 +1284,7 @@ class RunDriver:
             try:
                 reply = future.result()
             except AccountError as error:
-                if error.reason_code == 'account_unavailable':
+                if error.reason_code in FENCE_OUTAGES:
                     entry['outages'] += 1
                     entry['at'] = now + self._earlier_delay(entry['outages'])
                 else:
