@@ -168,6 +168,7 @@ class ResultPersistenceLane:
                                      + (0 if request_limits is None else request_limits.requests))
         self._reporting = 0  # reporting writes queued or being written (at most REPORT_SLOTS)
         self._earlier_held = 0  # earlier-lease requests queued or being run (at most EARLIER_SLOTS)
+        self._unanswered = {}  # id -> request: queued and not yet answered; failed if the writer stops (R6-19)
         self._ready = threading.Event()
         self._closed = self._fault = False
         self._store = None
@@ -1020,6 +1021,8 @@ class ResultPersistenceLane:
 
     def _queue_counted(self, request, counter, slots):
         with self._lock:
+            if self._closed or self._fault:
+                raise HistoryError('history_service_unavailable')  # before any quota (R6-19)
             if getattr(self, counter) >= slots:
                 raise HistoryError('history_writer_busy')
             setattr(self, counter, getattr(self, counter) + 1)
@@ -1038,6 +1041,7 @@ class ResultPersistenceLane:
                 self._incoming.put_nowait(('earlier', request))
             except queue.Full:
                 raise HistoryError('history_writer_busy') from None  # never queue.Full out of a step
+            self._unanswered[id(request)] = request
         return request
 
     def _earlier(self, request):
@@ -1087,6 +1091,7 @@ class ResultPersistenceLane:
             reason = HistoryError(error.reason_code).reason_code if type(error) is HistoryError else 'history_service_unavailable'
         with self._lock:
             request.result, request.reason, request.state = result, reason, state
+            self._unanswered.pop(id(request), None)
             if request.kind in {'register', 'failed_before_open'}:
                 self._reporting -= 1
             else:
@@ -1150,6 +1155,12 @@ class ResultPersistenceLane:
                     if retained.state not in {"committed", "failed"}:
                         retained.state, retained.reason = "unknown", "history_service_unavailable"
         finally:
+            with self._lock:
+                # R6-19: nothing left queued is answered now; each says so instead of waiting forever.
+                self._fault = self._fault or not self._closed
+                for request in self._unanswered.values():
+                    request.state, request.reason = 'failed', 'history_service_unavailable'
+                self._unanswered.clear()
             self._ready.set()
             if service is not None:
                 try:

@@ -440,8 +440,11 @@ class RunDriver:
             else:
                 run = held[0]
                 if run.state != 'failed' and run.reporting is not None:
-                    # R6-18: written after its registration (one ordered queue); dropped if that never was.
-                    self._report('failed_before_open', run.key[0], run.key[1], 'run_failed')
+                    # R6-18/R6-20: reported only once its registration has committed.
+                    self._report('failed_before_open', run.key[0], run.key[1], 'run_failed', after=run.reporting)
+                for waiting, _ in run.waiters:  # R6-21: a prepare still waiting is answered
+                    self._reply(waiting, {'state': 'failed', 'reason_code': 'run_abandoned'})
+                run.waiters = []
                 self._give_back(run)
                 del self._runs[run.key]
                 self._reply(connection, {'state': 'failed', 'reason_code': 'run_abandoned'})
@@ -641,10 +644,11 @@ class RunDriver:
         finally:
             connection.close()
 
-    def _report(self, kind, *arguments):
+    def _report(self, kind, *arguments, after=None):
         """Queue one failure report (S1-R6); it never holds up the run, and a failed write is asked again
-        while the service runs (R6-8)."""
-        self._reports.append([kind, arguments, None])
+        while the service runs (R6-8). `after`: a registration still being written; the report is sent
+        once it commits and dropped if it does not (R6-20)."""
+        self._reports.append([kind, arguments, None, after])
         self._send_reports()  # at once when there is room, so a report read next comes after it
 
     def _send_reports(self):
@@ -652,6 +656,14 @@ class RunDriver:
         once written, and ask again for one whose write failed."""
         lane = self._runtime.persistence
         for entry in list(self._reports):
+            after = entry[3]
+            if after is not None:
+                if after.state == 'queued':
+                    continue
+                if after.state != 'done':
+                    self._reports.remove(entry)  # Its registration was never written: nothing to report.
+                    continue
+                entry[3] = None
             request = entry[2]
             if request is not None and (request.state == 'done' or (
                     request.state == 'failed' and request.reason not in _REPORT_RETRIED)):
