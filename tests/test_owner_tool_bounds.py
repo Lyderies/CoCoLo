@@ -70,6 +70,22 @@ class InstallBoundsTests(unittest.TestCase):
                 install._write_new(directory, "owner.json", b"abcdef", 0o600)
         self.assertEqual([], list(self.base.iterdir()))
 
+    def test_a_temporary_that_cannot_be_removed_is_named_and_the_error_kept(self) -> None:
+        """Review 040-s5-wizard-4 (a): the write's own error is raised, and the kept file is named."""
+        import io
+        directory = os.open(self.base, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, directory)
+
+        def failing_write(fd, data):
+            raise OSError(28, "No space left on device")
+        with mock.patch.object(install.os, "write", failing_write), \
+                mock.patch.object(install.os, "unlink", side_effect=PermissionError("no")), \
+                mock.patch.object(install.sys, "stderr", new_callable=io.StringIO) as err:
+            with self.assertRaises(OSError) as raised:
+                install._write_new(directory, "owner.json", b"abcdef", 0o600)
+        self.assertEqual(28, raised.exception.errno)
+        self.assertIn("owner.json", err.getvalue())
+
     def test_the_git_tool_unwinds_on_a_termination_signal(self) -> None:
         """Review 040-s5-wizard-3 (d): SIGTERM and SIGHUP become SystemExit while the tool runs, so
         commit_paths' cleanup (its private index folder) still runs; the old handlers come back after."""
@@ -134,6 +150,26 @@ class AttestBoundsTests(unittest.TestCase):
             attest.enabled_providers(target)
         routing.write_text('{"providers": {"codex": {"enabled": true}, "claude": {"enabled": true}}}')
         self.assertEqual(["codex", "claude"], attest.enabled_providers(target))
+
+    def test_a_routing_file_swapped_for_a_fifo_after_the_check_is_refused(self) -> None:
+        """Review 040-s5-wizard-4 (a): the opened file's own type is checked before reading."""
+        target = self.base / "project"
+        (target / ".codex" / "orchestration").mkdir(parents=True)
+        routing = target / ".codex" / "orchestration" / "provider-routing.json"
+        routing.write_text("{}")
+        real_open = attest.os.open
+
+        def swapped(path, flags, *args, **kwargs):
+            if path == "provider-routing.json" and not getattr(swapped, "done", False):
+                swapped.done = True
+                routing.unlink()
+                os.mkfifo(routing)
+                writer = os.open(routing, os.O_RDWR)  # keeps the FIFO from blocking the test
+                self.addCleanup(os.close, writer)
+            return real_open(path, flags, *args, **kwargs)
+        with mock.patch.object(attest.os, "open", swapped):
+            with self.assertRaises(attest.AttestError):
+                attest.enabled_providers(target)
 
     def test_the_routing_read_never_follows_a_symlinked_folder(self) -> None:
         """Review 040-s5-wizard-3 (a): a folder on the way swapped for a symlink is refused too."""

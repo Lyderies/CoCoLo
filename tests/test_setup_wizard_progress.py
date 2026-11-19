@@ -247,6 +247,33 @@ class RunnerTests(unittest.TestCase):
         self.assertIsNone(term.active)
 
 
+    def test_a_signal_just_after_a_start_still_stops_the_process(self):
+        """Review 040-s5-wizard-4 (c): a signal landing between the start and its registration waits
+        until the process is registered, so the stop still finds it."""
+        term = terminal.Terminal(out=io.StringIO(), read=lambda count, timeout: b"", colours=terminal.NO_COLOURS,
+                                 size=lambda: (80, 24))
+        started = []
+        real_popen = terminal.subprocess.Popen
+
+        def popen_then_signal(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            started.append(process)
+            os.kill(os.getpid(), signal.SIGALRM)  # delivered at once unless held
+            return process
+
+        def stop(signum, frame):
+            raise terminal.Stop(130)
+        previous = signal.signal(signal.SIGALRM, stop)
+        self.addCleanup(signal.signal, signal.SIGALRM, previous)
+        for launch in (lambda: term.call(["/bin/sleep", "30"]),
+                       lambda: term.run_cmd("x", ["/bin/sleep", "30"], logdir=self.logdir, width=lambda: 80)):
+            started.clear()
+            with unittest.mock.patch.object(terminal.subprocess, "Popen", popen_then_signal):
+                with self.assertRaises(terminal.Stop):
+                    launch()
+            self.assertIsNotNone(started[0].returncode)  # stopped and reaped
+
+
 class WidthTests(unittest.TestCase):
     """S3-P9a and S3-P5 on terminal_width itself: (COLUMNS, the terminal's size, the terminfo answer)."""
 

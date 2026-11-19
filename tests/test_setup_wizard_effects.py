@@ -361,5 +361,25 @@ class ProfileCleanupReportTests(unittest.TestCase):
             self.assertIn("delete it", str(refused.exception))
 
 
+
+class CancellationKeptTests(unittest.TestCase):
+    """Review 040-s5-wizard-4 (a): an interrupted profile write whose cleanup fails still stops, and
+    names the file it could not remove."""
+
+    def test_the_stop_is_kept_and_the_file_named(self) -> None:
+        import io
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(os.path.realpath(directory)) / "codex"
+
+            def interrupted(*args, **kwargs):
+                raise KeyboardInterrupt
+            with mock.patch.object(effects.os, "fdopen", interrupted), \
+                    mock.patch.object(effects.Path, "unlink", side_effect=PermissionError("no")), \
+                    mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                with self.assertRaises(KeyboardInterrupt):
+                    effects.create_profile(home, "content")
+            self.assertIn("orchestrator.config.toml", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

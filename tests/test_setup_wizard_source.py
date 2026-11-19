@@ -157,6 +157,17 @@ class WizardSourceTests(unittest.TestCase):
                                               "        self.t.call([self.git, '-C', project, 'status'])\n"),
             "python list without the builder": "class Wizard:\n    def f(self):\n        self.run('x', [ self.py, '-c', 'pass'])\n",
             "keyword argv without the builder": "class Wizard:\n    def f(self):\n        self.t.call(argv=[self.py])\n",
+            "argv changed in place in a wrapper": ("class Terminal:\n    def call(self, argv):\n"
+                                                   "        argv[:] = ['git', 'status']\n        subprocess.Popen(argv)\n"),
+            "a wrapper launching its own list": ("class Terminal:\n    def call(self, argv):\n"
+                                                 "        subprocess.Popen(['git', 'status'])\n"),
+            "a wrapper appending to argv": ("class Terminal:\n    def call(self, argv):\n"
+                                            "        argv.append('x')\n        subprocess.Popen(argv)\n"),
+            "an aliased runner": "class Wizard:\n    def f(self):\n        runner = self.t.call\n        runner(['git'])\n",
+            "os.system": "import os\nos.system('git status')\n",
+            "os.execv": "import os\nos.execv('/usr/bin/git', ['git'])\n",
+            "os.posix_spawn": "import os\nos.posix_spawn('/usr/bin/git', ['git'], {})\n",
+            "pty.spawn": "import pty\npty.spawn(['git'])\n",
             "a forwarder that rewrites argv": ("class Wizard:\n    def run(self, label, argv):\n        argv = ['git']\n"
                                                "        return self.t.run_cmd(label, argv)\n"),
         }
@@ -184,6 +195,22 @@ class WizardSourceTests(unittest.TestCase):
         for name, source in SOURCES.items():
             with self.subTest(source=name):
                 self.assertEqual([], git_problems(source))
+
+    def test_the_git_builder_accepts_only_the_wizards_read_only_invocations(self) -> None:
+        """Review 040-s5-wizard-4 (b): the builder is the boundary, not the scanner: no configuration
+        override, alias, other directory or other command can follow the safety settings."""
+        from types import SimpleNamespace
+        from setup_wizard import flow
+        wizard = SimpleNamespace(git="/trusted/git")
+        for args in (("--version",), ("rev-parse", "--show-toplevel"), ("rev-parse", "--is-inside-work-tree")):
+            with self.subTest(args=args):
+                self.assertEqual(list(args), flow.Wizard.git_argv(wizard, *args, project="/p")[-len(args):])
+        for args in (("-c", "alias.owned=!./hook", "owned"), ("-c", "core.fsmonitor=./x", "status"), ("status",),
+                     ("-C", "/elsewhere", "rev-parse", "--show-toplevel"), ("--exec-path=/x", "rev-parse"),
+                     ("rev-parse", "--show-toplevel", "--git-dir"), ("commit", "-m", "x"), ("config", "--list"), ()):
+            with self.subTest(args=args):
+                with self.assertRaises(ValueError):
+                    flow.Wizard.git_argv(wizard, *args, project="/p")
 
     def test_the_builders_add_the_isolation_flags_and_gits_safety_settings(self) -> None:
         from types import SimpleNamespace
