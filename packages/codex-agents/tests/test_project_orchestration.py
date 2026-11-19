@@ -97,6 +97,16 @@ class ProjectOrchestrationTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
             self.call('open', context={'role': 'host', 'active': True})
 
+    def test_R8a_an_orchestration_opened_under_another_scope_says_so(self):
+        snapshot = self.opened()
+        # After an update the service runs under a new generation; the caller is authorized for it.
+        self.scope = replace(self.scope, supervisor_generation=2)
+        with self.assertRaisesRegex(HistoryError, '^history_orchestration_other_scope$'):
+            self.call('status', {'orchestration_handle': snapshot['orchestration_handle']}, identity='status-later')
+        with self.assertRaisesRegex(HistoryError, '^history_orchestration_other_scope$'):
+            self.call('close', self.target(snapshot, status='completed', goal_tokens_used=None,
+                                           goal_time_used_seconds=None), identity='close-later')
+
     def test_monotonic_checkpoints_pause_resume_and_known_current_are_distinct(self):
         initial = self.call('open', identity='open')
         opened = initial['current']['snapshot']
