@@ -33,6 +33,8 @@ SCRIPT = Path(__file__).resolve()
 CLONE_PACKAGE = SCRIPT.parents[1] / "native-package" / ".codex" / "orchestration"
 # The ledger's own limit for one project's backup (learning_store.MAX_PROJECT_BACKUP_BYTES).
 BACKUP_LIMIT_BYTES = 16 * 1024 ** 3
+# How long the copy and its checks may take; a hung child must not hold the collector stopped (F3-9).
+CHILD_SECONDS = 4 * 3600
 _FILE_ID = re.compile(r"[A-Za-z0-9_]{1,160}")
 
 
@@ -420,7 +422,9 @@ def _checked_report(child: object) -> dict[str, object]:
             or not isinstance(child.get("counts"), dict)
             or not all(isinstance(k, str) and type(v) is int for k, v in child["counts"].items())
             or not isinstance(child.get("identity"), list) or len(child["identity"]) != 2
-            or not all(type(part) is int for part in child["identity"])):
+            or not all(type(part) is int for part in child["identity"])
+            or not isinstance(child.get("columns"), dict)
+            or not all(isinstance(k, str) and isinstance(v, list) for k, v in child["columns"].items())):
         raise RuntimeError("the backup copy's check did not report everything it must")
     return child
 
@@ -478,15 +482,25 @@ def backup_partition(ledger, project_id: str, file_id: str, *, schema_version: i
                                      stderr=subprocess.PIPE, text=True)
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, held)
-        out, _ = child.communicate()
+        try:
+            out, err = child.communicate(timeout=CHILD_SECONDS)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"the backup copy was stopped at its time limit ({CHILD_SECONDS} s)") from None
         try:
             report = json.loads(out)
         except ValueError:
             report = None
         if child.returncode != 0:
-            raise RuntimeError(str(report.get("error")) if isinstance(report, dict) and report.get("error")
-                               else "the backup copy could not be written or checked")
+            if isinstance(report, dict) and report.get("error"):
+                raise RuntimeError(str(report["error"]))
+            last = [line for line in (err or "").splitlines() if line.strip()][-1:]
+            raise RuntimeError("the backup copy could not be written or checked"
+                               + (f": {last[0][:300]}" if last else f" (exit {child.returncode})"))
         report = _checked_report(report)
+        # The copy has exactly the columns this script checked against the installed schema (F3-6).
+        expected = {table: list(_expected_columns(schema_version, table)) for table in _tables(schema_version)}
+        if report["columns"] != expected:
+            raise RuntimeError("the backup copy's columns differ from the installed schema's columns")
         # The file published is the file the child checked: same identity, same bytes.
         descriptor = os.open(partial_name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=folder)
         try:
@@ -582,11 +596,24 @@ def _stream_child(argv: list[str]) -> int:
     path = Path(partial)
     if _identity(os.lstat(path)) != expected_identity or not stat.S_ISREG(os.lstat(path).st_mode):
         raise RuntimeError("the backup copy is not the file the script created")
-    connection = sqlite3.connect("file:" + urllib.parse.quote(database) + "?mode=ro", uri=True)
+    from codex_agents import learning_store  # noqa: PLC0415
+
+    connection = sqlite3.connect("file:" + urllib.parse.quote(database) + "?mode=ro", uri=True,
+                                 isolation_level=None)
     connection.row_factory = sqlite3.Row
     try:
+        connection.execute("BEGIN")  # One snapshot for the plan, the copy and the comparison (F3-8).
         schema_version = int(schema)
-        project_backup.write(connection, path, project_id, schema_version, limit_bytes=int(limit))
+        # Planned before anything is written, as the ledger plans its own backups (F3-7).
+        planned = project_backup.estimate_bytes(connection, project_id, schema_version)
+        if planned > int(limit):
+            raise RuntimeError(f"the project's backup is planned at {planned} bytes, over the limit of {limit}")
+        free = os.statvfs(path.parent)
+        needed = planned * learning_store.BACKUP_SPACE_FACTOR + learning_store.BACKUP_SPACE_MARGIN_BYTES
+        if needed > free.f_bavail * free.f_frsize:
+            raise RuntimeError(f"the project's backup is planned at {planned} bytes and needs {needed} bytes free; "
+                               "not enough disk space")
+        manifest = project_backup.write(connection, path, project_id, schema_version, limit_bytes=int(limit))
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         try:
             before = os.fstat(descriptor)
@@ -607,10 +634,13 @@ def _stream_child(argv: list[str]) -> int:
         finally:
             os.close(descriptor)
     finally:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
         connection.close()
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
     print(json.dumps({"backup_sha256": digest, "manifest_sha256": result["manifest_sha256"],
-                      "counts": result["counts"], "identity": expected_identity, "peak_rss_bytes": peak},
+                      "counts": result["counts"], "identity": expected_identity, "peak_rss_bytes": peak,
+                      "columns": manifest["columns"]},
                      sort_keys=True))
     return 0
 
