@@ -9,6 +9,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import steps
+
 STEP_NAMES = ("Checks", "Project", "Providers", "Install", "Collector", "Billing", "Profile", "Commands", "Done")
 COLOUR_NAMES = ("reset", "bold", "dim", "red", "green", "yellow", "blue", "magenta", "cyan")
 NO_COLOURS = dict.fromkeys(COLOUR_NAMES, "")
@@ -108,6 +110,42 @@ def phase_of(path) -> str:
     return re.sub(rb"[^A-Za-z0-9 ,.'-]", b"", text).decode("ascii")[:60]
 
 
+def complete_path(text: str, home: str) -> list[str]:
+    """Tab completion for the path prompt (bash's `read -e`): the names starting with `text`, folders
+    ending in "/", a leading ~ kept as typed."""
+    import glob
+    tilde = text == "~" or text.startswith("~/")
+    expanded = home + text[1:] if tilde else text
+    found = []
+    for match in sorted(glob.glob(glob.escape(expanded) + "*")):
+        shown = "~" + match[len(home):] if tilde else match
+        found.append(shown + "/" if os.path.isdir(match) else shown)
+    return found
+
+
+def line_editor(home: str):
+    """The real terminal's line reader: readline (GNU or libedit), with Tab completing paths. Like
+    `read -e`, it takes the terminal out of line mode while it reads. None at end of input."""
+    import readline
+
+    matches: list[str] = []
+
+    def completer(text, state):
+        if state == 0:
+            matches[:] = complete_path(text, home)
+        return matches[state] if state < len(matches) else None
+    readline.set_completer_delims(" \t\n")
+    readline.set_completer(completer)
+    readline.parse_and_bind("bind ^I rl_complete" if "libedit" in (readline.__doc__ or "") else "tab: complete")
+
+    def read_line():
+        try:
+            return input("")
+        except EOFError:
+            return None
+    return read_line
+
+
 def fold(text: str, width: int) -> str:
     """`fold -s -w WIDTH`: each line broken after the last blank that fits, else at the width."""
     lines = []
@@ -139,6 +177,7 @@ class Terminal:
         self.in_details = False
         self.redraw = False  # Set by the resize handler.
         self.cols = 80
+        self.line_reader = None  # The real terminal sets line_editor(home); tests type into `read`.
 
     # Drawing --------------------------------------------------------------------------------
 
@@ -309,6 +348,38 @@ class Terminal:
                 self.confirm_quit()
             elif key == "EOF":
                 self._closed()
+
+    def _line(self):
+        """One typed line without its newline; None at end of input."""
+        if self.line_reader is not None:
+            return self.line_reader()
+        typed = ""
+        while True:
+            char = self._char(None)
+            if char == "":
+                return None
+            if char == "\n":
+                return typed
+            typed += char
+
+    def ask_text(self, prompt: str, default: str, *, home: str) -> tuple[str, str]:
+        """setup.sh's ask_text: (the answer with home markers expanded, the answer as typed). Nothing
+        typed takes the default; q asks to quit, then asks again."""
+        while True:
+            self.render()
+            self.show_cursor()
+            if default:
+                self.write(f"  {self.c['bold']}{prompt}{self.c['reset']} [{default}]\n  > ")
+            else:
+                self.write(f"  {self.c['bold']}{prompt}{self.c['reset']} (type or paste the full path)\n  > ")
+            typed = self._line()
+            if typed is None:
+                raise Stop(1, "Input closed; stopping.")
+            answer = typed or default
+            if answer in ("q", "Q"):
+                self.confirm_quit()
+                continue
+            return steps.expand_home(answer, home), answer
 
     def pause(self) -> None:
         self.menu(0, ["Continue"])
