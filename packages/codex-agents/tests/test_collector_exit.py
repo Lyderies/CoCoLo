@@ -279,6 +279,15 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         status = self.ready_status()  # Starts a new collector.
         return status.get('collector_previous_exit'), json.dumps(status)
 
+    def test_S1_U9a_status_reports_how_long_each_start_up_phase_took(self):
+        status = self.ready_status()
+        phases = status.get('collector_startup_ms')
+        self.assertEqual({'ledger_open', 'collector', 'account'}, set(phases), json.dumps(status))
+        for name, value in phases.items():
+            self.assertIs(int, type(value), name)
+            self.assertGreaterEqual(value, 0, name)
+        self.assertLess(sum(phases.values()), 60_000)  # milliseconds, not some other unit
+
     def test_C10_a_signal_is_recorded(self):
         self.ready_status()
         for pid in self.processes('collector_host.py'):
