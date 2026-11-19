@@ -204,5 +204,48 @@ class PlanTests(unittest.TestCase):
             self.assertIsNone(effects.plan_paths(entries))
 
 
+
+class ProjectListTests(unittest.TestCase):
+    """W3.2: the remembered projects file, kept private in the records' installer folder."""
+
+    def test_the_list_is_read_one_per_line_and_written_privately_in_one_step(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(os.path.realpath(directory)) / "setup-projects"
+            self.assertEqual([], effects.read_projects(path))
+            effects.write_projects(path, ["/p/new", "/p/old"])
+            self.assertEqual("/p/new\n/p/old\n", path.read_text())
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
+            self.assertEqual(["/p/new", "/p/old"], effects.read_projects(path))
+            self.assertEqual(["setup-projects"], [p.name for p in path.parent.iterdir()])
+            link = path.parent / "linked"
+            link.symlink_to(path)
+            self.assertEqual([], effects.read_projects(link))
+
+    def test_the_projects_file_is_only_in_a_private_installer_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(os.path.realpath(directory)) / "state"
+            (state / "installer").mkdir(parents=True, mode=0o700)
+            with mock.patch.object(effects.attest(), "default_state_root", lambda: state):
+                self.assertEqual(state / "installer" / "setup-projects", effects.projects_file())
+                (state / "installer").chmod(0o755)
+                self.assertIsNone(effects.projects_file())
+
+    def test_an_input_is_snapshotted_only_from_a_regular_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(os.path.realpath(directory))
+            (base / "checks.json").write_text("{}\n")
+            self.assertTrue(effects.copy_input(base / "checks.json", base / "copy.json"))
+            self.assertEqual("{}\n", (base / "copy.json").read_text())
+            os.mkfifo(base / "fifo")
+            self.assertFalse(effects.copy_input(base / "fifo", base / "copy2.json"))
+            self.assertFalse((base / "copy2.json").exists())
+
+    def test_git_is_chosen_by_the_runtime(self) -> None:
+        """W1.4: git_plumbing.git_executable, in-process: an absolute path, never the xcrun shim."""
+        chosen = effects.git_executable([])
+        self.assertTrue(chosen is None or (chosen.startswith("/") and chosen != "/usr/bin/git"
+                                           or sys.platform != "darwin"))
+
+
 if __name__ == "__main__":
     unittest.main()
