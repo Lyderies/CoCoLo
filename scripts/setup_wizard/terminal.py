@@ -124,29 +124,6 @@ def complete_path(text: str, home: str) -> list[str]:
     return found
 
 
-def line_editor(home: str):
-    """The real terminal's line reader: readline (GNU or libedit), with Tab completing paths. Like
-    `read -e`, it takes the terminal out of line mode while it reads. None at end of input."""
-    import readline
-
-    matches: list[str] = []
-
-    def completer(text, state):
-        if state == 0:
-            matches[:] = complete_path(text, home)
-        return matches[state] if state < len(matches) else None
-    readline.set_completer_delims(" \t\n")
-    readline.set_completer(completer)
-    readline.parse_and_bind("bind ^I rl_complete" if "libedit" in (readline.__doc__ or "") else "tab: complete")
-
-    def read_line():
-        try:
-            return input("")
-        except EOFError:
-            return None
-    return read_line
-
-
 def fold(text: str, width: int) -> str:
     """`fold -s -w WIDTH`: each line broken after the last blank that fits, else at the width."""
     lines = []
@@ -178,7 +155,7 @@ class Terminal:
         self.in_details = False
         self.redraw = False  # Set by the resize handler.
         self.cols = 80
-        self.line_reader = None  # The real terminal sets line_editor(home); tests type into `read`.
+        self.hold = None  # The real terminal's context that keeps it out of line mode for a whole line.
 
     # Drawing --------------------------------------------------------------------------------
 
@@ -351,18 +328,62 @@ class Terminal:
             elif key == "EOF":
                 self._closed()
 
-    def _line(self):
+    def _line(self, complete=lambda text: []):
         """One typed line without its newline; None at end of input."""
-        if self.line_reader is not None:
-            return self.line_reader()
-        typed = ""
-        while True:
-            char = self._char(None)
-            if char == "":
-                return None
-            if char == "\n":
-                return typed
-            typed += char
+        return self.edit_line(complete)
+
+    def edit_line(self, complete) -> str | None:
+        """W3.3: the prompt's own line editor (no libedit, which waits for the screen to drain): typing,
+        Backspace, Ctrl-U, Ctrl-W, Ctrl-V for a literal character, Tab completion, Enter; Ctrl-D on an
+        empty line or closed input ends input (None)."""
+        import contextlib
+        line = ""
+        with self.hold() if self.hold is not None else contextlib.nullcontext():
+            while True:
+                char = self._char(None)
+                if char == "":
+                    return None
+                if char in ("\n", "\r"):
+                    self.write("\r\n")
+                    return line
+                if char == "\x04":
+                    if not line:
+                        return None
+                elif char in ("\x7f", "\x08"):
+                    if line:
+                        line = line[:-1]
+                        self.write("\b \b")
+                elif char == "\x15":
+                    self.write("\b \b" * len(line))
+                    line = ""
+                elif char == "\x17":
+                    kept = line.rstrip(" ")
+                    kept = kept[:kept.rfind(" ") + 1] if " " in kept else ""
+                    self.write("\b \b" * (len(line) - len(kept)))
+                    line = kept
+                elif char == "\x16":
+                    literal = self._char(None)
+                    if literal == "":
+                        return None
+                    line += literal
+                    self.write(literal if literal.isprintable() else "?")
+                elif char == "\t":
+                    import os.path
+                    found = complete(line)
+                    common = os.path.commonprefix(found) if found else ""
+                    if len(common) > len(line) and common.startswith(line):
+                        self.write(common[len(line):])
+                        line = common
+                elif char == "\033":
+                    follow = self._char(1)
+                    if follow in ("[", "O"):
+                        while True:
+                            final = self._char(1)
+                            if not final or "@" <= final <= "~":
+                                break
+                elif char.isprintable():
+                    line += char
+                    self.write(char)
 
     def ask_text(self, prompt: str, default: str, *, home: str) -> tuple[str, str]:
         """setup.sh's ask_text: (the answer with home markers expanded, the answer as typed). Nothing
@@ -374,7 +395,7 @@ class Terminal:
                 self.write(f"  {self.c['bold']}{prompt}{self.c['reset']} [{default}]\n  > ")
             else:
                 self.write(f"  {self.c['bold']}{prompt}{self.c['reset']} (type or paste the full path)\n  > ")
-            typed = self._line()
+            typed = self._line(lambda text: complete_path(text, home))
             if typed is None:
                 raise Stop(1, "Input closed; stopping.", stderr=True)
             answer = typed or default
