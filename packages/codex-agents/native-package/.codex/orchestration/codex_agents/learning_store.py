@@ -2523,6 +2523,14 @@ class LearningLedger:
         with contextlib.suppress(FileNotFoundError):
             partial.unlink()  # Left by a write that was stopped; never registered.
         os.close(os.open(partial, flags, 0o600))
+        published = None  # The identity of the file this call published, once it has (O10 L2).
+
+        def remove_published():
+            with contextlib.suppress(OSError):
+                info = os.stat(path, follow_symlinks=False)
+                if published is not None and (info.st_dev, info.st_ino) == published:
+                    path.unlink()
+
         try:
             project_backup.write(self._connection, partial, project_id, schema_version,
                                  limit_bytes=MAX_PROJECT_BACKUP_BYTES)
@@ -2536,7 +2544,14 @@ class LearningLedger:
             finally:
                 os.close(descriptor)
             self._verify_streamed_backup(partial, project_id, digest, schema_version=schema_version)
-            os.replace(partial, path)
+            try:
+                # Never replaces a file that appeared at the name after the check above (O10 L1).
+                os.link(partial, path, follow_symlinks=False)
+            except FileExistsError:
+                raise LedgerError("stored file already exists") from None
+            info = os.stat(path, follow_symlinks=False)
+            published = (info.st_dev, info.st_ino)  # the same file, whatever its link count
+            partial.unlink()
             directory = os.open(partition, os.O_RDONLY)
             try:
                 os.fsync(directory)
@@ -2545,13 +2560,13 @@ class LearningLedger:
         except BaseException:
             with contextlib.suppress(OSError):
                 partial.unlink()
+            remove_published()
             raise
         try:
             self._register_stored_file(project_id, file_id=file_id, kind="backup", path=path,
                                        digest=digest, expires_at_ms=expires_at_ms)
-        except Exception:
-            with contextlib.suppress(OSError):
-                path.unlink()
+        except BaseException:
+            remove_published()
             raise
         return path
 
