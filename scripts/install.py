@@ -328,23 +328,41 @@ def commit_paths(target: Path, message: str, detail: str, paths: list[str]) -> s
         seeded = _git_run(target, "read-tree", *((head,) if head else ("--empty",)), index=private_index)
         if seeded.returncode != 0:
             raise InstallRefused("Git could not read the project's last commit")
-        records = []
+        entries: list[tuple[str, tuple[str, bytes] | None]] = []
         root_fd = os.open(os.path.realpath(target), os.O_RDONLY | os.O_DIRECTORY)
         try:
             for path in paths:
                 entry = None if path in LOCAL_ONLY else _worktree_entry(root_fd, path)
-                if entry is None:
-                    records.append(f"0 {zero}\t{path}\0")
-                    continue
-                if not entry[0]:
+                if entry is not None and not entry[0]:
                     raise InstallRefused(f"{path} is not a file Git can commit")
-                written = _git_run(target, "hash-object", "-w", "--no-filters", "--stdin",
-                                   input=entry[1], text=False)
-                if written.returncode != 0:
-                    raise InstallRefused("Git could not store a file")
-                records.append(f"{entry[0]} {written.stdout.decode().strip()}\t{path}\0")
+                entries.append((path, entry))
         finally:
             os.close(root_fd)
+        # Every blob in one hash-object: the bytes already read (never through a link) go to private
+        # copies, which Git stores without filters; each id is checked against those bytes.
+        blobs = [(path, entry) for path, entry in entries if entry is not None]
+        ids: dict[str, str] = {}
+        if blobs:
+            copies = []
+            for number, (path, (_mode, content)) in enumerate(blobs):
+                copy = scratch / f"blob-{number}"
+                descriptor = os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                try:
+                    _write_all(descriptor, content)
+                finally:
+                    os.close(descriptor)
+                copies.append(str(copy))
+            written = _git_run(target, "hash-object", "-w", "--no-filters", "--stdin-paths",
+                               input="\n".join(copies) + "\n")
+            stored = written.stdout.split() if written.returncode == 0 else []
+            if len(stored) != len(blobs):
+                raise InstallRefused("Git could not store a file")
+            for (path, (_mode, content)), blob in zip(blobs, stored):
+                if blob != _blob_id(content, object_format):
+                    raise InstallRefused("Git stored a file differently from what setup read")
+                ids[path] = blob
+        records = [f"0 {zero}\t{path}\0" if entry is None else f"{entry[0]} {ids[path]}\t{path}\0"
+                   for path, entry in entries]
         info = "".join(records).encode("utf-8", "surrogateescape")
         if _git_run(target, "update-index", "-z", "--index-info", input=info, index=private_index,
                     text=False).returncode != 0:
