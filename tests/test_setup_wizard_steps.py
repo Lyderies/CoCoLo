@@ -171,5 +171,52 @@ class CodexPrimaryTests(unittest.TestCase):
         self.assertFalse(steps.codex_primary(b"{"))
 
 
+
+class RegistrationOutcomeTests(unittest.TestCase):
+    """W6.5 and W6.2: what the collector step says after learning-register, one fixed sentence each."""
+
+    def lines(self, reply, moved=None):
+        return " ".join(steps.registration_outcome(reply, moved)[1])
+
+    def test_each_failure_says_how_far_it_got_and_never_the_misleading_sentence(self) -> None:
+        for reason, said, never in (
+            ("ledger_upgrade_failed", "Your records were not upgraded: they are as the earlier version left them.",
+             "were upgraded, but"),
+            ("registration_incomplete_after_upgrade", "Your records were upgraded, but registering this project did not",
+             "as the earlier version left them"),
+            ("collector_not_started_after_registration", "This project is registered, but the collector",
+             "did not finish"),
+            ("ledger_upgrade_unknown", "could not be read afterwards. Delete nothing", "as the earlier version left them"),
+        ):
+            with self.subTest(reason=reason):
+                reply = {"ready": False, "reason_code": reason, "ledger_copy": "/kept/old ledger",
+                         "state_moved": "/somewhere/old copy"}
+                ok, lines = steps.registration_outcome(reply, None)
+                text = " ".join(lines)
+                self.assertFalse(ok)
+                self.assertIn("Collector registration failed", text)
+                self.assertIn(said, text)
+                self.assertNotIn(never, text)
+                self.assertIn("A copy of the records as they were before the upgrade is at /kept/old ledger", text)
+                self.assertIn("stay there; the old copy is at /somewhere/old copy", text)
+
+    def test_a_failed_upgrade_names_its_cause_without_control_characters(self) -> None:
+        text = self.lines({"ready": False, "reason_code": "ledger_upgrade_failed", "cause": "disk\x1b[2J full"})
+        self.assertIn("What stopped it: disk[2J full.", text)
+        self.assertNotIn("\x1b", text)
+
+    def test_success_names_the_kept_copy_and_the_move_without_control_characters(self) -> None:
+        ok, lines = steps.registration_outcome({"ready": True, "ledger_copy": "/kept/old ledger"}, "/old\x7f copy")
+        text = " ".join(lines)
+        self.assertTrue(ok)
+        self.assertIn("Upgraded your orchestrator records. A copy of them as they were is at /kept/old ledger", text)
+        self.assertIn("Moved your orchestrator records once to a protected folder", text)
+        self.assertIn("/old copy", text)
+        self.assertNotIn("\x7f", text)
+
+    def test_no_move_no_records_sentence(self) -> None:
+        self.assertNotIn("Moved your orchestrator records", self.lines({"ready": True}))
+
+
 if __name__ == "__main__":
     unittest.main()
