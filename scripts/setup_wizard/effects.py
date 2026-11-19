@@ -202,3 +202,31 @@ def runtime_problem(project) -> str:
     except OSError:
         return "the orchestrator installed in this project could not be read"
     return ""
+
+
+def _scan_modules():
+    module = attest()
+    return (module.clone_module("session_guard"), module.clone_module("host_commands"),
+            module.clone_module("learning_store"))
+
+
+def session_scan(clone_root) -> dict | None:
+    """W2.1: the runtime's scan of recent Codex sessions (codex-session-scan), run in-process from
+    this clone's own package; None when it fails, which warns about nothing."""
+    try:
+        session_guard, host_commands, learning_store = _scan_modules()
+        warnings = session_guard.scan_recent_sessions(
+            Path(clone_root), host_commands.configured_codex_home(),
+            Path(os.environ.get("HOME") or Path.home()), projects=learning_store.registered_project_roots())
+        return {"ready": True, "warnings": warnings}
+    except Exception:
+        return None
+
+
+def client_status(name: str, project=None) -> tuple[int, bytes]:
+    """W1.5: a provider client's sign-in status, run as the runtime runs it (attest.client_status):
+    0 yes, 10 no, 11 not where the runtime runs it from, 12 refused, anything else not checked."""
+    try:
+        return attest().client_status(name, Path(project) if project is not None else None)
+    except Exception:
+        return 1, b""
