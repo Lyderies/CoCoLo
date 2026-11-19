@@ -507,6 +507,27 @@ class AccountBillingJobTests(unittest.TestCase):
             "SELECT COUNT(*) FROM account_billing_probe_requests WHERE state='admitted'").fetchone()[0])
         self.take(self.begin(self.request('probe-after-step')), self.request('probe-after-step'))
 
+    def test_H1a_a_failed_step_is_noted_without_a_fault_and_the_next_probe_is_still_taken(self):
+        real = self.billing._executions.snapshot
+        calls = []
+
+        def failing_once(*args):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError('a secret step detail')
+            return real(*args)
+        self.enterContext(mock.patch.object(self.billing._executions, 'snapshot', side_effect=failing_once))
+        with self.assertRaisesRegex(AccountError, '^probe_step_failed$'):
+            self.take(self.begin())
+        self.until(lambda: not self.billing._jobs)
+        view = self.billing.health.view()
+        self.assertEqual((False, 0, 0), (view['faulted'], view['kept'], view['busy']))
+        self.assertEqual(('probe_step_failed', 'RuntimeError'),
+                         (view['last_failure']['cause'], view['last_failure']['type']))
+        self.assertNotIn('secret', repr(view))
+        self.assertFalse(self.billing._faulted)  # instrumentation never touches the operational flag
+        self.take(self.begin(self.request('probe-after-health')), self.request('probe-after-health'))
+
     def test_C9c_a_probe_with_every_worker_lost_says_so_at_once(self):
         # 0.3.3 requirement C9c: every worker slot has faulted, so no worker can free without a
         # restart. The probe says so at once, launches nothing, and does not wait out its deadline.
