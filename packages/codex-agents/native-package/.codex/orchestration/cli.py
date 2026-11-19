@@ -1423,6 +1423,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     learning_serve.add_argument("--state-root", type=Path)
 
+    learning_start_service = subparsers.add_parser(
+        "learning-start-project-service",
+        help="start this project's service now, as the next child would (S1-U8: setup runs it after an update)",
+    )
+    learning_start_service.add_argument("--state-root", type=Path)
+    learning_start_service.add_argument("--project-root", required=True, type=Path)
+
     learning_status = subparsers.add_parser(
         "learning-status", help="report persistent collector and redacted client health"
     )
@@ -2283,6 +2290,16 @@ def main() -> int:
             sys.stdout.flush()
             os.execv(sys.executable, [sys.executable, *PYTHON_ISOLATION_FLAGS,
                                       str(ORCHESTRATION_ROOT / "collector_host.py"), "--state-root", str(state.root)])
+        elif args.command == "learning-start-project-service":
+            # As every command that needs it: an idle earlier version's service is replaced and a
+            # project with history is moved first when nothing runs (S1-U8).
+            serving = _start_project_host(args) is True
+            report = {"ready": serving, "serving": serving}
+            if not serving:
+                report.update(reason_code="project_service_unavailable",
+                              error="this project's service did not start; run learning-status for the collector")
+                _print(report)
+                return 2
         elif args.command == "learning-status":
             _start_collector_quietly(args)
             report = status_client(args.state_root, args.project_root)

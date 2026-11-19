@@ -1006,7 +1006,9 @@ class WizardTerminalTests(unittest.TestCase):
             ' echo \'{"ready": false, "reason_code": "ledger_upgrade_required", "ledger_schema_version": 6,'
             ' "state_moved": null}\'; exit 2;;'
             ' *"cli.py learning-status "*)'
-            ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;; esac; fi\n'
+            ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;;'
+            ' *"cli.py learning-start-project-service "*)'
+            ' echo \'{"ready": true, "serving": true}\'; exit 0;; esac; fi\n'
             'if [ -n "$FAKE_REGISTER" ]; then case "$*" in *"cli.py learning-register "*)'
             f' printf "%s\\n" "$*" >> "{self.base / "register.log"}"; echo "$FAKE_REGISTER"; exit 0;;'
             # S1-U8: the project's service, started after the collector is ready; FAKE_START replaces the reply.

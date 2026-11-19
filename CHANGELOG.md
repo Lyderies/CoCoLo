@@ -16,6 +16,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - `./setup.sh --answers FILE` installs a project with no menu from a JSON answers file
   (docs/setup-wizard.md); a missing, unknown or invalid answer is refused by name before anything
   changes.
+- Setup starts the project's own service once the collector is ready, so it closes what an earlier
+  service left at once, not when the next child runs. `learning-start-project-service` does the same
+  from the command line.
 - A refused run open now says why instead of `open_unavailable`: the account is still starting
   (`open_account_starting`) or closing (`open_account_closing`), its database stayed busy
   (`open_account_busy`), the project's service is not running (`open_service_not_running`), is an

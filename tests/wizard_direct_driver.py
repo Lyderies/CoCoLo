@@ -182,6 +182,8 @@ class DirectDriverMixin:
                            b' "state_moved": null}\n'), b""
             if matches("*cli.py learning-status *"):
                 return 0, b'{"ready": true, "collector_runtime_version": "0.0.0"}\n', b""
+            if matches("*cli.py learning-start-project-service *"):  # S1-U8
+                return 0, b'{"ready": true, "serving": true}\n', b""
         if env.get("FAKE_REGISTER"):
             if matches("*cli.py learning-register *"):
                 self._append(self.base / "register.log", joined)

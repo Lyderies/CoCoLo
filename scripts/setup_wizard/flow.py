@@ -1206,6 +1206,15 @@ class Wizard:
         if self.wait_collector_ready(draw=t.render):
             version = steps.get(self.last_reply, "collector_runtime_version")
             t.list_add("ok", f"Collector status: ready (runtime {version})")
+            # S1-U8: the project's new service starts now, so it closes what an earlier one left.
+            if self.run_owner_cli("Starting this project's service", "learning-start-project-service",
+                                  "--project-root", self.project, draw=t.render) != 0:
+                reason = steps.get(self.last_reply, "reason_code") or "project_service_unavailable"
+                self.failure_detail("This project's service did not start")
+                self.mark_step(5, "fail", f"the project's service did not start ({reason})")
+                t.pause()
+                return
+            t.list_add("ok", "This project's service: running")
             self.mark_step(5, "ok", "registered, ready")
         else:
             self.failure_detail("Collector status: not ready")
