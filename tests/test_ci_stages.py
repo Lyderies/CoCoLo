@@ -64,5 +64,14 @@ class CiStageTests(unittest.TestCase):
         self.assertIn('--jobs "$(getconf _NPROCESSORS_ONLN)"', integration)
 
 
+    def test_a_failing_integration_shard_keeps_its_failed_modules_work(self):
+        """PLAN T4c: the failed modules run once more with --keep, uploaded for 7 days."""
+        integration = self.jobs["integration"]
+        self.assertIn("if: failure()", integration)
+        self.assertIn("--keep", integration)
+        self.assertIn("actions/upload-artifact@v7.0.2", integration)
+        self.assertIn("retention-days: 7", integration)
+
+
 if __name__ == "__main__":
     unittest.main()
