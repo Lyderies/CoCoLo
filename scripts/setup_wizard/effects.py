@@ -86,30 +86,43 @@ def read_routing(path) -> tuple[str, bytes | None]:
 
 
 def write_project_routing(project, content: str) -> None:
-    """W4.4: write `.codex/orchestration/provider-routing.json` atomically (a new file renamed into
-    place, mode 0644), never through a symlink. Refuses, changing nothing, when a folder on the way is
-    a symlink or not a folder, when it resolves outside the project, or when the destination is a
-    symlink or not a regular file. Ported from setup.sh's write_project_routing."""
-    project = Path(project)
-    current = project
-    for part in (".codex", "orchestration"):
-        current = current / part
-        if current.is_symlink() or not current.is_dir():
-            raise EffectRefused(f"refused: {part} is not a real directory inside the project")
-    if os.path.realpath(current) != os.path.join(os.path.realpath(project), ".codex", "orchestration"):
-        raise EffectRefused("refused: the configuration directory resolves outside the project")
-    destination = current / "provider-routing.json"
-    if destination.is_symlink() or (destination.exists() and not destination.is_file()):
-        raise EffectRefused("refused: provider-routing.json is a symlink or not a regular file")
-    descriptor, temporary = tempfile.mkstemp(prefix=".provider-routing.", dir=current)
+    """W4.4: write `.codex/orchestration/provider-routing.json` atomically, never through a symlink.
+    Each folder is opened without following a link and held open, and every later step (the new
+    file, its mode, the rename) is relative to it, so a folder swapped for a symlink after the checks
+    cannot redirect the write (review 040-s5-wizard c). Refuses, changing nothing, when a folder on the
+    way is a symlink or not a folder, or the destination is a symlink or not a regular file."""
+    import secrets
+    directory = os.open(os.path.realpath(project), os.O_RDONLY | os.O_DIRECTORY)
     try:
-        with os.fdopen(descriptor, "w") as handle:
-            handle.write(content)
-        os.chmod(temporary, 0o644)
-        os.replace(temporary, destination)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+        for part in (".codex", "orchestration"):
+            try:
+                following = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            except OSError as exc:
+                raise EffectRefused(f"refused: {part} is not a real directory inside the project") from exc
+            os.close(directory)
+            directory = following
+        try:
+            info = os.stat("provider-routing.json", dir_fd=directory, follow_symlinks=False)
+        except FileNotFoundError:
+            info = None
+        if info is not None and not stat.S_ISREG(info.st_mode):
+            raise EffectRefused("refused: provider-routing.json is a symlink or not a regular file")
+        temporary = f".provider-routing.{secrets.token_hex(6)}"
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+        try:
+            with os.fdopen(descriptor, "w") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fchmod(handle.fileno(), 0o644)
+            os.replace(temporary, "provider-routing.json", src_dir_fd=directory, dst_dir_fd=directory)
+        except BaseException:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(directory)
 
 
 _INSTALLER = None
