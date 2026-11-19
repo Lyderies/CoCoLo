@@ -354,3 +354,62 @@ def commit_candidates(project, reply, planned: list[str]) -> list[str]:
         if os.path.lexists(project / rel) or result.stdout:
             keep.append(rel)
     return keep
+
+
+def git_executable(untrusted) -> str | None:
+    """W1.4: the git binary the runtime would choose (git_plumbing.git_executable): never macOS's xcrun
+    shim, never one in a temporary or an untrusted folder; None when none qualifies."""
+    try:
+        return attest().clone_module("git_plumbing").git_executable([Path(item) for item in untrusted])
+    except Exception:
+        return None
+
+
+def projects_file() -> Path | None:
+    """W3.2: where setup keeps its list of projects: the records' installer folder, only when that is a
+    real folder of yours that only you can open (attest.py projects-file)."""
+    try:
+        folder = attest().default_state_root() / "installer"
+        info = folder.lstat()
+    except Exception:
+        return None
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        return None
+    return folder / "setup-projects"
+
+
+def read_projects(path) -> list[str]:
+    """The remembered projects, one per line; nothing from a symlink or anything not a regular file."""
+    path = Path(path)
+    try:
+        if path.is_symlink() or not path.is_file():
+            return []
+        return path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+
+def write_projects(path, lines: list[str]) -> None:
+    """Replace the remembered list in one step: a new owner-only file renamed into place."""
+    path = Path(path)
+    try:
+        descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    except OSError:
+        return
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write("".join(line + "\n" for line in lines))
+        os.replace(temporary, path)
+    except OSError:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def copy_input(source, destination) -> bool:
+    """A private snapshot of an owner-chosen input (attest.copy_input): a regular file of at most
+    1 MiB, opened so a FIFO never hangs; False, writing nothing, otherwise."""
+    module = attest()
+    try:
+        module.copy_input(Path(source), Path(destination))
+        return True
+    except (module.AttestError, OSError):
+        return False
