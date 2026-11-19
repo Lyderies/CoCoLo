@@ -196,6 +196,7 @@
  "root:test_measure_test_behaviour_probe": "integration",
  "root:test_setup_progress": "integration",
  "root:test_setup_sh": "e2e",
+ "root:test_setup_wizard_effects": "unit",
  "root:test_setup_wizard_steps": "unit",
  "root:test_test_stages": "integration",
  "root:test_wizard_clock": "integration"
