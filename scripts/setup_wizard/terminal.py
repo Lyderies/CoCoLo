@@ -62,6 +62,15 @@ def terminal_colours() -> dict:
         return dict(NO_COLOURS)
 
 
+def fit(item: str, width: int) -> str:
+    """An item fitted to its line: a longer one keeps its beginning and its end, which names the
+    project's folder, with "..." between (O10 W1), so two long paths stay told apart."""
+    if len(item) <= width or width < 8:
+        return item[:max(width, 0)]
+    head = (width - 3) // 3
+    return item[:head] + "..." + item[len(item) - (width - 3 - head):]
+
+
 def terminal_width(columns, stty, tput) -> int:
     """S3-P5, S3-P9a: COLUMNS when set; else the terminal's own size (`stty size`'s "ROWS COLS", None
     when it failed); else the terminfo answer, trusted only when it succeeded ((ok, text)); a size of 0
@@ -331,9 +340,9 @@ class Terminal:
             rows = ""
             for index, item in enumerate(items):
                 if index == selected:
-                    rows += f"   {self.c['cyan']}{self.c['bold']}> {item[:width]}{self.c['reset']}\n"
+                    rows += f"   {self.c['cyan']}{self.c['bold']}> {fit(item, width)}{self.c['reset']}\n"
                 else:
-                    rows += f"     {item[:width]}\n"
+                    rows += f"     {fit(item, width)}\n"
             hint = "Enter go back   q quit" if self.in_details else "Up/Down move   Enter select   ? what ran   q quit"
             self.write(rows + f"\n  {self.c['dim']}{hint}{self.c['reset']}\n")
             key = self.read_key()
@@ -488,9 +497,9 @@ class Terminal:
             for index, item in enumerate(items):
                 mark = "[x]" if state[index] == "1" else "[ ]"
                 if index == selected:
-                    rows += f"   {self.c['cyan']}{self.c['bold']}> {mark} {item[:width]}{self.c['reset']}\n"
+                    rows += f"   {self.c['cyan']}{self.c['bold']}> {mark} {fit(item, width)}{self.c['reset']}\n"
                 else:
-                    rows += f"     {mark} {item[:width]}\n"
+                    rows += f"     {mark} {fit(item, width)}\n"
             self.write(rows + f"\n  {self.c['dim']}Up/Down move   Space toggle   Enter accept   q quit{self.c['reset']}\n")
             key = self.read_key()
             if key in ("UP", "k"):

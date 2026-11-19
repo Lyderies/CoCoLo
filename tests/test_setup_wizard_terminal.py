@@ -157,7 +157,8 @@ class MenuTests(unittest.TestCase):
     def test_long_items_are_cut_to_the_width(self) -> None:
         term, out = make("\n", cols=30)
         term.menu(0, ["x" * 50])
-        self.assertIn("   > " + "x" * 22 + "\n", out.getvalue())
+        # O10 W1: still exactly the width, now keeping the beginning and the end.
+        self.assertIn("   > " + "x" * 6 + "..." + "x" * 13 + "\n", out.getvalue())
 
 
 
