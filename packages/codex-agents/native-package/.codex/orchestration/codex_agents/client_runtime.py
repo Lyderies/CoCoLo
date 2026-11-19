@@ -362,7 +362,10 @@ def status_client(state_root, project_root):
         state = CollectorPaths(state_root)
         report['client_failures'] = client_health_snapshot(state, project_root)
     except (StateError, OSError, ValueError):
-        return report | {'reason_code': 'status_runtime_unavailable', 'error': 'Status services are unavailable.'}
+        return report | {'reason_code': 'status_runtime_unavailable', 'error': 'Status services are unavailable.',
+                         'account_health': {'state': 'unknown', 'reason_code': 'account_health_unavailable',
+                                            'reasons': ['account_health_unavailable'], 'lanes': None,
+                                            'slots': None, 'attention': []}}
     collector_ready = False
     try:
         health = CollectorClient(state.socket, timeout=1).health(project_root)
@@ -427,8 +430,11 @@ _TYPE_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
 
 
 def _checked_lanes(lanes):
-    """The lane notes, closed and content-free, or None when missing or malformed (S1-H1a)."""
-    if type(lanes) is not dict or not lanes or lanes.keys() - _LANE_LABELS.keys():
+    """The six lane notes, closed and content-free; None when missing or not all six; ValueError
+    when malformed (S1-H1a C2, C3)."""
+    if type(lanes) is not dict or lanes.keys() != _LANE_LABELS.keys():
+        if type(lanes) is dict and lanes.keys() - _LANE_LABELS.keys() - {'available'}:
+            raise ValueError()
         return None
     for lane in lanes.values():
         failure = lane.get('last_failure') if type(lane) is dict else None
@@ -439,22 +445,39 @@ def _checked_lanes(lanes):
                     type(failure) is not dict or failure.keys() != {'cause', 'type', 'at_ms'}
                     or not matches(failure['cause'], _HEALTH_CODE) or not matches(failure['type'], _TYPE_NAME)
                     or not account_integer(failure['at_ms'])))):
-            return None
+            raise ValueError()
     return lanes
 
 
 def _checked_slots(slots):
     names = ('runs_past_deadline', 'runs_held_without_deadline', 'probes_held', 'probes_past_deadline')
-    if type(slots) is dict and slots.get('available') is True and all(account_integer(slots.get(n)) for n in names):
-        return {name: slots[name] for name in names}
-    return None
+    if slots is None:
+        return None
+    if type(slots) is not dict or type(slots.get('available')) is not bool:
+        raise ValueError()
+    if slots['available'] is False:
+        if slots.get('reason') not in {'ledger_busy', 'budget_spent'}:
+            raise ValueError()
+        return None
+    if not all(account_integer(slots.get(n)) for n in names):
+        raise ValueError()
+    return {name: slots[name] for name in names}
 
 
 def _account_health(report):
-    """S1-H1a-4: the account's own state from the collector's reply; `ready` is not changed."""
+    """S1-H1a-4: the account's own state from the collector's reply; `ready` is not changed, and a
+    malformed new field only makes this unknown (C2)."""
+    raw_lanes, raw_slots = report.pop('account_lanes', None), report.pop('account_slots', None)
+    try:
+        return _account_health_of(report, raw_lanes, raw_slots)
+    except Exception:
+        return {'state': 'unknown', 'reason_code': 'account_health_invalid', 'reasons': ['account_health_invalid'],
+                'lanes': None, 'slots': None, 'attention': []}
+
+
+def _account_health_of(report, raw_lanes, raw_slots):
     from datetime import datetime, timezone
-    lanes = _checked_lanes(report.pop('account_lanes', None))
-    raw_slots = report.pop('account_slots', None)
+    lanes = _checked_lanes(raw_lanes)
     slots = _checked_slots(raw_slots)
     attention, faulted, reason = [], False, None
     for name, lane in sorted((lanes or {}).items()):
@@ -475,15 +498,17 @@ def _account_health(report):
                            ('probes_past_deadline', 'probe slot(s) past their deadline (wall clock)')):
             if slots[name]:
                 attention.append(f"{slots[name]} {text} in this project")
+    reasons = []  # C3: every missing source is named
     if lanes is None:
-        reason = ('account_health_starting' if report.get('account_services') == 'starting'
-                  else 'account_health_unsupported' if report.get('collector_runtime_digest') not in (
-                      None, COLLECTOR_RUNTIME_DIGEST) else 'account_health_unavailable')
-    elif slots is None and raw_slots is not None:
-        reason = 'account_slots_' + (raw_slots.get('reason') if type(raw_slots) is dict and raw_slots.get(
-            'reason') in {'ledger_busy', 'budget_spent'} else 'unavailable')
+        reasons.append('account_health_starting' if report.get('account_services') == 'starting'
+                       else 'account_health_unsupported' if report.get('collector_runtime_digest') not in (
+                           None, COLLECTOR_RUNTIME_DIGEST) else 'account_health_unavailable')
+    if slots is None:
+        reasons.append('account_slots_' + (raw_slots['reason'] if type(raw_slots) is dict else 'unavailable'))
+    reason = reasons[0] if reasons else None
     state = 'faulted' if faulted else 'degraded' if attention else 'unknown' if reason else 'ok'
-    return {'state': state, 'reason_code': reason, 'lanes': lanes, 'slots': slots, 'attention': attention}
+    return {'state': state, 'reason_code': reason, 'reasons': reasons, 'lanes': lanes, 'slots': slots,
+            'attention': attention}
 
 
 class RuntimeOpenError(RuntimeError):

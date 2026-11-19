@@ -40,6 +40,7 @@ class _Note:
     dead: bool = False
     kept: frozenset = frozenset()
     busy: int = 0
+    busy_tokens: frozenset = frozenset()  # busy by token: never counted while kept anywhere
     queued: int = 0
     failure: _Failure | None = None
 
@@ -57,9 +58,13 @@ class Slot:
         self.note = _Note()
 
     def publish(self, **changes) -> None:
-        """Replace this slot's note; fields not given keep their values (the failure always does)."""
-        changes.pop('failure', None)
-        self.note = replace(self.note, **changes)
+        """Replace this slot's note; fields not given keep their values (the failure always does).
+        Never raises: a note that cannot be built is dropped and the lane goes on."""
+        try:
+            changes.pop('failure', None)
+            self.note = replace(self.note, **changes)
+        except BaseException:  # noqa: BLE001 - instrumentation must never change a lane's outcome
+            return
 
 
 class Lane:
@@ -114,10 +119,11 @@ class Lane:
         failures = [note.failure for note in notes if note.failure is not None]
         newest = max(failures, key=lambda failure: failure.sequence) if failures else None
         kept = frozenset().union(*(note.kept for note in notes)) if notes else frozenset()
+        busy_tokens = frozenset().union(*(note.busy_tokens for note in notes)) if notes else frozenset()
         return {
             'faulted': any(note.faulted or note.dead for note in notes),
             'kept': len(kept),
-            'busy': sum(note.busy for note in notes),
+            'busy': sum(note.busy for note in notes) + len(busy_tokens - kept),
             'queued': sum(note.queued for note in notes),
             'last_failure': None if newest is None else {
                 'cause': newest.cause, 'type': newest.type, 'at_ms': newest.at_ms},
