@@ -485,17 +485,21 @@ class ProjectDriverTests(DriverHarness):
         def seen(driver, run):
             drivers.append(driver)
             return advance(driver, run)
+        reports = mock.Mock(side_effect=AssertionError('no failure report may be sent'))
         with mock.patch.object(result_persistence.ResultPersistenceLane, 'report_registered_run',
-                               return_value=never), mock.patch.object(project_driver.RunDriver, '_advance', seen):
+                               return_value=never), mock.patch.object(project_driver.RunDriver, '_advance', seen), \
+                mock.patch.object(result_persistence.ResultPersistenceLane, 'report_failed_before_open', reports):
             context, route_path, _, run_handle = self.open_run()
             process = self.separate_dispatch(context, route_path, run_handle)
             self.wait_for(lambda: drivers and any(run.state == 'recording_registration'
                                                   for run in drivers[-1]._runs.values()), seconds=30)
             self.cli('learning-classify-host-run-abandoned', '--run-handle', run_handle, '--reason', 'owner_cancelled')
             output, _ = process.communicate(timeout=30)
-        self.assertEqual('run_abandoned', json.loads(output)['reason_code'], output)
-        never.state, never.reason = 'failed', 'history_conflict'  # refused after all: still no report
-        self.wait_for(lambda: not drivers[-1]._reports, seconds=10)
+            self.assertEqual('run_abandoned', json.loads(output)['reason_code'], output)
+            self.assertTrue(drivers[-1]._reports)  # held while its registration is queued
+            never.state, never.reason = 'failed', 'history_conflict'  # refused after all: still no report
+            self.wait_for(lambda: not drivers[-1]._reports, seconds=10)
+        reports.assert_not_called()
         self.assertEqual([], self.registered_rows())
 
     def test_R6_a_run_that_opens_is_counted_once_by_its_open(self):

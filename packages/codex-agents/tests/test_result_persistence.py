@@ -118,23 +118,25 @@ class ResultPersistenceTests(unittest.TestCase):
         self.assertFalse(lane._writer.is_alive())
 
     def test_R6_19_a_stopped_writer_fails_every_queued_request_and_a_closed_lane_says_so_before_busy(self):
-        release = threading.Event()
+        # The fault is in place before anything is queued, and holds until every request is (review 040-s1-r6-4).
+        queued = threading.Event()
 
-        def slow_history():
-            release.wait(10)
-            return self.open_history()
+        def fault(request):
+            queued.wait(10)
+            raise RuntimeError('fixture writer fault')
 
-        lane = ResultPersistenceLane(self.fixture.owner, self.fixture.pool, mock.Mock(side_effect=slow_history),
+        lane = ResultPersistenceLane(self.fixture.owner, self.fixture.pool, self.factory,
                                      max_entries=1, retained_bytes=MAX_PERSISTENCE_ENTRY_BYTES,
                                      allow_local_execution_reference=True)
+        lane._earlier = fault
         requests = [lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
                     for _ in range(result_persistence.REPORT_SLOTS)]
-        with mock.patch.object(lane, '_earlier', side_effect=RuntimeError('fixture writer fault')):
-            release.set()
-            lane._writer.join(6)
+        requests += [lane.expire_results() for _ in range(result_persistence.EARLIER_SLOTS)]
+        queued.set()
+        lane._writer.join(6)
         self.assertFalse(lane._writer.is_alive())
         self.assertEqual({('failed', 'history_service_unavailable')}, {(r.state, r.reason) for r in requests})
-        with self.assertRaisesRegex(HistoryError, 'history_service_unavailable'):
+        with self.assertRaisesRegex(HistoryError, 'history_service_unavailable'):  # before the full quota
             lane.report_failed_before_open('hrn_' + 'a' * 48, 1, 'run_failed')
 
     def stop_lane(self, lane):
