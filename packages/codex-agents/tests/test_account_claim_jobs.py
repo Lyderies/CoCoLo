@@ -288,11 +288,10 @@ class AccountClaimJobTests(unittest.TestCase):
             self.assertTrue(started.wait(2))
             self.ledger._store_provider_observations(project, [record], timestamp=self.fixture.stamp + 1)
             gate.set()
-            self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
-            self.fixture.assert_no_claim()
-            # New evidence needs explicit new bounded preparation. It cannot be
-            # parsed under the final writer or silently ignored as a cache miss.
-            result = decode_account_response(self.pump(self.begin()), self.request())
+            # Corrected for 0.4.0 FR1/FR4 (owner, 2026-11-19): a stale preparation is captured and prepared again,
+            # and decides as a fresh claim would on the new facts. Until then this test expected claim_preparation_stale.
+            # New evidence gets a new bounded preparation, never parsed under the final writer.
+            result = decode_account_response(self.pump(ticket), self.request())
         self.assertEqual(("denied", "codex_spend_control_reached"), (result["state"], result["reason_code"]))
         self.fixture.assert_no_claim()
 
@@ -330,8 +329,12 @@ class AccountClaimJobTests(unittest.TestCase):
             self.assertTrue(started.wait(2))
             self.ledger._connection.execute("DELETE FROM records WHERE record_type='provider_headroom'")
             gate.set()
-            self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
-        self.fixture.assert_no_claim()
+            result = decode_account_response(self.pump(ticket), self.request())
+        # Corrected for 0.4.0 FR1/FR4 (owner, 2026-11-19): a stale preparation is captured and prepared again,
+        # and decides as a fresh claim would on the new facts. Until then this test expected claim_preparation_stale.
+        # A fresh claim with no headroom reading is admitted too (checked 2026-11-19), so the deleted
+        # candidate is never used: the decision is the fresh one.
+        self.assertEqual("claimed", result["state"], result)
 
     def test_changed_policy_after_preparation_is_stale_without_claim(self):
         gate, started, patcher = self.gate_first_project()
@@ -341,7 +344,10 @@ class AccountClaimJobTests(unittest.TestCase):
             self.assertTrue(started.wait(2))
             gate.set()
             with mock.patch.object(self.views, "_claim_policy", return_value=AdmissionInputPolicy("999.0.0", "1000.0.0", None)):
-                self.assert_wire_error(self.pump(ticket), self.request(), "claim_preparation_stale")
+                result = decode_account_response(self.pump(ticket), self.request())
+        # Corrected for 0.4.0 FR1/FR4 (owner, 2026-11-19): a stale preparation is captured and prepared again,
+        # and decides as a fresh claim would on the new facts. Until then this test expected claim_preparation_stale.
+        self.assertEqual(("denied", "client_version_unreviewed"), (result["state"], result["reason_code"]))
         self.fixture.assert_no_claim()
 
     def test_changed_before_observation_after_preparation_is_rechecked(self):

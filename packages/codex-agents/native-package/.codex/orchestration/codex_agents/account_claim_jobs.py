@@ -44,6 +44,13 @@ class _Job:
     cancelled: bool = False
     kind: str = 'claim'
     before_commit: object = None
+    provider: str | None = None
+    stale_preparations: int = 0
+
+
+# How many times a claim whose prepared admission went stale is captured and prepared again before it
+# is refused (0.4.0 FR1): sibling claims dispatched at once add decisions that change each other's rows.
+MAX_STALE_PREPARATIONS = 3
 
 
 class AccountClaimJobs:
@@ -176,6 +183,7 @@ class AccountClaimJobs:
             else:
                 # Anchored at the run's open, so the capture keeps the run's own
                 # admission and the identity it cited however late the launch is.
+                job.provider = provider
                 job.signature_handle = self._intake.capture_admission(
                     project_id, provider, self._work_limits, claim_anchor_ms(context))
                 self._signatures[job.signature_handle] = ticket
@@ -283,6 +291,7 @@ class AccountClaimJobs:
                     # subscriber loss must win before any final SQL claim; it
                     # need not wait behind the owner's ordinary request batch.
                     job.cancelled = True
+                again = False
                 if job.cancelled:
                     job.reason = 'open_cancelled' if job.kind == 'open' else "claim_cancelled"
                 else:
@@ -296,9 +305,26 @@ class AccountClaimJobs:
                     except OpenError as error:
                         job.reason = error.reason_code
                     except ClaimError as error:
-                        job.reason = error.reason_code
+                        again = (error.reason_code == "claim_preparation_stale" and job.kind == 'claim'
+                                 and job.provider is not None and job.stale_preparations < MAX_STALE_PREPARATIONS)
+                        job.reason = None if again else error.reason_code
                     except Exception:
                         job.reason = 'open_unavailable' if job.kind == 'open' else "claim_unavailable"
+                if again:
+                    # Captured and prepared again from the run's open, verified in full as the first was
+                    # (0.4.0 FR1); the job keeps its place, quota and identity.
+                    self._pool.discard(notice.handle)
+                    del self._signatures[notice.handle]
+                    job.signature_handle = None
+                    job.stale_preparations += 1
+                    try:
+                        job.signature_handle = self._intake.capture_admission(
+                            job.context.project_id, job.provider, self._work_limits, claim_anchor_ms(job.context))
+                    except Exception:
+                        job.reason, job.state = "claim_preparation_stale", "ready"
+                        continue
+                    self._signatures[job.signature_handle] = ticket
+                    continue
                 # Publish the bounded reply before releasing returned inputs.
                 # Any interruption/fault fences the coordinator without replay.
                 job.state = "ready"
