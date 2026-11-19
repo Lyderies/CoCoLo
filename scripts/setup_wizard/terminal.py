@@ -20,10 +20,11 @@ _MARKS = {"ok": ("OK  ", "green"), "fail": ("FAIL", "red"), "warn": ("WARN", "ye
 class Stop(Exception):
     """The wizard stops: `code` is the exit status, `message` the line to print, if any."""
 
-    def __init__(self, code: int, message: str = "") -> None:
+    def __init__(self, code: int, message: str = "", *, stderr: bool = False) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.stderr = stderr  # setup.sh prints "Input closed" and the working-folder refusal there.
 
 
 def terminal_colours() -> dict:
@@ -312,7 +313,7 @@ class Terminal:
 
     def _closed(self) -> None:
         self.show_cursor()
-        raise Stop(1, "Input closed; stopping.")
+        raise Stop(1, "Input closed; stopping.", stderr=True)
 
     # Menus ----------------------------------------------------------------------------------
 
@@ -375,7 +376,7 @@ class Terminal:
                 self.write(f"  {self.c['bold']}{prompt}{self.c['reset']} (type or paste the full path)\n  > ")
             typed = self._line()
             if typed is None:
-                raise Stop(1, "Input closed; stopping.")
+                raise Stop(1, "Input closed; stopping.", stderr=True)
             answer = typed or default
             if answer in ("q", "Q"):
                 self.confirm_quit()
@@ -457,7 +458,7 @@ class Terminal:
     # Running commands -----------------------------------------------------------------------
 
     def run_cmd(self, label: str, argv: list[str], *, logdir, slow_seconds: int = 10, width=live_width,
-                quiet: bool = False, reason=None) -> int:
+                quiet: bool = False, reason=None, draw=None) -> int:
         """setup.sh's run_cmd: run `argv` in its own process group with a spinner, the seconds so far,
         the command's phase and, after `slow_seconds`, that it can take a few minutes. Output goes to
         private logs in `logdir` (never shown), or nowhere when `quiet`. Returns the exit status."""
@@ -480,6 +481,8 @@ class Terminal:
         self.active = process
         started, frame = time.monotonic(), 0
         try:
+            if draw is not None:
+                draw()  # After the start: a redraw that blocks never holds the command back.
             self.hide_cursor()
             while process.poll() is None:
                 waited = int(time.monotonic() - started)
