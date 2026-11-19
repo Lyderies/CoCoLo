@@ -208,7 +208,8 @@ class ServiceHostTests(unittest.TestCase):
         }
         for name, payload in refused.items():
             with self.subTest(name):
-                self.assertEqual(b'', self.send(endpoint, payload, wait=4))  # Closed by the host, not timed out.
+                # R7b: refused by the host with its fixed reason, then closed; never timed out.
+                self.assertEqual(b'{"refused":"service_enrollment_refused"}\n', self.send(endpoint, payload, wait=4))
         # A verified preamble with no request behind it is held, never answered.
         self.assertIsNone(self.send(endpoint, self.preamble(key, frame, endpoint)+b'\n', wait=1))
 
@@ -218,7 +219,8 @@ class ServiceHostTests(unittest.TestCase):
         self.assertTrue(reply['ready'])
         self.assertEqual((1, False, 'codex-host-v1'), (reply['result']['current']['snapshot']['sequence'],
             reply['result']['known'], reply['result']['current']['snapshot']['client_version']))
-        self.assertEqual(b'', self.send(endpoint, accepted, wait=4))  # Captured bytes cannot be replayed.
+        # Captured bytes cannot be replayed: the spent proof is refused like any other.
+        self.assertEqual(b'{"refused":"service_enrollment_refused"}\n', self.send(endpoint, accepted, wait=4))
         self.assertFalse((proofs/('c'*32)).exists())  # The accepted proof was consumed.
 
         # A correctly enrolled other host class still cannot change this orchestration.
@@ -263,7 +265,8 @@ class ServiceHostTests(unittest.TestCase):
         self.start(generation=2)
         orphaned = self.cli('learning-orchestration-status', '--orchestration-handle', opened['orchestration_handle'],
                             expected=2)
-        self.assertEqual('host_client_mismatch', orphaned['reason_code'])  # Reported as such; the cause is the generation.
+        # R8a: the cause is named now (it was reported as host_client_mismatch); closing it after an update is R8b.
+        self.assertEqual('history_orchestration_other_scope', orphaned['reason_code'])
 
     def test_restart_replaces_the_capability_and_keeps_history(self):
         first, ready = self.start()
@@ -296,7 +299,11 @@ class ServiceHostTests(unittest.TestCase):
         self.assertLess(time.monotonic()-started, 8)
         for client in stalled:
             client.settimeout(3)
-            assert_dropped(self, client)
+            # R7b: told it was late, then dropped (Linux may reset instead, as unread input remains).
+            try:
+                self.assertIn(client.recv(64), (b'{"refused":"service_enrollment_late"}\n', b''))
+            except ConnectionResetError:
+                pass
 
     def test_finished_exchanges_free_their_context_slots(self):
         _, ready = self.start()
