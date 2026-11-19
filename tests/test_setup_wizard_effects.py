@@ -88,6 +88,29 @@ class RoutingWriteTests(unittest.TestCase):
         self.assertEqual('{"second": 2}\n', (target / "provider-routing.json").read_text())
         self.assertEqual(["provider-routing.json"], [p.name for p in target.iterdir()])
 
+    def test_a_folder_swapped_for_a_symlink_during_the_write_never_redirects_it(self) -> None:
+        """Review 040-s5-wizard (c), high: the checked folders are held open, so swapping one for a
+        symlink after the checks cannot send the write outside the project."""
+        project = self.base / "project"
+        target = project / ".codex" / "orchestration"
+        target.mkdir(parents=True)
+        elsewhere = self.base / "elsewhere"
+        elsewhere.mkdir()
+        real_open = os.open
+        swapped = []
+
+        def swapping_open(path, flags, mode=0o777, *, dir_fd=None):
+            if str(path).startswith(".provider-routing") and not swapped:
+                os.rename(target, project / ".codex" / "moved")
+                os.symlink(elsewhere, target)
+                swapped.append(True)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+        with mock.patch.object(effects.os, "open", swapping_open):
+            effects.write_project_routing(project, "{}\n")
+        self.assertEqual([True], swapped)
+        self.assertEqual([], list(elsewhere.iterdir()))
+        self.assertEqual("{}\n", (project / ".codex" / "moved" / "provider-routing.json").read_text())
+
     def test_symlinked_routing_destination_is_refused(self) -> None:
         project = self.base / "project"
         (project / ".codex" / "orchestration").mkdir(parents=True)
