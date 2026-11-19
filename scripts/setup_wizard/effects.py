@@ -205,11 +205,9 @@ def git_commit(project, message: str, detail: str, paths: list[str], python: str
     import sys
     done = subprocess.run(owner_git_argv(python or sys.executable, "commit", str(project), message, detail, *paths),
                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
-    if done.returncode == 0:
-        return "committed", ""
-    if done.returncode == 3:
-        return "nothing", ""
-    return "failed", done.stderr.strip() if done.returncode == 2 else ""
+    from . import steps
+    state, line = steps.commit_status(done.returncode)
+    return state, line if state != "failed" else (done.stderr.strip() if done.returncode == 2 else "")
 
 
 _ATTEST = None

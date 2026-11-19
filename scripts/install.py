@@ -127,6 +127,10 @@ class InstallRefused(RuntimeError):
     """The target is not in a state where packages may be changed."""
 
 
+class CommittedIndexStale(InstallRefused):
+    """The commit was made, but the project's own index could not be updated to match it."""
+
+
 def _git_binary(target: Path) -> str:
     """The real git binary at a fixed, trusted location (never macOS's xcrun shim), outside
     the project and every temporary folder."""
@@ -362,7 +366,7 @@ def commit_paths(target: Path, message: str, detail: str, paths: list[str]) -> s
         if moved.returncode != 0:
             raise InstallRefused("the branch moved while setup ran, so nothing was committed")
         if _git_run(target, "update-index", "-z", "--index-info", input=info, text=False).returncode != 0:
-            raise InstallRefused("the commit was made, but Git could not update the project's index; "
+            raise CommittedIndexStale("the commit was made, but Git could not update the project's index; "
                                  "run git status and stage the committed files yourself")
         return "committed"
     finally:
@@ -1127,7 +1131,8 @@ def git_tool(argv: list[str]) -> int:
 
     ``changes PROJECT [PATH...]`` prints, NUL-delimited, the paths with uncommitted changes
     (project_changes); ``commit PROJECT MESSAGE DETAIL PATH...`` commits exactly those paths
-    (commit_paths) and exits 3 when there was nothing to commit. A refusal exits 2 with its
+    (commit_paths) and exits 3 when there was nothing to commit, 4 when the commit was made but the
+    project's index could not be updated. A refusal exits 2 with its
     reason on stderr; any other failure exits 1.
     """
 
@@ -1138,6 +1143,9 @@ def git_tool(argv: list[str]) -> int:
             return 0
         if len(argv) >= 5 and argv[0] == "commit":
             return 0 if commit_paths(Path(argv[1]), argv[2], argv[3], argv[4:]) == "committed" else 3
+    except CommittedIndexStale as exc:
+        print(exc, file=sys.stderr)
+        return 4
     except InstallRefused as exc:
         print(exc, file=sys.stderr)
         return 2

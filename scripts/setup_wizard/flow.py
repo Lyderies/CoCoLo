@@ -931,7 +931,10 @@ class Wizard:
         # As setup.sh: the installer's git tool, under the runner, quiet (Git's output can name you).
         status = self.run("Committing", effects.owner_git_argv(self.py, "commit", project, COMMIT_MSG_1, COMMIT_MSG_2,
                                                                *self.commit_paths), quiet=True)
-        if status == 0:
+        state, line = steps.commit_status(status)
+        if line:
+            self.t.list_add("warn", line)
+        if state == "committed":
             self.commit_state = "committed"
             return True
         self.failure_detail("The commit did not go through", steps.COMMIT_REFUSED_HINT)

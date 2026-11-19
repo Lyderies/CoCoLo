@@ -554,3 +554,16 @@ def owner_key_notice(report) -> str:
         except Exception:
             return ""
     return ""
+
+
+def commit_status(status: int) -> tuple[str, str]:
+    """The installer git tool's exit status as a commit state and, when there is one, what to tell the
+    owner: 0 committed, 3 nothing to commit, 4 committed but the project's index was not updated."""
+    if status == 0:
+        return "committed", ""
+    if status == 3:
+        return "nothing", ""
+    if status == 4:
+        return "committed", ("Committed, but Git could not update the project's index. Run git status in the "
+                             "project and stage the committed files yourself.")
+    return "failed", ""
