@@ -3,6 +3,11 @@ from setup.sh's drawing and key functions. Output goes to `out`, keys come from 
 code runs on a real terminal and under scripted tests."""
 
 import os
+import re
+import signal
+import subprocess
+import time
+from pathlib import Path
 
 STEP_NAMES = ("Checks", "Project", "Providers", "Install", "Collector", "Billing", "Profile", "Commands", "Done")
 COLOUR_NAMES = ("reset", "bold", "dim", "red", "green", "yellow", "blue", "magenta", "cyan")
@@ -41,6 +46,66 @@ def terminal_colours() -> dict:
         return colours
     except Exception:
         return dict(NO_COLOURS)
+
+
+def terminal_width(columns, stty, tput) -> int:
+    """S3-P5, S3-P9a: COLUMNS when set; else the terminal's own size (`stty size`'s "ROWS COLS", None
+    when it failed); else the terminfo answer, trusted only when it succeeded ((ok, text)); a size of 0
+    is not known. Not a plain decimal number: 80. Leading zeros are dropped; more than 4 digits: 9999."""
+    width = columns or ""
+    if not width:
+        width = (stty or "").split(" ")[-1]
+        if not re.search(r"[^0]", width):
+            width = ""
+    if not width:
+        ok, text = tput
+        width = text.strip() if ok else ""
+        if not re.search(r"[^0]", width):
+            width = ""
+    if not re.fullmatch(r"[0-9]+", width):
+        width = "80"
+    width = width.lstrip("0")
+    if not width:
+        return 0
+    return 9999 if len(width) > 4 else int(width)
+
+
+def live_width() -> int:
+    """The width of the wizard's own terminal now, read again at each redraw (S3-P5)."""
+    import fcntl
+    import struct
+    import termios
+    try:
+        rows, cols = struct.unpack("HHHH", fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8))[:2]
+        stty = f"{rows} {cols}"
+    except OSError:
+        stty = None
+    try:
+        tput = (True, str(os.get_terminal_size(2).columns))
+    except OSError:
+        tput = (False, "")
+    return terminal_width(os.environ.get("COLUMNS"), stty, tput)
+
+
+_PHASE_PREFIX = b"cocolo-phase: "
+_SPINNER = "|/-\\"
+
+
+def phase_of(path) -> str:
+    """S3-P1, S3-P2, S3-P6: the last `cocolo-phase: ` line in the last 4 KiB of the error log, as ASCII
+    letters, digits, spaces and ,.'- only, at most 60 characters."""
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(handle.tell() - 4096, 0))
+            tail = handle.read().replace(b"\0", b"")
+    except OSError:
+        return ""
+    lines = [line for line in tail.split(b"\n") if line.startswith(_PHASE_PREFIX)]
+    if not lines:
+        return ""
+    text = lines[-1][len(_PHASE_PREFIX):][:200]
+    return re.sub(rb"[^A-Za-z0-9 ,.'-]", b"", text).decode("ascii")[:60]
 
 
 def fold(text: str, width: int) -> str:
@@ -288,3 +353,73 @@ class Terminal:
                 self.confirm_quit()
             elif key == "EOF":
                 self._closed()
+
+    # Running commands -----------------------------------------------------------------------
+
+    def run_cmd(self, label: str, argv: list[str], *, logdir, slow_seconds: int = 10, width=live_width,
+                quiet: bool = False, reason=None) -> int:
+        """setup.sh's run_cmd: run `argv` in its own process group with a spinner, the seconds so far,
+        the command's phase and, after `slow_seconds`, that it can take a few minutes. Output goes to
+        private logs in `logdir` (never shown), or nowhere when `quiet`. Returns the exit status."""
+        self.command_count = getattr(self, "command_count", 0) + 1
+        if quiet:
+            self.last_out = self.last_err = None
+            stdout = stderr = subprocess.DEVNULL
+        else:
+            self.last_out = str(Path(logdir) / f"cmd{self.command_count}.out")
+            self.last_err = str(Path(logdir) / f"cmd{self.command_count}.err")
+            stdout = os.open(self.last_out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            stderr = os.open(self.last_err, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                                       start_new_session=True, env={**os.environ, "COCOLO_PHASES": "1"})
+        finally:
+            if not quiet:
+                os.close(stdout)
+                os.close(stderr)
+        self.active = process
+        started, frame = time.monotonic(), 0
+        try:
+            self.hide_cursor()
+            while process.poll() is None:
+                waited = int(time.monotonic() - started)
+                hint = "  (still working: this can take a few minutes)" if waited >= slow_seconds else ""
+                phase = "" if quiet else phase_of(self.last_err)
+                columns = width()
+                if columns > 6:
+                    text = f"{label}  {waited}s" + (f"  {phase}" if phase else "") + hint
+                    self.write(f"\r\033[K  {self.c['cyan']}{_SPINNER[frame % 4]}{self.c['reset']} "
+                               f"{text[:columns - 6]} ")
+                else:
+                    self.write("\r\033[K")  # Too narrow for a frame: still erase the last one (S3-P9b).
+                frame += 1
+                time.sleep(0.15)
+        except BaseException:
+            self.stop_active()
+            raise
+        self.active = None
+        status = process.returncode if process.returncode >= 0 else 128 - process.returncode
+        self.last_rc = status
+        self.write("\r\033[K")
+        self.show_cursor()
+        self.log_step(label, status, reason(self.last_out) if reason and status and not quiet else "")
+        return status
+
+    def stop_active(self) -> None:
+        """Stop the running command's whole process group, then reap it."""
+        process, self.active = getattr(self, "active", None), None
+        if process is None:
+            return
+        for sig, pause in ((signal.SIGTERM, 0.3), (signal.SIGKILL, 0)):
+            try:
+                os.killpg(process.pid, sig)
+            except (ProcessLookupError, PermissionError):
+                pass
+            time.sleep(pause)
+        process.wait()
+
+    def log_step(self, label: str, status: int, why: str = "") -> None:
+        """One line for the ? screen: what ran and how it ended, and a refusal's fixed reason."""
+        why = re.sub(r"[\x00-\x1f\x7f]", "", why or "")
+        ended = "done" if status == 0 else f"stopped, exit {status}"
+        self.step_log.append(f"{time.strftime('%H:%M:%S')}  {label}: {ended}" + (f" - {why}" if why else ""))
