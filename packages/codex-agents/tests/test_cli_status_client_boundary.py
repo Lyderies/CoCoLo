@@ -152,6 +152,23 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.assertEqual('status_account_starting', report['reason_code'])
         self.assertEqual('starting', report['account_services'])
 
+    def test_ST2_a_ready_status_never_reports_health_from_before_the_account_came_up(self):
+        from codex_agents.account_api import AccountClient
+        self.collector.account_services = 'starting'
+        original = AccountClient.owner_key
+
+        def came_up_meanwhile(client, **options):
+            self.collector.account_services = 'running'
+            self.collector.startup_phases = {'ledger_open': 1, 'collector': 2, 'account': 3}
+            return original(client, **options)
+        with mock.patch.object(AccountClient, 'owner_key', came_up_meanwhile):
+            code, stdout, stderr = self.command()
+        self.assertEqual(0, code, stdout + stderr)
+        report = json.loads(stdout)
+        self.assertTrue(report['ready'])
+        self.assertEqual('running', report['account_services'])
+        self.assertEqual({'ledger_open': 1, 'collector': 2, 'account': 3}, report['collector_startup_ms'])
+
     def test_missing_hint_does_not_read_database_or_start_runtime(self):
         self.hint.unlink()
         code, stdout, stderr = self.command()
