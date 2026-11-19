@@ -54,3 +54,67 @@ def provider_routing(*choices: str) -> str:
     out += '}\n  },\n  "codex_primary_may_bridge_to_claude": '
     out += "true" if bridge == "on" else "false"
     return out + "\n}\n"
+
+
+PROFILE_LIMIT = 65536  # Bytes of the orchestrator profile read; a larger file is unreadable.
+
+
+def profile_difference(raw: bytes | None) -> str:
+    """W8.1: compare the settings the wizard manages, not the bytes: "same", the first differing setting
+    ("sandbox_mode", "network_access"), or "unreadable". Never returns contents."""
+    try:
+        import tomllib
+        if raw is None or len(raw) > PROFILE_LIMIT:
+            raise ValueError
+        data = tomllib.loads(raw.decode("utf-8"))
+        box = data.get("sandbox_workspace_write")
+        box = box if isinstance(box, dict) else {}
+        if data.get("sandbox_mode") != "workspace-write":
+            return "sandbox_mode"
+        if box.get("network_access") is not True:
+            return "network_access"
+        return "same"
+    except Exception:
+        return "unreadable"
+
+
+def profile_network_on(raw: bytes | None) -> bool:
+    """W4.6: whether `network_access = true` is the last such setting inside `[sandbox_workspace_write]`,
+    comments ignored, read line by line as setup.sh does (no TOML parser needed)."""
+    section, network = "", False
+    for line in (raw or b"")[:PROFILE_LIMIT].decode("utf-8", "replace").splitlines():
+        compact = re.sub(r"\s+", "", line.split("#", 1)[0])
+        if compact.startswith("[") and compact.endswith("]"):
+            section = compact[1:-1]
+        elif section == "sandbox_workspace_write" and compact == "network_access=true":
+            network = True
+        elif section == "sandbox_workspace_write" and compact == "network_access=false":
+            network = False
+    return network
+
+
+def codex_hint(wanted: bool, ready: bool, network_on: bool) -> tuple[str, str]:
+    """W4.6: the command that starts a Codex session able to reach Claude children, and why."""
+    if ready or network_on:
+        return ("codex -p orchestrator",
+                "The profile turns network on for these sessions, which Claude children need.")
+    if wanted:
+        return ("codex",
+                "The orchestrator profile is missing or does not set network_access = true under "
+                "[sandbox_workspace_write], so Codex sessions cannot reach Claude children yet.")
+    return "codex", "Codex-to-Claude bridging was not chosen, so no profile is needed."
+
+
+def codex_primary(raw: bytes | None) -> bool:
+    """W4.5: whether a Codex session may orchestrate: no routing file means only Codex is enabled (yes);
+    otherwise Codex children enabled, or Codex sessions allowed to bridge to Claude. A file that is
+    not valid JSON is no. (Refusing a symlink or FIFO is the effect that reads the file.)"""
+    if raw is None:
+        return True
+    try:
+        import json
+        data = json.loads(raw)
+        codex = data.get("providers", {}).get("codex", {}).get("enabled")
+        return codex is True or data.get("codex_primary_may_bridge_to_claude") is True
+    except Exception:
+        return False
