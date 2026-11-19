@@ -211,5 +211,48 @@ class ViewTests(unittest.TestCase):
         term.view_text("a", "Title")
 
 
+
+class LineEditorTests(unittest.TestCase):
+    """W3.3: the path prompt's own line editor (what read -e gave setup.sh's prompts): typing, Backspace,
+    Ctrl-U, Ctrl-W, Ctrl-V for a literal character, Tab completion, Enter, and Ctrl-D on an empty line."""
+
+    def edit(self, *pressed, complete=lambda text: []):
+        term, out = make(*pressed)
+        return term.edit_line(complete), out.getvalue()
+
+    def test_typing_and_deleting(self) -> None:
+        self.assertEqual("abc", self.edit("abc\n")[0])
+        self.assertEqual("ac", self.edit("ab\x7fc\n")[0])
+        self.assertEqual("ac", self.edit("ab\x08c\n")[0])
+        self.assertEqual("new", self.edit("old path\x15new\n")[0])
+        self.assertEqual("/a/b/c ", self.edit("/a/b/c d\x17\n")[0])  # Ctrl-W: back to the last space,
+        self.assertEqual("", self.edit("/a/b/c d\x17\x17\n")[0])  # trailing spaces first (readline's rubout).
+        self.assertEqual("x", self.edit("\x7fx\n")[0])  # Backspace on nothing does nothing.
+
+    def test_the_line_is_echoed_and_erased_on_screen(self) -> None:
+        line, shown = self.edit("ab\x7fc\n")
+        self.assertEqual("ac", line)
+        self.assertEqual("ab\b \bc\r\n", shown)
+
+    def test_ctrl_v_inserts_the_next_character_literally(self) -> None:
+        self.assertEqual("a\x01b", self.edit("a\x16\x01b\n")[0])
+        self.assertEqual("a\nb", self.edit("a\x16\nb\n")[0])
+
+    def test_tab_completes_a_single_match_or_the_common_start(self) -> None:
+        def complete(text):
+            return {"/p": ["/projects/", "/private/"], "/pro": ["/projects/"]}.get(text, [])
+        self.assertEqual("/projects/app", self.edit("/pro\tapp\n", complete=complete)[0])
+        self.assertEqual("/pr", self.edit("/p\t\n", complete=complete)[0])
+        self.assertEqual("/zz", self.edit("/zz\t\n", complete=complete)[0])
+
+    def test_escape_sequences_are_ignored(self) -> None:
+        self.assertEqual("ab", self.edit("a\033[Db\n")[0])
+
+    def test_end_of_input(self) -> None:
+        self.assertIsNone(self.edit("\x04")[0])
+        self.assertIsNone(self.edit("ab")[0])  # Input closed before Enter.
+        self.assertEqual("ab", self.edit("ab\x04\n")[0])  # Ctrl-D in a line does nothing.
+
+
 if __name__ == "__main__":
     unittest.main()
