@@ -54,6 +54,16 @@ def _resolve_dir(path: str) -> str:
     return ""
 
 
+def _regular_size(path: str) -> int:
+    """A regular file's size without following a link; -1 otherwise."""
+    import stat
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return -1
+    return info.st_size if stat.S_ISREG(info.st_mode) else -1
+
+
 def _inside(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip("/") + "/")
 
@@ -178,8 +188,7 @@ class Wizard:
     def owner_tool(self, *args: str) -> subprocess.CompletedProcess:
         """setup.sh's owner_tool: one of attest.py's owner checks, in the trusted Python, isolated. A
         process, as in setup.sh, so the argv the tests intercept is the same."""
-        return subprocess.run([self.py, *PYF, "-c", OWNER_TOOL, str(ATTEST), *args], capture_output=True,
-                              stdin=subprocess.DEVNULL)
+        return self.t.call([self.py, *PYF, "-c", OWNER_TOOL, str(ATTEST), *args])
 
     def client_status(self, name: str, top: str | None) -> tuple[int, bytes]:
         """W1.5: a client's sign-in status as the runtime runs it (attest.py client-status)."""
@@ -188,8 +197,7 @@ class Wizard:
 
     def session_scan(self):
         """W2.1: the runtime's scan of recent Codex sessions (this clone's codex-session-scan)."""
-        done = subprocess.run([self.py, *PYF, str(CLONE_CLI), "codex-session-scan", "--clone-root", str(CLONE)],
-                              capture_output=True, stdin=subprocess.DEVNULL)
+        done = self.t.call([self.py, *PYF, str(CLONE_CLI), "codex-session-scan", "--clone-root", str(CLONE)])
         if done.returncode != 0:
             return None
         try:
@@ -198,8 +206,7 @@ class Wizard:
             return None
 
     def g(self, project: str, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run([self.git, "-C", project, *GIT_SAFE, *args], capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL, env={**os.environ, **GIT_ENV})
+        return self.t.call([self.git, "-C", project, *GIT_SAFE, *args], text=True, env={**os.environ, **GIT_ENV})
 
     def manual_installer(self, operation: str, project: str, apply: bool = False) -> str:
         return (f"python3 -I -B -S -X pycache_prefix=/dev/null {steps.shell_quote(str(INSTALLER))} {operation} "
@@ -241,6 +248,8 @@ class Wizard:
         """Hand the terminal to attest.py, then keep its summary on screen until Enter (W7.1)."""
         self.t.show_cursor()
         self.t.write("\033[H\033[2J")
+        # In the foreground and the wizard's own group, as setup.sh: attest.py needs the terminal for its
+        # passphrase prompts, so it cannot run in a group of its own (review 040-s5-wizard c).
         status = subprocess.run(argv).returncode
         status = status if status >= 0 else 128 - status
         self.t.write(f"\n  attest.py finished (exit code {status}). Press Enter to continue. ")
@@ -314,8 +323,7 @@ class Wizard:
             top = self.work_tree_top(self.start_dir)
             self.git = effects.git_executable([Path(self.start_dir)]) or ""
             if self.git:
-                version = subprocess.run([self.git, "--version"], capture_output=True, text=True,
-                                         stdin=subprocess.DEVNULL, env={**os.environ, "xcrun_nocache": "1"})
+                version = self.t.call([self.git, "--version"], text=True, env={**os.environ, "xcrun_nocache": "1"})
                 words = version.stdout.split(" ")
                 t.list_add("ok", f"git: {words[2].strip() if len(words) > 2 else ''}")
             else:
@@ -432,7 +440,7 @@ class Wizard:
         result = self.g(folder, "rev-parse", "--show-toplevel")
         if result.returncode != 0:
             return "That directory is not inside a Git working tree. Run: git init"
-        top = _resolve_dir(result.stdout.strip())
+        top = _resolve_dir(result.stdout.rstrip("\n"))  # As $( ): only the line ending, never spaces.
         if top != folder:
             return f"That is inside a Git project but not its top. Use the project root instead: {top}"
         if folder == _resolve_dir(str(CLONE)):
@@ -450,9 +458,11 @@ class Wizard:
         if helpers != []:
             return (self.git_helpers_text(helpers) + " Remove those settings from .git/config, or install and commit by "
                     "hand (docs/manual-setup.md).")
-        dirty = effects.git_changes(folder, list(MANAGED))
+        why: list[str] = []
+        dirty = effects.git_changes(folder, list(MANAGED), why)
         if dirty is None:
-            return "Git could not read the project, so setup cannot tell whether its managed paths are clean: "
+            return ("Git could not read the project, so setup cannot tell whether its managed paths are clean: "
+                    + steps.plain(" ".join(why))[:200])
         if dirty:
             return "Uncommitted changes exist in managed paths (.codex, .agents, .claude). Commit or discard them first."
         return ""
@@ -612,6 +622,13 @@ class Wizard:
         self.routing_write = True
         self.begin_step(3)
         status, raw_routing = effects.read_routing(existing)
+        if status == "refused" and _regular_size(existing) > effects.ROUTING_READ_LIMIT:
+            t.list_add("fail", "provider-routing.json is larger than 1 MiB; refused")
+            t.list_sub("Replace it with a regular file in the project, commit, and run setup again.")
+            self.mark_step(3, "fail", "provider-routing.json refused")
+            self.fail_reason = "provider configuration refused"
+            self.failure_menu()
+            return False
         if status == "refused":
             t.list_add("fail", "provider-routing.json is a symlink or not a regular file; refused")
             t.list_sub("Replace it with a regular file in the project, commit, and run setup again.")
@@ -870,9 +887,8 @@ class Wizard:
         apply_file, plan_file = self.logdir / "apply.json", self.logdir / "plan-paths.nul"
         apply_file.write_text(json.dumps(applied if isinstance(applied, dict) else {}))
         plan_file.write_bytes(b"".join(rel.encode("utf-8") + b"\0" for rel in self.planned))
-        done = subprocess.run([self.py, *PYF, str(CLONE / "scripts" / "setup-wizard.py"), "--helper", "paths",
-                               str(apply_file), self.project, str(plan_file), self.git or "git"],
-                              capture_output=True, stdin=subprocess.DEVNULL)
+        done = self.t.call([self.py, *PYF, str(CLONE / "scripts" / "setup-wizard.py"), "--helper", "paths",
+                               str(apply_file), self.project, str(plan_file), self.git or "git"])
         if done.returncode != 0:
             return [], done.returncode
         return [item.decode("utf-8", "surrogateescape") for item in done.stdout.split(b"\0") if item], 0
@@ -912,6 +928,7 @@ class Wizard:
             self.failure_detail("Not committed", self.git_helpers_text(helpers) + " Commit the files yourself, then run "
                                 "./setup.sh again and choose Verify.")
             return False
+        self.last_reply, self.last_fixed = None, False  # As setup.sh's quiet run: no earlier reply is shown.
         state, _ = effects.git_commit(project, COMMIT_MSG_1, COMMIT_MSG_2, self.commit_paths)
         self.last_rc = 0 if state == "committed" else 1
         self.t.log_step("Committing", self.last_rc)
@@ -1636,8 +1653,14 @@ class Wizard:
                 break
 
     def cleanup(self) -> None:
+        import signal
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):  # A second signal cannot cut it short.
+            signal.signal(number, signal.SIG_IGN)
         self.t.stop_active()
         self.t.show_cursor()
         self.t.write(self.t.c["reset"])
         if self.logdir is not None:
             shutil.rmtree(self.logdir, ignore_errors=True)
+            if self.logdir.exists():
+                print("Warning: a private working folder could not be removed; delete it yourself:", self.logdir,
+                      file=sys.stderr)

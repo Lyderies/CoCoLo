@@ -11,13 +11,15 @@ from pathlib import Path
 CLONE = Path(__file__).resolve().parents[2]
 
 PROFILE_READ_LIMIT = 65536  # One byte past it is read, so a larger file shows as larger.
+ROUTING_READ_LIMIT = 1024 * 1024  # A routing file is read whole up to this; a larger one is refused.
+HASH_LIMIT = 256 * 1024 * 1024  # A planned file larger than this is not hashed (it counts as changed).
 
 
 class EffectRefused(RuntimeError):
     """An effect refused before changing anything; its message is fixed text, safe to show."""
 
 
-def read_owned_file(path) -> bytes | None:
+def read_owned_file(path, limit: int = PROFILE_READ_LIMIT) -> bytes | None:
     """The bytes of a regular file the owner owns, without ever following a symlink or opening a FIFO
     or device; None when it is absent or refused. Only root-owned system links on the way (such as
     /var on macOS) are resolved. Ported from setup.sh's read_profile."""
@@ -60,7 +62,14 @@ def read_owned_file(path) -> bytes | None:
                 info = os.fstat(descriptor)
                 if not stat.S_ISREG(info.st_mode) or info.st_uid != uid:
                     return None
-                return os.read(descriptor, PROFILE_READ_LIMIT + 1)
+                chunks, size = [], 0
+                while size <= limit:
+                    chunk = os.read(descriptor, min(65536, limit + 1 - size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                return b"".join(chunks)
             finally:
                 os.close(descriptor)
         finally:
@@ -71,7 +80,8 @@ def read_owned_file(path) -> bytes | None:
 
 def read_routing(path) -> tuple[str, bytes | None]:
     """W4.5: ("absent", None) when there is no routing file, ("present", bytes) for a regular file read
-    safely, and ("refused", None) for a symlink or any other kind of file, which is never opened."""
+    safely and whole, and ("refused", None) for one over ROUTING_READ_LIMIT, a symlink or any other
+    kind of file, which is never opened."""
     path = Path(path)
     try:
         info = os.lstat(path)
@@ -81,8 +91,11 @@ def read_routing(path) -> tuple[str, bytes | None]:
         return "refused", None
     if not stat.S_ISREG(info.st_mode):
         return "refused", None
-    raw = read_owned_file(path)
-    return ("refused", None) if raw is None else ("present", raw)
+    raw = read_owned_file(path, ROUTING_READ_LIMIT)
+    if raw is None:
+        return "refused", None
+    # Never decided from part of the file (review 040-s5-wizard d): larger than the limit is refused.
+    return ("refused", None) if len(raw) > ROUTING_READ_LIMIT else ("present", raw)
 
 
 def write_project_routing(project, content: str) -> None:
@@ -150,15 +163,20 @@ def git_helpers(project) -> list[str] | None:
         return None
 
 
-def git_changes(project, paths: list[str]) -> list[str] | None:
+def git_changes(project, paths: list[str], why: list | None = None) -> list[str] | None:
     """W5.1, W5.2: the paths under `paths` with uncommitted changes (a rename's both names), literal
-    paths only; None when Git could not answer or must not run (a helper named, W1.4)."""
+    paths only; None when Git could not answer or must not run (a helper named, W1.4). `why`, when
+    given, receives the installer's reason (a fixed sentence) for a None."""
     if git_helpers(project) != []:
         return None
     install = installer()
     try:
         return install.project_changes(Path(project), list(paths))
-    except (install.InstallRefused, OSError, subprocess.SubprocessError, ValueError):
+    except install.InstallRefused as exc:
+        if why is not None:
+            why.append(str(exc))
+        return None
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
 
 
@@ -190,19 +208,8 @@ def attest():
     return _ATTEST
 
 
-def make_scratch(prefix: str, project=None) -> Path:
-    """W1.7: a new folder only this account can open, outside every agent sandbox's reach."""
-    module = attest()
-    try:
-        return module.make_scratch(prefix, Path(project) if project is not None else None)
-    except (module.AttestError, OSError) as exc:
-        raise EffectRefused(str(exc) if isinstance(exc, module.AttestError) else
-                            "a private working folder could not be created") from exc
 
 
-def remove_scratch(path) -> bool:
-    """W1.7: remove a working folder; False (with a warning naming it) when it could not be."""
-    return attest().remove_scratch(Path(path))
 
 
 def runtime_problem(project) -> str:
@@ -217,32 +224,10 @@ def runtime_problem(project) -> str:
     return ""
 
 
-def _scan_modules():
-    module = attest()
-    return (module.clone_module("session_guard"), module.clone_module("host_commands"),
-            module.clone_module("learning_store"))
 
 
-def session_scan(clone_root) -> dict | None:
-    """W2.1: the runtime's scan of recent Codex sessions (codex-session-scan), run in-process from
-    this clone's own package; None when it fails, which warns about nothing."""
-    try:
-        session_guard, host_commands, learning_store = _scan_modules()
-        warnings = session_guard.scan_recent_sessions(
-            Path(clone_root), host_commands.configured_codex_home(),
-            Path(os.environ.get("HOME") or Path.home()), projects=learning_store.registered_project_roots())
-        return {"ready": True, "warnings": warnings}
-    except Exception:
-        return None
 
 
-def client_status(name: str, project=None) -> tuple[int, bytes]:
-    """W1.5: a provider client's sign-in status, run as the runtime runs it (attest.client_status):
-    0 yes, 10 no, 11 not where the runtime runs it from, 12 refused, anything else not checked."""
-    try:
-        return attest().client_status(name, Path(project) if project is not None else None)
-    except Exception:
-        return 1, b""
 
 
 def unsafe_name(rel) -> bool:
@@ -260,20 +245,36 @@ def unsafe_name(rel) -> bool:
 
 
 def _digest(path) -> str | None:
+    """A file's SHA-256, or None: never through a symlink, never a FIFO or device, read in chunks and
+    only up to HASH_LIMIT (review 040-s5-wizard f). None counts as changed."""
     import hashlib
     try:
-        with open(path, "rb") as handle:
-            return hashlib.sha256(handle.read()).hexdigest()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > HASH_LIMIT:
+            return None
+        digest, size = hashlib.sha256(), 0
+        while chunk := os.read(descriptor, 1024 * 1024):
+            size += len(chunk)
+            if size > HASH_LIMIT:
+                return None
+            digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
 
 
 def _manifest(target: Path):
     import json
+    raw = read_owned_file(target / ".codex" / "orchestration" / "install-manifest.json", ROUTING_READ_LIMIT)
     try:
-        with open(target / ".codex" / "orchestration" / "install-manifest.json", encoding="utf-8") as handle:
-            return json.load(handle)
-    except Exception:
+        return json.loads(raw) if raw is not None and len(raw) <= ROUTING_READ_LIMIT else None
+    except ValueError:
         return None
 
 
@@ -460,15 +461,25 @@ def project_in_temp(project) -> bool:
 
 def create_profile(folder, content: str) -> bool:
     """W8.1, step 7: create `orchestrator.config.toml` in the Codex home, new only (an existing file is
-    never overwritten), mode 0600, its folder made owner-only when it is new."""
+    never overwritten), mode 0600, its folder made owner-only when it is new. All or nothing: a write
+    that fails part-way removes the new file (review 040-s5-wizard c)."""
     folder = Path(folder)
+    path = folder / "orchestrator.config.toml"
     try:
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-        descriptor = os.open(folder / "orchestrator.config.toml", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                             0o600)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except OSError:
         return False
-    with os.fdopen(descriptor, "w") as handle:
-        handle.write(content + "\n")
-    os.chmod(folder / "orchestrator.config.toml", 0o600)
-    return True
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(content + "\n")
+            handle.flush()
+            os.fchmod(handle.fileno(), 0o600)
+        return True
+    except OSError:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        path.unlink(missing_ok=True)
+        return False

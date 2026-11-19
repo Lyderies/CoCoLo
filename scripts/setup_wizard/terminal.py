@@ -119,6 +119,8 @@ def complete_path(text: str, home: str) -> list[str]:
     expanded = home + text[1:] if tilde else text
     found = []
     for match in sorted(glob.glob(glob.escape(expanded) + "*")):
+        if not match.isprintable():  # Never offered: it could drive the terminal (review 040-s5-wizard b).
+            continue
         shown = "~" + match[len(home):] if tilde else match
         found.append(shown + "/" if os.path.isdir(match) else shown)
     return found
@@ -528,6 +530,21 @@ class Terminal:
         self.show_cursor()
         self.log_step(label, status, reason(self.last_out) if reason and status and not quiet else "")
         return status
+
+    def call(self, argv: list[str], **options) -> subprocess.CompletedProcess:
+        """A helper the wizard waits on without a spinner, in its own process group: when the wizard
+        stops (a signal, an error), the whole group is stopped and reaped (review 040-s5-wizard c)."""
+        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=True, **options)
+        self.active = process
+        try:
+            stdout, stderr = process.communicate()
+        except BaseException:
+            self.stop_active()
+            raise
+        self.active = None
+        status = process.returncode if process.returncode >= 0 else 128 - process.returncode
+        return subprocess.CompletedProcess(argv, status, stdout, stderr)
 
     def stop_active(self) -> None:
         """Stop the running command's whole process group, then reap it."""
