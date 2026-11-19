@@ -1,10 +1,14 @@
 """The wizard's effects (S5): the only code that reads or writes files or runs anything. Each ports
 setup.sh exactly; `steps` decides what they mean."""
 
+import importlib.util
 import os
 import stat
+import subprocess
 import tempfile
 from pathlib import Path
+
+CLONE = Path(__file__).resolve().parents[2]
 
 PROFILE_READ_LIMIT = 65536  # One byte past it is read, so a larger file shows as larger.
 
@@ -106,3 +110,54 @@ def write_project_routing(project, content: str) -> None:
     except BaseException:
         Path(temporary).unlink(missing_ok=True)
         raise
+
+
+_INSTALLER = None
+
+
+def installer():
+    """W1.8: this clone's scripts/install.py, loaded by its path (as setup.sh does), never found on
+    sys.path, so nothing from the project or the current folder can stand in for it."""
+    global _INSTALLER
+    if _INSTALLER is None:
+        spec = importlib.util.spec_from_file_location("agent_orchestration_install", CLONE / "scripts" / "install.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _INSTALLER = module
+    return _INSTALLER
+
+
+def git_helpers(project) -> list[str] | None:
+    """W1.4: the project's own Git settings that name a program Git could start (none: []), read with
+    plumbing; None when the settings cannot be read."""
+    install = installer()
+    try:
+        return install.repository_helpers(Path(project))
+    except (install.InstallRefused, OSError, subprocess.SubprocessError):
+        return None
+
+
+def git_changes(project, paths: list[str]) -> list[str] | None:
+    """W5.1, W5.2: the paths under `paths` with uncommitted changes (a rename's both names), literal
+    paths only; None when Git could not answer or must not run (a helper named, W1.4)."""
+    if git_helpers(project) != []:
+        return None
+    install = installer()
+    try:
+        return install.project_changes(Path(project), list(paths))
+    except (install.InstallRefused, OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def git_commit(project, message: str, detail: str, paths: list[str]) -> tuple[str, str]:
+    """W5.3-W5.5: commit exactly `paths` with the installer's plumbing (no hook, filter or signing
+    program runs): ("committed", ""), ("nothing", "") when no path changed (W5.4: not a failure), or
+    ("failed", the installer's fixed refusal, or "")."""
+    install = installer()
+    try:
+        result = install.commit_paths(Path(project), message, detail, list(paths))
+    except install.InstallRefused as exc:
+        return "failed", str(exc)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return "failed", ""
+    return (result, "") if result in ("committed", "nothing") else ("failed", "")

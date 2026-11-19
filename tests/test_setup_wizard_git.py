@@ -83,9 +83,8 @@ class GitEffectTests(unittest.TestCase):
 
     def test_nothing_to_commit_commits_nothing(self) -> None:
         """W5.4."""
-        state, reason = effects.git_commit(self.project, "Set up", "detail", [".codex/kept"])
-        self.assertEqual("failed", state)
-        self.assertIn("nothing to commit", reason)
+        # W5.4: nothing changed is not a failure: the state is "nothing" ("nothing to commit").
+        self.assertEqual(("nothing", ""), effects.git_commit(self.project, "Set up", "detail", [".codex/kept"]))
         self.assertEqual("1", self.git("rev-list", "--count", "HEAD").strip())
 
     def test_the_installer_is_this_clones_own_file(self) -> None:
