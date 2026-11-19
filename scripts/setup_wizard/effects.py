@@ -161,3 +161,44 @@ def git_commit(project, message: str, detail: str, paths: list[str]) -> tuple[st
     except (OSError, subprocess.SubprocessError, ValueError):
         return "failed", ""
     return (result, "") if result in ("committed", "nothing") else ("failed", "")
+
+
+_ATTEST = None
+
+
+def attest():
+    """W1.8: this clone's scripts/attest.py, loaded by its path, never found on sys.path."""
+    global _ATTEST
+    if _ATTEST is None:
+        spec = importlib.util.spec_from_file_location("agent_orchestration_attest", CLONE / "scripts" / "attest.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _ATTEST = module
+    return _ATTEST
+
+
+def make_scratch(prefix: str, project=None) -> Path:
+    """W1.7: a new folder only this account can open, outside every agent sandbox's reach."""
+    module = attest()
+    try:
+        return module.make_scratch(prefix, Path(project) if project is not None else None)
+    except (module.AttestError, OSError) as exc:
+        raise EffectRefused(str(exc) if isinstance(exc, module.AttestError) else
+                            "a private working folder could not be created") from exc
+
+
+def remove_scratch(path) -> bool:
+    """W1.7: remove a working folder; False (with a warning naming it) when it could not be."""
+    return attest().remove_scratch(Path(path))
+
+
+def runtime_problem(project) -> str:
+    """W1.6: why the project's installed orchestrator is not this release byte for byte, or ""."""
+    module = attest()
+    try:
+        module.check_project_runtime(Path(project))
+    except module.AttestError as exc:
+        return str(exc)
+    except OSError:
+        return "the orchestrator installed in this project could not be read"
+    return ""
