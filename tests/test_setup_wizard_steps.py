@@ -334,7 +334,7 @@ class CommitOutcomeTests(unittest.TestCase):
         paths = [f".codex/{n}" for n in range(13)]
         self.assertEqual(paths[:10] + ["... and 3 more"], steps.first_ten(paths))
         self.assertEqual(paths[:10], steps.first_ten(paths[:10]))
-        self.assertEqual(["  .codex/0", "  ... and 12 more"][-1], steps.first_ten(paths, "  ")[-1])
+        self.assertEqual("  ... and 3 more", steps.first_ten(paths, "  ")[-1])  # setup.sh: n - shown.
 
     def test_each_commit_state_has_its_summary_line(self) -> None:
         for state, note in (("committed", "committed"), ("nothing", "nothing to commit"),

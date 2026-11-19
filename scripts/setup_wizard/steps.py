@@ -313,3 +313,50 @@ def uncommitted_display(records: list[str] | None, git_safe: bool) -> str:
     if records is None:
         return "(not checked: Git could not read the project)"
     return "\n".join(plain(name) for name in records)
+
+
+COMMIT_REFUSED_HINT = ("Git refused it. The usual cause is that your Git identity (user.name and user.email) is "
+                       "not set. Commit the files yourself, then run ./setup.sh again and choose Verify.")
+
+_COMMIT_NOTES = {
+    "committed": "committed",
+    "nothing": "nothing to commit",
+    "not_committed": "not committed (you chose to commit yourself)",
+}
+
+
+def commit_body(count: int) -> str:
+    """W5.3: what the commit screen says before offering "Commit now"."""
+    return (f"Next: commit the installed files in the project. Only these {count} paths are committed, nothing "
+            "is pushed. Setup commits with Git's plumbing commands only (hash-object, update-index, write-tree, "
+            "commit-tree, update-ref), which start no hook, filter, signing program, pager or maintenance "
+            "whatever the project's Git settings say, and with every network transport off. To commit them "
+            "yourself instead, these are the commands; choose 'Show every path' for the full list.")
+
+
+def first_ten(paths: list[str], indent: str = "") -> list[str]:
+    """The first ten of a list, then "... and N more" when there are others."""
+    lines = [indent + path for path in paths[:10]]
+    if len(paths) > 10:
+        lines.append(f"{indent}... and {len(paths) - 10} more")
+    return lines
+
+
+def commit_outcome(state: str, uncommitted: str, ignored: int) -> tuple[str, str]:
+    """W5.7, W10.5: the commit state after checking what is left, and the summary's commit line. A
+    commit that left managed files uncommitted has failed; so has any run with ignored files."""
+    if state == "committed" and uncommitted:
+        state = "failed"
+    if ignored > 0 and state != "failed":
+        state = "failed"
+    if state in _COMMIT_NOTES:
+        return state, _COMMIT_NOTES[state]
+    return state, "installed files ignored or could not be checked" if ignored > 0 else "commit failed"
+
+
+def left_uncommitted(uncommitted: str, state: str) -> list[str]:
+    """W5.7: the summary's list of what is left, shown unless the commit went through."""
+    paths = [line for line in uncommitted.split("\n") if line]
+    if not paths or state == "committed":
+        return []
+    return ["Left uncommitted in the project:"] + first_ten(paths, "  ")
