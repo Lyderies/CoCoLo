@@ -1832,6 +1832,10 @@ def sign_in_memory(key: Path, payload: bytes, snapshot: Path | None = None) -> b
         raise AttestError("signing did not finish")
 
 
+# End of input (Ctrl-D) at any prompt (O10 A1): a plain stop, never a traceback.
+NO_ANSWER = "no answer was given (end of input)."
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--target", type=Path, help="project with the packages installed")
@@ -1862,6 +1866,9 @@ def main(argv: list[str] | None = None) -> int:
         except AttestError as exc:
             print(f"Stopped: {exc}", file=sys.stderr)
             return 1
+        except EOFError:
+            print(f"Stopped: {NO_ANSWER}", file=sys.stderr)
+            return 1
         finally:
             _restore_handlers(previous)
         return 1 if _CLEANUP_FAILURES else 0
@@ -1882,6 +1889,9 @@ def main(argv: list[str] | None = None) -> int:
         done = [p for p in providers if attest_provider(target, key, p, cli_state)]
     except AttestError as exc:
         print(f"Stopped: {exc}", file=sys.stderr)
+        return 1
+    except EOFError:
+        print(f"Stopped: {NO_ANSWER}", file=sys.stderr)
         return 1
     finally:
         _restore_handlers(previous)
