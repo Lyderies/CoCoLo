@@ -175,7 +175,7 @@ class AccountBillingAdmission:
                         raise ProbeAdmissionError('probe_conflict')
                     # O0b RS-A round 2 G3: a replay of a request the sweep closed frees its memory (its row
                     # was committed by an earlier transaction, so this one rolling back cannot undo it).
-                    self._forget_closed()
+                    self._forget_closed_contained()
                     return reply
                 original = self._pending.get((project, key))
                 if original is None:
@@ -190,7 +190,7 @@ class AccountBillingAdmission:
                 "WHERE project_id=? AND state<>'committed' LIMIT ?)", (project, MAX_PROBE_REQUESTS+1))[0]
             if count >= MAX_PROBE_REQUESTS:
                 raise ProbeAdmissionError('probe_full')
-            self._forget_closed()
+            self._forget_closed_contained()
             if (len(self._pending) >= MAX_PENDING_PROBES
                     or sum(p == project for p, _ in self._pending) >= MAX_PENDING_PROJECT_PROBES):
                 raise ProbeAdmissionError('probe_full')
@@ -477,6 +477,16 @@ class AccountBillingAdmission:
             self._reserved_inputs.pop(reservation, None)
         return not left
 
+    def _forget_closed_contained(self):
+        """RS-A code round 3 verifier M2: forgetting inside a request (reserve's replay, a new reservation,
+        known_reply) must never turn a valid answer into an error. A failure leaves the originals as the
+        retry target and sets the notice, so the owner's next step tries again and notes any failure."""
+        try:
+            if not self._forget_closed():
+                self._closed_notice.set()
+        except Exception:
+            self._closed_notice.set()
+
     def probes_closed(self):
         """O0b RS-A round 2 G3: told by the ledger after a sweep's transaction has committed expired probes
         (never on rollback). Any thread may call this; only the owner thread touches memory or the pool, here
@@ -524,7 +534,7 @@ class AccountBillingAdmission:
             self._authorize(context, snapshot, before_commit)
             if self._project(project, context) != root or self._row(project, key) != row:
                 raise ProbeAdmissionError('probe_conflict')
-            self._forget_closed()  # O0b RS-A round 2 G9: as reserve()'s replay does
+            self._forget_closed_contained()  # O0b RS-A round 2 G9: as reserve()'s replay does
             return reply
 
     @staticmethod
