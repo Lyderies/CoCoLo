@@ -10,14 +10,21 @@ This module is written before any B0 code: each failure exit here fails on 0.8.3
 listed with the B0 step that makes it pass.
 """
 import json
+import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
+from tests.support import SHORT_TMP
 from tests.test_bridge import null_filled, result
+from tests.test_container_launch_journal import TimeoutPodman
+from tests.test_container_runtime import FakeClock, FakeHostFiles
 from tests.test_lost_run_settlement import LostRunAfterStopTests
 from tests.test_result_lifetime import ResultLifetimeTests
 
-from codex_agents import codex_preparation
+from codex_agents import codex_preparation, container_launch
+from codex_agents import container_runtime as cr
 
 
 class HoldLifecycleTests(ResultLifetimeTests):
@@ -127,10 +134,87 @@ class LostSlotReleaseTests(LostRunAfterStopTests):
         self.assertEqual('lost', rows[0]['release_kind'])
 
 
+class ContainerRunHoldTests(HoldLifecycleTests):
+    """C3 (PLAN-0.4.0-supervisor-slices.md): a live service's own ended run in container mode.
+
+    The project service launches its runs in containers (C2's switch, on for these tests) over a
+    fake podman; the run's command runs locally in the container's place, as its attached output.
+    """
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory(dir=SHORT_TMP)
+        self.addCleanup(folder.cleanup)
+        self.seccomp = os.path.join(os.path.realpath(folder.name), 'seccomp.json')
+        Path(self.seccomp).write_text('{}')
+        self.podman_host = FakeHostFiles()
+        self.podman = TimeoutPodman(self.podman_host)
+        clock = FakeClock()  # the primitive's own polling only; back-off and sweeps run on real time
+
+        def launcher_for(project_id, journal, settings=None):
+            runtime = cr.ContainerRuntime(project_id, runner=self.podman, host_files=self.podman_host,
+                                          monotonic=clock.monotonic, sleep=clock.sleep)
+            config = container_launch.ContainerLaunchConfig(image='python:3.12-slim', seccomp_profile=self.seccomp,
+                                                            grace_seconds=1)
+            return container_launch.ContainerLauncher(runtime, journal, config, attach=self.attached)
+
+        patcher = mock.patch.object(container_launch, 'launcher_for', launcher_for)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def attached(self, started):
+        """The command the container was created with, run locally in its place."""
+        args = self.podman.containers[started.name].args
+        image = next(index for index, arg in enumerate(args) if index and not arg.startswith('-'))
+        return list(args[image + 1:])
+
+    def running_run(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'quiet'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        process = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(lambda: any(c.status == 'running' for c in self.podman.containers.values()), seconds=30)
+        self.assertEqual(1, self.held()['account_slots'])  # the hold was taken
+        return context, route_path, orchestration, run_handle, process
+
+    def container_holds(self):
+        return self.cli('learning-status')['container_holds']
+
+    def test_C3_a_cancelled_run_frees_its_slot_once_its_container_is_gone(self):
+        context, route_path, orchestration, run_handle, process = self.running_run()
+        self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
+        process.communicate(timeout=60)
+        self.assertEqual([], [name for name, c in self.podman.containers.items()])  # stopped and removed
+        # Only the live service's own work may free it: no restart.
+        self.wait_for(lambda: self.held()['account_slots'] == 0, seconds=30)
+        self.assertEqual(0, self.container_holds()['counts']['stop_failed'])
+
+    def test_C3_a_container_that_does_not_stop_keeps_its_slot_until_a_retried_stop_proves_it_gone(self):
+        context, route_path, orchestration, run_handle, process = self.running_run()
+        self.podman.stop_does_nothing = self.podman.rm_fails = True
+        self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
+        process.communicate(timeout=60)
+        self.wait_for(lambda: self.container_holds()['counts']['stop_failed'] == 1, seconds=30)
+        status = self.cli('learning-status')
+        [failed] = status['container_holds']['stop_failed']
+        self.assertEqual('cancel_requested', failed['reason'])
+        self.assertTrue(any(failed['container'] in line and 'could not be stopped' in line
+                            for line in status['account_health']['attention']), status['account_health'])
+        # Held while the container is not proven gone, though its run ended.
+        import time
+        time.sleep(3)  # several sweeps and retried stops
+        self.assertEqual(1, self.held()['account_slots'])
+        # The container goes: a retried stop proves it, and the live service releases the slot by itself.
+        self.podman.stop_does_nothing = self.podman.rm_fails = False
+        self.wait_for(lambda: self.held()['account_slots'] == 0, seconds=60)
+        self.assertEqual(0, self.container_holds()['counts']['stop_failed'])
+
+
 def load_tests(loader, tests, pattern):
     """Only this module's own tests: the inherited ones run in their own modules."""
     suite = unittest.TestSuite()
-    for case in (HoldLifecycleTests, LostServiceHoldTests, LostSlotReleaseTests):
+    for case in (HoldLifecycleTests, LostServiceHoldTests, LostSlotReleaseTests, ContainerRunHoldTests):
         for name in loader.getTestCaseNames(case):
             if name in case.__dict__:
                 suite.addTest(case(name))

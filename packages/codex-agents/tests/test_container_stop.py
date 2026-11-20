@@ -266,7 +266,10 @@ class EveryReasonTests(ContainerStopCase):
             outcome = run.join()
         self.assertEqual('cancelled', outcome['abort'])
         self.assertEqual(('gone', 'cancel_requested'), (self.entry()['state'], self.entry()['stop_reason']))
-        self.assertTrue(self.confirmed(run))
+        self.assertNotIn(self.name(), self.podman.containers)
+        # Its local output reader was stopped before it was ever tracked, so (as in the process mode)
+        # the execution is not confirmed clean here; the gone container lets the driver settle it.
+        self.assertFalse(self.confirmed(run))
 
     def test_a_stop_under_way_is_joined_not_repeated(self):
         started = container_launch.StartedContainer(self.token, self.journal.entry(self.token)['container_name'],
@@ -703,7 +706,8 @@ class WatchdogTests(unittest.TestCase):
 
     def test_the_watchdog_stops_through_container_runtime_stop(self):
         config = {'project': CONTAINER_PROJECT, 'prefix': cr.DEFAULT_NAME_PREFIX, 'podman': '/opt/example/podman',
-                  'global': [], 'name': 'cocolo-run-' + '2' * 32, 'grace': 2, 'cgroup': None, 'parent': os.getpid()}
+                  'global': [], 'name': 'cocolo-run-' + '2' * 32, 'grace': 2, 'cgroup': None,
+                  'parent': os.getppid()}  # in the watchdog, the service is its parent
         watcher = process_tree.container_watcher(json.dumps(config))
         self.assertTrue(watcher.parent_alive())
         self.assertEqual('container_runtime.py', os.path.basename(sys.modules[type(watcher.runtime).__module__]
