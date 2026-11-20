@@ -27,6 +27,7 @@
  "codex:tests.test_account_observation_schema": "integration",
  "codex:tests.test_account_open_schema": "unit",
  "codex:tests.test_account_original_open": "integration",
+ "codex:tests.test_account_restart": "unit",
  "codex:tests.test_account_slot_health": "integration",
  "codex:tests.test_account_store_recovery": "integration",
  "codex:tests.test_account_terminal_delivery": "integration",
