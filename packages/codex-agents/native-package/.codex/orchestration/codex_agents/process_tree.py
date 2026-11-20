@@ -61,7 +61,12 @@ WATCHDOG_READY = b"ready\n"
 # Kill rounds: each takes a fresh snapshot, adopts what the tree started since and
 # kills every live tracked process, until a round finds none left alive.
 MAX_KILL_ROUNDS = 5
+# Identities not yet proven stopped that cleanup evidence holds at once; one proven stopped
+# is dropped (except the root's), so a long run that starts many short processes never reaches it.
 MAX_CLEANUP_IDENTITIES = 4096
+# A failed process listing is retried this often, this far apart, before cleanup is refused.
+SNAPSHOT_RETRY_ATTEMPTS = 5
+SNAPSHOT_RETRY_PAUSE_SECONDS = 0.1
 KILL_ROUND_PAUSE_SECONDS = 0.05
 
 # macOS: sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID, pid) fills one 648-byte
@@ -615,23 +620,57 @@ class ProcessTree:
         self.identified = False
         # Unlike the signalling set, cleanup evidence never forgets an
         # unreadable identity. None is not proof that a process has stopped.
+        # An identity proven stopped is dropped (the root's stays, as the anchor of the
+        # evidence), so only identities not yet proven stopped count toward the limit.
         self._cleanup_seen: dict[tuple[int, str], bool] = {}
         self._cleanup_incomplete = False
+        # A process listing failed since the last good one. With a run marker a later good
+        # listing, or the marker scan, covers what the gap hid; without one it is permanent.
+        self._snapshot_missed = False
+
+    def snapshot_failed(self) -> None:
+        """A process listing failed: cleanup is unproven until a later listing succeeds."""
+        if self.run_tag is None:
+            self._cleanup_incomplete = True
+        else:
+            self._snapshot_missed = True
+
+    def _retry_snapshot(self) -> bool:
+        """After a failed listing, bounded fresh attempts; True once a listing succeeded."""
+        for attempt in range(SNAPSHOT_RETRY_ATTEMPTS):
+            if attempt:
+                time.sleep(SNAPSHOT_RETRY_PAUSE_SECONDS)
+            table = process_table()
+            if table is not None:
+                self.update(table)
+                return True
+        return False
+
+    def _snapshot_covered(self) -> bool:
+        return not self._snapshot_missed or self._retry_snapshot() and not self._snapshot_missed
+
+    def _mark_stopped(self, identity: tuple[int, str]) -> None:
+        if identity == (self.root, self.root_birth):
+            self._cleanup_seen[identity] = True
+        else:
+            self._cleanup_seen.pop(identity, None)
 
     def _remember_cleanup(self, pid: int, birth: str, record: Record | None) -> None:
         identity = (pid, birth)
+        if record is not None and (record[2] != birth or record[3]):
+            self._mark_stopped(identity)
+            return
         if identity not in self._cleanup_seen:
-            if len(self._cleanup_seen) >= MAX_CLEANUP_IDENTITIES:
+            unproven = sum(1 for stopped in self._cleanup_seen.values() if not stopped)
+            if unproven >= MAX_CLEANUP_IDENTITIES:
                 self._cleanup_incomplete = True
                 return
             self._cleanup_seen[identity] = False
-        if record is not None and (record[2] != birth or record[3]):
-            self._cleanup_seen[identity] = True
-        elif record is None and not self._cleanup_seen[identity]:
+        if record is None and not self._cleanup_seen[identity]:
             # Gone means it exited and its parent reaped it (a child's quick shell command,
             # say); anything else unreadable stays unproven.
             if process_gone(pid):
-                self._cleanup_seen[identity] = True
+                self._mark_stopped(identity)
             else:
                 self._cleanup_incomplete = True
 
@@ -645,7 +684,8 @@ class ProcessTree:
         """
         root = (self.root, self.root_birth)
         if (not self.identified or self._cleanup_incomplete or root not in self._cleanup_seen
-                or process.pid != self.root or type(process.returncode) is not int):
+                or process.pid != self.root or type(process.returncode) is not int
+                or not self._snapshot_covered()):
             return False
         for (pid, birth), stopped in tuple(self._cleanup_seen.items()):
             if not stopped and (pid, birth) != root:
@@ -672,7 +712,8 @@ class ProcessTree:
         root, so the root must also be seen stopped (a zombie, reaped, or its
         pid reborn). An unreadable record, a lost snapshot or overflow is unknown.
         """
-        if not self.identified or self._cleanup_incomplete or (self.root, self.root_birth) not in self._cleanup_seen:
+        if (not self.identified or self._cleanup_incomplete or (self.root, self.root_birth) not in self._cleanup_seen
+                or not self._snapshot_covered()):
             return False
         for (pid, birth), stopped in tuple(self._cleanup_seen.items()):
             if not stopped:
@@ -687,7 +728,7 @@ class ProcessTree:
         """
 
         if table is None:
-            self._cleanup_incomplete = True
+            self.snapshot_failed()
             return False
         record = process_record(self.root)
         if record is None or (birth is not None and record[2] != birth):
@@ -742,6 +783,7 @@ class ProcessTree:
                 grew = True
         # Exited processes are forgotten; their pids may belong to anything later.
         self.tracked = {pid: self.tracked[pid] for pid in live}
+        self._snapshot_missed = False  # A listing succeeded and what it showed is adopted.
         return live
 
     def root_exited(self) -> bool:
@@ -767,7 +809,7 @@ class ProcessTree:
             if table is not None:
                 self.update(table)
             else:
-                self._cleanup_incomplete = True
+                self.snapshot_failed()
             records = {pid: self._record(pid) for pid in sorted(self.tracked)}
             running = [pid for pid, record in records.items() if record and not record[3]]
             if round_number and not running:

@@ -7,8 +7,13 @@ No frame, message, command, reasoning, output or provider timestamp is retained.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 import re
 
+# Items still in progress, per run. A completed item is forgotten at once (it moves to a
+# recent window of the same size, so an immediate replay is still recognised; the oldest
+# entry of the window is dropped, never reported), so a long healthy run never reaches
+# this. Only more items open at once than this is a monitoring failure.
 MAX_ACTIVITY_ITEMS = 4096
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _STAGES = {"item.started": 1, "item.updated": 2, "item.completed": 3}
@@ -28,7 +33,8 @@ class CodexActivity:
     def __init__(self):
         self._thread_id = None
         self._started = False
-        self._items = {}
+        self._items = {}  # In progress: id -> (type, stage).
+        self._finished = OrderedDict()  # Recently completed: id -> type; the oldest is forgotten.
 
     def observe(self, frame):
         if type(frame) is not dict:
@@ -66,14 +72,23 @@ class CodexActivity:
             raise CodexActivityError()
         stage = _STAGES[kind]
         previous = self._items.get(identity)
+        if previous is None and identity in self._finished:
+            previous = (self._finished[identity], _STAGES["item.completed"])
         if previous is not None:
             if previous[0] != item_type:
                 raise CodexActivityError()
             if stage <= previous[1]:
                 return None
-        elif len(self._items) >= MAX_ACTIVITY_ITEMS:
+        elif stage < _STAGES["item.completed"] and len(self._items) >= MAX_ACTIVITY_ITEMS:
             raise CodexActivityError("monitor_unavailable")
-        self._items[identity] = (item_type, stage)
+        if stage < _STAGES["item.completed"]:
+            self._items[identity] = (item_type, stage)
+        else:
+            self._items.pop(identity, None)
+            self._finished[identity] = item_type
+            self._finished.move_to_end(identity)
+            while len(self._finished) > MAX_ACTIVITY_ITEMS:
+                self._finished.popitem(last=False)
         if item_type in {"agent_message", "reasoning"}:
             text = item.get("text")
             if type(text) is not str:
