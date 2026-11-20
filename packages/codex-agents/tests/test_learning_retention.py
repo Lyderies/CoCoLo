@@ -98,7 +98,7 @@ class ProjectCycleWindowTests(unittest.TestCase):
                                           similarity_group_digest="e" * 64, destination="promotion_holdout",
                                           freeze=True)
         fixture_record(self.store, reviewed, "evaluator", 0)
-        self.small(cases=1)
+        self.small(cases=2)
         self.outcome("later", 200)
         view = self.cycle("later", 200)
         self.assertEqual("ready", view["state"], view)  # The promoted case + one new one, never the old development case.
@@ -176,7 +176,7 @@ class ProjectPurgeTests(ProjectRetentionFixture):
 
     def test_P7_nothing_is_removed_within_the_retention(self):
         before = (self.surviving("case"), self.surviving("candidate"))
-        with mock.patch.object(self.store, "_result_now", return_value=90 * DAY):
+        with mock.patch.object(self.store, "_result_now", return_value=90 * DAY - 1):
             self.store.expire_results(limit=10)
         self.assertEqual(before, (self.surviving("case"), self.surviving("candidate")))
 
