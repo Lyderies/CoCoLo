@@ -486,8 +486,99 @@ class CleanupEvidenceTests(unittest.TestCase):
             records[20001] = (*records[20001][:3], True)
             self.assertFalse(tree.cleanup_after_owned_wait(root))
         with mock.patch.object(process_tree, "MAX_CLEANUP_IDENTITIES", 1):
-            tree, records, root = self.identified(child_exited=True)
+            tree, records, root = self.identified()  # Root and child both unproven: more than the limit.
+        self.assertTrue(tree._cleanup_incomplete)
+        records[20001] = (*records[20001][:3], True)
         with mock.patch.object(process_tree, "process_record", side_effect=records.get):
+            self.assertFalse(tree.cleanup_after_owned_wait(root))
+
+    def waves(self, tree, records, count, width, root=20000):
+        """Children in waves of `width` live at once; the wave before exits when the next starts."""
+        previous = []
+        for wave in range(count // width):
+            current = [root + 1 + wave * width + number for number in range(width)]
+            for pid in previous:
+                records[pid] = (root, root, f"c{pid}", True)
+            for pid in current:
+                records[pid] = (root, root, f"c{pid}", False)
+            tree.update({root: 1, **{pid: root for pid in current}})
+            previous = current
+        for pid in previous:
+            records[pid] = (root, root, f"c{pid}", True)
+        tree.update({root: 1})
+
+    def test_a_tree_of_more_processes_than_the_limit_is_confirmed_when_few_are_live_at_once(self):
+        # O0c M2: only identities not yet proven stopped count toward the limit.
+        root = 20000
+        records = {root: (1, root, "root", False)}
+        tree = process_tree.ProcessTree(root)
+        with mock.patch.object(process_tree, "MAX_CLEANUP_IDENTITIES", 8), \
+                mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "process_gone", return_value=False):
+            self.assertTrue(tree.identify({root: 1}))
+            self.waves(tree, records, 20, 5)
+            self.assertFalse(tree._cleanup_incomplete)
+            self.assertLessEqual(len(tree._cleanup_seen), 8)
+            self.assertTrue(tree.cleanup_after_owned_wait(SimpleNamespace(pid=root, returncode=0)))
+            records[root] = (1, root, "root", True)
+            self.assertTrue(tree.cleanup_confirmed())
+
+    def test_more_live_unproven_processes_than_the_limit_still_refuse_confirmation_for_good(self):
+        root = 20000
+        records = {root: (1, root, "root", False)}
+        tree = process_tree.ProcessTree(root)
+        with mock.patch.object(process_tree, "MAX_CLEANUP_IDENTITIES", 8), \
+                mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "process_gone", return_value=False):
+            self.assertTrue(tree.identify({root: 1}))
+            self.waves(tree, records, 20, 20)  # Twenty live at once, then all exit.
+            self.assertTrue(tree._cleanup_incomplete)
+            self.assertFalse(tree.cleanup_after_owned_wait(SimpleNamespace(pid=root, returncode=0)))
+
+    def tagged_tree(self):
+        root, child = 20000, 20001
+        records = {root: (1, root, "root", False), child: (root, root, "child", True)}
+        tree = process_tree.ProcessTree(root, "tag")
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get):
+            self.assertTrue(tree.identify({root: 1, child: root}))
+        return tree, records, SimpleNamespace(pid=root, returncode=0)
+
+    def test_one_failed_snapshot_is_retried_and_cleanup_is_confirmed(self):
+        # O0c M2: a failed process_table() no longer fails cleanup for good.
+        tree, records, root = self.tagged_tree()
+        with mock.patch.object(bridge, "process_table", return_value=None):
+            bridge._track(tree)
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "tagged_process_running", return_value=False), \
+                mock.patch.object(process_tree, "process_table",
+                                  side_effect=[None, {20000: 1, 20001: 20000}, {20000: 1, 20001: 20000}]), \
+                mock.patch.object(process_tree.time, "sleep"):
+            self.assertTrue(tree.cleanup_after_owned_wait(root))
+            records[20000] = (1, 20000, "root", True)
+            self.assertTrue(tree.cleanup_confirmed())
+
+    def test_a_snapshot_that_keeps_failing_refuses_confirmation_after_bounded_attempts(self):
+        tree, records, root = self.tagged_tree()
+        with mock.patch.object(bridge, "process_table", return_value=None):
+            bridge._track(tree)
+        table = mock.Mock(return_value=None)
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "tagged_process_running", return_value=False), \
+                mock.patch.object(process_tree, "process_table", table), \
+                mock.patch.object(process_tree.time, "sleep"):
+            self.assertFalse(tree.cleanup_after_owned_wait(root))
+            self.assertFalse(tree.cleanup_confirmed())
+        self.assertGreaterEqual(table.call_count, 2)
+        self.assertLessEqual(table.call_count, 20)
+
+    def test_a_failed_snapshot_without_a_run_marker_stays_unproven(self):
+        # Nothing but the marker covers a descendant that left its parent during the gap.
+        tree, records, root = self.identified(child_exited=True)
+        with mock.patch.object(bridge, "process_table", return_value=None):
+            bridge._track(tree)
+        with mock.patch.object(process_tree, "process_record", side_effect=records.get), \
+                mock.patch.object(process_tree, "process_table", return_value={20000: 1, 20001: 20000}), \
+                mock.patch.object(process_tree.time, "sleep"):
             self.assertFalse(tree.cleanup_after_owned_wait(root))
 
 
