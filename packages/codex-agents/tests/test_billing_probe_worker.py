@@ -323,12 +323,14 @@ class BillingProbeWorkerTests(unittest.TestCase):
         view = self.pool.health.view()
         self.assertEqual((0, 0, None), (view['busy'], view['kept'], view['held_since_ms']))
 
-    def test_H1a_an_unknown_preparation_is_kept_and_held_without_a_fault(self):
+    def test_H1a_M10_an_unknown_preparation_is_kept_held_and_faults_the_lane(self):
         with mock.patch.object(workers, '_prepare', return_value=(None, None, True)):
             handle = self.pool.prepare(self.payload())
             self.until(lambda: self.pool.snapshot(handle)['state'] == 'unknown')
         view = self.pool.health.view()
-        self.assertEqual((1, False), (view['kept'], view['faulted']))
+        # O0c M10 (replacing H1a's "without a fault"): unknown work faults its lane, so the account's
+        # self-restart fires.
+        self.assertEqual((1, True), (view['kept'], view['faulted']))
         self.assertIs(int, type(view['held_since_ms']))
         self.assertEqual(('probe_preparation_unknown', 'invariant'),
                          (view['last_failure']['cause'], view['last_failure']['type']))

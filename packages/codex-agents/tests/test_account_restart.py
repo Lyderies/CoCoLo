@@ -152,7 +152,9 @@ class RestartCheckTests(unittest.TestCase):
             raise RuntimeError('unreadable')
         self.assertEqual('ok', account_restart.check(broken, lambda: IDLE, None, now_ms=NOW)['action'])
         self.assertEqual('wait', account_restart.check(lambda: faulted, broken, None, now_ms=NOW)['action'])
-        self.assertEqual('restart', account_restart.check(lambda: faulted, lambda: IDLE, None, now_ms=NOW)['action'])
+        # O0c M8-M10: a restart also needs every child proven gone (here: none started).
+        self.assertEqual('restart', account_restart.check(lambda: faulted, lambda: IDLE, None, now_ms=NOW,
+                                                          read_children=lambda: [])['action'])
 
 
 if __name__ == '__main__':

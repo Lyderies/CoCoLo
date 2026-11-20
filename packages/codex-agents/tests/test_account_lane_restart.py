@@ -152,6 +152,7 @@ class SignatureLaneRestartTests(unittest.TestCase):
     def restarted(self):
         """New claim jobs and service on the same ledger, as the next collector builds them."""
         c = self.claims
+        c.ledger._signature_job_intake = None  # the next collector's ledger has no intake yet
         views = AccountOwnerViews(c.ledger)
         jobs = AccountClaimJobs(views, SignatureIntakeLimits(2, 2, 128, 262_144, 2), WORKER_LIMITS,
                                 SQLReadLimits(10_000, 1000, 1_048_576), allow_unleased_claim_reference=True)
@@ -224,6 +225,7 @@ class SignatureLaneRestartTests(unittest.TestCase):
                                side_effect=execution.SignatureExecutionUnconfirmed(Unproven())):
             c.begin()
             self.drive_until(c.jobs, lambda: c.jobs._pool.health.view()['kept'] >= 1)
+        c.jobs.drive()  # the owner sees it unconfirmed
         pool = c.jobs._pool
         self.assertTrue(pool.health.view()['faulted'])
         self.assertEqual(['signature'], account_host.unended_children(pool, None))
@@ -272,6 +274,9 @@ class BillingLaneRestartTests(unittest.TestCase):
     def build(self):
         """The account's billing phases as AccountServiceHost builds them: two probe jobs per project (M9's
         limit) and one probe worker per machine (M10's), both scaled to the test."""
+        # A restarted collector opens its own ledger, with no account owners registered on it yet.
+        for owner in ('_signature_job_intake', '_observation_owner', '_billing_admission_owner'):
+            setattr(self.ledger, owner, None)
         views = AccountOwnerViews(self.ledger)
         limits = SQLReadLimits(100_000, 1000, 2 * 1_048_576)
         claims = AccountClaimJobs(views, SignatureIntakeLimits(4, 2, 512, 262_144, 4), WORKER_LIMITS, limits)
@@ -422,10 +427,25 @@ class BillingLaneRestartTests(unittest.TestCase):
         self.assertEqual([], self.ledger.machine_idle()['probes'])
         self.assert_restarts('billing')
         self.services = self.build()
-        # The product's five-minute cooldown after an admitted probe is not a held slot; it is
-        # passed here (the next test shows it still applies).
+        # Two product rules, not held slots, are passed here: the five-minute cooldown after an admitted
+        # probe (the next test shows it still applies), and the account's one bootstrap admission, which
+        # the lost probe spent without keeping its records (an earlier run's billing reading stands in).
+        self.seed_billing(minutes_ago=10)
         with mock.patch.object(account_billing_admission, 'PROBE_COOLDOWN_MS', 0):
-            self.assertEqual('completed', self.take('after-restart')['probe'])
+            answer = self.take('after-restart')
+            self.assertEqual('completed', answer['probe'], answer)
+
+    def seed_billing(self, *, minutes_ago):
+        from codex_agents.providers import claude_rate_limit_records
+        identity = self.ledger._connection.execute(
+            "SELECT content FROM records WHERE project_id=? AND record_type='provider_identity' "
+            "ORDER BY rowid DESC LIMIT 1", (self.fixture.project_id,)).fetchone()[0]
+        fingerprint = __import__('json').loads(bytes(identity))['account_fingerprint']
+        observed = time.time_ns() // 1_000_000 - minutes_ago * 60_000
+        records = claude_rate_limit_records({'status': 'allowed', 'isUsingOverage': False,
+            'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'},
+            account_fingerprint=fingerprint, observed_at_ms=observed)
+        self.ledger._store_provider_observations(self.fixture.project_id, records, timestamp=observed)
 
     def test_M10_an_unknown_probe_execution_restarts_the_account_and_a_probe_succeeds(self):
         self.restart_after_unknown_probe(self.fail_workspace_removal_after_the_probe_ran)
