@@ -246,6 +246,18 @@ import runpy
 runpy.run_path(sys.argv[0], run_name="__main__")
 '''
 
+RESTART_WRAPPER = '''
+import sys
+sys.path.insert(0, sys.argv[1])
+from codex_agents import account_restart
+account_restart.CHECK_EVERY_SECONDS = 0.05
+account_restart.decide = lambda *args, **kwargs: {'action': 'restart', 'lane': 'ingress',
+                                                  'cause': 'ingress_cleanup_failed', 'held': {}}
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
 WRAPPER = '''
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -332,6 +344,13 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
                                     str(self.state.root)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(lambda: process.poll() is None and process.kill())
         return process
+
+    def test_H1c_3_a_stuck_account_with_nothing_running_stops_itself_and_records_why(self):
+        process = self.run_wrapper(RESTART_WRAPPER)
+        process.wait(timeout=60)
+        self.wait_gone()
+        record, _ = self.previous_exit()
+        self.assertEqual(('account_restart', 'ingress_cleanup_failed'), (record['cause'], record['error']))
 
     def test_C10a_an_error_in_the_collector_thread_is_recorded(self):
         process = self.run_wrapper(THREAD_WRAPPER)

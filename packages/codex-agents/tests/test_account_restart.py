@@ -75,5 +75,16 @@ class RestartDecisionTests(unittest.TestCase):
                 self.assertEqual('ok', self.decide(notes)['action'])
 
 
+class RestartCheckTests(unittest.TestCase):
+    def test_H1c_6_unreadable_notes_never_restart_and_an_unreadable_ledger_waits(self):
+        faulted = lanes(ingress=lane(faulted=True))
+
+        def broken():
+            raise RuntimeError('unreadable')
+        self.assertEqual('ok', account_restart.check(broken, lambda: IDLE, None, now_ms=NOW)['action'])
+        self.assertEqual('wait', account_restart.check(lambda: faulted, broken, None, now_ms=NOW)['action'])
+        self.assertEqual('restart', account_restart.check(lambda: faulted, lambda: IDLE, None, now_ms=NOW)['action'])
+
+
 if __name__ == '__main__':
     unittest.main()
