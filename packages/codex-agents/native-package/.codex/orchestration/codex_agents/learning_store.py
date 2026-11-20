@@ -11814,7 +11814,7 @@ class CollectorServer:
         self.account_restart = None  # S1-H1c, set by collector_host: its latest restart decision
         self.account_restart_last = None  # S1-H1c D5: the last self-restart kept (time, lane, cause)
         self.thread_error: BaseException | None = None
-        self.sweep_error: str | None = None  # S1-H1a-6: the type of an error that ended the sweep thread
+        self.sweep_error: str | None = None  # S1-H1a-6: the type of the last unexpected sweep error
         self._sweeps: threading.Thread | None = None
         self._sweeps_stop = threading.Event()
         self._clients = client_capabilities or load_client_capabilities(
@@ -11868,11 +11868,11 @@ class CollectorServer:
             sweeps.start()
         except Exception as exc:
             self._startup_error = exc
-            self._ready.set()
-            listener.close()
+            listener.close()  # closed and removed before start() is told, so it never sees them
             self._socket = None
             with contextlib.suppress(FileNotFoundError):
                 self.state.socket.unlink()
+            self._ready.set()
             return
         self._sweeps = sweeps
         self._ready.set()

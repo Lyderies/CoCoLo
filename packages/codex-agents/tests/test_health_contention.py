@@ -202,7 +202,7 @@ class HealthContentionTests(unittest.TestCase):
                 while not server._sweeps_stop.is_set():  # the cancellation reached the sweeps
                     self.assertLess(time.monotonic(), deadline)
                     time.sleep(0.01)
-                time.sleep(1.0)  # two cycles would have come due
+                time.sleep(1.8)  # two cycles would have come due
                 self.assertEqual([], calls)
             finally:
                 release.set()
@@ -210,7 +210,7 @@ class HealthContentionTests(unittest.TestCase):
                 stopper.join(10)
             self.assertFalse(stopper.is_alive())
             self.assertEqual([], failed)  # G6: the stop itself succeeded
-        self.run_with(self.patched_sweeps(calls, interval=0.4)
+        self.run_with(self.patched_sweeps(calls, interval=0.8)
                       + [mock.patch.object(learning_store, 'client_health_snapshot', blocked)], body)
 
     def test_G2_G4_a_sweep_outliving_the_join_is_reported_and_a_restart_is_refused(self):
@@ -245,6 +245,17 @@ class HealthContentionTests(unittest.TestCase):
                 time.sleep(0.02)
         self.run_with([mock.patch.object(learning_store, 'WORKER_RESULT_SWEEP_SECONDS', 0.05),
                        mock.patch.object(self.ledger, 'sweep_worker_results', stuck)], body)
+
+    def test_G1_a_stop_right_after_start_is_kept(self):
+        calls = []
+
+        def body():
+            server, _ = self.serve()
+            server.stop()
+            self.assertFalse(server._sweeps.is_alive())
+            time.sleep(0.2)
+            self.assertEqual([], calls)
+        self.run_with(self.patched_sweeps(calls), body)
 
     def test_G5_a_sweep_thread_that_cannot_start_fails_the_start(self):
         from codex_agents.collector_contracts import CollectorError
@@ -360,6 +371,12 @@ class HealthContentionTests(unittest.TestCase):
                 time.sleep(0.02)
             self.assertEqual('RuntimeError', server.sweep_error)
             self.assertIn('runtime_digest', client.health())
+            taken = []  # the cycle released the lock after the error (verifier 040-h1a6-code-2)
+            thread = threading.Thread(target=lambda: taken.append(self.ledger._lock.acquire(timeout=2)
+                                                                  and self.ledger._lock.release() is None))
+            thread.start()
+            thread.join(5)
+            self.assertEqual([True], taken)
         self.run_with(self.patched_sweeps(calls, fail_first=True), body)
 
 
