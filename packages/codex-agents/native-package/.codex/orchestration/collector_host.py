@@ -121,8 +121,10 @@ def main(argv: list[str] | None = None) -> int:
                 now_ms, mono_ns = time.time_ns() // 1_000_000, time.monotonic_ns()
                 last = account_restart.last_restart(state.root)
                 server.account_restart_last = last if type(last) is dict else None  # D5
+                # O0c M8-M10: and only once every child the account's lanes started is proven gone.
                 decision = account_restart.check(account.health_notes, ledger.machine_idle, last,
-                                                 now_ms=now_ms, mono_ns=mono_ns)
+                                                 now_ms=now_ms, mono_ns=mono_ns,
+                                                 read_children=account.unended_children)
                 if decision["action"] == "restart" and not account_restart.record_restart(
                         state.root, lane=decision["lane"], cause=decision["cause"], now_ms=now_ms, mono_ns=mono_ns):
                     decision = {**decision, "action": "suppressed", "reason": "unrecorded"}  # C4/D6

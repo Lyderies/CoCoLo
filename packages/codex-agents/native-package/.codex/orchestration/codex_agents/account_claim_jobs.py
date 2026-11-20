@@ -123,10 +123,14 @@ class AccountClaimJobs:
         self._publish_health()
 
     def _publish_health(self):
-        """S1-H1a: this owner's note: faulted, and its jobs (kept while faulted, else busy)."""
+        """S1-H1a: this owner's note: faulted, and its jobs (kept while faulted, else busy). O0c M8: a job
+        whose signature work is held unconfirmed is kept too: it waits on the stuck lane, runs nothing."""
         try:
             tokens = frozenset(id(job) for job in self._jobs.values())
-            lane_health.safely(lambda: self._note.publish(faulted=self._faulted, kept=tokens if self._faulted else frozenset(), busy=0 if self._faulted else len(tokens)))
+            held = self._pool.unknown_handles()
+            kept = tokens if self._faulted else frozenset(
+                id(job) for job in self._jobs.values() if job.signature_handle in held)
+            lane_health.safely(lambda: self._note.publish(faulted=self._faulted, kept=kept, busy=len(tokens - kept)))
         except Exception:
             pass
 
@@ -174,6 +178,10 @@ class AccountClaimJobs:
                 # quota/custody and require an explicit retry after cleanup.
                 raise ClaimError("claim_busy")
             return existing
+        if self._pool.stuck():
+            # O0c M8: no signature worker can free before the account restarts itself; say so at once
+            # (retryable) instead of queueing work that would hold that restart.
+            raise ClaimError("claim_unavailable")
         limits = self._intake._limits
         count = self._counts.get(project_id, 0)
         if (count >= limits.max_jobs_per_project
@@ -253,6 +261,8 @@ class AccountClaimJobs:
                 raise OpenError('open_busy')
             before_commit()
             return existing
+        if self._pool.stuck():
+            raise OpenError('open_unavailable')  # O0c M8, as for a claim
         limits, count = self._intake._limits, self._counts.get(project_id, 0)
         if (count >= limits.max_jobs_per_project
                 or (not count and len(self._counts) >= limits.max_projects)

@@ -75,6 +75,22 @@ ACCOUNT_INTAKE_LIMITS = SignatureIntakeLimits(8, 3, 4096, 2 * 1_048_576, 4)
 ACCOUNT_WORKER_LIMITS = SignatureWorkerLimits(2, 32 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000)
 
 
+def unended_children(pool, workers):
+    """O0c M8-M10: the account lanes whose children are not proven gone ([] when every one is), asked
+    by the self-restart before it frees what the account holds in memory. Only the signature workers and
+    the probe workers start children here: the signature helper (each root reaped inside its no-fork
+    confinement) and the probe's model (its tree confirmed empty, or never started). The collector's
+    own exit ends none of them: each was started in a session of its own. Owner thread; never raises."""
+    pending = []
+    for lane, owner in (('signature', pool), ('probe_worker', workers)):
+        try:
+            if owner is not None and owner.children_ended() is not True:
+                pending.append(lane)
+        except Exception:
+            pending.append(lane)
+    return pending
+
+
 def account_endpoint(state):
     return account_endpoint_path(state)
 
@@ -226,6 +242,11 @@ class AccountServiceHost:
                  'ingress': self._ingress and self._ingress.health, 'billing': self._billing and self._billing.health,
                  'probe_worker': self._workers and self._workers.health}
         return {name: lane.view() for name, lane in lanes.items() if lane is not None}
+
+    def unended_children(self):
+        """O0c M8-M10: see `unended_children`; the self-restart asks this on the owner thread."""
+        self._owner()
+        return unended_children(self._claims and self._claims._pool, self._workers)
 
     def serve_once(self):
         self._owner()

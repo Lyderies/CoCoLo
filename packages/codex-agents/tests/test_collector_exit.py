@@ -639,5 +639,65 @@ class CollectorMainTests(unittest.TestCase):
         self.assertEqual([True], self.closed)
 
 
+    def test_M8_a_self_restart_waits_until_every_child_the_lanes_started_is_proven_gone(self):
+        """O0c M8-M10: the collector restarts the account only once its lanes' children are proven gone;
+        until then the decision is `wait`, naming the lane, and the check runs again."""
+        from codex_agents import account_restart
+        test, asked = self, []
+        (self.root / 'collector.sock').touch()
+
+        class Account:
+            def __init__(self, _ledger, _paths):
+                pass
+
+            def health_notes(self):
+                notes = {name: {'faulted': False, 'kept': 0, 'busy': 0, 'queued': 0, 'last_failure': None,
+                                'held_since_ms': None} for name in account_restart.LANES}
+                notes['signature'].update(faulted=True, kept=2, last_failure={
+                    'cause': 'signature_execution_unconfirmed', 'type': 'SignatureExecutionUnconfirmed', 'at_ms': 1})
+                return notes
+
+            def unended_children(self):
+                asked.append(dict(test.server.account_restart or {}))
+                return ['signature'] if len(asked) == 1 else []
+
+            def serve_once(self):
+                pass
+
+            def close(self):
+                pass
+
+            def drained(self):
+                return True
+
+        real_server = self.Server
+
+        class Server(real_server):
+            def __init__(self, ledger):
+                super().__init__(ledger)
+                test.server = self
+                self.account_restart = None
+
+            def wait(self, _timeout):
+                return False  # serving: only the self-restart ends this loop
+
+        self.enterContext(unittest.mock.patch.object(self.host, 'CollectorServer', Server))
+        self.enterContext(unittest.mock.patch.object(self.host, 'AccountServiceHost', Account))
+        self.enterContext(unittest.mock.patch.object(self.host.LearningLedger, 'machine_idle',
+                                                     lambda _self: {'run_slots': [], 'probes': []}, create=True))
+        self.enterContext(unittest.mock.patch.object(account_restart, 'CHECK_EVERY_SECONDS', 0))
+        self.enterContext(unittest.mock.patch.object(account_restart, 'last_restart', return_value=None))
+        recorded = []
+        self.enterContext(unittest.mock.patch.object(account_restart, 'record_restart',
+                                                     side_effect=lambda *_a, **k: recorded.append(k) or True))
+        self.assertEqual(0, self.host.main(['--state-root', str(self.root)]))
+        self.assertEqual(2, len(asked))
+        first = asked[1]  # the decision the first check made, seen by the second
+        self.assertEqual(('wait', ['signature']), (first.get('action'), first.get('held', {}).get('children')))
+        self.assertEqual([('signature', 'signature_execution_unconfirmed')],
+                         [(k['lane'], k['cause']) for k in recorded])
+        self.assertEqual('restart', self.server.account_restart['action'])
+        self.assertEqual(['requested'], [r['cause'] for r in self.records])
+
 if __name__ == '__main__':
     unittest.main()

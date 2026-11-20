@@ -40,7 +40,8 @@
   },
   "account_billing_jobs.py::submit": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "O0c M9: a job ends when taken ready; one left unknown faults the billing lane, and the self-restart (H1c) ends it once every child is proven gone",
+   "test": "test_M9_two_unknown_billing_jobs_in_a_project_restart_the_account_and_a_probe_succeeds"
   },
   "account_claim_contracts.py::checked_claim_receipt": {
    "checks": 2,
@@ -206,7 +207,8 @@
   },
   "billing_probe_worker.py::prepare": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "O0c M10: a worker is freed when its job retires; one held unknown faults the probe worker lane; its admitted row is settled once its child is proven gone, and the self-restart (H1c) frees the worker",
+   "test": "test_M10_an_unknown_probe_execution_restarts_the_account_and_a_probe_succeeds"
   },
   "billing_probe_worker.py::probe_payload": {
    "checks": 1,
@@ -1487,7 +1489,8 @@
   },
   "signature_job_intake.py::select_next": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "O0c M8: a job ends when its worker confirms it stopped; one whose execution is unconfirmed faults the signature lane, and the account's self-restart (H1c) ends it once every child is proven gone",
+   "test": "test_M8_two_unconfirmed_signature_executions_restart_the_account_and_a_claim_succeeds"
   },
   "signature_payloads.py::_check_payload": {
    "checks": 1,

@@ -90,9 +90,10 @@ class _Job:
 
 def _held(slot, job, cause, type_name=None, *, faulted=False):
     """S1-H1a: this worker publishes its own unknown job (and fault) as kept and held. Reporting only;
-    never raises (C1): the whole record, its arguments included, runs inside lane_health.safely."""
+    never raises (C1): the whole record, its arguments included, runs inside lane_health.safely.
+    O0c M10: an unknown job faults the lane, so the account's self-restart fires."""
     def record():
-        changes = {'faulted': True} if faulted else {}
+        changes = {'faulted': True} if faulted or job is not None else {}
         if job is not None:
             changes['kept'] = frozenset({job.token})
         slot.note.publish(**changes)
@@ -109,7 +110,7 @@ def _released(slot, job):
     episode; its failure note stays. Never raises."""
     def record():
         job.held = False
-        slot.note.publish(kept=frozenset())
+        slot.note.publish(kept=frozenset(), faulted=False)  # O0c M10: no longer unknown
         slot.lane.leave_held()
     lane_health.safely(record)
 
@@ -410,6 +411,28 @@ class BillingProbeWorkers:
                                                          or self._jobs[slot.current].state == 'unknown'))
                        for slot in self._slots)
 
+    def children_ended(self, handle=None, ticket=None):
+        """O0c M10: whether no child these workers (or, given a handle, that one job) started can still run.
+
+        A job queued for, inside or just past its execution may hold a child: not proven. Otherwise
+        every execution ticket must be released, confirmed cleaned (its tree proven empty, the normal
+        release's evidence) or never have tried to start a child. `ticket` adds one the job may not
+        hold (issued, then never bound). Owner thread; never raises."""
+        try:
+            with self._registry._lock:
+                if handle is None:
+                    jobs = list(self._jobs.values())
+                else:
+                    job = self._jobs.get(handle) if type(handle) is ProbeWorkerHandle else None
+                    jobs = [] if job is None else [job]
+                if any(job.state in {'queued', 'active', 'finishing'} for job in jobs):
+                    return False
+                if handle is None:
+                    return self._registry.children_ended()
+                return all(self._registry.ticket_ended(t) for t in {*(job.ticket for job in jobs), ticket})
+        except Exception:
+            return False
+
     def prepare(self, payload):
         self._owner()
         if self._closed or type(payload) is not bytes or not 0 < len(payload) <= MAX_PROBE_INPUT_BYTES:
@@ -450,7 +473,8 @@ class BillingProbeWorkers:
                 self._registry._handoff_worker(ticket, self, handle)
             except BaseException as error:
                 job.state = 'unknown'
-                lane_health.safely(lambda: self._note.publish(kept=self._note.note.kept | {job.token}))  # S1-H1a, reporting only
+                # S1-H1a, reporting only; O0c M10: an unknown job faults the lane.
+                lane_health.safely(lambda: self._note.publish(faulted=True, kept=self._note.note.kept | {job.token}))
                 lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_handoff_failed', error))
                 if not job.held:
                     job.held = True

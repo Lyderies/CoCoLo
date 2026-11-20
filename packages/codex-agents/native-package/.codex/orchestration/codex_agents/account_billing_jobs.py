@@ -14,6 +14,7 @@ from .account_billing_execution import AccountBillingExecutions
 from .account_observation import ObservationContext
 from .account_observation_jobs import AccountObservationJobs
 from .admission_inputs import AdmissionCaptureError, public_capture_reason
+from .billing_probe_contracts import PROBE_STEP_REASONS
 from .billing_probe_worker import BillingProbeWorkers, ProbeWorkerError
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches
 from .provider_observation_contracts import OBSERVATION_REASONS, ObservationInput
@@ -62,6 +63,7 @@ class _Job:
     noted: bool = False  # S1-H1a: its failure reason has been noted
     closed: bool = False  # O0b RS-A round 2 G9: its reservation was closed by the sweep; ends with the stored answer
     timed_out: bool = False  # O0b RS-A round 3: cancelled by its own deadline, not by a caller or the close
+    ended: bool = False  # O0c M10: unknown, and its admitted row settled (or none was admitted) once its child ended
 
 
 @dataclass(frozen=True, repr=False)
@@ -88,7 +90,12 @@ class AccountBillingJobs:
                 if job.reason in _FAILURE_REASONS and not job.noted:
                     job.noted = True
                     lane_health.safely(lambda: self.health.note_failure(self._note, job.reason, None))
-            lane_health.safely(lambda: self._note.publish(kept=frozenset(job.token for job in jobs if job.state == 'unknown'), busy=sum(job.state != 'unknown' for job in jobs)))
+            # O0c M9: an unknown job faults the lane (so the self-restart fires); a job whose signature
+            # work is held unconfirmed is kept too, since it waits on the stuck lane and runs nothing.
+            held = self._claims._pool.unknown_handles()
+            kept = frozenset(job.token for job in jobs if job.state == 'unknown' or job.signature in held)
+            lane_health.safely(lambda: self._note.publish(faulted=any(job.state == 'unknown' for job in jobs),
+                                                          kept=kept, busy=sum(job.token not in kept for job in jobs)))
             # S1-H1a C6: a probe worker a kept job still holds is held in the probe lane (its own
             # slot there, written only by this owner).
             handles = {self._executions.worker_of(job.preparation) for job in jobs
@@ -99,7 +106,8 @@ class AccountBillingJobs:
             for _ in self._parent_held - tokens:
                 self._workers.health.leave_held()
             self._parent_held = tokens
-            lane_health.safely(lambda: self._parent_note.publish(kept=tokens))
+            # O0c M10: a probe worker an unknown job holds faults the probe lane too.
+            lane_health.safely(lambda: self._parent_note.publish(kept=tokens, faulted=bool(tokens)))
         except Exception:
             pass
 
@@ -269,8 +277,28 @@ class AccountBillingJobs:
             self._signatures.pop(handle)
             job.signature = None
 
+    def _settle_ended(self, job):
+        """O0c M10: an unknown job's admitted row is settled once no model it launched can still run, so
+        it stops holding probe capacity and the self-restart. Asked again on later steps until then."""
+        if job.ended or job.settled or job.reservation is None:
+            return
+        try:
+            if not self._executions.child_ended(job.reservation):
+                return
+            row = self._owner._row(job.key[0], job.reservation.key)
+            if row is not None and row['state'] == 'admitted':
+                reason = job.reason if job.reason in PROBE_STEP_REASONS else 'probe_worker_failed'
+                self._owner.settle_ended(job.reservation, reason)
+        except Exception as error:
+            # Not settled: the row keeps holding, as before M10, and the restart waits on it.
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_settle_failed', error))
+        job.ended = True  # settled now, nothing admitted to settle, or it could not be (noted)
+
     def _step(self, ticket, job):
-        if job.state in {'ready', 'unknown'}:
+        if job.state == 'unknown':
+            self._settle_ended(job)
+            return
+        if job.state == 'ready':
             return
         if job.reservation is not None and job.state != 'offered':
             explicit = self._closing or job.cancelled or not self._subscribed(ticket)
@@ -313,6 +341,11 @@ class AccountBillingJobs:
             job.identity, job.state = None, 'preparing'
         if job.state == 'preparing':
             state = self._executions.snapshot(job.preparation)['worker_state']
+            if state == 'prepared' and self._claims._pool.stuck():
+                # O0c M8: no signature worker can free before the account restarts itself: say so now,
+                # rather than wait as work that would hold that restart.
+                self._discard(job, 'probe_unavailable')
+                return
             if state == 'prepared':
                 try:
                     job.signature = self._owner.prepare(job.reservation)

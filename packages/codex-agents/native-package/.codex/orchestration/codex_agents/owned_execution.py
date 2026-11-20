@@ -226,6 +226,9 @@ class _Owned:
     # factory) and cleared only when the factory provably left none. With it unset when the worker
     # returns, the execution never launched: nothing is left to clean up.
     child_possible: bool = False
+    # O0c M10: set before anything that may start a child (container or process); an entry without it
+    # provably never started one.
+    spawn_attempted: bool = False
 
 
 class OwnedExecutionRegistry:
@@ -689,6 +692,8 @@ class OwnedExecutionRegistry:
         if options.get("start_new_session") is not True:
             raise ExecutionCustodyError()
         entry = self.enter(ticket)
+        with self._lock:
+            entry.spawn_attempted = True
         process = None
         try:
             launcher = self.container_launch
@@ -820,6 +825,33 @@ class OwnedExecutionRegistry:
             if confirmed:
                 entry.state = "cleaned"
             return confirmed
+
+    def children_ended(self):
+        """O0c M10: whether no execution this registry issued can still have a child: each one not yet
+        released was confirmed cleaned (its tree proven empty by `finish`) or never tried to start one.
+        Takes the registry lock; never raises."""
+        try:
+            with self._lock:
+                return all(self._entry_ended(entry) for entry in self._pending.values())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _entry_ended(entry):
+        if entry is None:
+            return False
+        if entry.state in {"cleaned", "released"}:
+            return True
+        return (not entry.spawn_attempted and entry.process is None and entry.container is None
+                and entry.state in {"issued", "unknown"})
+
+    def ticket_ended(self, ticket):
+        """O0c M10: `children_ended` for one ticket (None: no ticket, so nothing started). Never raises."""
+        try:
+            with self._lock:
+                return ticket is None or self._entry_ended(self._issued.get(ticket))
+        except Exception:
+            return False
 
     def key(self, ticket, *, cleaned=False):
         with self._lock:

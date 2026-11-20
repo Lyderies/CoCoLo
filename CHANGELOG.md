@@ -4,6 +4,14 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Claims, opens and probes no longer stop machine-wide after two account executions end unconfirmed. An
+  unconfirmed signature execution, a billing job left unknown or a probe worker held unknown now faults its
+  account lane, so the account restarts itself at its next check; unknown work held in one lane no longer stops
+  another lane's restart. The restart first proves every child the account started is gone (each signature
+  helper reaped, each probe's process tree confirmed empty or never started) and waits, naming the lane, while
+  one may still run. An unknown probe whose child is proven gone has its admitted row settled at once, so it no
+  longer holds the machine's probe capacity. A claim, open or probe that could only wait for a stuck signature
+  lane is refused at once (`claim_unavailable`, `open_unavailable`, `probe_unavailable`).
 - A project's run opens no longer stop for good after 256: the account counted every open request ever made
   (and refused the next with `open_busy`), in every release since the open journal was added. Only opens in
   progress count now (four at once), and a full limit says so (`open_capacity_full`, with its next step).

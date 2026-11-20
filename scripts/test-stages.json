@@ -18,6 +18,7 @@
  "codex:tests.test_account_cleanup_schema": "unit",
  "codex:tests.test_account_host": "integration",
  "codex:tests.test_account_ingress": "integration",
+ "codex:tests.test_account_lane_restart": "integration",
  "codex:tests.test_account_launch_claims": "integration",
  "codex:tests.test_account_observation": "integration",
  "codex:tests.test_account_observation_backup": "integration",

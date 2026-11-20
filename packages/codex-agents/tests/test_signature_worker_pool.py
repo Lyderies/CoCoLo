@@ -157,7 +157,9 @@ class SignatureWorkerPoolTests(unittest.TestCase):
                 self.assertLess(time.monotonic() - started, 10)
                 time.sleep(0.002)
         self.assertEqual('signature_execution_unconfirmed', pool.health.view()['last_failure']['cause'])
-        self.assertFalse(pool.health.view()['faulted'])
+        # O0c M8 (replacing H1a's "kept, not faulted"): an unknown execution faults its lane, so the
+        # account's self-restart fires.
+        self.assertTrue(pool.health.view()['faulted'])
         pool.poll()  # the owner acknowledges it: still counted once
         self.assertEqual(1, pool.health.view()['kept'])
         self.pool = None  # its worker keeps custody for good; nothing to drain here

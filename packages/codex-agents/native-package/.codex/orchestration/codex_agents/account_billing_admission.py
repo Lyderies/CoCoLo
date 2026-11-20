@@ -424,6 +424,37 @@ class AccountBillingAdmission:
         self._reserved_inputs.pop(reservation, None)
         self._signatures.pop(reservation, None)
 
+    def settle_ended(self, reservation, reason):
+        """O0c M10: settle an admitted probe left unknown once no model it launched can still be running.
+
+        As settle_unlaunched, but where a ticket was issued: only when the execution owner proves its
+        child gone (`child_ended`: the ticket confirmed cleaned or never started). The row becomes a
+        committed denial naming the failed step, so it stops holding the machine's and the account's
+        probe capacity and the self-restart; its admission record stays, so the cooldown still applies."""
+        self._guard()
+        execution_owner = getattr(self, '_execution_owner', None)
+        if (type(reservation) is not _Reservation or reason not in PROBE_STEP_REASONS or execution_owner is None
+                or self._pending.get((reservation.project, reservation.key)) is not reservation):
+            raise ProbeAdmissionError('probe_conflict')
+        with self._ledger._account_transaction():
+            row = self._row(reservation.project, reservation.key)  # Sealed rows only; no callback runs.
+            if (row is None or row['state'] != 'admitted' or row['parameters_digest'] != reservation.parameters
+                    or row['created_at_ms'] != reservation.created or row['deadline_at_ms'] != reservation.deadline):
+                raise ProbeAdmissionError('probe_conflict')
+            # Checked last, with nothing reentrant between this and the write.
+            if not execution_owner.child_ended(reservation):
+                raise ProbeAdmissionError('probe_conflict')
+            final = self._update(row, state='committed', references_json=canonical_json(
+                {'probe': 'denied', 'reason_code': reason, 'records': []}).decode())
+            if self._row(reservation.project, reservation.key) != final:
+                raise ProbeAdmissionError('probe_conflict')
+        permit = self._permits.pop(reservation, None)
+        if permit is not None:
+            self._execution_inputs.pop(permit, None)
+        self._pending.pop((reservation.project, reservation.key), None)
+        self._reserved_inputs.pop(reservation, None)
+        self._signatures.pop(reservation, None)
+
     def release_committed(self, reservation):
         """Drop the memory of a reservation whose row is already committed (0.3.3, C9d).
 

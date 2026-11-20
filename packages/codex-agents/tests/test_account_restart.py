@@ -68,10 +68,12 @@ class RestartDecisionTests(unittest.TestCase):
         both_old = {'at_ms': NOW - 61 * MINUTE, 'mono_ns': mono - 61 * MINUTE * 1_000_000}
         self.assertEqual('restart', self.decide(notes, previous=both_old, mono_ns=mono)['action'])
 
-    def test_C3_kept_work_outside_the_stuck_lane_means_wait(self):
+    def test_M8_kept_work_outside_the_stuck_lane_never_blocks_the_restart(self):
+        # O0c M8 replaces C3: held unknown work never blocks another lane's restart; the restart instead
+        # waits until every child the lanes started is proven gone (test_account_lane_restart).
         notes = lanes(ingress=lane(faulted=True), billing=lane(kept=1))
         decision = self.decide(notes)
-        self.assertEqual(('wait', {'billing': 1}), (decision['action'], decision['held']['lanes']))
+        self.assertEqual(('restart', {}), (decision['action'], decision['held']['lanes']))
 
     def test_H1c_2_kept_work_that_makes_it_stuck_does_not_count_as_running(self):
         notes = lanes(probe_worker=lane(kept=1, held_since_ms=NOW - 20 * MINUTE),
@@ -150,7 +152,9 @@ class RestartCheckTests(unittest.TestCase):
             raise RuntimeError('unreadable')
         self.assertEqual('ok', account_restart.check(broken, lambda: IDLE, None, now_ms=NOW)['action'])
         self.assertEqual('wait', account_restart.check(lambda: faulted, broken, None, now_ms=NOW)['action'])
-        self.assertEqual('restart', account_restart.check(lambda: faulted, lambda: IDLE, None, now_ms=NOW)['action'])
+        # O0c M8-M10: a restart also needs every child proven gone (here: none started).
+        self.assertEqual('restart', account_restart.check(lambda: faulted, lambda: IDLE, None, now_ms=NOW,
+                                                          read_children=lambda: [])['action'])
 
 
 if __name__ == '__main__':
