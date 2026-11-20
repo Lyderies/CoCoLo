@@ -105,8 +105,10 @@ class LostSlotReleaseTests(LostRunAfterStopTests):
             {'type': 'thread.started', 'thread_id': 'orphan'}, {'sleep': 30},
             {'type': 'turn.completed', 'usage': {'input_tokens': 1}}], reached=self.launches)
         rows = [dict(row) for row in self.collector_ledger._connection.execute(
-            "SELECT a.released_at_ms, a.release_kind FROM active_run_capacity a JOIN host_run_bindings h "
+            # The kind is in the register row, written with the release (RS-A implementation decisions).
+            "SELECT a.released_at_ms, r.release_kind FROM active_run_capacity a JOIN host_run_bindings h "
             "ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest "
+            "JOIN run_holds r ON r.kind='run_slot' AND r.project_id=a.project_id AND r.identity=a.handle_digest "
             "WHERE h.binding_state='abandoned' AND h.abandoned_reason='service_lost'")]
         self.assertEqual(1, len(rows), rows)
         self.assertIsNotNone(rows[0]['released_at_ms'])  # written, not re-derived from the binding

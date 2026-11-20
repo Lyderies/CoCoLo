@@ -49,7 +49,10 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.assertEqual(1, self.sweep(now, rebooted))      # the supervisor writes the decision
         released = self.rows()[0]
         self.assertIsNotNone(released["released_at_ms"])
-        self.assertEqual("crashed", released["release_kind"])
+        # The kind is in the register row, written with the release (design: implementation decisions).
+        self.assertEqual("crashed", self.ledger._connection.execute(
+            "SELECT release_kind FROM run_holds WHERE kind='run_slot' AND identity=?",
+            (released["handle_digest"],)).fetchone()[0])
         self.assertFalse(self.counted(account, now, later))  # and it never counts again
 
     def test_RS_A_3_a_live_slot_is_never_released_by_the_sweep(self):
