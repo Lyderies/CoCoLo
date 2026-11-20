@@ -6,7 +6,6 @@ process, never values from a request. The registry lookup goes through the
 collector; this process opens only its own project's history.
 """
 from pathlib import Path
-import os
 import signal
 import time
 
@@ -117,38 +116,21 @@ def service_bundle_root(orchestration_root, project_root):
     except HostCommandError:
         raise HistoryError('history_not_authorized') from None
     if bound is None:
-        return Path(orchestration_root).resolve().parents[1]
+        # O10 SB: the project being served, whatever this service runs from. A service setup starts runs
+        # from the clone, whose tree holds no install (preparation_failed_at_role_prompt); from the
+        # project's own install this is the same folder as before.
+        return Path(project_root).resolve()
     if bound != Path(project_root).resolve():
         raise HistoryError('history_not_authorized')
     return bound
 
 
 def service_history(directory, project_id, **options):
-    """O10 HS-1/HS-2: the project's own service opens its store and upgrades an earlier format, under the
-    store's exclusive writer lock (which is what makes the offline path safe, and the service holds it
-    too), whether or not the project's learning has moved. Before the first upgrade it keeps the store as
-    it was, once per format: history.sqlite3.before-<version>, owner-only."""
-    import sqlite3
-    from .project_history import _SCHEMA_VERSION, ProjectHistory
+    """O10 HS-1: the project's own service opens its store and upgrades an earlier format, under the
+    store's exclusive writer lock (what makes the offline path safe; the service holds it too), whether
+    or not the project's learning has moved. The store keeps a copy of itself first (HS-5)."""
+    from .project_history import ProjectHistory
 
-    database = Path(directory) / "history.sqlite3"
-    if database.is_file() and not database.is_symlink():
-        reader = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)
-        try:
-            version = reader.execute("PRAGMA user_version").fetchone()[0]
-            copy = Path(directory) / f"history.sqlite3.before-{_SCHEMA_VERSION}"
-            if 0 < version < _SCHEMA_VERSION and not copy.exists():
-                temporary = copy.with_name(copy.name + ".partial")
-                temporary.unlink(missing_ok=True)
-                target = sqlite3.connect(temporary)
-                try:
-                    reader.backup(target)  # one consistent snapshot of the store as it is now
-                finally:
-                    target.close()
-                os.chmod(temporary, 0o600)
-                os.replace(temporary, copy)
-        finally:
-            reader.close()
     return ProjectHistory(directory, project_id, allow_schema_upgrade=True, **options)
 
 

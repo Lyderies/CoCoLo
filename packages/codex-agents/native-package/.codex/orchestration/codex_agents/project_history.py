@@ -301,6 +301,7 @@ class ProjectHistory:
         if not matches(project_id, _PROJECT) or not isinstance(directory, Path) or not directory.is_absolute():
             raise HistoryError("history_invalid_input")
         self.project_id = project_id
+        self._directory = directory
         failure = None
         try:
             if directory.resolve(strict=True) != directory:
@@ -449,6 +450,10 @@ class ProjectHistory:
                                                  or (name == 'project_cleanup_reservations' and version == 9)) else columns)
                            for name, columns in _COLUMNS.items() if name not in omitted}
             self._check_schema_identity(old_columns)
+            # O10 HS-5/HS-6: every check passes before anything is written, and the store is kept as it
+            # was, under this writer lock, on every path that upgrades.
+            self._check_result_identity_before_upgrade(version)
+            self._keep_copy_before_upgrade(version)
             with self._transaction():
                 additions = ((_RESULT_SCHEMA if version == 1 else "") + (_LEASE_SCHEMA if version < 3 else "")
                              + (_EXECUTION_SCHEMA if version < 4 else "")
@@ -488,6 +493,67 @@ class ProjectHistory:
         rows = self._connection.execute("SELECT project_id FROM history_identity LIMIT 2").fetchall()
         if len(rows) != 1 or rows[0][0] != self.project_id:
             raise HistoryError("history_incompatible")
+
+    def _check_result_identity_before_upgrade(self, version) -> None:
+        """HS-6: the result key and identity _initialize_results would refuse, refused before the upgrade."""
+        if self._result_key is None or version == 1:  # format 1 has no result identity yet
+            return
+        check = keyed_digest(self._result_key, "project-result-key-v1:" + self.project_id)
+        rows = self._connection.execute("SELECT * FROM result_identity LIMIT 2").fetchall()
+        if rows and (len(rows) != 1 or rows[0]["project_id"] != self.project_id
+                     or not matches(rows[0]["key_check"], _DIGEST)
+                     or not secrets.compare_digest(rows[0]["key_check"], check)):
+            raise HistoryError("history_incompatible")
+
+    def _keep_copy_before_upgrade(self, version) -> None:
+        """HS-5/HS-7: history.sqlite3.before-<format>, the store as it was, made once, owner-only, durably.
+        An existing copy is used only if it is this project's store at this old format; otherwise it is
+        set aside and a new one made. Any failure here stops the upgrade (nothing is written)."""
+        name = f"history.sqlite3.before-{_SCHEMA_VERSION}"
+        copy = self._directory / name
+        try:
+            info = os.lstat(copy)
+        except FileNotFoundError:
+            info = None
+        if info is not None:
+            if self._usable_copy(copy, info, version):
+                return
+            os.replace(copy, self._directory / f"{name}.invalid-{time.time_ns() // 1_000_000}")
+        temporary = self._directory / f".{name}.{secrets.token_hex(8)}.partial"
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            os.fchmod(descriptor, 0o600)
+            os.close(descriptor)
+            target = sqlite3.connect(temporary)
+            try:
+                self._connection.backup(target)
+            finally:
+                target.close()
+            descriptor = os.open(temporary, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, copy)
+            os.fsync(self._directory_fd)
+        except (OSError, sqlite3.Error):
+            with contextlib.suppress(OSError):
+                temporary.unlink()
+            raise HistoryError("history_unavailable") from None
+
+    def _usable_copy(self, copy, info, version) -> bool:
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600):
+            return False
+        try:
+            reader = sqlite3.connect(copy.as_uri() + "?mode=ro", uri=True)
+            try:
+                return (reader.execute("PRAGMA user_version").fetchone()[0] == version
+                        and reader.execute("SELECT project_id FROM history_identity").fetchall() == [(self.project_id,)])
+            finally:
+                reader.close()
+        except sqlite3.Error:
+            return False
 
     def _initialize_results(self) -> None:
         check = keyed_digest(self._result_key, "project-result-key-v1:" + self.project_id)

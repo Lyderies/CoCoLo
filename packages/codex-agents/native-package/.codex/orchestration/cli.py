@@ -500,7 +500,15 @@ def _replace_other_version_host(args):
     return replaced
 
 
-from codex_agents.learning_migration import clear_start_failure, record_start_failure  # noqa: E402 -- O10 HS-3
+from codex_agents.learning_migration import START_REASONS, clear_start_failure, record_start_failure  # noqa: E402
+
+
+def _start_reply(serving, migration_failure):
+    """learning-start-project-service's reply; a start-time migration failure is part of it (O10 HS-8)."""
+    report = {"ready": serving, "serving": serving}
+    if migration_failure is not None:
+        report["learning_migration_failure"] = migration_failure
+    return report
 
 
 def _start_project_host(args):
@@ -535,12 +543,14 @@ def _start_project_host(args):
                         report = _migrate_learning(argparse.Namespace(
                             state_root=args.state_root, project_root=args.project_root, status=False, rollback=False))
                     except Exception:
-                        record_start_failure(state, args.project_root, "migration_failed")
+                        report = {"ready": False, "reason_code": "migration_failed"}
+                    if type(report) is dict and report.get("ready") is False:
+                        # HS-8: in this start's reply as well as kept, so it shows even if keeping it fails.
+                        reason = report.get("reason_code")
+                        args.learning_migration_failure = reason if reason in START_REASONS else "migration_failed"
+                        record_start_failure(state, args.project_root, args.learning_migration_failure)
                     else:
-                        if type(report) is dict and report.get("ready") is False:
-                            record_start_failure(state, args.project_root, report.get("reason_code"))
-                        else:
-                            clear_start_failure(state, args.project_root)
+                        clear_start_failure(state, args.project_root)
     except Exception:
         pass
     return ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)
@@ -2319,7 +2329,7 @@ def main() -> int:
             # As every command that needs it: an idle earlier version's service is replaced and a
             # project with history is moved first when nothing runs (S1-U8).
             serving = _start_project_host(args) is True
-            report = {"ready": serving, "serving": serving}
+            report = _start_reply(serving, getattr(args, "learning_migration_failure", None))
             if not serving:
                 report.update(reason_code="project_service_unavailable",
                               error="this project's service did not start; run learning-status for the collector")

@@ -75,7 +75,7 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
                                     result_clock_ms=lambda: self.now, orchestration_limits=self.limits)
         copy = self.directory / 'history.sqlite3.before-17'
         self.assertEqual(16, self.version(copy))
-        self.assertEqual(before, self.copy_rows(copy))  # HS-7: the data, not just the file
+        self.assertEqual([tuple(row) for row in before], self.copy_rows(copy))  # HS-7: the data, not just the file
 
     def test_HS_5_a_busy_store_is_refused_before_any_copy(self):
         import fcntl
@@ -107,7 +107,7 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
         before = self.format_16_store()
         (self.directory / 'history.sqlite3.before-17').write_bytes(b'')  # not a usable copy
         self.store = self.service_history()
-        self.assertEqual(before, self.copy_rows(self.directory / 'history.sqlite3.before-17'))
+        self.assertEqual([tuple(row) for row in before], self.copy_rows(self.directory / 'history.sqlite3.before-17'))
         self.assertTrue(any(path.name.startswith('history.sqlite3.before-17.invalid-')
                             for path in self.directory.iterdir()))
         self.assertFalse(any(path.name.endswith('.partial') for path in self.directory.iterdir()))
