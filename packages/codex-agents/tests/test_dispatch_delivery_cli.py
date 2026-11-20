@@ -227,5 +227,57 @@ class DispatchDeliveryCliTests(unittest.TestCase):
             operation.assert_not_called()
 
 
+ROUTE_SHAPES = [{**({} if provider is None else {'provider': provider}), **({} if way is None else {'dispatch': way})}
+                for provider in ('codex', 'claude', 'gemini', None) for way in ('bridge', 'native', 'other', None)]
+
+
+class DirectDispatchTests(unittest.TestCase):
+    """O10 D9: the CLI's direct bridge dispatch, for a route the project host does not run."""
+
+    def test_D9_every_route_the_project_host_does_not_run_is_refused_by_the_bridge_before_anything(self):
+        from codex_agents import bridge
+        refused = 0
+        for route in ROUTE_SHAPES:
+            if cli._host_driven(route):
+                continue
+            with self.subTest(route=route):
+                ledger = mock.Mock()
+                with self.assertRaises(BridgeRefused):
+                    bridge.dispatch(ledger, 'prj_' + 'a' * 32, project_root=Path('/nonexistent'),
+                                    bundle_root=Path('/nonexistent'), task={}, route=route, assignment=assignment(),
+                                    parent_grant={}, run_handle='hrn_' + 'a' * 48, result_schema=b'{}', environ={})
+                self.assertEqual([], ledger.mock_calls)
+                refused += 1
+        self.assertEqual(11, refused)  # Only codex routes and bridged Claude routes are the host's.
+
+    def test_D9_a_route_the_project_host_does_not_run_is_refused_without_the_legacy_ledger(self):
+        assigned = assignment()
+        for route in ROUTE_SHAPES:
+            if cli._host_driven(route):
+                continue
+            with self.subTest(route=route):
+                inputs = {"task.json": {"id": assigned["task_id"]}, "route.json": route,
+                          "assignment.json": assigned, "grant.json": assigned["permissions"]}
+                output = io.StringIO()
+                with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory, contextlib.ExitStack() as stack:
+                    argv = ["cli.py", "dispatch", "--project-root", directory, "--run-handle", "hrn_" + "a" * 48,
+                            "--task", "task.json", "--route", "route.json", "--assignment", "assignment.json",
+                            "--parent-grant", "grant.json", "--expected-export-commit", "a" * 40]
+                    stack.enter_context(mock.patch.object(sys, "argv", argv))
+                    for name in ("_require_protected_runtime", "_require_own_roots"):
+                        stack.enter_context(mock.patch.object(cli, name))
+                    stack.enter_context(mock.patch.object(cli, "validate_assignment"))
+                    stack.enter_context(mock.patch.object(cli, "_json_input", side_effect=lambda name: inputs[name]))
+                    opened = stack.enter_context(mock.patch.object(cli, "_learning_ledger"))
+                    client = stack.enter_context(mock.patch.object(cli, "dispatch_codex_client"))
+                    stack.enter_context(contextlib.redirect_stdout(output))
+                    code = cli.main()
+                self.assertEqual(2, code)
+                self.assertEqual({"ready": False, "error": "dispatch refused",
+                                  "reason": "route is not run by the project host"}, json.loads(output.getvalue()))
+                opened.assert_not_called()
+                client.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -444,6 +444,216 @@ class LaunchJournalTests(unittest.TestCase):
         self.assertEqual(0o700, self.directory.stat().st_mode & 0o777)
         self.assertEqual(0o600, (self.directory / (BRIDGE + '.json')).stat().st_mode & 0o777)
 
+    # O10 D6 (a): every journal file is read, however many there are.
+    @staticmethod
+    def bridges(count):
+        return ['brg_%032x' % (index + 1) for index in range(count)]
+
+    def test_D6a_successive_listings_reach_every_entry_past_the_cap(self):
+        journal = LaunchJournal(self.directory)
+        names = self.bridges(7)
+        for bridge in names:
+            claimed(journal, bridge)
+        seen = set()
+        with mock.patch.object(launch_journal, 'MAX_ENTRIES', 3):
+            for _ in range(3):  # Bounded work per pass: at most three files each time.
+                listed = journal.entries()
+                self.assertLessEqual(len(listed), 3)
+                seen.update(entry['bridge_run_id'] for entry in listed)
+        self.assertEqual(set(names), seen)
+
+    def test_D6a_a_stopped_instance_is_forgotten_although_the_journal_is_past_the_cap(self):
+        first = LaunchJournal(self.directory)
+        second = LaunchJournal(self.directory)
+        for bridge in self.bridges(5):
+            claimed(second, bridge)
+            second.settled(bridge, 'settled')
+        claimed(first, 'brg_' + 'f' * 32)
+        first.spawning('brg_' + 'f' * 32)
+        first.release()
+        lock = self.directory / (first.instance + '.lock')
+        self.assertTrue(lock.exists())  # Kept while its run is unsettled.
+        second.settled('brg_' + 'f' * 32, 'settled')  # Settled later, by a later instance.
+        with mock.patch.object(launch_journal, 'MAX_ENTRIES', 2):
+            second.forget_instance(first.instance)
+        self.assertFalse(lock.exists())
+
+    def test_D6a_an_unsettled_entry_past_the_cap_still_keeps_its_instances_lock(self):
+        first = LaunchJournal(self.directory)
+        second = LaunchJournal(self.directory)
+        for bridge in self.bridges(5):
+            claimed(second, bridge)
+        claimed(first, 'brg_' + 'f' * 32)  # Sorted last: past any cap below six.
+        first.spawning('brg_' + 'f' * 32)
+        first.release()
+        with mock.patch.object(launch_journal, 'MAX_ENTRIES', 2):
+            second.forget_instance(first.instance)
+        self.assertTrue((self.directory / (first.instance + '.lock')).exists())
+
+    def test_D6a_old_tombstones_past_the_cap_are_pruned_in_later_passes(self):
+        journal = LaunchJournal(self.directory)
+        names = self.bridges(5)
+        now = 2 + launch_journal.TOMBSTONE_MS
+        for index, bridge in enumerate(names):
+            claimed(journal, bridge)
+            journal.settled(bridge, 'settled', now_ms=now if index < 2 else 1)  # The first two are recent.
+        names = names[2:]
+        with mock.patch.object(launch_journal, 'MAX_ENTRIES', 2):
+            for _ in range(3):
+                journal.prune(now_ms=now)
+        self.assertEqual([], [bridge for bridge in names if (self.directory / (bridge + '.json')).exists()])
+
+    # O10 D6 (b): a lock temporary whose creator is gone is removed.
+    def lock_temporary(self, mode=0o600):
+        path = self.directory / ('.%s.lock.tmp' % secrets.token_hex(16))
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, mode)
+        os.fchmod(descriptor, mode)
+        return path, descriptor
+
+    def test_D6b_a_lock_temporary_left_by_a_stopped_creator_is_removed(self):
+        journal = LaunchJournal(self.directory)
+        path, descriptor = self.lock_temporary()
+        os.close(descriptor)  # Its creator stopped before it held the lock or linked it into place.
+        journal.prune()
+        self.assertFalse(os.path.lexists(path))
+        self.assertTrue((self.directory / (journal.instance + '.lock')).exists())
+
+    def test_D6b_only_a_checked_unheld_lock_temporary_is_removed(self):
+        journal = LaunchJournal(self.directory)
+        kept = []
+        held, descriptor = self.lock_temporary()  # Its creator is still starting: it holds the lock.
+        launch_journal.fcntl.flock(descriptor, launch_journal.fcntl.LOCK_EX | launch_journal.fcntl.LOCK_NB)
+        self.addCleanup(os.close, descriptor)
+        kept.append(held)
+        linked, other = self.lock_temporary()  # Linked into place but not yet unlinked: two links.
+        os.close(other)
+        os.link(linked, self.directory / (secrets.token_hex(16) + '.lock.other'))
+        kept.append(linked)
+        shared, other = self.lock_temporary(0o644)  # Not owner-only.
+        os.close(other)
+        kept.append(shared)
+        target = Path(self.temporary.name) / 'target'
+        target.write_text('x')
+        target.chmod(0o600)
+        symlink = self.directory / ('.%s.lock.tmp' % secrets.token_hex(16))
+        symlink.symlink_to(target)
+        kept.append(symlink)
+        folder = self.directory / ('.%s.lock.tmp' % secrets.token_hex(16))
+        folder.mkdir(mode=0o700)
+        kept.append(folder)
+        unrelated = self.directory / '.notes.lock.tmp'
+        unrelated.write_text('x')
+        unrelated.chmod(0o600)
+        kept.append(unrelated)
+        journal.prune()
+        self.assertEqual([], [path.name for path in kept if not os.path.lexists(path)])
+        self.assertTrue(target.exists())
+
+    def test_D6b_a_journal_still_starts_when_its_temporary_is_removed_before_it_holds_it(self):
+        other = LaunchJournal(self.directory)
+        original = launch_journal.fcntl.flock
+        raced = []
+
+        def racing(descriptor, operation):
+            # Another instance tidies the folder between this one's create and its lock.
+            if not raced:
+                raced.append(True)
+                other.prune()
+            return original(descriptor, operation)
+
+        with mock.patch.object(launch_journal.fcntl, 'flock', racing):
+            journal = LaunchJournal(self.directory)
+        self.assertTrue(raced)
+        self.assertTrue((self.directory / (journal.instance + '.lock')).exists())
+        self.assertFalse(other.instance_stopped(journal.instance))
+        self.assertEqual([], [name for name in os.listdir(self.directory) if name.endswith('.lock.tmp')])
+
+    # O10 D6 (c): an entry that cannot be settled is shown as unresolved, with its age.
+    def test_D6c_the_never_settling_states_stay_unknown(self):
+        """Today's proof is kept: no new evidence of 'gone' for these states (a kernel-group design is coming)."""
+        journal = LaunchJournal(self.directory)
+        claimed(journal)
+        journal.spawning(BRIDGE)
+        self.assertEqual('unknown', tree_state(self.entry(journal)))
+        root = self.sleeper()
+        journal.launched(BRIDGE, root.pid, birth(root.pid), TAG)
+        self.end(root)
+        self.assertEqual('unknown', tree_state(self.entry(journal)))
+        watchdog = self.sleeper()
+        journal.watched(BRIDGE, watchdog.pid, birth(watchdog.pid))
+        self.end(watchdog)
+        self.assertEqual('unknown', tree_state(self.entry(journal)))  # No confirmation from its watchdog.
+
+    def test_D6c_unresolved_lists_unsettled_entries_of_stopped_instances_with_their_age(self):
+        stopped = LaunchJournal(self.directory)
+        names = self.bridges(5)
+        claimed(stopped, names[0])
+        stopped.spawning(names[0])
+        claimed(stopped, names[1])
+        stopped.spawning(names[1])
+        stopped.launched(names[1], 4242, '1.000000', TAG)
+        claimed(stopped, names[2])
+        stopped.settled(names[2], 'settled')
+        stopped.release()
+        live = LaunchJournal(self.directory)
+        claimed(live, names[3])
+        live.spawning(names[3])  # Its own service still runs it: not unresolved.
+        (self.directory / (names[4] + '.json')).write_text('{"truncated"')
+        os.chmod(self.directory / (names[4] + '.json'), 0o600)
+        changed = time.time() - 120
+        for name in (names[0], names[1], names[4]):
+            os.utime(self.directory / (name + '.json'), (changed, changed))
+        now_ms = int(time.time() * 1000)
+        report = launch_journal.unresolved(self.directory, now_ms=now_ms)
+        self.assertEqual(3, report['count'])
+        listed = {item['bridge_run_id']: item for item in report['entries']}
+        self.assertEqual({names[0]: 'spawning', names[1]: 'launched', names[4]: None},
+                         {name: item['state'] for name, item in listed.items()})
+        for item in listed.values():
+            self.assertGreaterEqual(item['age_ms'], 119_000)
+            self.assertLess(item['age_ms'], 600_000)
+        self.assertEqual(max(item['age_ms'] for item in listed.values()), report['oldest_age_ms'])
+
+    def test_D6c_unresolved_is_bounded_and_empty_without_a_journal(self):
+        self.assertEqual({'count': 0, 'oldest_age_ms': None, 'entries': []},
+                         launch_journal.unresolved(self.directory / 'missing'))
+        stopped = LaunchJournal(self.directory)
+        for bridge in self.bridges(launch_journal.MAX_UNRESOLVED_LISTED + 2):
+            claimed(stopped, bridge)
+            stopped.spawning(bridge)
+        stopped.release()
+        report = launch_journal.unresolved(self.directory)
+        self.assertEqual(launch_journal.MAX_UNRESOLVED_LISTED + 2, report['count'])
+        self.assertEqual(launch_journal.MAX_UNRESOLVED_LISTED, len(report['entries']))
+
+    def test_D6c_status_shows_the_projects_unresolved_launches(self):
+        from codex_agents import client_runtime
+        from codex_agents.learning_store import LearningState, authorize_collector_runtime
+        from tests.support import ORCHESTRATION_ROOT
+        base = Path(self.temporary.name)
+        state = LearningState(base / 'state')
+        authorize_collector_runtime(state, ORCHESTRATION_ROOT / 'cli.py')
+        project = base / 'project'
+        (project / '.git').mkdir(parents=True)
+        project_id = 'prj_' + 'a' * 32
+        (Path(state.root) / 'projects' / project_id).mkdir(parents=True, mode=0o700)
+        stopped = LaunchJournal(Path(state.root) / 'projects' / project_id / 'launches')
+        claimed(stopped)
+        stopped.spawning(BRIDGE)
+        stopped.release()
+        owner = mock.Mock()
+        owner.owner_key.return_value = {'state': 'present', 'fingerprint': 'f', 'replacements': 0,
+                                        'last_replaced_at_ms': None}
+        with mock.patch.object(client_runtime, '_account_target', return_value=(project_id, 'e')), \
+                mock.patch.object(client_runtime, 'enroll_clients'), \
+                mock.patch.object(client_runtime, 'AccountClient', return_value=owner), \
+                mock.patch.object(client_runtime.CollectorClient, 'health',
+                                  side_effect=client_runtime.CollectorError('x')):
+            report = client_runtime.status_client(state.root, project)
+        self.assertEqual(1, report['unresolved_launches']['count'])
+        self.assertEqual([(BRIDGE, 'spawning')], [(item['bridge_run_id'], item['state'])
+                                                 for item in report['unresolved_launches']['entries']])
+
 
 if __name__ == '__main__':
     unittest.main()
