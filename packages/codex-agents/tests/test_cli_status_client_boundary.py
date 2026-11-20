@@ -211,9 +211,9 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
             'cause': 'claim_owner_failed', 'type': 'RuntimeError', 'at_ms': 1_700_000_000_000})}
         for decision, words in (
                 ({'action': 'wait', 'lane': 'claims', 'cause': 'claim_owner_failed',
-                  'held': {'run_slots': ['prj_' + 'a' * 32, 'prj_' + 'b' * 32], 'probes': [],
+                  'held': {'run_slots': ['prj_' + 'a' * 32, self.project_id], 'probes': [],
                            'lanes': {'billing': 1}}},
-                 ('not restarting', 'prj_' + 'a' * 32, 'prj_' + 'b' * 32, 'billing')),
+                 ('not restarting', 'prj_' + 'a' * 32, self.project_id + ' (this project)', 'billing')),
                 ({'action': 'suppressed', 'lane': 'claims', 'cause': 'claim_owner_failed', 'held': {}},
                  ('restarted itself less than an hour ago',))):
             with self.subTest(action=decision['action']):

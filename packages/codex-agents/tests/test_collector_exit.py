@@ -258,6 +258,16 @@ import runpy
 runpy.run_path(sys.argv[0], run_name="__main__")
 '''
 
+IDLE_WRAPPER = '''
+import sys
+sys.path.insert(0, sys.argv[1])
+from codex_agents import account_restart
+account_restart.CHECK_EVERY_SECONDS = 3600  # the check never runs during this test
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
 WRAPPER = '''
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -356,6 +366,23 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         from codex_agents import account_restart
         last = account_restart.last_restart(self.state.root)
         self.assertEqual(('ingress', 'ingress_cleanup_failed'), (last['lane'], last['cause']))
+
+    def test_E1_the_last_self_restart_is_shown_from_start_up(self):
+        from codex_agents import account_restart
+        self.state.root.mkdir(parents=True, exist_ok=True)
+        self.assertTrue(account_restart.record_restart(self.state.root, lane='ingress', cause='ingress_cleanup_failed',
+                                                       now_ms=1_700_000_000_000, mono_ns=1))
+        process = self.run_wrapper(IDLE_WRAPPER)
+        end = time.monotonic() + 30
+        while True:
+            code, status = self.cli('learning-status', expected=None)
+            text = ' '.join((status.get('account_health') or {}).get('attention') or [])
+            if 'restarted itself at' in text:
+                break
+            self.assertLess(time.monotonic(), end, json.dumps(status))
+            time.sleep(.2)
+        self.assertIn('ingress_cleanup_failed', text)
+        process.terminate()
 
     def test_C10a_an_error_in_the_collector_thread_is_recorded(self):
         process = self.run_wrapper(THREAD_WRAPPER)

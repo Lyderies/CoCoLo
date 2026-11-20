@@ -130,6 +130,11 @@ class RestartRecordTests(unittest.TestCase):
         with mock.patch.object(account_restart.os, 'fsync', folder_fails):
             self.assertFalse(account_restart.record_restart(self.root, lane='ingress', cause='x_failed', now_ms=NOW,
                                                             mono_ns=5))
+        self.assertIsNone(account_restart.last_restart(self.root))  # E2: never reported as a restart
+
+    def test_E3_an_oversized_record_is_unreadable(self):
+        (self.root / 'account-restart.json').write_bytes(b' ' * 5000 + b'{}')
+        self.assertEqual('unreadable', account_restart.last_restart(self.root))
 
     def test_D2_a_malformed_record_reads_as_unreadable_not_as_absent(self):
         # Requirement-driven change (D2): it used to read as None, which allowed a restart.
