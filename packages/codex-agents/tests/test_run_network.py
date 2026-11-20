@@ -323,6 +323,14 @@ class RecordTests(LocalProxyCase):
         hosts = [int(row["host"][4:-8]) for row in rows]
         self.assertEqual(sorted(hosts), hosts)
 
+    def test_the_proxys_own_health_check_is_not_an_attempt(self):
+        proxy = self.start()
+        socket.create_connection(("127.0.0.1", proxy.port), timeout=5).close()
+        self.assertEqual(0, ep.main(["--check", "--port", str(proxy.port)]))
+        status, connection, _ = connect(proxy.port, "example.com:443")
+        connection.close()
+        self.assertEqual(["example.com"], [row["host"] for row in self.records_now()])
+
     def test_unreadable_lines_are_skipped_not_fatal(self):
         Path(self.records, ep.RECORD_FILE).write_text('{"run": "run:a", "host": "x", "decision": "deny"}\nnot json\n')
         self.assertEqual(["x"], [row["host"] for row in ep.read_records(self.records)])
