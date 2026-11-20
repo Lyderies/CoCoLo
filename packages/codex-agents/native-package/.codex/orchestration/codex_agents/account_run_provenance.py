@@ -53,7 +53,7 @@ def attest_run_provenance(ledger, project_id, *, runtime_digest, caller_scope, r
         if (known is None or known['state'] != 'claimed' or known['bridge_run_id'] != registration.bridge_run_id
                 or known['receipt_digest'] != registration.claim_digest):
             raise ClaimError('claim_execution_unavailable')
-        with ledger._lock:
+        with ledger._held():
             connection = ledger._connection
             if connection.in_transaction:
                 raise ClaimError('claim_execution_unavailable')

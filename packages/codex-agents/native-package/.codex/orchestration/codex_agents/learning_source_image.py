@@ -355,7 +355,7 @@ def _capture(ledger, project_id, file_id, expected_domain_digest, limits):
     from . import learning_store as store
 
     _owner(ledger)
-    with ledger._lock:
+    with ledger._held():
         custody = _owner(ledger)
         connection = ledger._connection
         _schema(connection, store)

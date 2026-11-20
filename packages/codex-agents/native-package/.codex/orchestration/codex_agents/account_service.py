@@ -185,7 +185,7 @@ class AccountOwnerViews:
 
     def project(self, project_id: str) -> dict:
         self._guard()
-        with self._ledger._lock:
+        with self._ledger._held():
             self._ledger.state.harden_database_files()
             return self._project_locked(project_id)
 
@@ -205,7 +205,7 @@ class AccountOwnerViews:
 
     def capacity_status(self, project_id: str, status: CapacityStatusInput) -> dict:
         self._guard()
-        with self._ledger._lock:
+        with self._ledger._held():
             if self._ledger._connection.in_transaction:
                 raise AccountError("account_unavailable")
             self._project_locked(project_id)
@@ -324,7 +324,7 @@ class AccountOwnerViews:
         reason = "admission_capture_unavailable"
         try:
             work_limits.__post_init__()
-            with self._ledger._lock:
+            with self._ledger._held():
                 connection = self._ledger._connection
                 connection._read_owner()
                 unavailable = connection._sql_scope is not None or connection._sql_foreign_progress
@@ -522,7 +522,7 @@ class AccountOwnerViews:
         reason = "signature_capture_unavailable"
         try:
             work_limits.__post_init__()
-            with self._ledger._lock:
+            with self._ledger._held():
                 # read_call guards unusable connections and outer transactions.
                 return self._ledger._connection.read_call(
                     work_limits, lambda: self._capture_signature_inputs_locked(project_id, provider, limits),
@@ -633,7 +633,7 @@ class AccountOwnerViews:
 
     def _owner_key_view(self, project_id: str, *, include_public_key: bool) -> dict:
         self._guard()
-        with self._ledger._lock:
+        with self._ledger._held():
             self._ledger.state.harden_database_files()
             self._project_locked(project_id)
             try:

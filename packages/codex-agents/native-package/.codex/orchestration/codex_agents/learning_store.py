@@ -139,6 +139,8 @@ from .owner_key_contracts import (
 )
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .sql_read_budget import SQLReadConnection, SQLReadError
+from . import ledger_waits
+from .ledger_waits import LEDGER_LOCK_WAIT_MS, LEDGER_REQUEST_WAIT_MS  # noqa: F401 -- E1a, named here too
 from .account_claim_contracts import (
     CLAIM_DENIAL_CODES, MAX_CLAIM_INTEGER, ClaimError, LaunchClaimInput,
     _DIGEST as _CLAIM_DIGEST, _REQUEST_ID as _CLAIM_REQUEST_ID, _PROJECT as _CLAIM_PROJECT,
@@ -2013,6 +2015,10 @@ class LearningLedger:
         self._capacity_executions = OwnedExecutionRegistry()
         self._capacity_execution_origin = secrets.token_hex(32)
         self._active_readers = 0
+        # E1a revision 3: readers are counted under their own lock, so a reader's exit never waits for
+        # the ledger. Order: the ledger lock, then this one, never the reverse.
+        self._readers_lock = threading.Lock()
+        self._lock_waits = ledger_waits.LockWaits()
         self._client_capabilities = (
             client_capabilities
             if client_capabilities is not None
@@ -2042,7 +2048,7 @@ class LearningLedger:
                 raise
         try:
             self._connection = self._connect()
-            self._connection.share_with_lock(self._lock)
+            self._connection.share_with_lock(self._lock, waits=self._lock_waits)
             self._migrate()
             self._record_first_owner_key()
             self.state.mark_initialized()
@@ -2102,7 +2108,7 @@ class LearningLedger:
         From then on the signer file must match this record. The history only grows.
         """
 
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             self._connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS owner_key_history (
@@ -2150,7 +2156,7 @@ class LearningLedger:
         damaged = path.is_dir() and not path.is_symlink()
         if damaged:
             os.rmdir(path)  # refuses a non-empty one, before anything is recorded
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
             row = self._connection.execute(
                 "SELECT signer_line FROM owner_key_history ORDER BY sequence DESC LIMIT 1"
@@ -2220,7 +2226,7 @@ class LearningLedger:
         returns how many went. Skipped while a reader or a transaction is active."""
         from .account_observation import purge_old_observations
 
-        with self._lock:
+        with self._held():
             if self._active_readers or self._connection.in_transaction:
                 return 0
             now = self._clock_ms() if now_ms is None else now_ms
@@ -2237,7 +2243,7 @@ class LearningLedger:
         one transaction; a group that cannot be summarised is left as it was and
         the others still go. Backups keep their own lifetime.
         """
-        with self._lock:
+        with self._held():
             if self._active_readers or self._connection.in_transaction:
                 return 0
             now = self._clock_ms() if now_ms is None else now_ms
@@ -2332,7 +2338,7 @@ class LearningLedger:
         """
 
         removed = 0
-        with self._lock:
+        with self._held():
             with self._connection:
                 due = self._expire_worker_results_locked(self._clock_ms())
             for project_id, relative in due:
@@ -3555,7 +3561,7 @@ class LearningLedger:
         root_text = str(root)
         digest = keyed_digest(self.state.digest_key(), root_text)
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock:
+        with self._held():
             row = self._connection.execute(
                 "SELECT project_id FROM projects WHERE root_digest=? AND status='active'",
                 (digest,),
@@ -3579,7 +3585,7 @@ class LearningLedger:
         """Whether the ledger holds any learning record or QA row for the project."""
 
         types = sorted(LEARNING_MOVED_TYPES)
-        with self._lock:
+        with self._held():
             return self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type IN ("
                 + ",".join("?" for _ in types) + ") LIMIT 1",
@@ -3600,7 +3606,7 @@ class LearningLedger:
         from .history_contracts import HistoryError
         from .learning_source_image import _drained
 
-        with self._lock:
+        with self._held():
             try:
                 _drained(self._connection, self._clock_ms(), children_only=children_only)
             except HistoryError:
@@ -3617,7 +3623,7 @@ class LearningLedger:
 
         from .active_run_capacity import crashed_claim
 
-        with self._lock:
+        with self._held():
             crashed, parameters = crashed_claim("a", self._clock_ms(), self._capacity_clock_reference())
             count, newest = self._connection.execute(
                 "SELECT COUNT(*),MAX(a.claimed_at_ms) FROM active_run_capacity a "
@@ -3632,7 +3638,7 @@ class LearningLedger:
         the running collector may do it. Returns whether the project is moved.
         """
 
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -3661,7 +3667,7 @@ class LearningLedger:
     def learning_activation_pending(self, project_id: str) -> bool:
         """Whether a migration retired the ledger but has not yet switched the copy on."""
 
-        with self._lock:
+        with self._held():
             return self._connection.execute(
                 "SELECT 1 FROM additive_migrations WHERE feature_key=?",
                 (LEARNING_ACTIVATION_PENDING_KEY + project_id,),
@@ -3670,7 +3676,7 @@ class LearningLedger:
     def clear_learning_activation_pending(self, project_id: str) -> None:
         if self._allow_schema_upgrade is not True or self._collector_active is not False:
             raise LedgerError("learning store cutover requires the offline owner")
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             self._connection.execute(
                 "DELETE FROM additive_migrations WHERE feature_key=?",
                 (LEARNING_ACTIVATION_PENDING_KEY + project_id,),
@@ -3679,7 +3685,7 @@ class LearningLedger:
     def learning_moved(self, project_id: str) -> bool:
         """Whether this project's learning history now lives in its project store."""
 
-        with self._lock:
+        with self._held():
             return self._learning_moved_locked(project_id)
 
     def set_learning_moved(
@@ -3694,7 +3700,7 @@ class LearningLedger:
 
         if self._allow_schema_upgrade is not True or self._collector_active is not False:
             raise LedgerError("learning store cutover requires the offline owner")
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -3722,7 +3728,7 @@ class LearningLedger:
     def project_for_root(self, project_root: Path) -> str:
         root = _canonical_project_root(project_root)
         digest = keyed_digest(self.state.digest_key(), str(root))
-        with self._lock:
+        with self._held():
             row = self._connection.execute(
                 "SELECT project_id FROM projects WHERE root_digest=? AND status='active'",
                 (digest,),
@@ -3751,7 +3757,7 @@ class LearningLedger:
             raise LedgerError("repair receipt request is invalid")
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
         receipt_id = f"rpr_{secrets.token_hex(24)}"
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             self._connection.execute(
                 "DELETE FROM repair_receipts WHERE project_id=? AND expires_at_ms<=?",
                 (project_id, timestamp),
@@ -3787,7 +3793,7 @@ class LearningLedger:
         *,
         now_ms: int | None = None,
     ) -> tuple[str, str, str]:
-        with self._lock:
+        with self._held():
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
         if producer not in {"hook", "app_server"}:
@@ -3841,7 +3847,7 @@ class LearningLedger:
                     self._admit_session_run_locked(project_id, root_run_id, prepared)
             return project_id, session_digest, root_run_id
 
-        with self._lock:
+        with self._held():
             require_active()
             bindings = root_bindings()
             if bindings:
@@ -3918,7 +3924,7 @@ class LearningLedger:
         ):
             raise LedgerError("authorized transition requires atomic grant consumption")
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -4004,7 +4010,7 @@ class LearningLedger:
         handle = f"orc_{secrets.token_hex(24)}"
         handle_digest = keyed_digest(self.state.digest_key(), handle)
         orchestration_id = external_id(self.state.digest_key(), "orc", handle)
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -4096,7 +4102,7 @@ class LearningLedger:
         """Persist an explicit pause/resume transition without resetting history."""
 
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             row = self._orchestration_for_handle_locked(project_id, orchestration_handle)
             expected = "active" if paused else "paused"
             target = "paused" if paused else "active"
@@ -4142,7 +4148,7 @@ class LearningLedger:
             ):
                 raise LedgerError(f"{label} is invalid")
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             row = self._orchestration_for_handle_locked(
                 project_id, orchestration_handle
             )
@@ -4230,7 +4236,7 @@ class LearningLedger:
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise LedgerError(f"{label} is invalid")
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             row = self._orchestration_for_handle_locked(
                 project_id, orchestration_handle
             )
@@ -4297,7 +4303,7 @@ class LearningLedger:
             self.state.digest_key(), "asg", agent_id
         )
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             row = self._connection.execute(
                 "SELECT native_assignment_id,consumed_at_ms,binding_state,run_id,"
                 "client_version FROM host_run_bindings "
@@ -4349,7 +4355,7 @@ class LearningLedger:
         ):
             raise LedgerError("host run handle is invalid")
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             row = self._connection.execute(
                 "SELECT b.binding_state,o.status FROM host_run_bindings b "
                 "JOIN orchestrations o ON o.project_id=b.project_id "
@@ -4390,7 +4396,7 @@ class LearningLedger:
             raise LedgerError("host run handle is invalid")
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
-        with self._lock:
+        with self._held():
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -4518,7 +4524,7 @@ class LearningLedger:
         authority = OwnerGrantAuthority.for_state(self.state)
         if not authority.verify_upgrade_reconciliation_signature(request, signature):
             raise LedgerError("upgrade reconciliation owner signature is invalid")
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             # The ledger uses SQLite autocommit; explicitly begin before rechecks
             # so pause, classification and closure commit or roll back together.
             self._connection.execute("BEGIN IMMEDIATE")
@@ -4643,7 +4649,7 @@ class LearningLedger:
             self.state.digest_key(), canonical_json(primary_route)
         )
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             row = self._connection.execute(
                 "SELECT b.task_digest,b.route_digest,b.client_version,"
                 "b.binding_state,b.abandoned_reason,b.native_assignment_id,"
@@ -4737,7 +4743,7 @@ class LearningLedger:
             ),
         )
         timestamp = time.time_ns() // 1_000_000
-        with self._lock:
+        with self._held():
             row = self._connection.execute(
                 "SELECT assignment_digest,reason_code,expires_at_ms,consumed_at_ms,"
                 "run_id FROM repair_receipts WHERE project_id=? AND receipt_id=?",
@@ -4751,7 +4757,7 @@ class LearningLedger:
         ):
             raise LedgerError("legacy fallback receipt does not match trusted host state")
         if row["consumed_at_ms"] is not None:
-            with self._lock:
+            with self._held():
                 bound = self._connection.execute(
                     "SELECT task_digest,client_version,binding_state "
                     "FROM host_run_bindings WHERE project_id=? AND run_id=?",
@@ -4778,7 +4784,7 @@ class LearningLedger:
     ) -> dict[str, Any]:
         """Return content-free, non-duplicating statistics for one boundary."""
 
-        with self._lock:
+        with self._held():
             orchestration = self._connection.execute(
                 "SELECT * FROM orchestrations WHERE project_id=? AND orchestration_id=?",
                 (project_id, orchestration_id),
@@ -4965,6 +4971,23 @@ class LearningLedger:
         }
 
     @contextlib.contextmanager
+    def _held(self, label: str | None = None) -> Iterator[None]:
+        """M4b E1a-1: the ledger lock, waited for at most ledger_waits.wait_seconds(); re-entry by the
+        holder is immediate. A wait that runs out is counted by the caller's name and refused with
+        today's busy refusal before anything runs (E1a-2)."""
+        if not self._lock.acquire(timeout=ledger_waits.wait_seconds()):
+            self._lock_waits.refused(label or sys._getframe(2).f_code.co_name)
+            raise SQLReadError("sql_read_busy")
+        try:
+            yield
+        finally:
+            self._lock.release()
+
+    def lock_refusals(self) -> dict[str, int]:
+        """E1a-3: refused waits by caller, read without the ledger lock."""
+        return self._lock_waits.snapshot()
+
+    @contextlib.contextmanager
     def _account_transaction(self) -> Iterator[None]:
         """Own one explicit account write unit; never borrow an outer transaction.
 
@@ -4973,7 +4996,7 @@ class LearningLedger:
         here: an inner context could otherwise commit the outer unit early.
         """
 
-        with self._lock:
+        with self._held(sys._getframe(2).f_code.co_name):
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
             self._connection.execute("BEGIN IMMEDIATE")
@@ -5025,7 +5048,7 @@ class LearningLedger:
 
         # Refuse an outer unit before admission preparation, not only at the
         # final BEGIN. Preparation must not do crypto inside a caller's writer.
-        with self._lock:
+        with self._held():
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
         checked_assignment = validate_assignment_shape(assignment)
@@ -5315,7 +5338,7 @@ class LearningLedger:
             raise LedgerError("record admission rejected") from exc
         if any(record["record_type"] not in PROVIDER_OBSERVATION_TYPES for record in checked):
             raise LedgerError("provider observation type is unsupported")
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -5412,7 +5435,7 @@ class LearningLedger:
     def _registered_roots(self, project_id: str) -> tuple[Path, ...]:
         """The registered project's root, which no provider client may live in."""
 
-        with self._lock:
+        with self._held():
             row = self._connection.execute(
                 "SELECT canonical_root FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -5457,7 +5480,7 @@ class LearningLedger:
         """
 
         timestamp = self._clock_ms()
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             run_id = self._open_run_for_provider_locked(project_id, run_handle, provider)
             material = {
                 "schema_version": 1,
@@ -5492,7 +5515,7 @@ class LearningLedger:
         """Persist a dispatched run's client-observed usage, once, linked to the run."""
 
         timestamp = self._clock_ms()
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             run_id = self._open_run_for_provider_locked(project_id, run_handle, provider)
             if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='dispatch_intent' "
@@ -5573,13 +5596,13 @@ class LearningLedger:
 
         # Reject an invalid/foreign run before spending verification work. Never
         # borrow or commit an outer write transaction while releasing this lock.
-        with self._lock:
+        with self._held():
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
             admission, _ = self._launch_identity_locked(project_id, run_handle, identity)
         prepared = self._prepare_attestations(project_id, admission["provider"])
         denied = None
-        with self._lock:
+        with self._held():
             admission, digest = self._launch_identity_locked(project_id, run_handle, identity)
             provider = admission["provider"]
             attestations = self._prepared_attestations_locked(prepared, project_id, provider)
@@ -5616,7 +5639,7 @@ class LearningLedger:
         compares against what was admitted, never against current facts.
         """
 
-        with self._lock:
+        with self._held():
             binding = self._connection.execute(
                 "SELECT run_id FROM host_run_bindings WHERE project_id=? AND handle_digest=?",
                 (project_id, keyed_digest(self.state.digest_key(), run_handle)),
@@ -5683,7 +5706,7 @@ class LearningLedger:
                 "admission_basis": None, "account_fingerprint": None,
                 "evidence_digests": [], "observed_at_ms": timestamp,
             }
-            with self._lock, self._connection:
+            with self._held(), self._connection:
                 self._store_probe_admission_locked(project_id, record, timestamp=timestamp)
             self.state.harden_database_files()
 
@@ -5696,7 +5719,7 @@ class LearningLedger:
             project_id, "claude", project_root=project_root, environ=environ
         )[0]
         fingerprint = identity["account_fingerprint"]
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             # Read under the lock that orders admission decisions.
             timestamp = self._clock_ms()
             billing = [
@@ -5844,7 +5867,7 @@ class LearningLedger:
 
         timestamp = self._clock_ms()
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             binding = self._connection.execute(
                 "SELECT run_id,binding_state,consumed_at_ms FROM host_run_bindings "
                 "WHERE project_id=? AND handle_digest=?",
@@ -5936,7 +5959,7 @@ class LearningLedger:
                 or expected.run_handle != event.run_handle or lease.claim_id is None):
             raise ClaimError("claim_execution_invalid")
         handle_digest = keyed_digest(self.state.digest_key(), event.run_handle)
-        with self._lock:
+        with self._held():
             row = self._connection.execute(
                 "SELECT e.run_id FROM capacity_executions e JOIN active_run_capacity a "
                 "ON a.project_id=e.project_id AND a.handle_digest=e.handle_digest AND a.run_id=e.run_id "
@@ -6012,7 +6035,7 @@ class LearningLedger:
 
         from .learning_engine import OwnerGrantAuthority
 
-        with self._lock:
+        with self._held():
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
             owner = self._owner_generation_locked()
@@ -6263,7 +6286,7 @@ class LearningLedger:
             if _prepared_attestations is None else _prepared_attestations
         )
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock:
+        with self._held():
             decision = self._evaluate_admission_locked(
                 project_id, provider=provider, environ=environ, timestamp=timestamp,
                 _prepared_attestations=prepared,
@@ -6442,7 +6465,7 @@ class LearningLedger:
                                 request_id, launch, handle, scope, request, parameters,
                                 storage_required=storage_required or storage_binding is not None or storage_evidence is not None,
                                 storage_binding=storage_binding, storage_evidence=storage_evidence)
-        with self._lock:
+        with self._held():
             if self._connection.in_transaction:
                 raise LedgerError("account write transaction is already active")
             self.state.harden_database_files()
@@ -6606,7 +6629,7 @@ class LearningLedger:
             # whole claim request.
             if not fence:
                 raise ClaimError('claim_denial_invalid')
-            with self._lock:
+            with self._held():
                 observed = self._connection.execute(
                     'SELECT identity_digest FROM launch_observations WHERE project_id=? AND handle_digest=?',
                     (project_id, keyed_digest(self.state.digest_key(), closure.run_handle))).fetchone()
@@ -6632,7 +6655,7 @@ class LearningLedger:
             raise ClaimError('claim_denial_unavailable')
         key = self.state.digest_key()
         identity = denial_record_id(key, project_id, closure.lease_digest)
-        with self._lock:
+        with self._held():
             prior_hint = self._connection.execute('SELECT 1 FROM records WHERE project_id=? AND record_id=?',
                                                   (project_id, identity)).fetchone() is not None
         lease = None if prior_hint else verify_pending_storage_evidence(key, expected, raw)
@@ -7102,7 +7125,7 @@ class LearningLedger:
     def _known_capacity_release(self, project_id, run_handle, bridge_run_id):
         """Owner metadata reconciliation; never launches or releases anything."""
         handle = keyed_digest(self.state.digest_key(), run_handle)
-        with self._lock:
+        with self._held():
             cap = self._connection.execute(
                 "SELECT run_id,released_at_ms FROM active_run_capacity "
                 "WHERE project_id=? AND handle_digest=? AND bridge_run_id=?", (project_id, handle, bridge_run_id),
@@ -7125,7 +7148,7 @@ class LearningLedger:
         if not claim_matches(project_id, _CLAIM_PROJECT) or type(status) is not CapacityStatusInput:
             raise LedgerError("capacity status is unavailable")
         status.__post_init__()
-        with self._lock:
+        with self._held():
             if self._connection.in_transaction:
                 raise LedgerError("capacity status is unavailable")
             self.state.harden_database_files()
@@ -7193,7 +7216,7 @@ class LearningLedger:
         admission, work_limits = intake.returned_admission(handle)
         # Even a failed verification job may retrieve a durable receipt produced
         # independently while it waited. This never releases an active worker.
-        with self._lock:
+        with self._held():
             known = self._connection.read_call(work_limits, lambda: self._known_claim_for_request_locked(context))
         if known is not None:
             return known
@@ -7699,7 +7722,7 @@ class LearningLedger:
         only ever opened by the Codex host.
         """
 
-        with self._lock:
+        with self._held():
             if orchestration_handle is not None:
                 row = self._orchestration_for_handle_locked(project_id, orchestration_handle)
                 return str(row["client_version"])
@@ -7734,7 +7757,7 @@ class LearningLedger:
             "admission_basis": None, "account_fingerprint": None,
             "evidence_digests": [], "observed_at_ms": timestamp,
         }
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             self._store_admission_locked(
                 project_id, decision, run_id=None, timestamp=timestamp
             )
@@ -7744,7 +7767,7 @@ class LearningLedger:
         """Return the stored admission for a run; time-varying facts are not re-read."""
 
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
-        with self._lock:
+        with self._held():
             binding = self._connection.execute(
                 "SELECT run_id FROM host_run_bindings "
                 "WHERE project_id=? AND handle_digest=?",
@@ -7768,7 +7791,7 @@ class LearningLedger:
             raise LedgerError("host observation event is invalid")
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             binding = self._connection.execute(
                 "SELECT binding_state,observation_started_at_ms,"
                 "observation_deadline_at_ms,last_progress_at_ms,deadline_observed "
@@ -7855,7 +7878,7 @@ class LearningLedger:
             if axes["execution_state"] == "timed_out" and terminal_state != "timed_out":
                 raise LedgerError("timed-out result requires an authoritative host fact")
             handle_digest = keyed_digest(self.state.digest_key(), trusted_handle)
-            with self._lock:
+            with self._held():
                 binding = self._connection.execute(
                     "SELECT * FROM host_run_bindings WHERE project_id=? "
                     "AND handle_digest=?",
@@ -7904,7 +7927,7 @@ class LearningLedger:
         if capability is None:
             raise LedgerError("host result client is not in the accepted matrix")
         if trusted_handle is None:
-            with self._lock:
+            with self._held():
                 provenance = self._connection.execute(
                     "SELECT 1 FROM run_provenance WHERE project_id=? AND run_id=? "
                     "AND client_version=?",
@@ -7942,7 +7965,7 @@ class LearningLedger:
         # Every result path needs the run's stored passing admission, including
         # collector-bound sessions, whose admission is decided when they bind.
         dispatch_diagnostics = {}
-        with self._lock:
+        with self._held():
             self._run_admission_locked(project_id, checked_observation["run_id"])
             if client_version == BRIDGE_CLIENT_VERSION and self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? "
@@ -7992,7 +8015,7 @@ class LearningLedger:
 
         evaluation_candidate_digest = None
         evaluation_case_digest = None
-        with self._lock:
+        with self._held():
             assignment_rows = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? "
                 "AND record_type='evaluation_assignment'",
@@ -8081,7 +8104,7 @@ class LearningLedger:
             if execution_configuration["verification_required"] is True
             else None
         )
-        with self._lock:
+        with self._held():
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 project = self._connection.execute(
@@ -8220,7 +8243,7 @@ class LearningLedger:
             # already there, and the commit refuses or stands on its own checks.
             # An unregistered file is an interrupted commit, removed at the next
             # ledger start, and refuses this one.
-            with self._lock:
+            with self._held():
                 registered = self._connection.execute(
                     "SELECT relative_path,content_digest FROM stored_files "
                     "WHERE project_id=? AND file_id=? AND kind='artifact'",
@@ -8446,7 +8469,7 @@ class LearningLedger:
     ) -> dict[str, Any]:
         """Validate the two exact runs before executing project-approved checks."""
 
-        with self._lock:
+        with self._held():
             _, _, orchestration_id = self._operational_qa_scope_locked(
                 project_id, host_outcome_digest, verifier_host_outcome_digest
             )
@@ -8477,7 +8500,7 @@ class LearningLedger:
         digest = checked.get("verification_for_outcome")
         if digest is None:
             return None
-        with self._lock:
+        with self._held():
             rows = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? AND record_type='outcome' "
                 "AND source='host' AND content_digest=?",
@@ -8554,7 +8577,7 @@ class LearningLedger:
         from .providers import _latest
 
         report = {}
-        with self._lock:
+        with self._held():
             for provider in ("codex", "claude"):
                 identity = _latest(self._provider_records_locked(
                     project_id, "provider_identity", provider
@@ -8590,7 +8613,7 @@ class LearningLedger:
             # The original rule never waives Claude overage. No owner-signature
             # lookup or second connection is needed to display that fixed fact.
             return credits_waived(provider, record, None)
-        with self._lock:
+        with self._held():
             attestations = self._provider_records_locked(
                 project_id, "billing_attestation", provider
             )
@@ -8637,7 +8660,7 @@ class LearningLedger:
         ):
             raise LedgerError("operational check report time is invalid")
         receipt_id = f"oqc_{secrets.token_hex(24)}"
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             host, verifier, orchestration_id = self._operational_qa_scope_locked(
                 project_id, host_outcome_digest, verifier_host_outcome_digest
             )
@@ -8702,7 +8725,7 @@ class LearningLedger:
         ):
             raise LedgerError("operational check receipt is invalid")
         current_time = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock:
+        with self._held():
             host_outcome, verifier_host_outcome, orchestration_id = (
                 self._operational_qa_scope_locked(
                     project_id, host_outcome_digest, verifier_host_outcome_digest
@@ -8747,7 +8770,7 @@ class LearningLedger:
             raise LedgerError("operational QA admission rejected") from exc
         qa_digest = content_digest(qa)
         timestamp = int(qa["observed_at_ms"])
-        with self._lock:
+        with self._held():
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 consumed = self._connection.execute(
@@ -8812,7 +8835,7 @@ class LearningLedger:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Prepare exact QA bytes from two durable host-bound executions."""
 
-        with self._lock:
+        with self._held():
             assignment_row = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? AND content_digest=? "
                 "AND record_type='evaluation_assignment'",
@@ -8906,7 +8929,7 @@ class LearningLedger:
         if not authority.verify_qa_attestation(project_id, qa, signature):
             raise LedgerError("verified QA attestation is invalid")
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -8950,7 +8973,7 @@ class LearningLedger:
         subjects = sorted(subject_digests)
         if not subjects or len(subjects) != len(set(subjects)):
             raise LedgerError("evidence review subjects are invalid")
-        with self._lock:
+        with self._held():
             rows = self._connection.execute(
                 "SELECT record_type,content,content_digest FROM records "
                 "WHERE project_id=?",
@@ -9007,7 +9030,7 @@ class LearningLedger:
                 "record_id": f"evidence_review:{content_digest(material)}",
             }
         )
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             result = self._append_checked_locked(
                 project_id, checked, producer="verifier", timestamp=timestamp
             )
@@ -9034,7 +9057,7 @@ class LearningLedger:
             raise LedgerError("authenticated owner record type is unsupported")
         from .learning_engine import OwnerGrantAuthority
 
-        with self._lock:
+        with self._held():
             # A key added while this ledger was already open (a new machine: register, then
             # attest) is recorded before its first signature counts, as opening would have.
             if not self._connection.in_transaction and self._owner_generation_locked() is None:
@@ -9043,7 +9066,7 @@ class LearningLedger:
         if not authority.verify_owner_record(project_id, checked, signature):
             raise LedgerError("owner record signature is invalid")
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -9769,7 +9792,7 @@ class LearningLedger:
 
     def _owner_invalidated_run_ids_locked(self, project_id: str) -> set[str]:
         invalidated: set[str] = set()
-        with self._lock:
+        with self._held():
             rows = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? "
                 "AND record_type='feedback'",
@@ -9785,7 +9808,7 @@ class LearningLedger:
         self, project_id: str, candidate: dict[str, Any]
     ) -> bool:
         invalidated = self._owner_invalidated_run_ids_locked(project_id)
-        with self._lock:
+        with self._held():
             rows = self._connection.execute(
                 "SELECT content,content_digest FROM records WHERE project_id=? "
                 "AND record_type='outcome'",
@@ -10126,7 +10149,7 @@ class LearningLedger:
             != checked_grant["bounds_digest"]
         ):
             raise LedgerError("grant and transition do not match")
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -10267,7 +10290,7 @@ class LearningLedger:
     def link(self, project_id: str, from_id: str, to_id: str, relation: str) -> None:
         if relation not in {"evidence", "derived_from", "corrects", "evaluates", "promotes"}:
             raise LedgerError("record relation is unsupported")
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             try:
                 self._connection.execute(
                     "INSERT OR IGNORE INTO record_links VALUES(?,?,?,?)",
@@ -10293,7 +10316,7 @@ class LearningLedger:
             checked = validate_learning_record(record)
         except ContractError as exc:
             raise LedgerError("stored record admission rejected") from exc
-        with self._lock:
+        with self._held():
             persisted = self._connection.execute(
                 "SELECT content_digest FROM records WHERE project_id=? AND record_id=?",
                 (project_id, checked["record_id"]),
@@ -10328,7 +10351,7 @@ class LearningLedger:
 
         if expires_at_ms <= time.time_ns() // 1_000_000:
             raise LedgerError("sanitized backup expiry must be in the future")
-        with self._lock:
+        with self._held():
             self._plan_project_backups([project_id], LEDGER_SCHEMA_VERSION)
             return self._write_streamed_backup(project_id, LEDGER_SCHEMA_VERSION, file_id,
                                                expires_at_ms=expires_at_ms)
@@ -10468,7 +10491,7 @@ class LearningLedger:
         if not secrets.compare_digest(hasher.hexdigest(), digest):
             raise LedgerError("stored file digest does not match")
         relative = resolved.relative_to(self.state.root).as_posix()
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -10492,17 +10515,18 @@ class LearningLedger:
 
     @contextlib.contextmanager
     def repository(self, project_id: str) -> Iterator["ProjectRepository"]:
-        with self._lock:
+        with self._held():  # validation and registration in one hold, so no deletion comes between
             row = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
             if not row or row["status"] != "active":
                 raise LedgerError("project binding is not active")
-            self._active_readers += 1
+            with self._readers_lock:
+                self._active_readers += 1
         try:
             yield ProjectRepository(self, project_id)
         finally:
-            with self._lock:
+            with self._readers_lock:  # E1a: the exit never waits for the ledger
                 self._active_readers -= 1
 
     def lifecycle_records(
@@ -10510,7 +10534,7 @@ class LearningLedger:
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """Return one candidate and its ordered transitions for the lifecycle controller."""
 
-        with self._lock:
+        with self._held():
             candidate_rows = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? AND record_type='candidate'",
                 (project_id,),
@@ -10550,7 +10574,7 @@ class LearningLedger:
         if not released_candidate_digests:
             return []
 
-        with self._lock:
+        with self._held():
             candidate_rows = self._connection.execute(
                 "SELECT content,source_sequence FROM records WHERE project_id=? "
                 "AND record_type='candidate' ORDER BY source_sequence",
@@ -10620,7 +10644,7 @@ class LearningLedger:
 
         from .learning_engine import CandidateLifecycle, OwnerGrantAuthority
 
-        with self._lock:
+        with self._held():
             case_rows = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? "
                 "AND record_type='evaluation_case' AND record_id=?",
@@ -10731,7 +10755,7 @@ class LearningLedger:
             "evaluation_assignment", "evaluation_trial",
         }:
             raise LedgerError("controller record type is unsupported")
-        with self._lock:
+        with self._held():
             rows = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? AND record_type=? "
                 "AND content_digest=?",
@@ -10756,7 +10780,7 @@ class LearningLedger:
             raise LedgerError(LEARNING_MOVED_ERROR)
         expected_task_id = keyed_digest(self.state.digest_key(), checked["id"])
         accepted: set[str] = set()
-        with self._lock:
+        with self._held():
             invalidated_run_ids = self._owner_invalidated_run_ids_locked(project_id)
             for reference in references:
                 match = re.fullmatch(r"outcome:([0-9a-f]{64})", reference)
@@ -10815,7 +10839,7 @@ class LearningLedger:
         from .learning_contracts import candidate_base_digest
         from .learning_engine import analyze_outcomes, generate_candidate, mine_evaluation_case
 
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             project = self._connection.execute(
                 "SELECT status FROM projects WHERE project_id=?", (project_id,)
             ).fetchone()
@@ -11174,7 +11198,7 @@ class LearningLedger:
     def evaluation_case(self, project_id: str, record_id: str) -> dict[str, Any]:
         """Return one exact controlled case for the evaluation controller only."""
 
-        with self._lock:
+        with self._held():
             rows = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? AND record_id=? "
                 "AND record_type='evaluation_case'",
@@ -11194,7 +11218,7 @@ class LearningLedger:
             query += " AND record_type=?"
             params += (record_type,)
         query += " ORDER BY source_sequence"
-        with self._lock:
+        with self._held():
             rows = self._connection.execute(query, params).fetchall()
         return [
             {
@@ -11209,7 +11233,7 @@ class LearningLedger:
         if code not in {"admission_rejected", "queue_full", "collector_error", "conflict"}:
             raise LedgerError("health code is unsupported")
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
-        with self._lock, self._connection:
+        with self._held(), self._connection:
             self._connection.execute(
                 "INSERT INTO collector_health VALUES(?,?,1,?) "
                 "ON CONFLICT(project_id,code) DO UPDATE SET count=count+1, updated_at_ms=excluded.updated_at_ms",
@@ -11220,7 +11244,7 @@ class LearningLedger:
         """S1-H1c: the projects that still have an unreleased run slot from the last day or an admitted
         probe, read only; this errs on the side of "still running"."""
         now_ms = time.time_ns() // 1_000_000
-        with self._lock:
+        with self._held():
             # C1 (review 040-s1-h1c): any unreleased slot claimed in the last day, counted or not, since
             # its child may outlive its counted life.
             # D1 (review 040-s1-h1c-2): or still counted by the two-clock rule, whatever its age.
@@ -11243,6 +11267,7 @@ class LearningLedger:
         its claim), and still counted, i.e. not yet past crashed_claim's grace on both; probe
         deadlines are wall-clock only (stated in the reply). This frees nothing."""
         if not self._lock.acquire(blocking=False):
+            self._lock_waits.refused("slot_health")  # E1a-3
             return {"available": False, "reason": "ledger_busy"}
         try:
             # C8: another reader's progress handler or budgeted read scope is left alone.
@@ -11287,7 +11312,7 @@ class LearningLedger:
         from .account_cleanup import MAX_RELEASE_RESERVATIONS, live_cleanup_receipts
         from .account_observation import MAX_OBSERVATION_REQUESTS
 
-        with self._lock:
+        with self._held():
             observations = self._connection.execute(
                 "SELECT COUNT(*) FROM account_observation_origins WHERE project_id=?", (project_id,)).fetchone()[0]
             receipts = live_cleanup_receipts(self, project_id)
@@ -11295,7 +11320,7 @@ class LearningLedger:
                 "cleanup_receipts": {"live": int(receipts), "limit": MAX_RELEASE_RESERVATIONS}}
 
     def health_snapshot(self, project_id: str) -> dict[str, dict[str, int]]:
-        with self._lock:
+        with self._held():
             rows = self._connection.execute(
                 "SELECT code,count,updated_at_ms FROM collector_health "
                 "WHERE project_id=? ORDER BY code",
@@ -11318,7 +11343,7 @@ class LearningLedger:
     ) -> dict[str, Any]:
         """Return exact-project hook ingestion counts without record content or IDs."""
 
-        with self._lock:
+        with self._held():
             rows = self._connection.execute(
                 "SELECT event_code,accepted_count,last_accepted_at_ms "
                 "FROM hook_ingestion WHERE project_id=? ORDER BY event_code",
@@ -11424,7 +11449,7 @@ class LearningLedger:
         return snapshot
 
     def expire(self, project_id: str, *, now_ms: int) -> int:
-        with self._lock:
+        with self._held():
             if self._active_readers:
                 raise LedgerError("expiry requires closed scoped readers")
             links = self._connection.execute(
@@ -11589,7 +11614,7 @@ class LearningLedger:
     def delete_project(self, project_id: str, *, now_ms: int | None = None) -> str:
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
         deletion_id = f"del_{secrets.token_hex(16)}"
-        with self._lock:
+        with self._held():
             if self._active_readers:
                 raise LedgerError("project deletion requires closed scoped readers")
             if self._connection.execute(
@@ -11915,8 +11940,12 @@ class CollectorServer:
         reader (which spans several holds) or a transaction is active (review 040-h1a6-design). The
         lock is never waited on past a stop."""
         lock = self.ledger._lock
+        deadline = time.monotonic() + LEDGER_LOCK_WAIT_MS / 1000  # E1a-2: a busy ledger skips the cycle
         while not lock.acquire(timeout=0.1):
             if self._sweeps_stop.is_set():
+                return
+            if time.monotonic() >= deadline:
+                self.ledger._lock_waits.refused("sweeps")
                 return
         try:
             if self.ledger._active_readers or self.ledger._connection.in_transaction:
@@ -12129,6 +12158,7 @@ class CollectorServer:
                     # S1-H1a-6a: one bounded hold for every project read (they re-enter it at once);
                     # when it is not free in time, none is read and the reply says so.
                     if not self.ledger._lock.acquire(timeout=HEALTH_LEDGER_WAIT_MS / 1000):
+                        self.ledger._lock_waits.refused("health")  # E1a-3
                         response["ledger_busy"] = True
                         return response
                     try:

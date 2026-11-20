@@ -112,6 +112,7 @@ RUNTIME_FILES = (
     "codex_agents/learning_source_image.py",
     "codex_agents/learning_source_transfer.py",
     "codex_agents/learning_store.py",
+    "codex_agents/ledger_waits.py",
     "codex_agents/liveness_clock.py",
     "codex_agents/lost_run_contracts.py",
     "codex_agents/observation_failure_contracts.py",

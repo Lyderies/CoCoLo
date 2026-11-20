@@ -324,7 +324,7 @@ def preflight_open(ledger, project_id, *, runtime_digest, caller_scope, request_
     before_commit()
     _owner(ledger)
     try:
-        with ledger._lock:
+        with ledger._held():
             if ledger._connection.in_transaction:
                 raise OpenError('open_failed')  # nesting is a misuse; contention waits elsewhere
             journal, known = ledger._connection.read_call(work_limits, lambda: current_open_request(ledger, captured))
@@ -438,7 +438,7 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
     before_commit()
     _owner(ledger)
     try:
-        with ledger._lock:
+        with ledger._held():
             if ledger._connection.in_transaction:
                 raise OpenError('open_failed')  # nesting is a misuse; contention waits elsewhere
             journal, known = ledger._connection.read_call(work_limits, lambda: current_open_request(ledger, request))

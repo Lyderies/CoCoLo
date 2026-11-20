@@ -32,7 +32,7 @@ def attest_open_provenance(ledger, project_id, *, runtime_digest, caller_scope, 
             or expected.run_handle != request.run_handle):
         raise ClaimError('claim_execution_invalid')
     try:
-        with ledger._lock:
+        with ledger._held():
             connection = ledger._connection
             if connection.in_transaction:
                 raise ClaimError('claim_execution_unavailable')
