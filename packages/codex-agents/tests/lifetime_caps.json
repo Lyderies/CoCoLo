@@ -321,8 +321,9 @@
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
   "codex_activity.py::observe": {
-   "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "checks": 2,
+   "ends": "O0c M5: only items in progress count; a completed item moves to a recent window of the same size whose oldest entry is dropped quietly",
+   "test": "test_a_long_run_of_completed_items_never_reaches_the_cap"
   },
   "codex_preparation.py::_build": {
    "checks": 1,
