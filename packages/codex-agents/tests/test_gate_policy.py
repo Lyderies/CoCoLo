@@ -705,6 +705,23 @@ class K05Interpreters(TableMixin, unittest.TestCase):
             ("node script unlisted", bash("node tools/x.js"), ESCALATE, "command_not_allowed"),
         ])
 
+    def test_a_listed_sed_runs_only_scripts_that_cannot_write_or_execute(self):
+        self.check_rows([
+            ("print a range", bash("sed -n '1,200p' src/a.py"), ALLOW, "command_allowed"),
+            ("substitute", bash("sed -e 's/a/b/g' src/a.py"), ALLOW, "command_allowed"),
+            ("regex address and delete", bash("sed '/^#/d;s|x|y|2' src/a.py"), ALLOW, "command_allowed"),
+            ("w command", bash("sed -n 'w .git/x' src/a.py"), REFUSE, "command_inline_code"),
+            ("w flag", bash("sed 's/a/b/w out' src/a.py"), REFUSE, "command_inline_code"),
+            ("e command", bash("sed 'e curl x' src/a.py"), REFUSE, "command_inline_code"),
+            ("e flag", bash("sed 's/a/b/e' src/a.py"), REFUSE, "command_inline_code"),
+            ("r command", bash("sed 'r /etc/passwd' src/a.py"), REFUSE, "command_inline_code"),
+            ("script file", bash("sed -f src/x.sed src/a.py"), REFUSE, "command_inline_code"),
+            ("bracket that hides a delimiter", bash("sed 's/[/]/x/w f' src/a.py"), REFUSE,
+             "command_inline_code"),
+            ("expression option value", bash("sed --expression='1e id' src/a.py"), REFUSE,
+             "command_inline_code"),
+        ])
+
 
 class M32Intersection(TableMixin, unittest.TestCase):
     SAMPLE = [
