@@ -59,7 +59,9 @@ MAX_DIRECTORY_DEPTH = 64
 # Full 0.3.0 runtime inventory exceeds the original 20,000 call sites. Keep a
 # finite source-size ceiling; byte/node/import/report budgets independently cap
 # parsing and retained metadata. A successful inventory still fails unsafe roots.
-MAX_CALLS = 32_768
+# 0.4.0 (2026-11-21): the runtime passed 32,768 call sites (32,840 with the M3 gate and merge modules); doubled,
+# still finite and well inside MAX_AST_NODES.
+MAX_CALLS = 65_536
 MAX_IMPORTS = 8_192
 # The report is derived from the sources it audits (about 1.43 bytes per source
 # byte in 0.8.38: 5,252,094 for 3,662,524), so its envelope follows the source
