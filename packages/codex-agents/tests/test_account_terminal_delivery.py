@@ -119,6 +119,44 @@ class AccountTerminalDeliveryTests(unittest.TestCase):
                     "SELECT released_at_ms, release_digest FROM active_run_capacity WHERE handle_digest=?",
                     (handle,)).fetchone()))
 
+    def reopen(self):
+        self.ledger.close()
+        bridge = self.fixture.base.fixture.fixture
+        self.fixture.base.ledger = LearningLedger(bridge.state, client_capabilities=bridge.clients)
+        self.addCleanup(self.fixture.base.ledger.close)
+
+    def unsettled_completion_without_owner(self, kind):
+        """O0b RS-A round 2 G7: a decision, then a late terminal (its completion stored, not settled), and no
+        execution owner for it."""
+        handle, _ = self.decided(kind)
+        self.assertEqual('recorded', self.call()['state'])
+        self.assertIsNone(self.ledger._connection.execute(
+            'SELECT released_at_ms FROM capacity_completions WHERE handle_digest=?', (handle,)).fetchone()[0])
+        with self.ledger._account_transaction():  # the owner and its cleanup receipt go together
+            self.ledger._connection.execute('DELETE FROM account_cleanup_receipts WHERE handle_digest=?', (handle,))
+            self.ledger._connection.execute('DELETE FROM capacity_executions WHERE handle_digest=?', (handle,))
+
+    def test_RS_A_G7_a_crashed_decision_with_an_unsettled_completion_needs_its_execution_owner(self):
+        from tests.test_run_holds import assert_refused_everywhere
+        self.unsettled_completion_without_owner('crashed')
+        assert_refused_everywhere(self, self.ledger, self.binding.project_id,
+                                  self.fixture.base.fixture.fixture.state.root, self.reopen)
+
+    def test_RS_A_G7_a_lost_decision_with_an_unsettled_completion_needs_its_execution_owner(self):
+        from tests.test_run_holds import assert_refused_everywhere
+        self.unsettled_completion_without_owner('lost')
+        assert_refused_everywhere(self, self.ledger, self.binding.project_id,
+                                  self.fixture.base.fixture.fixture.state.root, self.reopen)
+
+    def test_RS_A_G7_a_decision_with_an_unsettled_completion_and_its_owner_still_opens(self):
+        from tests.test_run_holds import assert_accepted_everywhere
+        handle, _ = self.decided('crashed')
+        self.assertEqual('recorded', self.call()['state'])
+        self.assertEqual(1, self.ledger._connection.execute(
+            'SELECT COUNT(*) FROM capacity_executions WHERE handle_digest=?', (handle,)).fetchone()[0])
+        assert_accepted_everywhere(self.ledger, self.binding.project_id,
+                                   self.fixture.base.fixture.fixture.state.root, self.reopen)
+
     def test_RS_A_F10_status_and_reconciliation_read_a_decision_without_a_completion(self):
         handle, (at, digest) = self.decided('crashed')
         known = self.ledger._known_capacity_release(self.binding.project_id, self.binding.run_handle,

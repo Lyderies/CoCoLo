@@ -11,6 +11,8 @@ adoption.
 """
 from __future__ import annotations
 
+import json
+
 RUN_HOLD_KINDS = ("run_slot", "binding", "probe")
 RELEASE_KINDS = ("completed", "consumed", "lost", "crashed", "expired", "withdrawn", "unlaunched",
                  "service_lost", "claim_denied", "upgrade_superseded", "abandoned", "removed")
@@ -63,7 +65,9 @@ RUN_HOLDS_OBJECTS = (
      "INSERT OR IGNORE INTO run_holds(kind,project_id,identity,state,taken_at_ms,released_at_ms,release_kind) "
      "VALUES('binding',NEW.project_id,NEW.handle_digest,"
      "CASE WHEN NEW.binding_state IS 'pending' THEN 'held' ELSE 'released' END,NEW.created_at_ms,"
-     "CASE WHEN NEW.binding_state IS 'pending' THEN NULL ELSE NEW.consumed_at_ms END,"
+     # O0b RS-A round 2 G2: consumed_at_ms is a release time only for a terminal binding (a
+     # recovery_unavailable one gains it later, by fallback); an abandoned row's time stays unknown.
+     "CASE WHEN NEW.binding_state='terminal' THEN NEW.consumed_at_ms END,"
      "CASE WHEN NEW.binding_state IS 'pending' THEN NULL WHEN NEW.binding_state='terminal' THEN 'consumed' "
      "ELSE COALESCE(NEW.abandoned_reason,'abandoned') END); END"),
     ("trigger", "run_holds_binding_released",
@@ -95,7 +99,8 @@ RUN_HOLDS_OBJECTS = (
 )
 
 # Adoption: each existing hold gets its row from the evidence it has; nothing is invented. A release time history
-# does not record (an abandoned binding's, a committed probe's) stays unknown (NULL), never the creation time.
+# does not record (an abandoned binding's, a committed probe's) stays unknown (NULL), never the creation time nor
+# a later fallback's consumption time (O0b RS-A round 2 G2).
 _ADOPT = (
     "INSERT OR IGNORE INTO run_holds(kind,project_id,identity,state,taken_at_ms,released_at_ms,release_kind,receipt) "
     "SELECT 'run_slot',a.project_id,a.handle_digest,"
@@ -104,7 +109,7 @@ _ADOPT = (
     "INSERT OR IGNORE INTO run_holds(kind,project_id,identity,state,taken_at_ms,released_at_ms,release_kind) "
     "SELECT 'binding',h.project_id,h.handle_digest,"
     "CASE WHEN h.binding_state IS 'pending' THEN 'held' ELSE 'released' END,h.created_at_ms,"
-    "CASE WHEN h.binding_state IS 'pending' THEN NULL ELSE h.consumed_at_ms END,"
+    "CASE WHEN h.binding_state='terminal' THEN h.consumed_at_ms END,"  # O0b RS-A round 2 G2: as the take trigger
     "CASE WHEN h.binding_state IS 'pending' THEN NULL WHEN h.binding_state='terminal' THEN 'consumed' "
     "ELSE COALESCE(h.abandoned_reason,'abandoned') END FROM host_run_bindings h",
     "INSERT OR IGNORE INTO run_holds(kind,project_id,identity,state,taken_at_ms,released_at_ms,release_kind) "
@@ -175,14 +180,40 @@ _INCONSISTENT = (
     "SELECT 1 FROM run_holds r JOIN active_run_capacity a ON a.project_id=r.project_id AND a.handle_digest=r.identity "
     "WHERE r.kind='run_slot' AND r.release_kind IN ('crashed','lost') AND (r.state<>'released' "
     "OR r.receipt IS NULL OR r.receipt IS NOT a.release_digest OR r.released_at_ms IS NOT a.released_at_ms) LIMIT 1",
+    # O0b RS-A round 2 G1: a released slot's kind is a slot's (an ordinary completion or a decision), and an
+    # ordinary completion carries its slot's own release time and digest
+    "SELECT 1 FROM run_holds r JOIN active_run_capacity a ON a.project_id=r.project_id AND a.handle_digest=r.identity "
+    "WHERE r.kind='run_slot' AND r.state='released' AND (r.release_kind NOT IN ('completed','crashed','lost') "
+    "OR (r.release_kind='completed' AND (r.receipt IS NOT a.release_digest "
+    "OR r.released_at_ms IS NOT a.released_at_ms))) LIMIT 1",
+    # O0b RS-A round 2 G10: a lost or crashed decision keeps its evidence for the row's life (its only proof; it
+    # must hash to the receipt, checked by _evidence_matches)
+    "SELECT 1 FROM run_holds WHERE kind='run_slot' AND release_kind IN ('crashed','lost') AND evidence IS NULL LIMIT 1",
+    # O0b RS-A round 2 G1: an expired binding is released no earlier than its expiry (an unknown time stays allowed)
+    "SELECT 1 FROM run_holds r JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity "
+    "WHERE r.kind='binding' AND r.release_kind='expired' AND r.released_at_ms<h.expires_at_ms LIMIT 1",
 )
+
+
+def _evidence_matches(connection) -> bool:
+    """O0b RS-A round 2 G1: retained decision evidence hashes to its receipt (evidence pruned to NULL is allowed)."""
+    from .learning_contracts import content_digest
+
+    for receipt, evidence in connection.execute(
+            "SELECT receipt,evidence FROM run_holds WHERE evidence IS NOT NULL"):
+        try:
+            if type(evidence) is not str or receipt != content_digest(json.loads(evidence)):
+                return False
+        except (ValueError, TypeError, RecursionError):
+            return False
+    return True
 
 
 def check_run_holds_consistency(connection) -> bool:
     """Round 1 F2: every hold has its row, every row its hold, and their states agree (used at open, at restore
     and by every backup check)."""
     return check_run_holds_coverage(connection) and all(
-        connection.execute(sql).fetchone() is None for sql in _INCONSISTENT)
+        connection.execute(sql).fetchone() is None for sql in _INCONSISTENT) and _evidence_matches(connection)
 
 
 def check_run_holds_coverage(connection) -> bool:

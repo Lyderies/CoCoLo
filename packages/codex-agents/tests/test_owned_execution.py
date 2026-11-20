@@ -831,6 +831,32 @@ class CapacityCompletionTests(unittest.TestCase):
         self.assertEqual((row[0], "completed"), (row[1], row[2]))
         self.assertIsNotNone(row[0])
 
+    def completed_then(self, change):
+        """O0b RS-A round 2 G1: an ordinary completed slot whose register row is then changed."""
+        from tests.test_run_holds import assert_refused_everywhere
+        self.run_one()
+        with self.ledger._account_transaction():
+            self.ledger._connection.execute(change)
+        assert_refused_everywhere(self, self.ledger, self.fixture.project_id, self.fixture.state.root, self.reopen)
+
+    def test_RS_A_G1_a_completed_slot_s_register_time_must_be_its_release_time(self):
+        self.completed_then("UPDATE run_holds SET released_at_ms=released_at_ms+1 WHERE kind='run_slot'")
+
+    def test_RS_A_G1_a_completed_slot_s_register_receipt_must_be_its_release_digest(self):
+        self.completed_then("UPDATE run_holds SET receipt='" + "f" * 64 + "' WHERE kind='run_slot'")
+
+    def test_RS_A_G1_a_slot_s_register_kind_must_be_a_slot_s_release_kind(self):
+        self.completed_then("UPDATE run_holds SET release_kind='unlaunched' WHERE kind='run_slot'")
+
+    def test_RS_A_G10_a_completed_slot_relabelled_as_a_decision_with_pruned_evidence_is_refused(self):
+        """Round 2 G10: its receipt and time still match the slot; only the missing evidence tells."""
+        self.completed_then("UPDATE run_holds SET release_kind='crashed',evidence=NULL WHERE kind='run_slot'")
+
+    def test_RS_A_G1_a_completed_slot_still_verifies_and_opens(self):
+        from tests.test_run_holds import assert_accepted_everywhere
+        self.run_one()
+        assert_accepted_everywhere(self.ledger, self.fixture.project_id, self.fixture.state.root, self.reopen)
+
     def test_three_completed_owned_runs_release_default_slots_without_relaunch(self):
         for _ in range(3):
             last_handle, output = self.run_one()
