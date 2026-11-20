@@ -3,6 +3,7 @@
 `WHERE project_id=? AND (handle_digest=? OR run_id=?)` let SQLite pick the
 project_id prefix of a covering index and scan every claim of the project.
 """
+import ast
 import re
 import sqlite3
 import unittest
@@ -18,13 +19,12 @@ PROBES = ("project", "a" * 64, "run-absent")
 
 def claim_lookup_queries():
     """Every launch_claims lookup in the ledger source that matches on a handle or a run id."""
-    source = Path(learning_store.__file__).read_text(encoding="utf-8")
-    found = []
-    for match in re.finditer(r"""(["'])(SELECT 1 FROM launch_claims\b.*?)\1""", source):
-        text = match.group(2)
-        if "run_id=?" in text:
-            found.append(text)
-    return found
+    tree = ast.parse(Path(learning_store.__file__).read_text(encoding="utf-8"))
+    return [node.value for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and node.value.startswith("SELECT 1 FROM launch_claims WHERE")
+            and "active_run_capacity" not in node.value and ("run_id=?" in node.value
+                                                                          or "handle_digest=?" in node.value)]
 
 
 class ClaimLookupGrowthTests(unittest.TestCase):
@@ -51,11 +51,13 @@ class ClaimLookupGrowthTests(unittest.TestCase):
         return count[0]
 
     def parameters(self, query):
-        return (PROBES[0],) + tuple(PROBES[1] if name == "handle_digest" else PROBES[2]
-                                    for name in re.findall(r"(handle_digest|run_id)=\?", query))
+        probes = {"project_id": PROBES[0], "handle_digest": PROBES[1], "run_id": PROBES[2]}
+        return tuple(probes[name] for name in re.findall(r"(project_id|handle_digest|run_id)=\?", query))
 
     def test_queries_found(self):
-        self.assertGreaterEqual(len(claim_lookup_queries()), 4)
+        self.assertGreaterEqual(len(claim_lookup_queries()), 1)
+        source = Path(learning_store.__file__).read_text(encoding="utf-8")
+        self.assertNotRegex(source, r"launch_claims WHERE[^\n]*\(handle_digest=\? OR run_id=\?\)")
 
     def test_plan_has_no_project_wide_scan(self):
         connection = self.database(10)

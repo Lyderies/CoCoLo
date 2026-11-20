@@ -592,6 +592,18 @@ def _snapshot_project_partition(
     }
 
 
+def _claim_exists(connection, project_id, handle_digest, run_id):
+    """Whether a launch claim holds this handle or this run id.
+
+    Two lookups, one per unique index: with `handle_digest=? OR run_id=?` SQLite chose the
+    project_id prefix of a covering index and read every claim of the project (D11).
+    """
+    return connection.execute(
+        "SELECT 1 FROM launch_claims WHERE project_id=? AND handle_digest=? UNION ALL "
+        "SELECT 1 FROM launch_claims WHERE project_id=? AND run_id=? LIMIT 1",
+        (project_id, handle_digest, project_id, run_id)).fetchone() is not None
+
+
 _LAUNCH_CLAIMS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS launch_claims (
     project_id TEXT NOT NULL,
@@ -6480,10 +6492,7 @@ class LearningLedger:
         if (binding["binding_state"] != "pending" or binding["consumed_at_ms"] is not None
                 or binding["client_version"] != "bridge-v1" or binding["expires_at_ms"] <= timestamp):
             return "claim_not_open", binding, None, None
-        if self._connection.execute(
-            "SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?)",
-            (project_id, handle_digest, binding["run_id"]),
-        ).fetchone() is not None:
+        if _claim_exists(self._connection, project_id, handle_digest, binding["run_id"]):
             return "claim_already_consumed", binding, None, None
         started, until = self._claim_observation_window(binding)
         if not started <= timestamp < until:
@@ -6805,8 +6814,7 @@ class LearningLedger:
             ).fetchone()
             orchestration_digest = self._claim_original_orchestration_digest(expected, 'claim_denial_unavailable')
             # Any durable consumed/unknown launch or capacity is contradictory.
-            if (self._connection.execute('SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?) LIMIT 1',
-                                         (project_id, context.handle, expected.run_id)).fetchone() is not None
+            if (_claim_exists(self._connection, project_id, context.handle, expected.run_id)
                     or self._connection.execute('SELECT 1 FROM active_run_capacity WHERE project_id=? AND (handle_digest=? OR run_id=?) LIMIT 1',
                                                 (project_id, context.handle, expected.run_id)).fetchone() is not None):
                 raise ClaimError('claim_denial_unavailable')
@@ -6875,8 +6883,7 @@ class LearningLedger:
         binding = self._connection.execute('SELECT run_id FROM host_run_bindings WHERE project_id=? AND handle_digest=?',
                                            (project_id, context.handle)).fetchone()
         if (binding is None or binding['run_id'] != expected.run_id
-                or self._connection.execute('SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?) '
-                                            'LIMIT 1', (project_id, context.handle, expected.run_id)).fetchone() is not None
+                or _claim_exists(self._connection, project_id, context.handle, expected.run_id)
                 or self._connection.execute('SELECT 1 FROM active_run_capacity WHERE project_id=? AND (handle_digest=? '
                                             'OR run_id=?) LIMIT 1',
                                             (project_id, context.handle, expected.run_id)).fetchone() is not None):
@@ -7479,10 +7486,7 @@ class LearningLedger:
             return "claim_not_open", binding, None, None
         if not claim_matches(binding["run_id"], _CLAIM_RUN):
             raise ClaimError("claim_unavailable")
-        if self._connection.execute(
-            "SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?)",
-            (project_id, handle, binding["run_id"]),
-        ).fetchone() is not None:
+        if _claim_exists(self._connection, project_id, handle, binding["run_id"]):
             return "claim_already_consumed", binding, None, None
         started, until = self._claim_observation_window(binding)
         if not started <= timestamp < until:
@@ -7742,10 +7746,7 @@ class LearningLedger:
             admission = self._run_admission_locked(project_id, run_id)
             if admission["provider"] != route.get("provider"):
                 raise LedgerError("host run admission differs from the dispatched provider")
-            if self._connection.execute(
-                "SELECT 1 FROM launch_claims WHERE project_id=? AND (handle_digest=? OR run_id=?)",
-                (project_id, handle_digest, run_id),
-            ).fetchone() is not None:
+            if _claim_exists(self._connection, project_id, handle_digest, run_id):
                 raise LedgerError("host run was already dispatched")
             if self._connection.execute(
                 "SELECT 1 FROM records WHERE project_id=? AND record_type='dispatch_intent' "
