@@ -12,11 +12,11 @@ import re
 
 from .history_contracts import HistoryError, matches
 from .learning_adapters import empty_usage
-from .learning_contracts import MAX_RECORD_BYTES, parse_bounded_json
+from .learning_contracts import MAX_RECORD_BYTES, external_id, parse_bounded_json
 
 MAX_REPORTED_CHECKPOINTS = 64
 MAX_RUNS = 512  # Runs of one orchestration.
-MAX_ORCHESTRATIONS = 1_024
+_PAGE = 1_024  # handles read per page while finding one orchestration
 _ORCHESTRATION_ID = re.compile(r"orc:[0-9a-f]{64}")
 
 
@@ -25,24 +25,35 @@ def _json(history, blob, maximum=MAX_RECORD_BYTES):
 
 
 def _orchestration(history, orchestration_id):
-    """The named orchestration's handle and its latest snapshots; one checkpoint read per orchestration."""
+    """The named orchestration's handle and its latest snapshots. O0c P10: the handle is found by its keyed id
+    (external_id of the handle), paging through handles with no count of the project's orchestrations; no
+    checkpoint is parsed until the match."""
     latest = "SELECT content FROM project_orchestration_checkpoints WHERE project_id=? " \
              "AND orchestration_handle=? ORDER BY sequence DESC LIMIT ?"
-    handles = history._connection.execute(
-        "SELECT orchestration_handle FROM project_orchestrations WHERE project_id=? LIMIT ?",
-        (history.project_id, MAX_ORCHESTRATIONS + 1)).fetchall()
-    if len(handles) > MAX_ORCHESTRATIONS:
-        raise HistoryError("history_learning_capacity")
-    for (handle,) in handles:
-        row = history._connection.execute(latest, (history.project_id, handle, 1)).fetchone()
-        if row is not None and _json(history, row[0])["snapshot"].get("orchestration_id") == orchestration_id:
+    key, after = history._result_key, ""
+    while True:
+        handles = history._connection.execute(
+            "SELECT orchestration_handle FROM project_orchestrations WHERE project_id=? AND orchestration_handle>? "
+            "ORDER BY orchestration_handle LIMIT ?", (history.project_id, after, _PAGE)).fetchall()
+        for (handle,) in handles:
+            if key is not None:
+                if external_id(key, "orc", handle) != orchestration_id:
+                    continue
+            else:  # no key (never for a running service): the checkpoint says
+                row = history._connection.execute(latest, (history.project_id, handle, 1)).fetchone()
+                if row is None or _json(history, row[0])["snapshot"].get("orchestration_id") != orchestration_id:
+                    continue
             rows = history._connection.execute(
                 latest, (history.project_id, handle, MAX_REPORTED_CHECKPOINTS)).fetchall()
+            if not rows or _json(history, rows[0][0])["snapshot"].get("orchestration_id") != orchestration_id:
+                continue
             count = history._connection.execute(
                 "SELECT COUNT(*) FROM project_orchestration_checkpoints WHERE project_id=? "
                 "AND orchestration_handle=?", (history.project_id, handle)).fetchone()[0]
             return handle, [_json(history, item[0])["snapshot"] for item in reversed(rows)], count
-    raise HistoryError("history_not_found")
+        if len(handles) < _PAGE:
+            raise HistoryError("history_not_found")
+        after = handles[-1][0]
 
 
 def orchestration_report(history, orchestration_id):
