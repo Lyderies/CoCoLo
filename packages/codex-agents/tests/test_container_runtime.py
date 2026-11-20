@@ -126,9 +126,14 @@ class FakePodman:
             "cpu.max": f"{quota[0]} {period[0] if period else 100000}" if quota else "max 100000",
         }
         values.update(self.effective_overrides)
+        # As on a real systemd host: the processes sit in crun's "container" leaf under the scope,
+        # both levels carry the limits, and only the leaf has swap 0 (the scope allows swap).
         for name, value in values.items():
-            self.host.files[f"{base}/{name}"] = value + "\n"
+            self.host.files[f"{base}/container/{name}"] = value + "\n"
+            scope = memory[0] if name == "memory.swap.max" and memory and value == "0" else value
+            self.host.files[f"{base}/{name}"] = scope + "\n"
         self.host.files[f"{base}/cgroup.events"] = "populated 1\nfrozen 0\n"
+        self.host.files[f"/proc/{container.pid}/cgroup"] = f"0::{container.cgroup_path}/container\n"
         dropped = "--cap-drop=ALL" in args
         status = {
             "CapPrm": SECONDS_ZERO if dropped else "00000000800405fb",
@@ -146,6 +151,7 @@ class FakePodman:
         container.exit_code = code
         if container.pid:
             self.host.files.pop(f"/proc/{container.pid}/status", None)
+            self.host.files.pop(f"/proc/{container.pid}/cgroup", None)
         container.pid = 0
         base = "/sys/fs/cgroup" + container.cgroup_path
         for path in [p for p in self.host.files if p.startswith(base + "/")]:
