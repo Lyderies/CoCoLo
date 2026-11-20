@@ -17,9 +17,12 @@ adversarial review):
   MCP tools; tools and tool fields the gate does not know; network tools, package installs,
   privilege changes, git commands that change history, configuration or the network, links, mode
   changes, recursive deletes outside the scope, find's exec options; bare or interactive
-  interpreters and shells, code read from standard input or a terminal; inline code (awk, -c/-e
-  forms, perl -M, node loaders given as URLs, sed scripts outside a small grammar); wrappers that
-  run another command in a changed context; shell constructs whose effect cannot be read.
+  interpreters and shells, code read from standard input or a terminal; shells other than bash,
+  sh and dash, and shell options other than -e, -u, -x, -l and -o errexit|nounset|pipefail|xtrace;
+  NAME=value words after a command name; arguments read from a file (pytest @file); inline code
+  (awk, -c/-e forms, perl -M, node loaders given as URLs, sed scripts outside a small grammar);
+  wrappers that run another command in a changed context; shell constructs whose effect cannot be
+  read.
 - Default deny over arguments: every argument, of every program, is split on '=', ':' and ',' (and
   the attached values of clustered short options are included); any piece naming an always-
   refused path is refused, and absolute pieces must lie inside /workspace. For each program the
@@ -28,7 +31,9 @@ adversarial review):
   abbreviation of a refused option is refused, and any other option the list does not name
   escalates (or refuses, when the owner escalates nothing). The writes a known program makes
   (output options, copy and move destinations and what lands inside them, in-place edits,
-  deletions) are checked as writes. A program with no grammar runs without asking only when its
+  deletions) are checked as writes; a separate option value that looks like an option is not
+  taken as the value (the program may read it as an option). A shell or eval runs its command only
+  when it is itself listed. A program with no grammar runs without asking only when its
   whole argv is listed exactly in every layer of the policy. Runners (`uv run`, `poetry run`,
   ...) are unwrapped and the inner command is checked as a command of its own.
 - Grant-only paths (code that runs later: CI, hooks, build and test configuration, lock files):
@@ -141,7 +146,7 @@ _REASONS = {
     "write_conditional_ungranted": ("{s} holds code that runs later (CI, hooks, build or test "
                                     "configuration) and this assignment was not granted it"),
     "write_outside_scope": "{s} is outside this assignment's allowed paths",
-    "write_tree": ("copying the folder to {s} brings in files the supervisor cannot see (agent "
+    "write_tree": ("copying the folder to {s} brings in files and links the supervisor cannot see (agent "
                    "configuration or code that runs later could be among them)"),
     "write_deletion": "deleting or moving {s} needs the owner's yes",
     "write_test_edit": "changing the existing test {s} needs the owner's yes",
@@ -162,6 +167,11 @@ _REASONS = {
     "command_inline_code": ("{s} runs inline code that cannot be checked; write a file inside "
                             "your paths and run that"),
     "command_wrapper": "{s} runs commands in a changed context; run the command directly",
+    "command_shell_option": ("the shell option {s} changes how commands are read; only -e, -u, -x, -l "
+                             "and -o errexit, nounset, pipefail or xtrace are allowed"),
+    "command_shell_unsupported": "{s} is not a shell the supervisor can read; use bash or sh",
+    "command_argument_file": "{s} reads more arguments from a file the supervisor cannot see",
+    "command_write_option": "{s} writes files where the supervisor cannot check them",
     "command_nesting_too_deep": "the command nests shells too deeply",
     "command_privilege": "{s} changes privileges and is never allowed",
     "command_network": "{s} uses the network and is never allowed",
@@ -400,6 +410,9 @@ _CONDITIONAL_NAMES = frozenset({
     "bun.lockb", "bun.lock", "pdm.lock", "pixi.lock", "deno.lock",
     ".gitlab-ci.yml", ".travis.yml", "azure-pipelines.yml", "bitbucket-pipelines.yml", ".drone.yml",
     "jenkinsfile", "build.rs", "justfile", ".justfile",
+    ".pytest.ini", "pytest.toml", ".pytest.toml", "mypy.ini", ".rspec", "rakefile", "build.gradle",
+    "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "pom.xml", "cmakelists.txt",
+    "bunfig.toml", "deno.json", "deno.jsonc", "taskfile.yml", "taskfile.yaml",
 })
 _CONDITIONAL_SUFFIXES = (".pth", ".mk")
 _CONDITIONAL_PREFIXES = ("jest.config.", "vitest.config.", ".mocharc", "karma.conf.")
@@ -734,6 +747,7 @@ class _Grammar:
     long: frozenset = frozenset()         # long options without a value
     long_value: frozenset = frozenset()   # long options with a value (=VALUE or the next word)
     long_optional: frozenset = frozenset()  # long options whose value can only follow '='
+    long_equals: frozenset = frozenset()  # long options whose value must follow '='
     refuse: Mapping = None                # option ('-x' or '--name') -> the refusing rule
     stop: str = ""                        # value letters after which every word is an operand
     numeric: bool = False                 # -NUM is an option (a count)
@@ -743,9 +757,9 @@ class _Grammar:
 
 
 def _g(short="", short_value="", short_optional="", long=(), long_value=(), long_optional=(),
-       refuse=None, **kwargs) -> _Grammar:
+       refuse=None, long_equals=(), **kwargs) -> _Grammar:
     return _Grammar(short, short_value, short_optional, frozenset(long), frozenset(long_value),
-                    frozenset(long_optional), dict(refuse or {}), **kwargs)
+                    frozenset(long_optional), frozenset(long_equals), dict(refuse or {}), **kwargs)
 
 
 def _parse(grammar: _Grammar, args: list[str], clean: set[int] | None = None, offset: int = 0):
@@ -769,12 +783,19 @@ def _parse(grammar: _Grammar, args: list[str], clean: set[int] | None = None, of
                 raise _Refused(refuse[name], arg)
             if name in grammar.long_value:
                 if not eq:
-                    if i + 1 >= n:
+                    if i + 1 >= n or args[i + 1].startswith("-"):
+                        # A next word that looks like an option: the program may read it as one.
                         unknown.append(arg)
-                        break
+                        i += 1
+                        continue
                     i += 1
                     value = args[i]
                 options.append((name, value))
+            elif name in grammar.long_equals:
+                if eq:
+                    options.append((name, value))
+                else:
+                    unknown.append(arg)
             elif name in grammar.long_optional:
                 options.append((name, value if eq else None))
             elif name in grammar.long and not eq:
@@ -805,8 +826,9 @@ def _parse(grammar: _Grammar, args: list[str], clean: set[int] | None = None, of
                 if letter in grammar.short_value:
                     value = letters[index + 1:]
                     if not value:
-                        if i + 1 >= n:
+                        if i + 1 >= n or args[i + 1].startswith("-"):
                             unknown.append(arg)
+                            complete = False
                             break
                         i += 1
                         value = args[i]
@@ -891,12 +913,15 @@ _RM = _g("rRfvd", long=("--recursive", "--force", "--verbose", "--dir", "--prese
 _RMDIR = _g("pv", long=("--parents", "--ignore-fail-on-non-empty", "--verbose"))
 _SYMLINK = {"-s": "command_symlink", "-l": "command_symlink", "--symbolic-link": "command_symlink",
             "--link": "command_symlink"}
-_CP = _g("aRrfinpuvLPHTxd", "t",
-         long=("--recursive", "--archive", "--force", "--no-clobber", "--interactive", "--verbose",
-               "--dereference", "--no-dereference", "--no-target-directory", "--one-file-system"),
+# cp options that copy a link as a link (from its new depth a relative link may point elsewhere).
+_CP_LINKS = {"-P": "command_symlink", "-d": "command_symlink", "-a": "command_symlink",
+             "--no-dereference": "command_symlink", "--archive": "command_symlink"}
+_CP = _g("RrfinpuvLHTx", "t",
+         long=("--recursive", "--force", "--no-clobber", "--interactive", "--verbose",
+               "--dereference", "--no-target-directory", "--one-file-system"),
          long_value=("--target-directory",),
          long_optional=("--preserve", "--update", "--reflink", "--sparse"),
-         refuse=_SYMLINK)
+         refuse={**_SYMLINK, **_CP_LINKS})
 _MV = _g("finuvT", "t", long=("--force", "--no-clobber", "--interactive", "--verbose",
                               "--no-target-directory"),
          long_value=("--target-directory",), long_optional=("--update",), refuse=_SYMLINK)
@@ -919,6 +944,11 @@ _UNITTEST = _g("vqfcb", "kspt", long=("--verbose", "--quiet", "--failfast", "--c
 _PYTHON_GRAMMAR = _g("BdEhIOPqsSuvVbRx", "WXm", stop="m", permute=False,
                      long=("--version", "--help"), long_value=("--check-hash-based-pycs",),
                      refuse={"-c": "command_inline_code", "-i": "command_interactive"})
+# python -X options: the ones that only change how the run behaves, and the ones that write files.
+_PYTHON_X = frozenset({"dev", "utf8", "importtime", "faulthandler", "tracemalloc",
+                       "warn_default_encoding", "no_debug_ranges", "frozen_modules",
+                       "int_max_str_digits", "showrefcount", "cpu_count", "disable_remote_debug"})
+_PYTHON_X_WRITES = frozenset({"pycache_prefix", "perf", "perf_jit"})
 _NODE_LOADERS = frozenset({"-r", "--require", "--import", "--loader", "--experimental-loader"})
 _NODE = _g("", "rC", permute=False,
            long=("--test", "--test-only", "--enable-source-maps", "--no-warnings", "--trace-warnings",
@@ -966,10 +996,11 @@ _GIT_LOG_LONG = _GIT_DIFF_LONG + (
     "--extended-regexp", "--fixed-strings", "--all-match", "--invert-grep", "--count")
 _GIT_LOG = _g("pusRawzbWDgiEFmct", "nSG", "MCBU", numeric=True, long=_GIT_LOG_LONG,
               long_value=("--diff-filter", "--max-count", "--skip", "--since", "--after", "--until",
-                          "--before", "--author", "--committer", "--grep", "--format", "--date",
+                          "--before", "--author", "--committer", "--grep", "--date",
                           "--inter-hunk-context"),
               long_optional=_GIT_DIFF_OPTIONAL + ("--decorate", "--pretty", "--branches", "--tags",
                                                   "--remotes", "--no-walk"),
+              long_equals=("--format",),
               refuse=_GIT_REFUSE_DIFF)
 _GIT_GRAMMARS = {
     "diff": _GIT_DIFF,
@@ -1042,8 +1073,13 @@ _FIND_VALUE = frozenset({"-name", "-iname", "-path", "-ipath", "-wholename", "-i
                          "-newermt"})
 _SED_LONG = frozenset({"--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered",
                        "--null-data", "--zero-terminated", "--posix", "--sandbox", "--debug"})
-_SHELL_LETTERS = frozenset("euxvnlfaCc")
-_SHELL_LONG = frozenset({"--norc", "--noprofile", "--posix", "--login", "--verbose", "--noediting"})
+# The shells the gate reads (POSIX parsing), and the only options they may be given: anything
+# else (-k and -o keyword put NAME=value words into the environment, rc files run code, shopt
+# options change parsing) is refused.
+_READABLE_SHELLS = frozenset({"bash", "sh", "dash"})
+_SHELL_LETTERS = frozenset("euxlc")
+_SHELL_O_VALUES = frozenset({"errexit", "nounset", "pipefail", "xtrace"})
+_SHELL_LONG = frozenset({"--norc", "--noprofile"})
 _ARG_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr"})
 
 
@@ -1304,18 +1340,34 @@ class _Commands:
             raise _Refused("command_wrapper", name)
         if name in _REPLS:
             raise _Refused("command_interactive", name)
+        for word in args:
+            if _ASSIGNMENT.match(word):
+                # NAME=value after a command name: an environment setting under bash -k, make's
+                # variables, and the like.
+                raise _Refused("command_assignment")
         parts = self.redirections(redirects)
-        shell_unknown: list[str] = []
         if name in _SHELLS:
-            mode, script, shell_unknown = self.shell_mode(args)
+            if name not in _READABLE_SHELLS:
+                try:
+                    mode = self.shell_mode(args)[0]
+                except _Refused:
+                    mode = None
+                raise _Refused("command_interactive" if mode == "interactive"
+                               else "command_shell_unsupported", name)
+            mode, script = self.shell_mode(args)
             if mode == "interactive":
                 raise _Refused("command_interactive", name)
             if mode == "inline":
-                return parts + self.nested(script, depth)
+                self.argument(argv[0], program=True)
+                nested = self.nested(script, depth)
+                self.policy_state()
+                return parts + nested + [self.rule(argv, True)]
         if name == "eval":
             if not args:
                 raise _Refused("command_malformed", "eval without a command")
-            return parts + self.nested(" ".join(args), depth)
+            nested = self.nested(" ".join(args), depth)
+            self.policy_state()
+            return parts + nested + [self.rule(argv, True)]
         module = None
         if _INTERPRETER.match(name):
             mode, module = self.interpreter_mode(name, args)
@@ -1342,7 +1394,6 @@ class _Commands:
         if name in _MODE_CHANGE:
             raise _Refused("command_mode_change")
         reading = self.read(name, args)
-        reading.unknown[:0] = shell_unknown
         clean = reading.clean or set()
         for index, word in enumerate(argv):
             if index - 1 not in reading.exempt:
@@ -1416,9 +1467,8 @@ class _Commands:
         return parts
 
     @staticmethod
-    def shell_mode(args: list[str]) -> tuple[str, str | None, list[str]]:
+    def shell_mode(args: list[str]) -> tuple[str, str | None]:
         inline = False
-        unknown: list[str] = []
         i = 0
         while i < len(args):
             arg = args[i]
@@ -1426,31 +1476,37 @@ class _Commands:
                 i += 1
                 break
             if arg in ("-", "+"):
-                return "interactive", None, unknown
+                return "interactive", None
             if arg.startswith("--"):
                 if arg not in _SHELL_LONG:
-                    unknown.append(arg)
-                i += 2 if arg in ("--rcfile", "--init-file") else 1
+                    raise _Refused("command_shell_option", arg)
+                i += 1
                 continue
             if arg[0] in "-+":
                 letters = arg[1:]
                 if "i" in letters or "s" in letters:
-                    return "interactive", None, unknown
+                    return "interactive", None
+                for index, letter in enumerate(letters):
+                    if letter == "o" and index == len(letters) - 1:
+                        if i + 1 >= len(args) or args[i + 1] not in _SHELL_O_VALUES:
+                            value = args[i + 1] if i + 1 < len(args) else ""
+                            raise _Refused("command_shell_option", f"{arg} {value}".strip())
+                        i += 1
+                    elif letter not in _SHELL_LETTERS or (letter == "c" and arg[0] == "+"):
+                        raise _Refused("command_shell_option", arg)
                 if "c" in letters:
                     inline = True
-                if any(c not in _SHELL_LETTERS and c not in "oO" for c in letters):
-                    unknown.append(arg)
-                i += 2 if ("o" in letters or "O" in letters) else 1
+                i += 1
                 continue
             break
         rest = args[i:]
         if inline:
             if not rest:
                 raise _Refused("command_malformed", "a shell -c without a command")
-            return "inline", rest[0], unknown
+            return "inline", rest[0]
         if not rest:
-            return "interactive", None, unknown
-        return "script", None, unknown
+            return "interactive", None
+        return "script", None
 
     @staticmethod
     def interpreter_mode(name: str, args: list[str]) -> tuple[str, str | None]:
@@ -1565,7 +1621,7 @@ class _Commands:
                         raise _Refused("command_inline_code", f"{name} {option}")
                     reading.unknown.append(f"{option} {value}")
         elif grammar is _PYTEST:
-            pass
+            self.argument_files(name, args)
         elif name in ("touch", "mkdir"):
             reading.writes = [(p, "replace") for p in operands]
         elif name == "tee":
@@ -1577,6 +1633,9 @@ class _Commands:
         elif name == "sort":
             reading.writes = [(p, "replace") for p in _values(options, "-o", "--output")]
         elif name in ("cp", "mv"):
+            for value in _values(options, "--preserve"):
+                if {"links", "all"} & set(value.split(",")):
+                    raise _Refused("command_symlink")
             self.copy(name, options, operands, reading)
         return reading
 
@@ -1646,10 +1705,24 @@ class _Commands:
                 i += 1
         return unknown
 
+    @staticmethod
+    def argument_files(name: str, args: list[str]) -> None:
+        """pytest expands any argument starting with '@' into the arguments in that file."""
+
+        for word in args:
+            if word.startswith("@"):
+                raise _Refused("command_argument_file", f"{name} {word}")
+
     def python(self, args: list[str], clean: set[int]) -> _Reading:
         options, operands, unknown = _parse(_PYTHON_GRAMMAR, args, clean, 1)
         values = [v for _, v in options if v is not None]
         reading = _Reading(True, unknown, [], [], clean=clean, values=values)
+        for x_option in _values(options, "-X"):
+            x_name = x_option.split("=", 1)[0]
+            if x_name in _PYTHON_X_WRITES:
+                raise _Refused("command_write_option", f"-X {x_name}")
+            if x_name not in _PYTHON_X:
+                reading.unknown.append(f"-X {x_option}")
         modules = _values(options, "-m")
         if not modules:
             return reading
@@ -1658,6 +1731,8 @@ class _Commands:
         if grammar is None:
             reading.unknown.append(f"-m {module}")
             return reading
+        if grammar is _PYTEST:
+            self.argument_files("python -m pytest", operands)
         more_options, _, more = _parse(grammar, operands, clean, 1 + len(args) - len(operands))
         values.extend(v for _, v in more_options if v is not None)
         reading.unknown.extend(more)

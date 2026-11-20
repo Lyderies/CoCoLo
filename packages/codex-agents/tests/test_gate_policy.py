@@ -1633,7 +1633,8 @@ class R18PythonDashX(TableMixin, unittest.TestCase):
 
     def test_x_options_are_a_fixed_list_and_writing_ones_are_refused(self):
         self.check_rows([
-            ("pycache_prefix", bash("python3 -X pycache_prefix=docs src/a.py"), REFUSE, "command_write_option"),
+            ("pycache_prefix as a separate word is assignment-shaped",
+             bash("python3 -X pycache_prefix=docs src/a.py"), REFUSE, "command_assignment"),
             ("pycache_prefix attached", bash("python3 -Xpycache_prefix=src src/a.py"), REFUSE,
              "command_write_option"),
             ("importtime", bash("python3 -X importtime src/a.py"), ALLOW, "command_allowed"),
