@@ -13,10 +13,10 @@ from test_setup_update import REGISTERED, SetupUpdateTests  # noqa: E402
 
 
 class SetupStraightTests(SetupUpdateTests):
-    def to_fresh_choice(self):
+    def to_fresh_choice(self, **env):
         project, checks = self.make_project()
         self.attest_count = self.base / "attest.count"
-        self.start(project, {**REGISTERED, "FAKE_ATTEST": str(self.attest_count)})
+        self.start(project, {**REGISTERED, "FAKE_ATTEST": str(self.attest_count), **env})
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
@@ -64,6 +64,45 @@ class SetupStraightTests(SetupUpdateTests):
         self.send("\x1b[B\r")  # Configure
         self.expect("Verify the install only")  # today's eight-entry menu, unchanged
         self.expect("Replace a lost owner key")
+
+    def set_up_to_commit(self, **env):
+        project = self.to_fresh_choice(**env)
+        self.send("\r")  # Set up
+        self.expect("Codex children")
+        self.send(" \r")
+        self.expect("Looks right")
+        self.send("\r")
+        self.expect("Commit now")
+        return project
+
+    def test_S4_2_declining_the_commit_in_set_up_leaves_the_install_uncommitted(self):
+        import subprocess
+        project = self.set_up_to_commit()
+        self.send("\x1b[B\r")  # I will commit myself
+        # Not the exit status: an uncommitted install is not verified, which setup already counts as a
+        # failure on every path (a leftover recorded in PLAN S4, not an S4 change).
+        self.finish(timeout=90)
+        tracked = subprocess.run(["git", "-C", str(project), "ls-files", ".codex/orchestration/cli.py"],
+                                 capture_output=True, text=True, env=self.env).stdout
+        self.assertEqual("", tracked)  # the owner's choice was kept: nothing committed
+        self.assertTrue((project / ".codex" / "orchestration" / "cli.py").is_file())
+
+    def test_S4_2_a_failed_step_in_set_up_offers_the_retry_menu_and_going_back_leaves_set_up(self):
+        self.set_up_to_commit(FAKE_ATTEST_FAILS="1")
+        self.send("\r")  # commit
+        self.expect("attest stub run 1")
+        self.expect("Try again")  # the retry menu, not update mode's stop
+        self.assertIn("Back to the main menu", self.screen)
+        self.send("\x1b[B\x1b[B\r")  # Back to the main menu
+        self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # Configure
+        self.expect("Update the install and walk through every step")
+        self.send("\x1b[B\r")
+        for wait in ("Continue", "Keep the existing configuration"):
+            self.expect(wait)
+            self.send("\r")
+        self.expect("Install now")  # asked again: Set up ended with the attempt
 
 
 def load_tests(loader, tests, pattern):

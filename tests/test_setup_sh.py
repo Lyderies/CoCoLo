@@ -1636,7 +1636,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         self.expect("fresh install is possible")
-        self.send("\r")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
         self.expect("Codex children")
         self.send("\r")
         self.expect("Looks right")
@@ -1710,7 +1710,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("The install failed")
@@ -1758,6 +1760,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
         self.send("\x1b[B\r")  # past "Update this project" (S1-U2)
         for wait in ("install can be updated", "Keep the existing configuration", "Install now"):
@@ -1833,6 +1837,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
         self.send("\x1b[B\r")  # past "Update this project" (S1-U2)
         for wait in ("install can be updated", "Codex children", "Looks right", "Install now"):
@@ -1859,7 +1865,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("Continue to the summary")
@@ -1944,6 +1952,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.to_failed_billing(1)
         self.send("\x1b[B\x1b[B\r")  # Back to the main menu
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")  # the existing-install menu, not the summary
         self.assertNotIn("Exit", self.screen)
         self.send("\x1b[B\x1b[B\x1b[B\r")  # Re-run the billing attestation only
@@ -1962,6 +1972,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.to_failed_billing(2)
         self.send("\x1b[B\x1b[B\r")  # Back to the main menu
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
         self.send("\x1b[B\x1b[B\x1b[B\r")  # Re-run the billing attestation only
         self.expect("Start the attestation")
@@ -1974,6 +1986,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.assertNotIn("Skip for now", self.screen)  # attestation-only has nothing to skip to
         self.send("\x1b[B\r")  # Back to the main menu
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
         self.settle()
         self.assertGreater(self.pid, 0)  # still running: a failure never ended the wizard
@@ -1989,7 +2003,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("Back to the main menu")
@@ -1997,7 +2013,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("Continue to the summary")
@@ -2027,12 +2045,16 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Replace a lost owner key")
         self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")
         self.expect("Use this only if you can no longer unlock your owner key")
         self.expect("Replace the owner key")
         self.send("\x1b[B\r")  # Back to the main menu
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
         self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
         self.expect("Stopped.")
@@ -2055,11 +2077,15 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Change the owner key passphrase")
         self.send("\x1b[B\x1b[B\x1b[B\x1b[B\r")
         self.expect("this wizard never sees them")
         self.send("\x1b[B\r")  # Back to the main menu: attest.py never ran
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Change the owner key passphrase")
         self.assertFalse(count.exists())
         self.send("\x1b[B\x1b[B\x1b[B\x1b[B\r")
@@ -2098,6 +2124,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Verify the install only")
         self.send("\x1b[B\x1b[B\r")
         self.expect("Try again")
@@ -2108,6 +2136,8 @@ class WizardTerminalTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(project), "add", "-A"], check=True, env=self.env)
         subprocess.run(["git", "-C", str(project), "commit", "-qm", "install"], check=True, env=self.env)
         self.send("\r")
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Verify the install only")
         self.send("\x1b[B\x1b[B\r")
         self.expect("Codex commands rule: missing")
@@ -2118,6 +2148,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.assertNotIn("Save a summary of what failed", self.screen)  # the old failures are gone
         self.send("\x1b[B\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
         self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r")  # Quit
         self.expect("Stopped.")
@@ -2132,7 +2164,7 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         self.expect("fresh install is possible")
-        self.send("\r")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
         self.expect("Codex children")
         self.send("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B \r")  # also turn on bridging to Claude
         self.expect("Looks right")
@@ -2153,6 +2185,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Try again")
         self.send("\x1b[B\x1b[B\r")  # Back to the main menu
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
         self.send("\x1b[B\x1b[B\x1b[B\r")  # a different mode: attestation only
         self.expect("Start the attestation")
@@ -2309,7 +2343,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("Commit now")
@@ -2361,7 +2397,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right"):
             self.expect(wait)
             self.send("\r")
         self.expect("Close every Codex session in this project first.")
@@ -2402,7 +2440,9 @@ class WizardTerminalTests(unittest.TestCase):
         self.choose_project()
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
-        for wait in ("fresh install is possible", "Codex children", "Looks right", "Install now"):
+        self.expect("fresh install is possible")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
+        for wait in ("Codex children", "Looks right", "Install now"):
             self.expect(wait)
             self.send("\r")
         self.expect("commit failed: no paths to commit")
@@ -2439,6 +2479,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
         self.send("\x1b[B\r")  # past "Update this project" (S1-U2)
         for wait in ("install can be updated", "Codex children", "Looks right", "Install now"):
@@ -2501,6 +2543,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Update the install")
         self.send("\x1b[B\x1b[B\x1b[B\r")  # Re-run the billing attestation only
         self.expect("Start the attestation")
@@ -2581,6 +2625,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Verify the install only")
         self.send("\x1b[B\x1b[B\r")
         self.expect("Codex commands rule: missing")
@@ -2615,6 +2661,8 @@ class WizardTerminalTests(unittest.TestCase):
         self.expect("Everything looks good")
         self.send("\r")
         self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # S4: Configure opens the menu below
         self.expect("Verify the install only")
         self.send("\x1b[B\x1b[B\r")
         self.expect("cannot be used with this Codex setup")

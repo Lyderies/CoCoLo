@@ -259,7 +259,7 @@ _INSTALLER_REFUSALS = (
      "setup with a Python from Homebrew, python.org or the system."),
     (("*learning hook*",),
      "The project's learning hooks are missing, from an older release or edited by hand (Codex runs them "
-     "outside its sandbox). Update the install (choose 'Update the install and walk through every step')."),
+     "outside its sandbox). Update the install (choose Configure, then 'Update the install and walk through every step')."),
     (("*merge*progress*", "*rebase*progress*", "*cherry-pick*progress*", "*revert*progress*",
       "*bisect*progress*", "*unmerged*"),
      "A Git operation (merge, rebase, cherry-pick or similar) is unfinished in the project. Finish or abort it "
@@ -275,7 +275,7 @@ _INSTALLER_REFUSALS = (
      "commit it, then retry."),
     (("*permission rules*",),
      "The Claude Code permission rules that keep owner commands away from a Claude session are missing from "
-     ".claude/settings.json. Update the install (choose 'Update the install and walk through every step'), "
+     ".claude/settings.json. Update the install (choose Configure, then 'Update the install and walk through every step'), "
      "then commit."),
     (("*settings.json*", "*agent-orchestration-permissions*"),
      "The project's .claude/settings.json could not be merged safely: it must be a regular file holding a JSON "

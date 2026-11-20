@@ -20,7 +20,7 @@ whose `.pub` file beside it matches the owner key on record is found by itself, 
 
 Seen only with the first 0.3.0 test build: commands run from your own terminal (setup, status and the
 billing attestation) were refused by the orchestrator's account service. This release lets your terminal
-read status and observe providers. Update this repository (`git pull`), then run `./setup.sh` and choose
+read status and observe providers. Update this repository (`git pull`), then run `./setup.sh` and choose Configure, then
 "Update the install and walk through every step".
 
 ## "the owner key must be a file in your own ~/.ssh folder"
@@ -33,7 +33,7 @@ If it then says the key file has another link elsewhere, make a fresh copy in `~
 
 Run `./setup.sh`, pick the project and choose "Replace a lost owner key". It creates a new key with a new
 passphrase, then signs for that project. If the wizard says the project's orchestrator differs from this
-setup, choose "Update the install and walk through every step" first and skip the attestation step.
+setup, choose Configure, then "Update the install and walk through every step" first and skip the attestation step.
 
 Replacing the key cancels every billing statement the old key signed, in every project, so each project's
 children are refused with `billing_attestation_missing` until you choose "Re-run the billing attestation
@@ -54,7 +54,7 @@ before going further. To go on, choose "Replace a lost owner key" in `./setup.sh
 
 ## Codex reports the collector unreachable or "filesystem operation failed"
 
-The command ran inside Codex's sandbox. Run `./setup.sh`, choose "Update the install and walk through every
+The command ran inside Codex's sandbox. Run `./setup.sh`, choose Configure, then "Update the install and walk through every
 step", and allow the rule in step 8 (Commands): the default there is "No, not now", so press Down once to
 "Yes, allow these commands" before Enter. Then start a new Codex session in the project's folder.
 
@@ -70,7 +70,7 @@ on this machine or project.
 
 ## The Codex rule is "stale" after a Python or package upgrade
 
-The rule names the exact Python build and runtime copy. Run `./setup.sh`, choose "Update the install and
+The rule names the exact Python build and runtime copy. Run `./setup.sh`, choose Configure, then "Update the install and
 walk through every step", and choose "Replace it" in step 8. The learning hooks name that Python too: the
 update renders them again, so trust them again in Codex's `/hooks` afterwards.
 
@@ -105,7 +105,7 @@ It works only in your account's real `~/.codex`: set `HOME` to your own home fol
 
 ## "the learning state is still in its old macOS folder"
 
-Your records are still in `~/Library/Application Support/codex-agents`. Run `./setup.sh`, choose "Update
+Your records are still in `~/Library/Application Support/codex-agents`. Run `./setup.sh`, choose Configure, then "Update
 the install and walk through every step", and approve the move in step 5 (Collector) after checking the
 creation date and owner key it shows. Until then every orchestrator command refuses. If it says the state
 exists in both folders, keep the one in use, move the other out of both places, and run it again.
@@ -124,7 +124,7 @@ primary to cancel it, and run the command again.
 ## `ledger_upgrade_required`, or "these records were written by an earlier version"
 
 Your orchestrator records come from an earlier version. Nothing was stopped or changed. Run `./setup.sh`
-for the project, choose "Update the install and walk through every step", and answer "Yes, upgrade them"
+for the project, choose Configure, then "Update the install and walk through every step", and answer "Yes, upgrade them"
 in step 5 (Collector). It keeps a checked copy first and says where. Then run setup for every other
 project on this machine: they share the records and need this version too.
 
@@ -165,13 +165,13 @@ start afterwards. Run `./setup.sh` again and repeat step 5 (Collector).
 
 Every project on the machine shares one set of records and one collector. Once one project is updated,
 the others are refused (the collector "differs from the owner-authorized runtime", or a newer ledger)
-until you run `./setup.sh` for each of them and choose "Update the install and walk through every step".
+until you run `./setup.sh` for each of them and choose Configure, then "Update the install and walk through every step".
 
 ## "collector did not become healthy"
 
 The shared collector was started and did not answer within 20 seconds, which happens only on a very
 busy machine or when it cannot start at all. It keeps starting by itself: run the command again. If it
-keeps failing, run `./setup.sh` and choose "Update the install and walk through every step"; step 5
+keeps failing, run `./setup.sh` and choose Configure, then "Update the install and walk through every step"; step 5
 (Collector) says what is wrong.
 
 ## A dispatch refused with `preparation_...` or `run_client_changed`
@@ -321,7 +321,7 @@ bridged children have hooks disabled: their run lifecycle comes from the managed
 `provider_attestations` shows `present`, `missing` or `identity_missing` for each provider, using the
 latest observed account and admission's owner-verified project lookup. `unavailable` means the collector
 could not report it. This is attestation status, not admission: fresh identity, billing, headroom and the
-other gates still apply. For `billing_attestation_missing`, choose "Re-run the billing attestation only"
+other gates still apply. For `billing_attestation_missing`, choose Configure, then "Re-run the billing attestation only"
 for that project in `./setup.sh`.
 
 ## Operational QA fails without test output

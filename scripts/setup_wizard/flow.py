@@ -89,10 +89,15 @@ class Wizard:
         self.slow_seconds = int(os.environ.get("RUN_SLOW_SECONDS") or 10)
         self.collector_ready_seconds = int(os.environ.get("COLLECTOR_READY_SECONDS") or 90)
         self.go_back = False
+        self.straight = False  # S4: Set up, every step with no do-it-now menu (only the owner's choices)
         self.reset_attempt()
 
-    def ask(self, items: list[str], update: int | str = 0) -> int:
-        """A menu; in update mode no menu: `update` is the answer, or the fixed reason the update stops."""
+    def ask(self, items: list[str], update: int | str = 0, *, implied: bool = False) -> int:
+        """A menu; in update mode no menu: `update` is the answer, or the fixed reason the update stops.
+        S4: in Set up mode an implied question (do it now, or a pause) takes its first answer."""
+        if self.straight and implied and not self.update:
+            self.t.render()
+            return 0
         if not self.update:
             return self.t.menu(0, items)
         self.t.render()  # No menu draws the screen, so the owner still sees each step as it goes.
@@ -120,6 +125,9 @@ class Wizard:
             self.t.stat.pop(number, None)
         self.note: dict[int, str] = {1: getattr(self, "note", {}).get(1, "")}
         self.failed_any = False
+        if self.straight:  # S4: back to the main menu leaves Set up
+            self.straight = False
+            self.t.no_pauses = self.update
         self.failures: list[str] = []
         self.fail_reason = ""
         self.mode = "full"
@@ -307,7 +315,7 @@ class Wizard:
         # In the foreground and the wizard's own group, as setup.sh: attest.py needs the terminal for its
         # passphrase prompts, so it cannot run in a group of its own (review 040-s5-wizard c).
         status = self.run_foreground(argv)
-        if self.update:  # Nothing but attest.py's own passphrase prompt is asked (S1-U1).
+        if self.update or self.straight:  # S1-U1, S4: nothing but attest.py's own prompt
             self.t.write(f"\n  attest.py finished (exit code {status}).\n")
             return status
         self.t.write(f"\n  attest.py finished (exit code {status}). Press Enter to continue. ")
@@ -624,10 +632,15 @@ class Wizard:
                 self.owner_key_notice()
                 if not self.update:
                     t.body("An existing install was found in this project. Choose what to do.")
-                    choice = t.menu(0, ["Update this project", "Update the install and walk through every step",
-                                        "Verify the install only", "Re-run the billing attestation only",
-                                        "Change the owner key passphrase", "Replace a lost owner key",
-                                        "Choose another path", "Quit"])
+                    # S4-1: the recommended way first; Configure opens today's menu, unchanged.
+                    first = t.menu(0, ["Update this project (recommended)", "Configure", "Quit"])
+                    if first == 2:
+                        raise Stop(0, "Stopped.")
+                    choice = 0 if first == 0 else t.menu(0, [
+                        "Update this project", "Update the install and walk through every step",
+                        "Verify the install only", "Re-run the billing attestation only",
+                        "Change the owner key passphrase", "Replace a lost owner key",
+                        "Choose another path", "Quit"])
                     if choice == 6:
                         default = folder
                         continue
@@ -692,7 +705,14 @@ class Wizard:
                 t.body("The install can be updated. Continue to choose providers.")
             else:
                 t.body("A fresh install is possible. Continue to choose providers.")
-            choice = self.ask(["Continue", "Choose another path", "Quit"])
+            if not self.update and not self.install_exists and not self.straight:
+                # S4-1: the recommended way first; Configure is the step-by-step setup as before.
+                first = self.t.menu(0, ["Set up (recommended)", "Configure step by step", "Quit"])
+                if first == 2:
+                    raise Stop(0, "Stopped.")
+                if first == 0:
+                    self.straight = t.no_pauses = True
+            choice = self.ask(["Continue", "Choose another path", "Quit"], implied=True)
             if choice == 1:
                 default = folder
                 continue
@@ -852,7 +872,7 @@ class Wizard:
         t.body("This adds or updates files under .codex, .agents and .claude, then writes "
                ".codex/orchestration/provider-routing.json. Nothing outside the project is touched.")
         while True:
-            choice = self.ask(["Install now", "Show the full list of files", "Skip the install", "Quit"])
+            choice = self.ask(["Install now", "Show the full list of files", "Skip the install", "Quit"], implied=True)
             if choice == 1:
                 self.view_plan()
                 continue
@@ -982,7 +1002,7 @@ class Wizard:
         else:
             self.mark_step(4, "ok", f"{base}; {note}")
             self.remember_project(project)
-        self.ask(["Continue"])
+        self.ask(["Continue"], implied=True)
         return True
 
     def commit_candidates(self, applied) -> tuple[list[str], int]:
@@ -1158,7 +1178,7 @@ class Wizard:
                "starts it.")
         t.body("Command: this setup's own orchestrator, learning-register --project-root <project>, then "
                "learning-status.")
-        choice = self.ask(["Register now", "Skip this step", "Quit"])
+        choice = self.ask(["Register now", "Skip this step", "Quit"], implied=True)
         if choice == 1:
             self.mark_step(5, "skip", "skipped")
             return
@@ -1261,7 +1281,7 @@ class Wizard:
                "program, including an AI agent, from signing in your name. The next screens belong to attest.py; this "
                "wizard will not touch them.")
         if self.mode == "full":
-            choice = self.ask(["Start the attestation", "Skip for now", "Quit"])
+            choice = self.ask(["Start the attestation", "Skip for now", "Quit"], implied=True)
             if choice == 1:
                 self.mark_step(6, "skip", "not attested yet")
                 return
@@ -1723,13 +1743,14 @@ class Wizard:
         t.menu(0, ["Continue"])
 
     def step_done(self) -> None:
-        if self.update:
+        if self.update or self.straight:  # S4: Set up shows the summary and exits
             self.summary_screen()
             self.t.render()
             self.t.show_cursor()
             self.t.write("\n")
             if self.failed_any:
-                raise Stop(1, "The update finished with failures; see the summary above.")
+                raise Stop(1, "The update finished with failures; see the summary above." if self.update
+                           else "Setup finished with failures; see the summary above.")
             return
         while True:
             self.summary_screen()

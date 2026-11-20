@@ -13,6 +13,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   is committed, the collector registered, and attest.py asks for the passphrase. It stops plainly,
   changing nothing, on a failed check, a client not signed in, uncommitted managed files, or earlier
   records that need your choice.
+- After the project is chosen, setup offers the recommended way first. A new project: "Set up
+  (recommended)" runs every step and asks only your own choices (providers, committing, earlier
+  records, the Codex profile and the commands rule; attest.py still asks for the passphrase), with no
+  do-it-now menus or pauses; "Configure step by step" asks every question as before. An installed
+  project: "Update this project (recommended)", or "Configure" for the full menu as before.
 - `./setup.sh --answers FILE` installs a project with no menu from a JSON answers file
   (docs/setup-wizard.md); a missing, unknown or invalid answer is refused by name before anything
   changes.

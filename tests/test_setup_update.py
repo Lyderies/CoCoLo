@@ -32,7 +32,7 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
         self.expect("Path to operational-checks.json")
         self.send(f"{checks}\r")
         self.expect("fresh install is possible")
-        self.send("\r")
+        self.send("\x1b[B\r\r")  # S4: Configure step by step, then Continue
         self.expect("Codex children")
         self.send(" \r")  # Codex children off
         for wait in ("Looks right", "Install now", "Commit now", "Continue"):

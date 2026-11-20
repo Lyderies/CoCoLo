@@ -25,10 +25,13 @@ details. `NO_COLOR=1` gives plain output. Paths accept a leading `~`,
    kept in the installer folder of your orchestrator records. A project
    that has never been set up needs a prepared `operational-checks.json` (see the
    [recipe](manual-setup.md#operational-checks)); the wizard asks for its path and works from a private
-   snapshot of it. An existing install offers: update this project (every step with no menu, as
-   `./setup.sh --update`), update the install and walk through every step, verify the
-   install only, re-run the billing attestation only, change the owner key passphrase, replace a lost
-   owner key, choose another path, or quit. The menu warns if the owner key file does not match its record,
+   snapshot of it. A project with no install offers: set up (recommended: every step with only your
+   own choices asked: providers, committing, earlier records, the Codex profile and the commands rule),
+   configure step by step (every question, as before), or quit. An existing install offers: update this
+   project (recommended: every step with no menu, as `./setup.sh --update`), configure, or quit.
+   Configure opens the full menu: update this project, update the install and walk through every step,
+   verify the install only, re-run the billing attestation only, change the owner key passphrase,
+   replace a lost owner key, choose another path, or quit. The menu warns if the owner key file does not match its record,
    and says when the key was last replaced.
 3. **Providers.** Codex children, Claude children and which Claude models, and "Let Codex sessions
    orchestrate Claude children". An existing `provider-routing.json` can be kept.

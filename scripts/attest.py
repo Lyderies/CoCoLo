@@ -911,8 +911,8 @@ def run_cli(target: Path, args: list[str], state_root: Path | None, *, stdin: st
 # Reason codes are fixed identifiers, so one that matches this is safe to show.
 REASON_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 REASON_HELP = {
-    None: "Run ./setup.sh again. If it happens again, choose Update the install and walk through "
-          "every step, and keep the reason shown above for a report.",
+    None: "Run ./setup.sh again. If it happens again, choose Configure, then Update the install and walk "
+          "through every step, and keep the reason shown above for a report.",
     "account_invalid_response": "The orchestrator's account service did not accept this request. Run "
                                 "./setup.sh again; if it repeats, update the install from ./setup.sh.",
     "account_unavailable": "The orchestrator's account service is not running. Run ./setup.sh again; it "
