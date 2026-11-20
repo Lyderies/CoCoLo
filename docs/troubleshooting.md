@@ -205,8 +205,9 @@ Release 0.3.1 and earlier said only `run_unavailable` for all of these.
 The account service closed the connection without answering, usually because the collector stopped
 while the call was in flight; the next command starts it again. Try the command again. Run
 `learning-status`: `collector_previous_exit` says how the last collector stopped (`signal`, `requested`,
-`state_removed`, `thread_ended`, or `error` with the error's type and code locations). Report an
-`error` with those fields. Releases before 0.3.3 said `account_invalid_response` for this.
+`state_removed`, `thread_ended`, `stop_forced`, or `error` with the error's type and code locations). Report an
+`error` with those fields. `stop_forced` means a stop took longer than 15 s and was ended; its
+`stalled_in` names the step it was stuck in. Report that too. Releases before 0.3.3 said `account_invalid_response` for this.
 
 On 0.8.28, an `error` of `SQLReadError` passing through `bind_session` was an account read colliding
 with a hook's session bind. Codex package 0.8.29 fixes it: update.
@@ -349,6 +350,12 @@ results: those of open orchestrations, and those still inside their seven-day re
 - Before 0.3.4, every result a project had ever stored counted, so a project could record only 64 in
   its whole life and then failed every child with `run_failed`. Updating fixes that; a full store
   recovers by itself at the project service's first cleanup.
+
+## A dispatch refused with `result_capacity_busy`
+
+Nothing is full: children still running in this project hold the space their results may need (about
+two at once). Wait for them to finish, then dispatch again. `learning-status` shows
+`project_capacity.results_in_flight` against how many fit. Closing orchestrations does not help here.
 
 ## An orchestration will not close: `history_orchestration_pending`
 
