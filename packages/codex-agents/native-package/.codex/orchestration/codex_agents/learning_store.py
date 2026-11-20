@@ -177,6 +177,14 @@ WORKER_RESULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 # The persistent collector deletes expired worker results this often, so the
 # limit holds even while no lifecycle command opens the ledger.
 WORKER_RESULT_SWEEP_SECONDS = 60.0
+# O0b RS-A round 1 F12: while due account holds remain, the next batch runs this soon after the last, with
+# the ledger lock released in between, so a 1,000-hold burst clears well inside 60 s (draft 3 item 6); a
+# busy cycle (the ledger held, or a reader inside) is retried this soon, not an interval later.
+# F15 (scripts/measure_release_batches.py, 2026-11-21): on 1,001 due holds a batch of 64 took at most 5.3 ms
+# (mean 1.6 ms) and the longest lock hold was 5.4 ms; RS-A-7 allows 50 ms and 750 ms.
+ACCOUNT_HOLD_RELEASE_BATCH = 64
+SWEEP_BATCH_GAP_SECONDS = 0.01
+SWEEP_BUSY_RETRY_SECONDS = 1.0
 # S1-H1a-6: the health route waits at most this for the ledger lock, well inside the client's
 # 1-second health timeout; what it cannot read in time it leaves out (`ledger_busy`).
 HEALTH_LEDGER_WAIT_MS = 250
@@ -12282,47 +12290,67 @@ class CollectorServer:
 
     def _sweep_loop(self) -> None:
         """Every WORKER_RESULT_SWEEP_SECONDS from the last cycle's start (as on the request loop), one
-        sweep cycle. An unexpected error is recorded by type and the next cycle runs (S1-H1a-6b)."""
+        sweep cycle. An unexpected error is recorded by type and the next cycle runs (S1-H1a-6b).
+        O0b RS-A round 1 F12: while due account holds remain, a release batch alone runs every
+        SWEEP_BATCH_GAP_SECONDS, each under its own hold of the ledger lock; a busy cycle is retried
+        after SWEEP_BUSY_RETRY_SECONDS (never past the next cycle's start). A stop ends either wait."""
         due = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS
-        while not self._sweeps_stop.wait(max(0.0, due - time.monotonic())):
-            due = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS
+        wait, full = WORKER_RESULT_SWEEP_SECONDS, True
+        while not self._sweeps_stop.wait(max(0.0, wait)):
+            now = time.monotonic()
+            if now >= due:
+                due, full = now + WORKER_RESULT_SWEEP_SECONDS, True
             try:
-                self._sweep_cycle()
+                outcome = self._sweep_cycle(holds_only=not full)
             except Exception as error:
                 self.sweep_error = type(error).__name__
+                outcome = None
+            if outcome == "busy":  # the same cycle again, soon
+                wait = min(SWEEP_BUSY_RETRY_SECONDS, due - time.monotonic())
+                continue
+            full = False
+            wait = SWEEP_BATCH_GAP_SECONDS if outcome == "more" else due - time.monotonic()
 
-    def _sweep_cycle(self) -> None:
+    def _sweep_cycle(self, *, holds_only: bool = False) -> str | None:
         """The three sweeps in their old order, under one hold of the ledger lock, and none while a
         reader (which spans several holds) or a transaction is active (review 040-h1a6-design). The
-        lock is never waited on past a stop."""
+        lock is never waited on past a stop. O0b RS-A round 1 F12: `holds_only` runs the account hold
+        release alone; returns "busy" when nothing ran for a held ledger or a reader inside, "more" when
+        the release filled its batch (more may be due), else None."""
         lock = self.ledger._lock
         deadline = time.monotonic() + LEDGER_LOCK_WAIT_MS / 1000  # E1a-2: a busy ledger skips the cycle
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:  # checked before each attempt, and no attempt runs past it
                 self.ledger._lock_waits.refused("sweeps")
-                return
+                return "busy"
             if lock.acquire(timeout=min(0.1, remaining)):
                 break
             if self._sweeps_stop.is_set():
-                return
+                return None
         try:
             if self.ledger._readers() or self.ledger._connection.in_transaction:
-                return
+                return "busy"
             loose = (LedgerError, OSError, sqlite3.Error, ValueError, KeyError)
+            released = []
+
+            def release_holds():
+                released.append(self.ledger.release_due_account_holds(limit=ACCOUNT_HOLD_RELEASE_BATCH))
             # Kept worker results expire on time even while the collector is the only process holding
             # the ledger; raw events past their weight's period are summarised and removed, a small batch
             # at a time; finished account rows past their retention go too (0.3.4 R6).
             # O0b RS-A-4: due account holds are released here, with no client action, in batches of 64. Until
             # M4b E1b's owner thread exists this runs where the other account sweeps run, under the ledger lock.
-            for sweep, errors in ((self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
-                                  (self.ledger.sweep_event_retention, loose),
-                                  (self.ledger.sweep_account_retention, loose),
-                                  (lambda: self.ledger.release_due_account_holds(limit=64), loose)):
+            sweeps = [(self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
+                      (self.ledger.sweep_event_retention, loose),
+                      (self.ledger.sweep_account_retention, loose),
+                      (release_holds, loose)]
+            for sweep, errors in sweeps[3:] if holds_only else sweeps:
                 if self._sweeps_stop.is_set():
-                    return
+                    return None
                 with contextlib.suppress(*errors):
                     sweep()
+            return "more" if released == [ACCOUNT_HOLD_RELEASE_BATCH] else None
         finally:
             lock.release()
 
