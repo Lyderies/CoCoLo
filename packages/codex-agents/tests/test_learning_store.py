@@ -526,6 +526,42 @@ class LearningStoreTests(unittest.TestCase):
         client_health_clear(self.state, self.project_a)
         self.assertEqual({}, client_health_snapshot(self.state, self.project_a))
 
+    def test_P11_client_health_never_fills_and_drops_the_oldest_project(self) -> None:
+        """O0c P11 (ANALYSIS-0.4.0-lifetime-caps.md): about 450 failing roots used to fill the 64 KiB file, after
+        which status, every write and even client_health_clear failed for good. Writes now stay within the
+        bound by dropping the projects whose newest counter is oldest; status and a new increment always work."""
+        roots = Path(tempfile.mkdtemp(dir=self.project_a.parent))
+        self.addCleanup(shutil.rmtree, roots, ignore_errors=True)
+        client_health_increment(self.state, self.project_a, "collector_unavailable", now_ms=1)
+        for index in range(1_000):
+            root = roots / f"p{index}"
+            root.mkdir()
+            client_health_increment(self.state, root, "hook_binding_rejected", now_ms=10 + index)
+        self.assertLessEqual(self.state.client_health.stat().st_size, 65_536)
+        self.assertEqual({}, client_health_snapshot(self.state, self.project_a))  # the oldest went first
+        newest = roots / "p999"
+        self.assertEqual({"hook_binding_rejected": {"count": 1, "updated_at_ms": 1_009}},
+                         client_health_snapshot(self.state, newest))
+        client_health_increment(self.state, self.project_a, "collector_unavailable", now_ms=5_000)
+        self.assertEqual({"collector_unavailable": {"count": 1, "updated_at_ms": 5_000}},
+                         client_health_snapshot(self.state, self.project_a))
+        client_health_clear(self.state, newest)
+        self.assertEqual({}, client_health_snapshot(self.state, newest))
+
+    def test_P11_an_oversized_file_from_an_older_build_is_read_and_repaired_by_the_next_write(self) -> None:
+        """O0c P11: older builds wrote past 64 KiB; such a file is still read, and the next write brings it
+        back within the bound."""
+        projects = {f"{index:064x}": {"collector_unavailable": {"count": 1, "updated_at_ms": index}}
+                    for index in range(1_000)}
+        self.state.client_health.write_bytes(canonical_json({"schema_version": 1, "projects": projects}) + b"\n")
+        self.state.client_health.chmod(0o600)
+        self.assertGreater(self.state.client_health.stat().st_size, 65_536)
+        self.assertEqual({}, client_health_snapshot(self.state, self.project_a))
+        client_health_increment(self.state, self.project_a, "collector_unavailable", now_ms=5_000)
+        self.assertLessEqual(self.state.client_health.stat().st_size, 65_536)
+        self.assertEqual({"collector_unavailable": {"count": 1, "updated_at_ms": 5_000}},
+                         client_health_snapshot(self.state, self.project_a))
+
     def test_ingestion_snapshot_is_exact_project_aggregate_only(self) -> None:
         event_codes = [
             "session_started", "session_ended", "turn_started",
