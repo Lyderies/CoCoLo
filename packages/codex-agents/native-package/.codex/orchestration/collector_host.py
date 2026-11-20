@@ -127,12 +127,17 @@ def main(argv: list[str] | None = None) -> int:
         # thread that did not stop cannot keep it alive.
         # SD1: each step is timed, so a slow shutdown shows which step it was.
         stop_ms = {"account_close": 0, "account_drain": 0, "server_stop": 0}
+        # O10 SD2: whatever a step does, the process ends within the bound, naming the step.
+        from codex_agents.shutdown_watchdog import ShutdownWatchdog
+        watchdog = ShutdownWatchdog(state.root, started_at_ms=getattr(server, "_started_at_ms", None))
         step_start = time.monotonic()
         if account is not None:
             try:
+                watchdog.step("account_close")
                 account.close()
                 stop_ms["account_close"] = int((time.monotonic() - step_start) * 1000)
                 step_start = time.monotonic()
+                watchdog.step("account_drain")
                 end = time.monotonic() + 10
                 while not account.drained() and time.monotonic() < end:
                     time.sleep(0.01)
@@ -140,11 +145,13 @@ def main(argv: list[str] | None = None) -> int:
             except Exception:
                 pass
         step_start = time.monotonic()
+        watchdog.step("server_stop")
         try:
             server.stop()
         except Exception:
             pass
         stop_ms["server_stop"] = int((time.monotonic() - step_start) * 1000)
+        watchdog.step("exit_record")
         try:
             # Best effort, and never in the way of closing the ledger or the exit code. Decided
             # once the collector thread has stopped, so an error it raised late still counts;
@@ -163,7 +170,9 @@ def main(argv: list[str] | None = None) -> int:
         except BaseException:
             pass
         finally:
+            watchdog.step("ledger_close")
             ledger.close()
+            watchdog.done()
     print(json.dumps({"ready": True, "stopped": True, "account_services": account is not None}, sort_keys=True))
     return 0
 

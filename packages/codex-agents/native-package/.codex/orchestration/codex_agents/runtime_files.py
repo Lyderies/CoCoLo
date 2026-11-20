@@ -178,6 +178,7 @@ RUNTIME_FILES = (
     "codex_agents/service_queue.py",
     "codex_agents/service_transport.py",
     "codex_agents/session_guard.py",
+    "codex_agents/shutdown_watchdog.py",
     "codex_agents/signature_execution.py",
     "codex_agents/signature_input_wire.py",
     "codex_agents/signature_inputs.py",

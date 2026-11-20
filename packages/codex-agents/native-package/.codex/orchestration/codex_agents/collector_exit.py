@@ -19,7 +19,10 @@ import sys
 import time
 from pathlib import Path
 
-CAUSES = frozenset({'signal', 'requested', 'state_removed', 'thread_ended', 'error', 'account_restart'})
+CAUSES = frozenset({'signal', 'requested', 'state_removed', 'thread_ended', 'error', 'account_restart',
+                    'stop_forced'})  # O10 SD2: the shutdown watchdog ended a stop that passed its bound
+# O10 SD2: the shutdown steps, in order; `stalled_in` names one of them.
+SHUTDOWN_STEPS = ('account_close', 'account_drain', 'server_stop', 'exit_record', 'ledger_close')
 # S1-H1c: a self-restart records only the fixed cause that made the account stuck, in `error`.
 _RESTART_CAUSE = re.compile(r'[a-z][a-z_]{2,63}')
 MAX_LOCATIONS = 8
@@ -99,7 +102,7 @@ def _locations(error):
     return found
 
 
-def write_exit(state_root, *, started_at_ms, cause, error, detail=None, stop_ms=None) -> None:
+def write_exit(state_root, *, started_at_ms, cause, error, detail=None, stop_ms=None, stalled_in=None) -> None:
     """Best effort: a record that cannot be written is skipped, and stopping carries on."""
     with contextlib.suppress(Exception):
         record = {'schema_version': 1, 'stopped_at_ms': time.time_ns() // 1_000_000,
@@ -113,6 +116,8 @@ def write_exit(state_root, *, started_at_ms, cause, error, detail=None, stop_ms=
             record['error'] = 'Exception'
         if _stop_ok(stop_ms):  # a malformed timing is left out; the record is still kept
             record['stop_ms'] = dict(stop_ms)
+        if stalled_in in SHUTDOWN_STEPS:  # O10 SD2: only a known step, never free text
+            record['stalled_in'] = stalled_in
         data = json.dumps(record, sort_keys=True).encode()
         target = exit_path(state_root)
         temporary = target.with_name(f'.{target.name}.{os.getpid()}.{secrets.token_hex(8)}')
@@ -135,8 +140,9 @@ def write_exit(state_root, *, started_at_ms, cause, error, detail=None, stop_ms=
 def checked(record):
     """The record if it has exactly the fixed shape, else None. Never raises."""
     try:
-        if (type(record) is not dict or set(record) - {'stop_ms'} != _FIELDS
+        if (type(record) is not dict or set(record) - {'stop_ms', 'stalled_in'} != _FIELDS
                 or ('stop_ms' in record and not _stop_ok(record['stop_ms']))
+                or ('stalled_in' in record and record['stalled_in'] not in SHUTDOWN_STEPS)
                 or type(record['schema_version']) is not int or record['schema_version'] != 1
                 or type(record['cause']) is not str or record['cause'] not in CAUSES
                 or type(record['stopped_at_ms']) is not int
