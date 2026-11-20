@@ -143,6 +143,7 @@
  "codex:tests.test_project_execution_grant": "integration",
  "codex:tests.test_project_execution_processes": "integration",
  "codex:tests.test_project_history": "integration",
+ "codex:tests.test_project_hold_register": "integration",
  "codex:tests.test_project_holds_schema": "integration",
  "codex:tests.test_project_host_open": "integration",
  "codex:tests.test_project_host_result": "integration",

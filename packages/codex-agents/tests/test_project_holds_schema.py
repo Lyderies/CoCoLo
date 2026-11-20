@@ -406,9 +406,10 @@ class SchemaStepTests(unittest.TestCase):
         self.assert_accepted(self.hold('reservation', binding(2).claim_id, 'released', 'lost'),
                              self.settlement(2, 'lost'))
 
-    @unittest.skip('B1: needs the lease and reservation writes and their adoption; SB writes no register rows')
     def test_R3_a_held_source_with_no_register_row_is_refused(self):
-        self.assert_refused()
+        # B1: every lease and reservation now has its row from its take (or the step's adoption); without it the
+        # open is refused, never silently adopted.
+        self.assert_refused(("DELETE FROM project_holds WHERE kind='lease' AND identity=?", (self.identity(1),)))
 
     # SH-7: the custody validator (RS-D) and the joint check -------------------------------------------------------
 
