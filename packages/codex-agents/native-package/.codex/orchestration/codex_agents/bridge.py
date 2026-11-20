@@ -1196,8 +1196,8 @@ def _check_claude_init(frame: dict[str, Any], model: str, allowed: tuple[str, ..
     ):
         return "tool_not_allowed"
     # O10 VF-6: a client that reports a version too old to hold its result to the schema stops here.
-    if (schema_held and frame.get("claude_code_version") is not None
-            and _client_version(frame.get("claude_code_version")) < CLAUDE_SCHEMA_MIN_VERSION):
+    # No version, or one that cannot be read, is refused like an old one (review 040-vf-dr-code).
+    if schema_held and _client_version(frame.get("claude_code_version")) < CLAUDE_SCHEMA_MIN_VERSION:
         return "client_unsupported"
     return None
 
@@ -1440,11 +1440,13 @@ def run_claude(
             }
     if outcome["abort"] is not None:
         return None, {**report, "outcome": outcome["abort"]}
+    missing = {**report, "outcome": "invalid_result", "result_validation_reason_code": "structured_output_missing"}
+    if isinstance(result_frame, dict) and result_frame.get("subtype") == "error_max_structured_output_retries":
+        # O10 VF-2: the client could not get a schema-valid result; recognised before the exit code,
+        # which may be an error for it (review 040-vf-dr-code).
+        return None, missing
     if outcome["returncode"] != 0 or not isinstance(result_frame, dict):
         return None, {**report, "outcome": "missing_result"}
-    missing = {**report, "outcome": "invalid_result", "result_validation_reason_code": "structured_output_missing"}
-    if result_frame.get("subtype") == "error_max_structured_output_retries":
-        return None, missing  # O10 VF-2: the client could not get a schema-valid result
     if result_frame.get("is_error") is not False or result_frame.get("subtype") != "success":
         return None, {**report, "outcome": "child_reported_error"}
     # O10 VF-5: the result is the client's validated object, never the text or a tool call's input,

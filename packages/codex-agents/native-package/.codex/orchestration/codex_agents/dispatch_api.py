@@ -248,12 +248,16 @@ class DispatchClient:
                 body = ResultReadClient(self._result_endpoint, timeout=remaining).read_result(
                     binding, view['delivery']['result_digest'])
             except Exception:
-                # O10 DR-2: read again only while the service still answers that it is published.
-                time.sleep(min(.05, max(0, deadline-time.monotonic())))
-                remaining = min(self._timeout, deadline-time.monotonic())
-                if remaining <= 0:
-                    raise DispatchError('dispatch_unavailable') from None
-                view = self._status(view, run_handle, attempt, inputs_digest, expected_export_commit, remaining)
+                # O10 DR-2: read again only after a fresh answer that it is still published; a re-check
+                # that times out is retried on its own, never taken as permission (review 040-vf-dr-code).
+                fresh = None
+                while fresh is None:
+                    time.sleep(min(.05, max(0, deadline-time.monotonic())))
+                    remaining = min(self._timeout, deadline-time.monotonic())
+                    if remaining <= 0:
+                        raise DispatchError('dispatch_unavailable') from None
+                    fresh = self._status(None, run_handle, attempt, inputs_digest, expected_export_commit, remaining)
+                view = fresh
                 if view['state'] != 'published':
                     raise DispatchError('dispatch_unavailable') from None
                 continue
