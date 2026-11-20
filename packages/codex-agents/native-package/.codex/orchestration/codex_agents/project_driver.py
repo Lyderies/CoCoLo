@@ -793,6 +793,21 @@ class RunDriver:
         except HistoryError:
             pass  # Still failed: the next step waits longer and asks again.
 
+    def _writer_stopped(self, run):
+        """O10 D12: the writer faulted while it held this run's step, so the lane says `unknown`.
+
+        A faulted lane refuses every later call for good (its writer, the history key and the
+        history endpoint are gone with it), so no retry can commit, attest or acknowledge anything
+        in this service: whether the result committed can only be settled from the store by a
+        later service. The run ends now, visibly (`run_unavailable` in its status), instead of
+        waiting for ever. It was admitted, so it keeps what the account holds: its lease,
+        preparation and journal entry stay, and the store keeps whatever it committed, so nothing
+        is published twice or lost; the account's own timed rule, or a later service's lost-run
+        settlement, settles its capacity.
+        """
+        run.publish_at = None
+        self._fail(run, 'run_unavailable')
+
     def _close(self, run):
         """The lease is expired in the history: drop its input, then give the preparation back."""
         if run.receipt is not None or run.binding is not None:
@@ -1161,6 +1176,9 @@ class RunDriver:
             run.state = 'ready'
         elif run.state == 'ready':
             snapshot = lane.snapshot(run.persistence)
+            if snapshot['state'] == 'unknown':
+                self._writer_stopped(run)
+                return
             if snapshot['state'] == 'failed':
                 self._retry_publication(run, snapshot['reason_code'])
                 return
@@ -1204,6 +1222,8 @@ class RunDriver:
             if lane.snapshot(run.persistence)['state'] != 'acknowledged':
                 if lane.snapshot(run.persistence)['state'] == 'failed':
                     self._fail(run, 'run_failed')
+                elif lane.snapshot(run.persistence)['state'] == 'unknown':
+                    self._writer_stopped(run)
                 return
             try:
                 lane.retain_cleanup(run.persistence)
