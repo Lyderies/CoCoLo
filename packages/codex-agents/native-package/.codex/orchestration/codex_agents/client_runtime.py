@@ -272,7 +272,10 @@ def _status_ingestion_unavailable():
 
 def _status_account_capacity(value):
     """Each account limit with its live count (0.3.4 R9); None from a collector that does not report it."""
-    if (type(value) is not dict or set(value) != {'observations', 'cleanup_receipts'}
+    # O0b B0 (narrowed): 0.8.38 also reports held run bindings and billing probes; an earlier collector does not.
+    if (type(value) is not dict or set(value) not in ({'observations', 'cleanup_receipts'},
+                                                      {'observations', 'cleanup_receipts', 'pending_bindings',
+                                                       'billing_probes'})
             or any(type(item) is not dict or set(item) != {'live', 'limit'}
                    or not account_integer(item['live']) or not account_integer(item['limit'])
                    for item in value.values())):
