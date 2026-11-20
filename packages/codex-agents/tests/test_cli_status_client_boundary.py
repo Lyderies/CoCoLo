@@ -211,7 +211,8 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
             'cause': 'claim_owner_failed', 'type': 'RuntimeError', 'at_ms': 1_700_000_000_000})}
         for decision, words in (
                 ({'action': 'wait', 'lane': 'claims', 'cause': 'claim_owner_failed',
-                  'held': {'run_slots': ['a', 'b'], 'probes': [], 'lanes': {}}}, ('not restarting', '2 project')),
+                  'held': {'run_slots': ['prj-a', 'prj-b'], 'probes': [], 'lanes': {'billing': 1}}},
+                 ('not restarting', 'prj-a', 'prj-b', 'billing')),
                 ({'action': 'suppressed', 'lane': 'claims', 'cause': 'claim_owner_failed', 'held': {}},
                  ('restarted itself less than an hour ago',))):
             with self.subTest(action=decision['action']):
@@ -221,7 +222,10 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
                 text = ' '.join(report['account_health']['attention'])
                 for word in words:
                     self.assertIn(word, text)
-                self.assertNotIn("'a'", text)  # project identifiers are not shown
+                # C6 (review 040-s1-h1c): projects are named by their opaque id; a suppressed restart
+                # is also a reason code.
+                self.assertEqual(decision['action'] == 'suppressed',
+                                 'account_restart_suppressed' in report['account_health']['reasons'])
         self.collector.account_restart = ['malformed']
         code, report = self.status_with(faulted)
         self.assertEqual(('faulted', True), (report['account_health']['state'], report['ready']))
