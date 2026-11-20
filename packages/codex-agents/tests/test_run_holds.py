@@ -689,13 +689,15 @@ class RunHoldTests(ActiveRunCapacityTests):
 
     def test_RS_A_G1_pruned_evidence_unknown_times_and_pruned_sources_still_open(self):
         """Round 2 G1: what the register may legitimately lack (pruned evidence, history's unknown times, a
-        tombstone whose source retention removed) is still accepted everywhere."""
+        tombstone whose source retention removed) is still accepted everywhere. (requirement) Round 2 G10
+        (DESIGN-0.4.0-RS-A.md): a lost or crashed decision's evidence is never pruned, so only other rows lose it."""
         self.crashed_release()
         project, launch = self.new_attempt()
         self.withdraw(project, launch.run_handle)
         digest, _ = self.expired_binding()
         with self.ledger._account_transaction():
-            self.ledger._connection.execute("UPDATE run_holds SET evidence=NULL")
+            self.ledger._connection.execute(  # (requirement) round 2 G10: not a decision's evidence
+                "UPDATE run_holds SET evidence=NULL WHERE release_kind NOT IN ('lost','crashed')")
             self.ledger._connection.execute(
                 "UPDATE run_holds SET released_at_ms=NULL WHERE kind='binding' AND release_kind='withdrawn'")
             self.ledger._connection.execute("DELETE FROM host_run_bindings WHERE handle_digest=?", (digest,))
@@ -708,6 +710,30 @@ class RunHoldTests(ActiveRunCapacityTests):
         project, launch = self.new_attempt()
         self.withdraw(project, launch.run_handle)
         self.expired_binding()
+        self.accepted()
+
+    # O0b RS-A round 2 G10: a lost or crashed decision's evidence is its only proof, never pruned.
+
+    def test_RS_A_G10_a_crashed_decision_without_its_evidence_is_refused(self):
+        self.crashed_release()
+        with self.ledger._account_transaction():
+            self.ledger._connection.execute("UPDATE run_holds SET evidence=NULL WHERE release_kind='crashed'")
+        self.refused()
+
+    def test_RS_A_G10_a_real_crashed_decision_still_opens(self):
+        self.crashed_release()
+        self.accepted()
+
+    def test_RS_A_G10_a_real_lost_decision_still_opens(self):
+        self.case.claim()
+        row = self.rows()[0]
+        with self.ledger._account_transaction():  # its service settled it lost
+            self.ledger._connection.execute(
+                "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='service_lost' "
+                "WHERE handle_digest=?", (row["handle_digest"],))
+        now = row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS + 1
+        self.assertGreaterEqual(self.sweep(now, row["clock_reference_ns"] - 1), 1)
+        self.assertEqual(("released", "lost", 1), self.slot_hold(self.ledger, row["handle_digest"]))
         self.accepted()
 
     def recovery_unavailable_then_fallback(self, consumed_at):

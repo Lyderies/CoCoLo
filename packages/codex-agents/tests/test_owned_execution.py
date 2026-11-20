@@ -848,6 +848,10 @@ class CapacityCompletionTests(unittest.TestCase):
     def test_RS_A_G1_a_slot_s_register_kind_must_be_a_slot_s_release_kind(self):
         self.completed_then("UPDATE run_holds SET release_kind='unlaunched' WHERE kind='run_slot'")
 
+    def test_RS_A_G10_a_completed_slot_relabelled_as_a_decision_with_pruned_evidence_is_refused(self):
+        """Round 2 G10: its receipt and time still match the slot; only the missing evidence tells."""
+        self.completed_then("UPDATE run_holds SET release_kind='crashed',evidence=NULL WHERE kind='run_slot'")
+
     def test_RS_A_G1_a_completed_slot_still_verifies_and_opens(self):
         from tests.test_run_holds import assert_accepted_everywhere
         self.run_one()
