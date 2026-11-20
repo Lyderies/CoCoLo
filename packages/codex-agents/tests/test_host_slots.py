@@ -171,3 +171,63 @@ class HostSlotLifecycleTests(HostSlotHarness):
         # Only the admitted-then-failed run holds anything: its preparation, worker and result entry.
         self.wait_for(lambda: self.held() == {'runs': 1, 'preparations': 1, 'workers': 1, 'results': 1,
                                               'executions': 0, 'monitor': 0}, seconds=30)
+
+
+class HostReplacementTests(HostSlotHarness):
+    """A hold nothing here can free keeps its slot; the host is replaced once idle."""
+    IDLE_SECONDS = 4
+
+    def setUp(self):
+        patcher = mock.patch.object(service_harness, 'serve_project', functools.partial(
+            service_harness.serve_project, idle_stop_ns=self.IDLE_SECONDS * 1_000_000_000))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def host_thread(self):
+        return [t for t in self.threads if t.name.startswith('test-project-host-')][-1]
+
+    def test_M3_an_admitted_then_failed_run_is_settled_when_its_host_is_replaced_once_idle(self):
+        self.succeed()
+        self.admitted_then_failed(self.open_run())
+        stuck = self.hosts[-1]
+        self.assertEqual(1, self.account_slots())  # the account still counts the admitted claim
+        thread = self.host_thread()
+        # No command: once idle the host stops by itself, settling its own run on the kernel's evidence
+        # (it never spawned), so the account no longer counts it.
+        thread.join(self.IDLE_SECONDS + 30)
+        self.assertFalse(thread.is_alive(), 'the host holding a stuck slot was never replaced')
+        self.wait_for(lambda: self.account_slots() == 0, seconds=30)
+        # The next command starts a fresh host by the production path, and a run completes there.
+        run = self.open_run()
+        self.assertIsNot(stuck, self.hosts[-1])
+        code, dispatched = self.dispatch(run)
+        self.assertEqual((0, 'result'), (code, dispatched.get('bridge_report', {}).get('outcome')), dispatched)
+
+    def test_M1_an_unconfirmed_cleanup_keeps_its_slot_says_so_and_the_host_is_replaced_once_idle(self):
+        self.succeed()
+        run = self.open_run()
+        with mock.patch.object(process_tree.ProcessTree, 'cleanup_after_owned_wait', return_value=False):
+            code, dispatched = self.dispatch(run)
+        self.assertEqual((0, 'result'), (code, dispatched.get('bridge_report', {}).get('outcome')), dispatched)
+        self.record(run[0], run[1], run[3], dispatched)
+        stuck, thread = self.hosts[-1], self.host_thread()
+        self.wait_for(lambda: ('driver', 'acknowledging', 'cleanup_unconfirmed') in self.stopped_runs, seconds=30)
+        # Its slot is kept: a child may still be alive, so nothing of it is freed.
+        held = self.held(stuck)
+        self.assertEqual((1, 1, 1, 1), (held['preparations'], held['workers'], held['results'], held['executions']))
+        self.assertEqual(1, self.account_slots())
+        # Status says so plainly while the host still serves.
+        service = self.cli('learning-status')['project_service']
+        self.assertEqual({'stuck_run_slots': 1, 'limit': 3, 'replaced_when_idle': True},
+                         {name: service[name] for name in ('stuck_run_slots', 'limit', 'replaced_when_idle')})
+        self.assertIn('replaced', service['summary'])
+        self.assertTrue(thread.is_alive())
+        # Once idle the host is replaced; its stopping settles the run on the kernel's evidence.
+        thread.join(self.IDLE_SECONDS + 30)
+        self.assertFalse(thread.is_alive(), 'the host holding an unconfirmed cleanup was never replaced')
+        self.wait_for(lambda: self.account_slots() == 0, seconds=30)
+        nxt = self.open_run()
+        self.assertIsNot(stuck, self.hosts[-1])
+        code, dispatched = self.dispatch(nxt)
+        self.assertEqual((0, 'result'), (code, dispatched.get('bridge_report', {}).get('outcome')), dispatched)
