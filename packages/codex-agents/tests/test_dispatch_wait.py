@@ -17,6 +17,13 @@ PUBLISHED = {'state': 'published', 'binding': BINDING, 'delivery': {'result_dige
              'report': {'outcome': 'success'}}
 
 
+def slow():
+    """A status check the service did not answer in time (deadline_exceeded)."""
+    error = DispatchError('dispatch_unavailable')
+    error.timed_out = True
+    return error
+
+
 class FakeClock:
     """time for the dispatch wait: sleeping moves the clock on."""
     def __init__(self):
@@ -59,8 +66,7 @@ class DispatchWaitTests(unittest.TestCase):
         return client
 
     def test_DR_1_a_failed_status_check_is_retried(self):
-        client = self.client([RUNNING, DispatchError('dispatch_unavailable'), DispatchError('dispatch_unavailable'),
-                              PUBLISHED], [json.dumps({'summary': 'done'}).encode()])
+        client = self.client([RUNNING, slow(), slow(), PUBLISHED], [json.dumps({'summary': 'done'}).encode()])
         reply = client.dispatch('r', 1, 'x' * 64, wait_seconds=30)
         self.assertEqual({'summary': 'done'}, reply['result'])
 
@@ -70,10 +76,28 @@ class DispatchWaitTests(unittest.TestCase):
             client.dispatch('r', 1, 'x' * 64, wait_seconds=30)
 
     def test_DR_1_a_status_check_that_keeps_failing_ends_at_the_deadline(self):
-        client = self.client([RUNNING] + [DispatchError('dispatch_unavailable')] * 10_000, [])
+        client = self.client([RUNNING] + [slow() for _ in range(10_000)], [])
         with self.assertRaises(DispatchError) as ended:
             client.dispatch('r', 1, 'x' * 64, wait_seconds=0.5)
         self.assertEqual('dispatch_unavailable', ended.exception.reason_code)
+
+    def test_DR_1_a_service_that_is_gone_ends_the_wait_at_once(self):
+        client = self.client([RUNNING, DispatchError('dispatch_unavailable'), PUBLISHED], [b'{}'])
+        with self.assertRaises(DispatchError) as ended:
+            client.dispatch('r', 1, 'x' * 64, wait_seconds=30)
+        self.assertEqual('dispatch_unavailable', ended.exception.reason_code)
+
+    def test_DR_1_a_timed_out_transport_is_marked_slow(self):
+        from codex_agents.service_transport import ServiceTransportError
+        client = object.__new__(DispatchClient)
+        client._endpoint, client._scope, client._timeout = '/nonexistent', None, 2
+        for reason, slow_answer in (('deadline_exceeded', True), ('transport_unavailable', False)):
+            with self.subTest(reason), mock.patch.object(dispatch_api, 'dispatch_request', return_value=None), \
+                    mock.patch.object(dispatch_api, 'encode_dispatch_request', return_value=b'{}'), \
+                    mock.patch.object(dispatch_api, 'exchange_frame', side_effect=ServiceTransportError(reason)):
+                with self.assertRaises(DispatchError) as ended:
+                    client.call('dispatch.status', 'r', 1, 'x' * 64)
+                self.assertEqual(slow_answer, getattr(ended.exception, 'timed_out', False))
 
     def test_DR_1_another_refusal_is_not_retried(self):
         client = self.client([RUNNING, DispatchError('dispatch_not_found'), PUBLISHED], [b'{}'])
@@ -81,9 +105,14 @@ class DispatchWaitTests(unittest.TestCase):
             client.dispatch('r', 1, 'x' * 64, wait_seconds=30)
         self.assertEqual('dispatch_not_found', ended.exception.reason_code)
 
-    def test_DR_2_reading_the_published_result_is_retried(self):
-        client = self.client([RUNNING, PUBLISHED], [OSError('slow'), json.dumps({'summary': 'done'}).encode()])
+    def test_DR_2_reading_the_published_result_is_retried_while_it_is_still_published(self):
+        client = self.client([RUNNING, PUBLISHED, PUBLISHED], [OSError('slow'), json.dumps({'summary': 'done'}).encode()])
         self.assertEqual({'summary': 'done'}, client.dispatch('r', 1, 'x' * 64, wait_seconds=30)['result'])
+
+    def test_DR_2_a_failed_read_from_a_service_that_is_gone_ends_the_wait(self):
+        client = self.client([RUNNING, PUBLISHED, DispatchError('dispatch_unavailable')], [OSError('gone')])
+        with self.assertRaises(DispatchError):
+            client.dispatch('r', 1, 'x' * 64, wait_seconds=30)
 
 
 if __name__ == '__main__':
