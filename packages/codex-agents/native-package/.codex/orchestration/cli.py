@@ -1622,6 +1622,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_learning_project(review)
     review.add_argument('--spec', required=True, type=Path)
     review.add_argument('--work-dir', required=True, type=Path)
+    review.add_argument('--status', default='completed', help='the status finish closes the orchestration with')
     run_status = subparsers.add_parser('learning-run-status',
         help="read a running child's live status through its project host")
     run_cancel = subparsers.add_parser('learning-cancel-run',
@@ -2673,7 +2674,7 @@ def main() -> int:
             except (OSError, ValueError):
                 spec = None
             try:
-                summary = run_review(args.stage, spec, args.work_dir, args.project_root)
+                summary = run_review(args.stage, spec, args.work_dir, args.project_root, status=args.status)
             except ReviewError as stopped:
                 _print({'ready': False, 'error': 'review stopped', 'reason_code': stopped.reason_code,
                         **({'step': stopped.detail} if stopped.detail else {})})

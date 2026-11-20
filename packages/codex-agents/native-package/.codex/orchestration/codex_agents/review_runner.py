@@ -6,7 +6,10 @@ CLI, each reply saved in the work folder. Worker and verifier must give a verdic
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import secrets
+import stat
 import subprocess
 import sys
 
@@ -27,7 +30,9 @@ def check_spec(spec, project_root: Path) -> None:
                                                                    'verify_objective', 'expected_output'))
               and type(spec['context']) is list and all(type(item) is str for item in spec['context'])
               and type(spec['evidence']) is list and spec['evidence']
-              and all(type(item) is dict and set(item) == {'id', 'description'} for item in spec['evidence']))
+              and all(type(item) is dict and set(item) == {'id', 'description'}
+                      and type(item['id']) is str and item['id'] and type(item['description']) is str
+                      and item['description'] for item in spec['evidence']))  # F5
         if ok:
             root = Path(project_root).resolve()
             packet = (root / spec['packet']).resolve()
@@ -51,23 +56,57 @@ def project_cli(project_root: Path):
     return call
 
 
-def run(step, spec, work_dir, project_root, *, cli=None):
+def run(step, spec, work_dir, project_root, *, cli=None, status='completed'):
     """Run one stage (`worker`, `verify` or `finish`); returns its summary, or raises ReviewError."""
-    project_root = Path(project_root)
+    project_root = Path(project_root).resolve()  # F3: absolute before any step
     check_spec(spec, project_root)
     cli = cli or project_cli(project_root)
-    work = Path(work_dir)
+    work = Path(work_dir).resolve()
     work.mkdir(parents=True, exist_ok=True)
+    if not work.is_dir():
+        raise ReviewError('review_unsafe_work_dir')
     root = ['--project-root', str(project_root)]
     grant = {'tools': ['shell'], 'filesystem': [f"{spec['packet']}:read"], 'network': False, 'mcps': [],
              'external_effects': False}
 
+    def entry(name):
+        """F1: a work-folder entry that is missing or a regular file; anything else is refused."""
+        path = work / name
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            return path, False
+        if not stat.S_ISREG(info.st_mode):
+            raise ReviewError('review_unsafe_work_dir', name)
+        return path, True
+
     def save(name, data):
-        (work / name).write_text(json.dumps(data, indent=1))
-        return str(work / name)
+        path, _ = entry(name)
+        temporary = work / f'.{name}.{secrets.token_hex(8)}'
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        try:
+            with os.fdopen(descriptor, 'w') as handle:
+                handle.write(json.dumps(data, indent=1))
+            os.replace(temporary, path)  # replaces the entry itself, never a file it might point to
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        return str(path)
 
     def load(name):
-        return json.loads((work / name).read_text())
+        path, present = entry(name)
+        if not present:
+            raise ReviewError('review_stage_not_ready', name)  # F2: the stage before has not finished
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        with os.fdopen(descriptor) as handle:
+            return json.loads(handle.read())
+
+    def forget(*names):
+        """F2: a stage starting again first removes its own and later stages' markers."""
+        for name in names:
+            path, present = entry(name)
+            if present:
+                path.unlink()
 
     def call(out, name, *args):
         reply = cli(name, *args)
@@ -130,12 +169,14 @@ def run(step, spec, work_dir, project_root, *, cli=None):
                 'summary': dispatched['result'].get('summary')}
 
     if step == 'worker':
+        forget('worker.json', 'verifier.json')
         orchestration = call('orchestration.json', 'learning-open-orchestration', *root)['orchestration_handle']
         worker = child('', task(spec['id'], 'security', spec['summary']), spec['objective'], spec['context'],
                        orchestration)
         save('worker.json', worker)
         return worker
     if step == 'verify':
+        forget('verifier.json')
         orchestration, worker = load('orchestration.json')['orchestration_handle'], load('worker.json')
         verifier = child('v', task(spec['id'] + '-verify', 'verification',
                                    'Independently check the recorded review: ' + spec['summary'],
@@ -154,6 +195,6 @@ def run(step, spec, work_dir, project_root, *, cli=None):
                   '--evaluator-result', str(work / 'result.json'), '--verifier-assignment',
                   str(work / 'vassignment.json'), '--verifier-result', str(work / 'vresult.json'))
         call('close.json', 'learning-close-orchestration', *root, '--orchestration-handle',
-             load('orchestration.json')['orchestration_handle'], '--status', 'completed')
+             load('orchestration.json')['orchestration_handle'], '--status', status)  # F4
         return {'checks_passed': checks.get('checks_passed'), 'accepted': qa.get('accepted')}
     raise ReviewError('review_invalid_step')
