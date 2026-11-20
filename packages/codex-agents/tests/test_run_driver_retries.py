@@ -199,5 +199,23 @@ class RetiredMonitorSlotTests(unittest.TestCase):
         self.assertEqual({}, value._forgetting)
 
 
+
+class UnclaimedRunFenceTests(unittest.TestCase):
+    """O0b B0-1: a run that fails before its claim is sent is fenced at the account, so its binding ends
+    at once instead of holding every drain for 24 h (2026-11-20, the control project's migration)."""
+
+    def test_B0_1_a_run_with_a_lease_but_no_claim_sent_is_fenced(self):
+        value, run = driver(), fencing_run(state='preparing', claim_sent=False)
+        value._fail(run, 'run_failed')
+        calls = [call.args[2] for call in value._account_call.call_args_list]
+        self.assertIn('fence_claim', calls)
+
+    def test_B0_1_a_run_with_no_lease_and_no_claim_sent_gives_back_at_once(self):
+        value, run = driver(), fencing_run(state='preparing', claim_sent=False, persistence=None)
+        value._give_back = mock.Mock()
+        value._fail(run, 'run_failed')
+        value._give_back.assert_called_once_with(run)
+        value._account_call.assert_not_called()  # nothing to fence it with; nothing was claimed
+
 if __name__ == '__main__':
     unittest.main()

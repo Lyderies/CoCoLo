@@ -162,6 +162,18 @@ class OriginalAccountOpenPendingTests(unittest.TestCase):
                 self.preflight(request_id='second-open', limits=limits)
         self.assertEqual(1, len(self.pending()))
 
+    def test_B0_1_an_expired_pending_binding_does_not_count_against_the_cap(self):
+        """O0b B0-1: the cap counts only live bindings (pending and not past their expiry), the rule
+        _drained already uses; an expired one never fills a project for good."""
+        self.preflight()
+        self.ledger._connection.execute("UPDATE host_run_bindings SET expires_at_ms=1 WHERE binding_state='pending'")
+        self.base.task = {**self.base.task, 'id': 'independent-second-verifier'}
+        self.base.route = {**self.base.route, 'task_id': self.base.task['id']}
+        self.base.assignment = {**self.base.assignment, 'task_id': self.base.task['id'], 'assignment_id': 'second-verifier'}
+        self.base.context = replace(self.base.context, task=self.base.task, route=self.base.route, assignment=self.base.assignment)
+        self.refresh_context()
+        self.preflight(request_id='second-open', limits=OpenOwnerLimits(1, 1, 1_048_576))  # not open_busy
+
     def test_native_context_and_copied_byte_quota_refuse_before_clock_or_request_write(self):
         with mock.patch.object(self.ledger, '_clock_ms', side_effect=AssertionError('clock before authority')):
             with self.assertRaisesRegex(OpenError, 'open_invalid_request'):
