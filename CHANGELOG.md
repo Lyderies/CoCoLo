@@ -4,6 +4,13 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- The learning cycle and case review read the last 90 days, not all time. Before, every case and candidate a
+  project ever mined counted for good against 30,000 records (the project store) or 20,000 cases (the old
+  ledger), and a project that reached them got `learning_capacity` on every cycle; only the owner's
+  `learning-expire` removed any. Now unpromoted cases and candidates past 90 days are removed in small batches by
+  the project service's cleanup pass (the collector's sweep for a project still in the old ledger). Kept
+  however old: cases in a controlled corpus, candidates past `proposed`, and anything a later record names.
+  The 90 days is one setting (`LEARNING_RETENTION_MS`), the same window outcomes and operational QA already use.
 - A project's run opens no longer stop for good after 256: the account counted every open request ever made
   (and refused the next with `open_busy`), in every release since the open journal was added. Only opens in
   progress count now (four at once), and a full limit says so (`open_capacity_full`, with its next step).

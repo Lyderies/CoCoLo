@@ -10,6 +10,7 @@ import secrets
 from .history_contracts import AttemptBinding, HistoryError, _DIGEST, _ID, matches, valid_integer
 from .host_result_contracts import OperationalQAContext
 from .learning_contracts import canonical_json, content_digest, keyed_digest, parse_bounded_json
+from .learning_cycle_core import LEARNING_RETENTION_MS
 from .learning_engine import _check_report_digests
 from .project_operational_qa import current_qa_scope, operational_qa_scope
 from .project_worker_result import current_host_reference
@@ -20,7 +21,7 @@ MAX_PENDING_CHECK_RECEIPTS = 64
 # (about 180 a day; a busy evening of reviews made about 60).
 MAX_CHECK_RECEIPTS = 16_384
 # The ledger's own retention, which learning reads QA evidence within (client_runtime.LEARNING_MAX_AGE_MS).
-QA_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+QA_RETENTION_MS = LEARNING_RETENTION_MS
 CHECK_TTL_MS = 600_000
 _RECEIPT = re.compile(r'oqc_[0-9a-f]{48}')
 _SCOPE_DOMAIN = b'project-qa-check-scope-v1\0'
