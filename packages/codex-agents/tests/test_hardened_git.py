@@ -242,6 +242,7 @@ class HardenedRunnerTests(Workspace):
             ("read-tree", "0" * 40),
             ("apply", "--cached", "--check", "/tmp/p"),
             ("apply", "--cached", "--numstat", "-z", "/tmp/p"),
+            ("apply", "--cached", "-R", "--numstat", "-z", "/tmp/p"),
             ("cat-file", "blob", "0" * 40),
             ("ls-tree", "-r", "0" * 40),
         )
@@ -267,7 +268,8 @@ class HardenedRunnerTests(Workspace):
             self.assertIn("GIT_ALTERNATE_OBJECT_DIRECTORIES", environment)
         # Other shapes of the writing plumbing stay refused.
         for arguments in (("hash-object", "-w", "--", "/tmp/f"), ("hash-object", "-w", "--no-filters", "--", "f"),
-                          ("hash-object", "--stdin"), ("write-tree",), ("apply", "--cached", "--numstat", "p")):
+                          ("hash-object", "--stdin"), ("write-tree",), ("apply", "--cached", "--numstat", "p"),
+                          ("apply", "--cached", "-R", "/tmp/p"), ("apply", "--cached", "-R", "--check", "/tmp/p")):
             with self.subTest(arguments=arguments), self.assertRaises(hg.GitCallRefused):
                 hg.run_hardened_git("/usr/bin/true", self.base, *arguments, private=alone)
 
@@ -480,6 +482,36 @@ class CandidateTreeTests(Workspace):
         result = self.build(second, revert)
         self.assertTrue(result.ok, getattr(result, "message", ""))
         self.assertEqual(first_tree, result.tree)
+        self.assertEqual(before, folder_map(self.project))
+        self.assert_store_has_no_leftovers()
+
+    @needs_real_git
+    def test_renames_copies_and_large_base_files(self) -> None:
+        """Both sides of a rename and a copy are read from the base; a base file over the cap refuses."""
+
+        base = self.make_repository(self.project)
+        clone = self.base / "rename-source"
+        fixture_git(self.base, "clone", "-q", "--no-local", str(self.project), str(clone))
+        (clone / "lib").mkdir()
+        fixture_git(clone, "mv", "src/keep.py", "lib/keep.py")
+        (clone / "lib" / "keep.py").write_text("KEEP = True\nMORE = 1\n")
+        shutil.copy(clone / "src" / "app.py", clone / "lib" / "app_copy.py")
+        fixture_git(clone, "add", "-A")
+        patch = fixture_git(
+            clone, "diff", "--cached", "--binary", "-M", "-C", "--find-copies-harder",
+            "--no-ext-diff", "--no-textconv",
+        ).stdout
+        self.assertIn(b"rename from src/keep.py", patch)
+        self.assertIn(b"copy from src/app.py", patch)
+        before = folder_map(self.project)
+        result = self.build(base, patch)
+        self.assertTrue(result.ok, getattr(result, "message", ""))
+        self.assertEqual(self.oracle_tree(self.project, base, patch)[0], result.tree)
+        self.assertEqual(before, folder_map(self.project))
+        self.assert_store_has_no_leftovers()
+        with mock.patch.object(hg, "MAX_BASE_BLOB_BYTES", 8):
+            refused = self.build(base, patch)
+        self.assertEqual("base_file_too_large", refused.reason)
         self.assertEqual(before, folder_map(self.project))
         self.assert_store_has_no_leftovers()
 
