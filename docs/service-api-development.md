@@ -416,6 +416,22 @@ of the run can still be running:
   relies on, with the root seen stopped instead of waited for. It names the bridge run
   and the child's pid and birth. A watchdog that was killed, or could not confirm, writes
   nothing. A normal release removes both files.
+- Container entries (0.4.0 slice C2, only while `container_launch.SETTINGS` is set; it is
+  None as shipped, which keeps the process launch above). Version 2 entries, keyed by a
+  launch token (`lnc_` + 32 hex) made before the claim. The driver writes `intent` before
+  the claim is handed to the account: the container's name (derived from the token) and its
+  labels `cocolo.project`, `cocolo.run` (the token), `cocolo.kind=run`, plus the lease, claim
+  request, identity digest and storage evidence a fence needs. A failed write stops the run
+  before the claim is sent. The admitted claim (bridge run id, deadline) is recorded on the
+  intent. At spawn the registry launches the container through `ContainerRuntime.launch`,
+  whose `record` reads the admitted intent back (`check_intent`) before `podman create`;
+  the run's deadline is set on the container (`--timeout`, enforced by conmon, so it fires
+  with the service killed; checked at start); `started` (container id, cgroup) is written
+  once podman returns. The bridge reads the output through a local `podman logs --follow`
+  then `podman wait`. Cleanup writes `stopping`, then `gone` or `stop_failed`; a run whose
+  container is not proven gone is never confirmed clean. `tree_state` never reads a
+  container entry as gone: recovery after a restart is slice C4. Tests:
+  `tests/test_container_launch_journal.py`.
 - Instance lock. Each driver holds an exclusive `flock` on its own
   `<instance>.lock` for as long as any of its threads may launch or own a child: the
   kernel frees it when the process dies, and a graceful stop frees it only after every
