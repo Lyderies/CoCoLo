@@ -86,6 +86,7 @@
  "codex:tests.test_health_contention": "integration",
  "codex:tests.test_history_api": "integration",
  "codex:tests.test_history_service_upgrade": "integration",
+ "codex:tests.test_hold_lifecycle": "integration",
  "codex:tests.test_hook_client_boundary": "integration",
  "codex:tests.test_hook_config": "integration",
  "codex:tests.test_host_commands": "integration",
