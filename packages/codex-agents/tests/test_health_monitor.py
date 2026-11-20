@@ -400,12 +400,14 @@ class SweepTests(unittest.TestCase):
         server._run_health_pass()
         self.assertEqual(0, second.calls)
 
-    def test_HM_0_5_a_collector_with_no_extra_checks_has_only_the_self_check_and_is_healthy(self):
+    def test_HM_0_5_a_collector_with_only_its_own_checks_is_healthy(self):
+        # HM-1 adds the containers check to the collector (test_health_containers HM-1-9); with containers off
+        # as shipped it is quiet, so the collector's own checks give a healthy, finding-free view.
         server = learning_store.CollectorServer(self.ledger)
         server._run_health_pass()
         view = server.health_monitor.view(self.store.project_a_id)
         self.assertEqual([], view['findings'])
-        self.assertEqual(['self_check'], [c['check'] for c in view['checks']])
+        self.assertEqual(['self_check', 'containers'], [c['check'] for c in view['checks']])
 
 
 class StatusTests(unittest.TestCase):

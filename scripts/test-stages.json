@@ -94,6 +94,7 @@
  "codex:tests.test_git_plumbing": "integration",
  "codex:tests.test_hardened_git": "integration",
  "codex:tests.test_health_contention": "integration",
+ "codex:tests.test_health_containers": "integration",
  "codex:tests.test_health_monitor": "integration",
  "codex:tests.test_history_api": "integration",
  "codex:tests.test_history_service_upgrade": "integration",
