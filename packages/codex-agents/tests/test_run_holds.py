@@ -201,9 +201,10 @@ class RunHoldTests(ActiveRunCapacityTests):
             holds = self.ledger.account_holds_status(self.project)
         self.assertEqual(holds, capacity["holds"])
         self.assertEqual(1, capacity["holds"]["run_slot"]["held"])
-        # The counts the earlier report carried are unchanged.
-        self.assertEqual({"observations", "cleanup_receipts", "pending_bindings", "billing_probes", "holds"},
-                         set(capacity))
+        # The counts the earlier report carried are unchanged. Corrected for OP-3 (requirement): the report also
+        # carries the open requests in flight.
+        self.assertEqual({"observations", "cleanup_receipts", "pending_bindings", "billing_probes", "open_requests",
+                          "holds"}, set(capacity))
 
     HOLDS = {"run_slot": {"held": 1, "past_due": 0, "next_eligible": 1_800_000_300_001, "deadline": 1_800_000_000_000},
              "binding": {"held": 0, "past_due": 0, "next_eligible": None, "deadline": None},

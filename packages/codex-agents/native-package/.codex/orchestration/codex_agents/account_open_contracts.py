@@ -22,7 +22,13 @@ OPEN_REASON_CODES = frozenset({'open_invalid_request', 'open_not_authorized', 'o
                              'open_account_starting', 'open_account_closing', 'open_account_busy',
                              'open_service_not_running', 'open_service_other_version', 'open_service_unreachable',
                              'open_service_hint_refused',
-                             'open_project_inactive', 'open_state_inconsistent', 'open_failed'})
+                             'open_project_inactive', 'open_state_inconsistent', 'open_failed',
+                             # OP-4: the project's opens in flight are at their limit (not transient: see
+                             # refusal_steps); OP-2: a replay of an open purged past its retention.
+                             'open_capacity_full', 'open_expired'})
+# OP-1: how many of a project's open requests may be in flight (pending, not past their own deadline) at once.
+# The account host's limit, and the one learning-status reports (OP-3).
+OPEN_REQUESTS_IN_FLIGHT = 4
 
 
 class OpenError(RuntimeError):
@@ -33,14 +39,14 @@ class OpenError(RuntimeError):
 
 @dataclass(frozen=True)
 class OpenOwnerLimits:
-    """Trusted startup configuration, never selected by an open request."""
+    """Trusted startup configuration, never selected by an open request. OP-1: only requests in flight are
+    capped; a finished one is bounded by retention (account_original_open.purge_finished_opens), never by a
+    count of every request kept, which 0.8.38 had (max_retained, a lifetime cap)."""
     max_pending: int
-    max_retained: int
     max_context_bytes: int
 
     def __post_init__(self):
         if (not valid_integer(self.max_pending, minimum=1, maximum=64)
-                or not valid_integer(self.max_retained, minimum=self.max_pending, maximum=4096)
                 or not valid_integer(self.max_context_bytes, minimum=1, maximum=MAX_ACCOUNT_OPEN_CONTEXT_BYTES)):
             raise OpenError('open_invalid_request')
 

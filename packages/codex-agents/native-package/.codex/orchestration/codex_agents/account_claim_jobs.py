@@ -78,7 +78,7 @@ class AccountClaimJobs:
         self._views = views
         self._allow_unleased_reference = allow_unleased_claim_reference
         self._open_limits = None if open_limits is None else OpenOwnerLimits(
-            open_limits.max_pending, open_limits.max_retained, open_limits.max_context_bytes)
+            open_limits.max_pending, open_limits.max_context_bytes)
         self._work_limits = SQLReadLimits(work_limits.max_callbacks, work_limits.max_duration_ms,
                                          work_limits.max_value_bytes)
         self._intake = SignatureJobIntake(views, intake_limits)

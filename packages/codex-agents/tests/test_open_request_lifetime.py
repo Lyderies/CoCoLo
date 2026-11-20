@@ -12,11 +12,13 @@ Integration stage: the in-process collector, account and project services (as 0.
 original-open ledger and signature-job fixtures.
 """
 import dataclasses
+import itertools
 import json
 import sqlite3
 import unittest
 from unittest import mock
 
+from tests.test_append_lookup import AppendLookupTests
 from tests.test_account_original_open import OriginalAccountOpenJobTests, OriginalAccountOpenPendingTests
 from tests.test_bridge import null_filled, result
 from tests.test_project_driver import DriverHarness
@@ -27,7 +29,7 @@ from codex_agents.account_service import AccountOwnerViews
 from codex_agents.signature_job_intake import SignatureIntakeLimits
 from codex_agents.signature_worker_pool import SignatureWorkerLimits
 
-DAY_MS = 24 * 60 * 60 * 1000
+_BATCHES = itertools.count(1)
 FAR = 10**13  # Past any open's deadline, binding expiry and retention in these fixtures.
 
 
@@ -74,15 +76,15 @@ def traced(ledger, action):
 def finished_requests(ledger, project, total, *, opened_at_ms=1):
     """`total` committed open requests for `project`, written in one statement (the cap's history only)."""
     connection = ledger._connection
-    have = connection.execute('SELECT COUNT(*) FROM account_open_requests WHERE project_id=?', (project,)).fetchone()[0]
+    batch = next(_BATCHES)  # each call's own keys (a sweep may remove rows between calls; corrected before code)
     with ledger._lock, connection:
         connection.execute(
-            "WITH RECURSIVE n(i) AS (SELECT ? UNION ALL SELECT i+1 FROM n WHERE i<?) "
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<?) "
             "INSERT INTO account_open_requests(project_id,request_key,original_key,parameters_digest,handle_digest,"
             "run_id,state,opened_at_ms,observation_deadline_at_ms,receipt_digest,request_seal) "
-            "SELECT ?, printf('k%063d', i), printf('o%063d', i), 'p', printf('h%063d', i), 'run-' || i, "
-            "'committed', ?, ?, printf('%064d', i), 's' FROM n",
-            (have + 1, have + total, project, opened_at_ms, opened_at_ms + 1))
+            "SELECT ?, printf('k%04d%059d', ?, i), printf('o%04d%059d', ?, i), 'p', printf('h%04d%059d', ?, i), "
+            "printf('run-%d-%d', ?, i), 'committed', ?, ?, printf('%064d', i), 's' FROM n",
+            (total, project, batch, batch, batch, batch, opened_at_ms, opened_at_ms + 1))
 
 
 def counts(ledger, handle_digest):
@@ -220,6 +222,21 @@ class OpenInFlightTests(unittest.TestCase):
             self.assertIn(code, account_api.ACCOUNT_REASON_CODES)  # allowed on the wire
 
 
+class OpenIndexTests(AppendLookupTests):
+    def test_OP_1_a_ledger_without_the_open_indexes_gets_them_on_open(self):
+        """OP-1/OP-2: an existing ledger (the control project's) gains both partial indexes when it opens, with no
+        schema change, as B0's additive indexes do."""
+        names = ('account_open_requests_in_flight', 'account_open_requests_finished')
+        self.reopen()
+        for name in names:
+            self.ledger._connection.execute(f'DROP INDEX IF EXISTS {name}')
+        version = self.ledger._connection.execute('PRAGMA user_version').fetchone()[0]
+        self.reopen()
+        present = {row[0] for row in self.ledger._connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        self.assertLessEqual(set(names), present)
+        self.assertEqual(version, self.ledger._connection.execute('PRAGMA user_version').fetchone()[0])
+
+
 class OpenLifetimeJobTests(OriginalAccountOpenJobTests):
     """OP-1 and OP-2 with real signature work: opens that commit, then finish."""
 
@@ -345,7 +362,7 @@ class OpenLifetimeJobTests(OriginalAccountOpenJobTests):
 def load_tests(loader, tests, pattern):
     """Only this module's own tests: the imported original-open classes run in their own module."""
     suite = unittest.TestSuite()
-    for case in (OpenLimitTests, OpenStatusTests, OpenInFlightTests, OpenLifetimeJobTests):
+    for case in (OpenLimitTests, OpenStatusTests, OpenInFlightTests, OpenIndexTests, OpenLifetimeJobTests):
         for name in loader.getTestCaseNames(case):
             if name in case.__dict__:
                 suite.addTest(case(name))

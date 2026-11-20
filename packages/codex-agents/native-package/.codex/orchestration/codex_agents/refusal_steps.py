@@ -20,6 +20,12 @@ EXACT = {
     'open_service_not_running': "Start the project's service with learning-start-project-service, then try again.",
     'open_account_starting': "The account services are still starting: wait a moment and try again.",
     'open_account_closing': "The account services are stopping: wait for the collector to restart, then try again.",
+    # OP-4: the project's opens in flight, or its runs opened and not yet claimed, are at their limit.
+    'open_capacity_full': "This project's runs being opened, or opened and not yet claimed, are at their limit "
+                          "(learning-status shows its open requests and pending bindings): wait for those runs to "
+                          "start or finish, then open the run again.",
+    'open_expired': "This open is older than the account keeps a finished open, and its record was removed: open "
+                    "a new run for the task.",  # OP-2
     'billing_attestation_missing': "Attest billing for this project: run attest.py from the COCOLO folder "
                                    "(setup's billing step does this).",
     'claude_backend_not_subscription': "This child must use the Claude subscription: sign Claude Code in with the "

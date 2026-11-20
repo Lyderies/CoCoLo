@@ -106,9 +106,11 @@ class ResultLifetimeTests(DriverHarness):
         capacity = self.cli('learning-status')['account_capacity']
         # Corrected for O0b B0 (narrowed, requirement): status also shows the run bindings and billing
         # probes still held, against their limits.
-        self.assertEqual({'observations', 'cleanup_receipts', 'pending_bindings', 'billing_probes'}, set(capacity))
+        # Corrected for OP-3 (requirement): and the open requests in flight, against their own limit of 4.
+        self.assertEqual({'observations', 'cleanup_receipts', 'pending_bindings', 'billing_probes', 'open_requests'},
+                         set(capacity))
         for name in capacity:
-            self.assertEqual(4096, capacity[name]['limit'], name)
+            self.assertEqual(4 if name == 'open_requests' else 4096, capacity[name]['limit'], name)
             self.assertIs(int, type(capacity[name]['live']), name)
 
 

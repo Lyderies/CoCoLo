@@ -4,6 +4,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- A project's run opens no longer stop for good after 256: the account counted every open request ever made
+  (and refused the next with `open_busy`), in every release since the open journal was added. Only opens in
+  progress count now (four at once), and a full limit says so (`open_capacity_full`, with its next step).
+  Finished opens are removed, with their run binding and receipt, a week after the run's expiry; replaying one
+  answers `open_expired`. `learning-status` shows `account_capacity.open_requests`.
 - The project's records gain format 18: four empty tables for the run supervisor's project-side holds, kept
   results' contexts, prepared publications and account settlements, with checks that run at every open and
   inside the upgrade. The service upgrades a project when it starts, keeping a copy as it was

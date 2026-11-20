@@ -40,6 +40,8 @@ class AccountObservationSchemaTests(unittest.TestCase):
         db.execute('DROP INDEX IF EXISTS records_type_project')  # O10 AP5: likewise
         db.execute('DROP INDEX IF EXISTS host_run_bindings_live')  # O0b B0-1: likewise
         db.execute('DROP INDEX IF EXISTS billing_probes_in_progress')  # O0b B0-5: likewise
+        db.execute('DROP INDEX IF EXISTS account_open_requests_in_flight')  # OP-1: likewise
+        db.execute('DROP INDEX IF EXISTS account_open_requests_finished')  # OP-2: likewise
         from codex_agents.run_holds_schema import RUN_HOLDS_OBJECTS  # O0b RS-A: schema 15's register, likewise
         for kind, name, _ in RUN_HOLDS_OBJECTS:
             if kind == 'trigger':

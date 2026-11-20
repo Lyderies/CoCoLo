@@ -218,6 +218,10 @@ LIVE_BINDINGS = ("FROM run_holds r INDEXED BY run_holds_due CROSS JOIN host_run_
                  "ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.state<>'released' "
                  "AND r.kind='binding' AND r.project_id=? AND h.binding_state='pending' AND h.expires_at_ms>?")
 HOST_RUN_TTL_MS = 24 * 60 * 60 * 1000
+# OP-2: how long a finished open (request, receipt and binding) is kept after its binding's expiry and its own
+# deadline, whichever is later. As long as a kept worker result (WORKER_RESULT_RETENTION_MS), whose orchestration
+# the result sweep reads through the run's binding; a replay later than this answers open_expired.
+OPEN_REQUEST_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 OPERATIONAL_CHECK_TTL_MS = 60 * 60 * 1000
 UPGRADE_RECONCILIATION_TTL_MS = 10 * 60 * 1000
 MAX_PENDING_OPERATIONAL_CHECKS = 256
@@ -2138,6 +2142,16 @@ class LearningLedger:
                 "CREATE INDEX IF NOT EXISTS billing_probes_in_progress ON account_billing_probe_requests(project_id) "
                 "WHERE state<>'committed'"
             )
+            # OP-1: the open-time cap and its status count read only open requests in flight, never the finished
+            # ones; OP-2: the retention sweep reads only committed requests old enough (additive, as above).
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS account_open_requests_in_flight "
+                "ON account_open_requests(project_id, observation_deadline_at_ms) WHERE state='pending'"
+            )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS account_open_requests_finished "
+                "ON account_open_requests(opened_at_ms) WHERE state='committed'"
+            )
             self._record_first_owner_key()
             self.state.mark_initialized()
             self._reconcile_managed_files()
@@ -2312,15 +2326,17 @@ class LearningLedger:
         return due
 
     def sweep_account_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
-        """Remove finished account rows past their retention, a small batch at a time (0.3.4 R6);
-        returns how many went. Skipped while a reader or a transaction is active."""
+        """Remove finished account rows past their retention, a small batch of each kind at a time (0.3.4 R6:
+        observations; OP-2: finished opens, with their binding and receipt); returns how many went. Skipped
+        while a reader or a transaction is active."""
         from .account_observation import purge_old_observations
+        from .account_original_open import purge_finished_opens
 
         with self._held():
             if self._readers() or self._connection.in_transaction:
                 return 0
             now = self._clock_ms() if now_ms is None else now_ms
-            return purge_old_observations(self, now, batch)
+            return purge_old_observations(self, now, batch) + purge_finished_opens(self, now, batch)
 
     def sweep_event_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
         """Summarise, then remove, up to `batch` expired raw events; returns how many were removed.
@@ -11512,10 +11528,15 @@ class LearningLedger:
         from .account_observation import MAX_OBSERVATION_REQUESTS
 
         from .account_billing_admission import MAX_PROBE_REQUESTS
+        from .account_open_contracts import OPEN_REQUESTS_IN_FLIGHT
+        from .account_original_open import IN_FLIGHT_OPENS
 
         with self._held():
             observations = self._connection.execute(
                 "SELECT COUNT(*) FROM account_observation_origins WHERE project_id=?", (project_id,)).fetchone()[0]
+            # OP-3: the open requests in flight, by the open-time cap's own rule (OP-1).
+            opens = self._connection.execute(IN_FLIGHT_OPENS + ")", (project_id, self._clock_ms(),
+                                                                     OPEN_REQUESTS_IN_FLIGHT + 1)).fetchone()[0]
             receipts = live_cleanup_receipts(self, project_id)
             # O0b B0 (narrowed): the holds the open and probe caps count, by the rule each cap uses.
             bindings = self._connection.execute(  # G12: from held register rows
@@ -11528,6 +11549,7 @@ class LearningLedger:
                 "cleanup_receipts": {"live": int(receipts), "limit": MAX_RELEASE_RESERVATIONS},
                 "pending_bindings": {"live": int(bindings), "limit": MAX_PENDING_HOST_RUNS},
                 "billing_probes": {"live": int(probes), "limit": MAX_PROBE_REQUESTS},
+                "open_requests": {"live": int(opens), "limit": OPEN_REQUESTS_IN_FLIGHT},
                 "holds": holds}
 
     def _release_slot_locked(self, project_id, handle_digest, kind, now, monotonic) -> bool:
