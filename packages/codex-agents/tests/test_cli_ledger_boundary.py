@@ -16,10 +16,10 @@ from tests.support import ORCHESTRATION_ROOT
 from codex_agents.host_commands import PRIMARY_HOST_COMMANDS
 
 # Commands a primary runs whose branch still contains a ledger fallback, and why.
+# (O10 D9 removed `dispatch`: its direct bridge branch could never launch, and it refuses now.)
 PRIMARY_LEDGER_FALLBACKS = {
     "learning-route": "routing evidence the project's service does not hold, released candidates, fallback receipts",
     "learning-open-host-run": "a route that is not host-driven (none is produced since every child is bridged)",
-    "dispatch": "a run an earlier version opened in the ledger",
     "learning-bind-host-agent": "native runs of earlier versions",
     "learning-observe-host-run": "native runs of earlier versions",
     "learning-classify-host-run-abandoned": "runs an earlier version opened in the ledger",

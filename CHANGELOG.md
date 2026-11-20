@@ -4,6 +4,17 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- `learning-status` shows launches the service cannot settle (`unresolved_launches`: how many, the oldest's age, and
+  up to 16 by run and state), instead of keeping them out of sight. The launch journal now reads every entry however
+  many there are, and removes lock files a stopped service left behind.
+- `dispatch` refuses, plainly, a route the project service does not run (`dispatch refused`, exit 2); the old direct
+  path, which no route could reach, is removed.
+- A result whose publication fails while the service is running is retried until it is recorded or the run's
+  deadline passes, instead of waiting until the service stops.
+- Leases a stopped service left are released by the service's own regular pass; a restarted service recognises what
+  its predecessor left; leases that were never admitted no longer use up cleanup slots.
+- Claim and capacity lookups stay fast as a project's history grows.
+- A collector's stop signal is never lost, whatever it was doing when the signal arrived.
 - The setup wizard is now Python. `./setup.sh` is a short launcher: it checks `python3` before it
   runs, as before, then starts the wizard, which shows the same screens, asks the same questions and
   keeps every safeguard. Path prompts take typing, Backspace, Ctrl-U, Ctrl-W, Ctrl-V and Tab to

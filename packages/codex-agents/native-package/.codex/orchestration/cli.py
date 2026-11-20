@@ -72,8 +72,6 @@ if os.path.lexists(RUNTIME_BINDING) and not _copy_holds_only_its_runtime():
 sys.path.append(str(ORCHESTRATION_ROOT))
 
 from codex_agents.bridge import BridgeRefused  # noqa: E402
-from codex_agents.bridge import signal_guard as bridge_signal_guard  # noqa: E402
-from codex_agents.bridge import dispatch as dispatch_bridge  # noqa: E402
 from codex_agents.bridge import dispatch_preflight  # noqa: E402
 from codex_agents.catalog import CatalogError, discover, load_discovery_policy  # noqa: E402
 from codex_agents.contracts import (  # noqa: E402
@@ -2574,54 +2572,9 @@ def main() -> int:
                     expected_export_commit=args.expected_export_commit)}
                 _print_command_report(args, report)
                 return 0
-            ledger, project_id = _learning_ledger(args)
-            completed_dispatch = None
-            try:
-                try:
-                    _require_host_owner(
-                        ledger, project_id, run_handle=args.run_handle
-                    )
-                    # A termination signal kills the child's process group before
-                    # this process exits, and the export is still removed.
-                    with bridge_signal_guard():
-                        completed_dispatch = {
-                            "ready": True,
-                            **dispatch_bridge(
-                                ledger,
-                                project_id,
-                                project_root=args.project_root.resolve(),
-                                bundle_root=BUNDLE_ROOT,
-                                task=task,
-                                route=route,
-                                assignment=assignment,
-                                parent_grant=parent_grant,
-                                run_handle=args.run_handle,
-                                expected_export_commit=args.expected_export_commit,
-                                result_schema=(
-                                    ORCHESTRATION_ROOT / "schemas" / "result.schema.json"
-                                ).read_bytes(),
-                            ),
-                        }
-                finally:
-                    _close_ledger(ledger)
-            except CollectorRestartError:
-                if completed_dispatch is None:
-                    raise
-                # The bridge already bound this exact validated/fenced result.
-                # Preserve it while reporting the distinct recovery failure;
-                # never normalize its contents, drop a fence or launch again.
-                _print_command_report(args, {
-                    **completed_dispatch,
-                    "ready": False,
-                    "error": _COMPLETED_LEDGER_RESTART_ERROR,
-                    "dispatch_completed": True,
-                    "post_operation_error": {
-                        "reason_code": "collector_restart_failed",
-                        "recovery_required": True,
-                    },
-                })
-                return 2
-            report = completed_dispatch
+            # O10 D9: the bridge runs only routes the project host drives (bridge.dispatch refuses
+            # every other one), so no child is ever started here.
+            raise BridgeRefused("route is not run by the project host")
         elif args.command == "provider-observe":
             if api_keys_present(os.environ) and not args.billing_probe:
                 # The account service observes with a clean environment; a session that
