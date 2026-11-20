@@ -28,6 +28,7 @@ from codex_agents.collector_paths import CollectorPaths  # noqa: E402
 from codex_agents.collector_runtime import require_authorized_collector_runtime  # noqa: E402
 from codex_agents.history_contracts import HistoryError  # noqa: E402
 from codex_agents.learning_store import CollectorServer, LearningLedger, LearningState  # noqa: E402
+from codex_agents.shutdown_watchdog import ShutdownWatchdog  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -40,17 +41,32 @@ def main(argv: list[str] | None = None) -> int:
     # Why this collector stops, recorded for the next one to report (0.3.3, C10). Recorded from
     # the moment it owns the ledger; before that, the command that started it reports a failure.
     stopping = {"signal": False, "error": None, "removed": False, "requested": False, "restart": None}
+    # O10 SD2: whatever a step does, the process ends within the bound, naming the step. O10 SD3-3:
+    # made (its thread started) before the handlers exist, so the handler can start the bound.
+    watchdog = ShutdownWatchdog(state.root, started_at_ms=None)
+    watchdog.prepare()
 
     def terminate(*_):
-        # Raise, so a wait in startup or in an owner step cannot outlive the signal.
+        # O10 SD3 (ANALYSIS-0.4.0-SD3-shutdown.md): the raise below can be swallowed by code the
+        # signal interrupts, which once lost the stop. So the stop is also recorded in a flag the main
+        # loop checks on every pass (SD3-2), and the shutdown bound starts here (SD3-3; the step is
+        # safe in a handler, see shutdown_watchdog). A repeated signal does not re-arm it.
+        first = not stopping["signal"]
         stopping["signal"] = True
+        if first:
+            watchdog.step("signal_received")
+        # Raise, so a wait in startup or in an owner step cannot outlive the signal.
         raise SystemExit(0)
 
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, terminate)
     # S1-U9a: how long each start-up phase takes, reported by learning-status (milliseconds only).
     phase_start = time.monotonic()
-    ledger = LearningLedger(state)
+    try:
+        ledger = LearningLedger(state)
+    except BaseException:
+        watchdog.done()  # Nothing to shut down; nothing may fire later (SD3-3).
+        raise
     phases = {"ledger_open": int((time.monotonic() - phase_start) * 1000)}
     phase_start = time.monotonic()
     try:
@@ -64,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
             pass
         finally:
             ledger.close()
+            watchdog.done()
         raise
     account = None
     server.account_services = "starting"  # O10 ST1: until the account services listen
@@ -72,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
         last = account_restart.last_restart(state.root)  # E1: shown from start-up, account or not
         server.account_restart_last = last if type(last) is dict else None
         server.start()
+        watchdog.started_at_ms = getattr(server, "_started_at_ms", None)
         phases["collector"] = int((time.monotonic() - phase_start) * 1000)
         phase_start = time.monotonic()
         try:
@@ -85,6 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         server.startup_phases = phases
         checked = restart_checked = time.monotonic()
         while not server.wait(0.002 if account is not None else 0.5):
+            if stopping["signal"]:
+                break  # O10 SD3-2: a stop signal whose exception was swallowed somewhere.
             if account is not None:
                 account.serve_once()
             if time.monotonic() - checked >= 1:
@@ -127,9 +147,6 @@ def main(argv: list[str] | None = None) -> int:
         # thread that did not stop cannot keep it alive.
         # SD1: each step is timed, so a slow shutdown shows which step it was.
         stop_ms = {"account_close": 0, "account_drain": 0, "server_stop": 0}
-        # O10 SD2: whatever a step does, the process ends within the bound, naming the step.
-        from codex_agents.shutdown_watchdog import ShutdownWatchdog
-        watchdog = ShutdownWatchdog(state.root, started_at_ms=getattr(server, "_started_at_ms", None))
         step_start = time.monotonic()
         if account is not None:
             try:

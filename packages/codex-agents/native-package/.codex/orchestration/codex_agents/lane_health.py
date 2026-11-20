@@ -3,6 +3,11 @@
 Each lane has slots, one per writing thread (its owner, each worker, the ingress front). A slot
 is written only by its own thread, by replacing one immutable value; a reader takes no lock and
 calls no lane method. Nothing reads these notes to decide anything: they are reporting only.
+
+C1 (restated by O10 SD3-1): instrumentation never changes a lane's outcome, except that an
+interruption still interrupts. An ordinary error (any Exception) while a note is written is dropped;
+SystemExit and KeyboardInterrupt are not: a collector's stop signal raises SystemExit from whatever
+line its main thread is running, and swallowing it here lost the stop (ANALYSIS-0.4.0-SD3-shutdown.md).
 """
 from __future__ import annotations
 
@@ -18,10 +23,11 @@ CAUSE = re.compile(r"[a-z][a-z_]{2,63}")
 
 
 def safely(record) -> None:
-    """Run one piece of health instrumentation, its arguments included; never raise (C1)."""
+    """Run one piece of health instrumentation, its arguments included; never raise an error (C1),
+    but let an interruption through (SD3-1)."""
     try:
         record()
-    except BaseException:  # noqa: BLE001 - instrumentation must never change a lane's outcome
+    except Exception:  # noqa: BLE001 - C1: never an interruption (SD3-1)
         return
 
 
@@ -67,11 +73,11 @@ class Slot:
 
     def publish(self, **changes) -> None:
         """Replace this slot's note; fields not given keep their values (the failure always does).
-        Never raises: a note that cannot be built is dropped and the lane goes on."""
+        Never raises an error: a note that cannot be built is dropped and the lane goes on (C1, SD3-1)."""
         try:
             changes.pop('failure', None)
             self.note = replace(self.note, **changes)
-        except BaseException:  # noqa: BLE001 - instrumentation must never change a lane's outcome
+        except Exception:  # noqa: BLE001 - C1: never an interruption (SD3-1)
             return
 
 
@@ -101,7 +107,7 @@ class Lane:
                 kind = name if _TYPE_NAME.fullmatch(name) else 'other'
             failure = _Failure(cause, kind, _wall_ms(), new_token())
             slot.note = replace(slot.note, failure=failure)
-        except BaseException:  # noqa: BLE001 - instrumentation must never change a lane's outcome
+        except Exception:  # noqa: BLE001 - C1: never an interruption (SD3-1)
             return
 
     def note_failure_named(self, slot: Slot, cause: str, type_name: str | None) -> None:
@@ -112,7 +118,7 @@ class Lane:
             kind = ('invariant' if type_name is None
                     else type_name if type(type_name) is str and _TYPE_NAME.fullmatch(type_name) else 'other')
             slot.note = replace(slot.note, failure=_Failure(cause, kind, _wall_ms(), new_token()))
-        except BaseException:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - C1, SD3-1
             return
 
     def enter_held(self) -> None:
@@ -121,7 +127,7 @@ class Lane:
                 episode = self._episode
                 onset = episode.onset_ms if episode.count else _wall_ms()
                 self._episode = _Episode(episode.count + 1, onset)
-        except BaseException:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - C1, SD3-1
             return
 
     def leave_held(self) -> None:
@@ -129,7 +135,7 @@ class Lane:
             with self._health_lock:
                 count = max(0, self._episode.count - 1)
                 self._episode = _Episode(count, self._episode.onset_ms if count else None)
-        except BaseException:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - C1, SD3-1
             return
 
     def view(self) -> dict:
