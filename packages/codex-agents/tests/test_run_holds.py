@@ -309,6 +309,20 @@ class RunHoldTests(ActiveRunCapacityTests):
         with self.assertRaisesRegex(LedgerError, "coverage|run hold"):
             learning_store._verify_project_backup_body(body)
 
+    def test_RS_A_1_a_hold_whose_record_retention_removes_is_released_and_its_tombstone_kept(self):
+        """RS-A-1: a released row stays as a tombstone after its source is pruned; a held one is released
+        `removed` with its source, so no held row is ever left without its hold, and the ledger still opens."""
+        project, launch = self.new_attempt()
+        from codex_agents.learning_contracts import keyed_digest
+        digest = keyed_digest(self.ledger.state.digest_key(), launch.run_handle)
+        at = self.case.stamp + 777
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=at), self.ledger._account_transaction():
+            self.ledger._connection.execute("DELETE FROM host_run_bindings WHERE handle_digest=?", (digest,))
+        self.assertEqual(("released", "removed", at), tuple(self.ledger._connection.execute(
+            "SELECT state, release_kind, released_at_ms FROM run_holds WHERE kind='binding' AND identity=?",
+            (digest,)).fetchone()))
+        self.reopened()
+
     def test_RS_A_F2_a_valid_ledger_with_every_kind_of_release_still_opens(self):
         row = self.crashed_release()
         project, launch = self.new_attempt()
