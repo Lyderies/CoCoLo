@@ -54,6 +54,10 @@ Requirements:
   live set after the listing (an identity recorded before its container was created is then never
   swept).
 
+- HM-1 (PLAN-0.4.0-supervisor-slices.md): `list_runs` lists every run container on this podman
+  (`cocolo.kind=run`), whatever its project, for the collector's health check (`health_containers`),
+  which then stops each project's orphans through `stop_orphans` with that project's own live set.
+
 The caller's duties (not done here): include every run whose identity it recorded in the live set
 it gives the sweep (a launch between its snapshot and the listing would otherwise be swept), keep
 the slot of any run whose stop is not "gone", and keep the seccomp profile file owner-only.
@@ -418,6 +422,52 @@ def _tightest(values: Sequence[str | None], *, cpu: bool = False) -> str | None:
     return None if best is None else best[1]
 
 
+def _call_podman(runner: PodmanRunner, args: Sequence[str], timeout: float) -> PodmanResult:
+    """One podman command; a podman that is missing, hangs or cannot reach its machine is a _Refused."""
+    try:
+        result = runner(list(args), timeout)
+    except (FileNotFoundError, PermissionError, NotADirectoryError):
+        raise _Refused(Refusal("podman_missing", "podman is not installed (looked in "
+                               + ", ".join(PODMAN_PATHS) + "); containers cannot run")) from None
+    except subprocess.TimeoutExpired:
+        raise _Refused(Refusal("podman_timeout", f"podman did not answer `{args[0]}` within "
+                               f"{timeout:g} s; its machine may be stuck")) from None
+    except OSError as error:
+        raise _Refused(Refusal("podman_unavailable", f"podman could not be run: {error.strerror}")) from None
+    if result.returncode == 125 and any(mark in result.stderr.lower() for mark in _UNREACHABLE_MARKS):
+        raise _Refused(Refusal("podman_unavailable", "podman is installed but not reachable: its machine or "
+                               "service is stopped (start it with `podman machine start`)"))
+    return result
+
+
+def _listing(runner: PodmanRunner, label: str, timeout: float) -> list[dict] | Refusal:
+    """`podman ps --all` filtered on one label (`key=value`): its rows with a labels map, or a Refusal."""
+    try:
+        listing = _call_podman(runner, ["ps", "--all", f"--filter=label={label}", "--format=json"], timeout)
+    except _Refused as refused:
+        return refused.refusal
+    if listing.returncode != 0:
+        return Refusal("podman_failed", "podman could not list containers: " + _first_line(listing.stderr))
+    try:
+        rows = json.loads(listing.stdout or "[]")
+    except ValueError:
+        rows = None
+    if not isinstance(rows, list):
+        return Refusal("podman_failed", "podman's container list was not readable")
+    return [row for row in rows if isinstance(row, dict) and isinstance(row.get("Labels"), dict)]
+
+
+def list_runs(runner: PodmanRunner, *, command_timeout: float = DEFAULT_COMMAND_TIMEOUT_SECONDS) -> list[dict] | Refusal:
+    """HM-1: every run container on this podman, whatever its project (`cocolo.kind=run`), or a Refusal.
+
+    A listing only: nothing is started, stopped or changed, and no machine is started (a stopped one is
+    the `podman_unavailable` refusal)."""
+    rows = _listing(runner, f"{KIND_LABEL}={RUN_KIND}", command_timeout)
+    if isinstance(rows, Refusal):
+        return rows
+    return [row for row in rows if row["Labels"].get(KIND_LABEL) == RUN_KIND]
+
+
 def _first_line(text: str) -> str:
     for line in (text or "").splitlines():
         if line.strip():
@@ -453,20 +503,7 @@ class ContainerRuntime:
 
     # -- podman
     def _podman(self, args: Sequence[str], timeout: float | None = None) -> PodmanResult:
-        try:
-            result = self.runner(list(args), timeout or self.command_timeout)
-        except (FileNotFoundError, PermissionError, NotADirectoryError):
-            raise _Refused(Refusal("podman_missing", "podman is not installed (looked in "
-                                   + ", ".join(PODMAN_PATHS) + "); containers cannot run")) from None
-        except subprocess.TimeoutExpired:
-            raise _Refused(Refusal("podman_timeout", f"podman did not answer `{args[0]}` within "
-                                   f"{timeout or self.command_timeout:g} s; its machine may be stuck")) from None
-        except OSError as error:
-            raise _Refused(Refusal("podman_unavailable", f"podman could not be run: {error.strerror}")) from None
-        if result.returncode == 125 and any(mark in result.stderr.lower() for mark in _UNREACHABLE_MARKS):
-            raise _Refused(Refusal("podman_unavailable", "podman is installed but not reachable: its machine or "
-                                   "service is stopped (start it with `podman machine start`)"))
-        return result
+        return _call_podman(self.runner, args, timeout or self.command_timeout)
 
     def _inspect(self, ref: str) -> dict | None:
         result = self._podman(["container", "inspect", ref])
@@ -806,21 +843,10 @@ class ContainerRuntime:
     # -- health monitor check 1 (CS-5), and C4's recovery listing
     def list_project(self) -> list[dict] | Refusal:
         """Every container carrying this project's label (`podman ps --all`), or a Refusal (podman unusable)."""
-        try:
-            listing = self._podman(["ps", "--all", f"--filter=label={PROJECT_LABEL}={self.project_id}",
-                                    "--format=json"])
-            if listing.returncode != 0:
-                return Refusal("podman_failed", "podman could not list containers: " + _first_line(listing.stderr))
-            try:
-                rows = json.loads(listing.stdout or "[]")
-            except ValueError:
-                rows = None
-            if not isinstance(rows, list):
-                return Refusal("podman_failed", "podman's container list was not readable")
-        except _Refused as refused:
-            return refused.refusal
-        return [row for row in rows if isinstance(row, dict) and isinstance(row.get("Labels"), dict)
-                and row["Labels"].get(PROJECT_LABEL) == self.project_id]
+        rows = _listing(self.runner, f"{PROJECT_LABEL}={self.project_id}", self.command_timeout)
+        if isinstance(rows, Refusal):
+            return rows
+        return [row for row in rows if row["Labels"].get(PROJECT_LABEL) == self.project_id]
 
     def sweep_orphans(self, live_run_ids: Iterable[str], *, grace_seconds: int = DEFAULT_GRACE_SECONDS,
                       gone_timeout: float = DEFAULT_GONE_TIMEOUT_SECONDS) -> SweepReport:

@@ -712,6 +712,26 @@ def unresolved(directory, *, now_ms=None):
     return report
 
 
+def container_tokens(directory):
+    """HM-1: the launch token of every container entry in that journal folder, read only; None when the
+    folder is missing, is not an owner-only folder of this user, or cannot be listed.
+
+    From the file names alone, as `LaunchJournal.tokens` (C4's live set): every entry counts, whatever
+    its state and whichever instance wrote it, and one whose file cannot be read counts too. No lock is
+    taken and nothing is written. Every intent is written (and its folder synced) before its container
+    is created, so a container listed before this is read is never missing from it while its run lives.
+    """
+    directory = Path(directory)
+    try:
+        info = os.lstat(directory)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            return None
+        names = os.listdir(directory)
+    except OSError:
+        return None
+    return {name[:-5] for name in names if name.endswith('.json') and _matches(name[:-5], _TOKEN)}
+
+
 def container_holds(directory, *, now_ms=None):
     """C3 (RS-C-12): the project's run containers by state, for status, and an owner alert for each
     one that could not be stopped.
