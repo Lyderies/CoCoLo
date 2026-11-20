@@ -160,6 +160,17 @@ class ActiveRunCapacityTests(unittest.TestCase):
                 self.assertEqual(past, health["runs_past_deadline"], health)
         self.assertIsNone(self.rows()[0]["released_at_ms"])  # reading released nothing
 
+    def test_H1c_2_machine_idle_names_each_project_with_a_counted_slot(self):
+        self.assertEqual({'run_slots': [], 'probes': []}, self.ledger.machine_idle())
+        self.case.claim()
+        self.assertEqual({'run_slots': [self.project], 'probes': []}, self.ledger.machine_idle())
+        row = self.rows()[0]
+        crashed = (row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS + 1) * 1_000_000
+        ended = row["execution_deadline_ns"] + learning_store.CRASHED_CLAIM_GRACE_MS * 1_000_000 + 1
+        with mock.patch.object(learning_store.time, "time_ns", return_value=crashed), \
+                mock.patch.object(learning_store.time, "monotonic_ns", return_value=ended):
+            self.assertEqual({'run_slots': [], 'probes': []}, self.ledger.machine_idle())  # no longer counted
+
     def test_an_unsettled_claim_long_past_its_hard_deadline_stops_counting_but_stays_unreleased(self):
         self.case.claim()
         row = self.rows()[0]

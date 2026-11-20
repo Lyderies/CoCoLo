@@ -35,6 +35,16 @@ class ExitRecordTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 
+    def test_H1c_3_a_self_restart_is_recorded_with_its_fixed_cause_only(self):
+        collector_exit.write_exit(self.root, started_at_ms=5, cause='account_restart', error=None,
+                                  detail='ingress_cleanup_failed')
+        record = collector_exit.read_exit(self.root)
+        self.assertEqual(('account_restart', 'ingress_cleanup_failed', []),
+                         (record['cause'], record['error'], record['where']))
+        collector_exit.write_exit(self.root, started_at_ms=5, cause='account_restart', error=None,
+                                  detail='not a fixed cause /x')
+        self.assertIsNone(collector_exit.read_exit(self.root)['error'])
+
     def test_C10_a_record_round_trips_owner_only(self):
         collector_exit.write_exit(self.root, started_at_ms=5, cause='error', error=RuntimeError('a secret value'))
         record = collector_exit.read_exit(self.root)
