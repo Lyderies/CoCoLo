@@ -38,7 +38,7 @@ class OriginalAccountOpenPendingTests(unittest.TestCase):
         self.base.setUp()
         self.addCleanup(self.base.doCleanups)
         self.ledger = self.base.ledger
-        self.limits = OpenOwnerLimits(4, 16, 1_048_576)
+        self.limits = OpenOwnerLimits(4, 1_048_576)  # OP-1: no cap on finished requests (0.8.38 kept 16 here)
         self.work = SQLReadLimits(100_000, 1000, 2*1_048_576)
         self.refresh_context()
 
@@ -151,15 +151,16 @@ class OriginalAccountOpenPendingTests(unittest.TestCase):
         self.assertEqual(captured.observation_deadline_at_ms+1, self.pending()[0]['observation_deadline_at_ms'])
 
     def test_retained_and_pending_caps_preserve_existing_identity(self):
+        # Corrected for OP-1 and OP-4 (requirement): the cap on every request kept (a lifetime cap) is gone, and
+        # the in-flight cap's refusal names itself (open_capacity_full, not open_busy).
         self.preflight()
         self.base.task = {**self.base.task, 'id': 'independent-second-verifier'}
         self.base.route = {**self.base.route, 'task_id': self.base.task['id']}
         self.base.assignment = {**self.base.assignment, 'task_id': self.base.task['id'], 'assignment_id': 'second-verifier'}
         self.base.context = replace(self.base.context, task=self.base.task, route=self.base.route, assignment=self.base.assignment)
         self.refresh_context()
-        for limits in (OpenOwnerLimits(1, 16, 1_048_576), OpenOwnerLimits(1, 1, 1_048_576)):
-            with self.subTest(limits=limits), self.assertRaisesRegex(OpenError, 'open_busy'):
-                self.preflight(request_id='second-open', limits=limits)
+        with self.assertRaisesRegex(OpenError, 'open_capacity_full'):
+            self.preflight(request_id='second-open', limits=OpenOwnerLimits(1, 1_048_576))
         self.assertEqual(1, len(self.pending()))
 
     def test_native_context_and_copied_byte_quota_refuse_before_clock_or_request_write(self):
@@ -167,7 +168,7 @@ class OriginalAccountOpenPendingTests(unittest.TestCase):
             with self.assertRaisesRegex(OpenError, 'open_invalid_request'):
                 self.preflight(context=None)
             with self.assertRaisesRegex(OpenError, 'open_busy'):
-                self.preflight(limits=OpenOwnerLimits(1, 4, 1))
+                self.preflight(limits=OpenOwnerLimits(1, 1))  # OP-1: the class has no retained cap
         self.assertEqual([], self.pending())
 
 @unittest.skipUnless((sys.platform.startswith('linux') or (sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file())), 'fixed macOS signature worker guard')
@@ -226,7 +227,8 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
         self.assertIsNone(self.pump(self.submit()).reason)  # the cap's last live place
         self.another_task('second-verifier')
         refused = self.pump(self.submit(request_id='second-open'))
-        self.assertEqual('open_busy', refused.reason)  # control: a live binding still counts
+        # Corrected for OP-4 (requirement): live bindings at their limit is a full cap, not a busy moment.
+        self.assertEqual('open_capacity_full', refused.reason)  # control: a live binding still counts
         self.ledger._connection.execute("UPDATE host_run_bindings SET expires_at_ms=1 WHERE binding_state='pending'")
         self.another_task('third-verifier')
         self.assertIsNone(self.pump(self.submit(request_id='third-open')).reason)  # the expired one does not

@@ -18,7 +18,8 @@ from .account_billing_jobs import AccountBillingJobs, BillingJobLimits
 from .account_claim_jobs import AccountClaimJobs
 from .account_ingress import AccountIngress, AccountIngressLimits
 from .account_observation import AccountObservationOwner, ObservationContext
-from .account_open_contracts import MAX_ACCOUNT_OPEN_CONTEXT_BYTES, AccountOpenContext, OpenOwnerLimits
+from .account_open_contracts import (MAX_ACCOUNT_OPEN_CONTEXT_BYTES, OPEN_REQUESTS_IN_FLIGHT, AccountOpenContext,
+                                     OpenOwnerLimits)
 from .account_observation_jobs import AccountObservationJobs, ObservationJobLimits
 from .account_service import AccountAuthorization, AccountOwnerViews, AccountService
 from .result_contracts import ResultLeaseBinding
@@ -96,7 +97,7 @@ class AccountServiceHost:
             self._views = AccountOwnerViews(ledger)
             limits = ACCOUNT_READ_LIMITS
             self._claims = AccountClaimJobs(self._views, ACCOUNT_INTAKE_LIMITS, ACCOUNT_WORKER_LIMITS, limits,
-                open_limits=OpenOwnerLimits(4, 256, MAX_ACCOUNT_OPEN_CONTEXT_BYTES))
+                open_limits=OpenOwnerLimits(OPEN_REQUESTS_IN_FLIGHT, MAX_ACCOUNT_OPEN_CONTEXT_BYTES))
             self._observations = AccountObservationJobs(AccountObservationOwner(self._views, limits),
                                                         ObservationJobLimits(8, 3, 3, 3))
             self._workers = BillingProbeWorkers(OwnedExecutionRegistry(), ProbeWorkerLimits(1, PROBE_SLOT_BYTES))

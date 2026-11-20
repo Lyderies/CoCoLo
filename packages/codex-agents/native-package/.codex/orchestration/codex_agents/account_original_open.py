@@ -31,6 +31,32 @@ _HOST_FIELDS = ('project_id', 'handle_digest', 'run_id', 'assignment_digest', 't
 
 BRIDGE_PROVIDERS = frozenset({'codex', 'claude'})
 
+# OP-1: a project's open requests in flight, pending and not past their own deadline (a pending request past it
+# can never commit: _fresh_admission refuses it). Finished, committed and expired requests never count, and the
+# partial index account_open_requests_in_flight keeps the work to the requests in flight. Parameters: the
+# project, the time and the limit; ')' closes it. learning-status counts with the same rule (OP-3).
+IN_FLIGHT_OPENS = ("SELECT COUNT(*) FROM (SELECT 1 FROM account_open_requests WHERE project_id=? "
+                   "AND state='pending' AND observation_deadline_at_ms>? LIMIT ?")
+# OP-2 (B0 revision 3 item 5): a finished open, purged with its binding and receipt. Only an open that opened a
+# run, whose binding the register has released (that released row stays, and is how a replay is told apart),
+# with no run slot held, no unreleased capacity and no live binding, past its retention. Bounded; the partial
+# index account_open_requests_finished reads only committed requests old enough.
+FINISHED_OPENS = (
+    "SELECT q.project_id,q.request_key,q.handle_digest FROM account_open_requests q "
+    "WHERE q.state='committed' AND q.opened_at_ms<:opened AND q.observation_deadline_at_ms<:deadline "
+    "AND EXISTS(SELECT 1 FROM account_open_receipts c WHERE c.project_id=q.project_id "
+    "AND c.handle_digest=q.handle_digest AND c.request_key=q.request_key AND c.run_id IS NOT NULL) "
+    "AND EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=q.project_id AND r.kind='binding' "
+    "AND r.identity=q.handle_digest AND r.state='released') "
+    "AND NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=q.project_id AND r.kind='run_slot' "
+    "AND r.identity=q.handle_digest AND r.state<>'released') "
+    "AND NOT EXISTS(SELECT 1 FROM active_run_capacity a WHERE a.project_id=q.project_id "
+    "AND a.handle_digest=q.handle_digest AND a.released_at_ms IS NULL) "
+    "AND NOT EXISTS(SELECT 1 FROM host_run_bindings h WHERE h.project_id=q.project_id "
+    "AND h.handle_digest=q.handle_digest AND (h.history_owner<>'project' "
+    "OR (h.binding_state='pending' AND h.expires_at_ms>:now))) "
+    "LIMIT :limit")
+
 
 @dataclass(frozen=True, repr=False)
 class OpenExecution:
@@ -284,6 +310,38 @@ def _receipt(ledger, request, journal):
     return view
 
 
+def _purged(ledger, request):
+    """OP-2: this request's open was purged past its retention. Its binding is gone, and the hold register keeps
+    the binding's released row (a tombstone keyed by the handle, which only this request's key derives)."""
+    if ledger._connection.execute('SELECT 1 FROM host_run_bindings WHERE project_id=? AND handle_digest=?',
+                                  (request.project_id, request.handle_digest)).fetchone() is not None:
+        return False
+    return ledger._connection.execute("SELECT 1 FROM run_holds WHERE project_id=? AND kind='binding' AND identity=? "
+                                      "AND state='released'", (request.project_id, request.handle_digest)).fetchone() is not None
+
+
+def purge_finished_opens(ledger, now, limit):
+    """OP-2: remove up to `limit` finished opens past their retention, each request with its receipt and binding
+    in one transaction (B0 revision 3 item 5). The binding's register row stays released, so a replay answers
+    open_expired. An open that opened no run (denied, or never finished) has no such row to tell its replay
+    apart, so it is kept: it counts against nothing (OP-1). Returns how many went. The caller holds the ledger
+    lock outside any transaction."""
+    from .learning_store import HOST_RUN_TTL_MS, OPEN_REQUEST_RETENTION_MS
+    rows = ledger._connection.execute(FINISHED_OPENS, {
+        'opened': now - HOST_RUN_TTL_MS - OPEN_REQUEST_RETENTION_MS, 'deadline': now - OPEN_REQUEST_RETENTION_MS,
+        'now': now, 'limit': limit}).fetchall()
+    if rows:
+        with ledger._account_transaction():
+            for project, key, handle in rows:
+                ledger._connection.execute('DELETE FROM account_open_receipts WHERE project_id=? AND handle_digest=? '
+                                           'AND request_key=?', (project, handle, key))
+                ledger._connection.execute("DELETE FROM account_open_requests WHERE project_id=? AND request_key=? "
+                                           "AND state='committed'", (project, key))
+                ledger._connection.execute("DELETE FROM host_run_bindings WHERE project_id=? AND handle_digest=? "
+                                           "AND history_owner='project'", (project, handle))
+    return len(rows)
+
+
 def current_open_request(ledger, request):
     _owner(ledger)
     if type(request) is not OriginalOpenRequest or request.origin is not ledger._attestation_origin:
@@ -295,6 +353,8 @@ def current_open_request(ledger, request):
     known = _receipt(ledger, request, journal)
     if known is not None:
         return journal, known
+    if journal is None and _purged(ledger, request):
+        raise OpenError('open_expired')  # OP-2: a purged open never reopens
     # Neither another request ID nor another assignment label can reopen the
     # same original task stage/attempt. A verified reconnaissance promotion has
     # its own routed stage, rather than resetting the original task identity.
@@ -342,13 +402,12 @@ def preflight_open(ledger, project_id, *, runtime_digest, caller_scope, request_
                         raise OpenError('open_conflict')
                     return captured, known
                 if journal is None:
-                    positions = ledger._connection.transaction_read_call(work_limits, lambda: ledger._connection.execute(
-                        'SELECT state FROM account_open_requests WHERE project_id=? LIMIT ?',
-                        (project_id, limits.max_retained+1)).fetchall())
-                    if (len(positions) >= limits.max_retained
-                            or sum(row[0] == 'pending' for row in positions) >= limits.max_pending):
-                        raise OpenError('open_busy')
                     opened = ledger._clock_ms()
+                    # OP-1: only requests in flight count; OP-4: a full cap names itself, it is not a busy moment.
+                    in_flight = ledger._connection.transaction_read_call(work_limits, lambda: ledger._connection.execute(
+                        IN_FLIGHT_OPENS + ')', (project_id, opened, limits.max_pending)).fetchone()[0])
+                    if in_flight >= limits.max_pending:
+                        raise OpenError('open_capacity_full')
                     seconds = captured.observation_seconds
                     created = ledger._connection.transaction_read_call(work_limits, lambda: ledger._connection.execute(
                         'SELECT created_at_ms FROM projects WHERE project_id=?', (project_id,)).fetchone())
@@ -484,7 +543,7 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
                     "SELECT h.handle_digest " + LIVE_BINDINGS + " LIMIT ?",
                     (request.project_id, now, MAX_PENDING_HOST_RUNS)).fetchall())
                 if len(pending) >= MAX_PENDING_HOST_RUNS:
-                    raise OpenError('open_busy')
+                    raise OpenError('open_capacity_full')  # OP-4: live bindings at their limit, not a busy moment
                 expires = request.opened_at_ms+HOST_RUN_TTL_MS
                 if not valid_integer(expires, minimum=now+1):
                     raise OpenError('open_preparation_stale')

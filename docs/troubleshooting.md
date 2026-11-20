@@ -364,6 +364,24 @@ Nothing is full: children still running in this project hold the space their res
 two at once). Wait for them to finish, then dispatch again. `learning-status` shows
 `project_capacity.results_in_flight` against how many fit. Closing orchestrations does not help here.
 
+## A run's open refused with `open_capacity_full` (or `open_busy` before 0.4.0)
+
+This project already has as many runs being opened, or opened and not yet claimed, as the account allows:
+up to four opens in progress at once, and up to 4,096 runs opened and not yet started.
+
+- `learning-status` shows `account_capacity.open_requests` (opens in progress) and
+  `account_capacity.pending_bindings` (runs opened and not yet claimed), each with its limit.
+- Wait for those runs to start or finish, then open the run again. An open that never finishes stops
+  counting at its own deadline, and an opened run that is never claimed at its expiry (a day).
+- Before 0.4.0, every open request a project had ever made counted, so a project could open only 256 runs
+  in its whole life and then every open failed with `open_busy`. Updating fixes that: finished requests
+  no longer count, and finished opens are removed a week after their run's expiry.
+
+## A replayed open refused with `open_expired`
+
+The open was finished more than a week ago and the account has removed its record. A run handle is never
+reopened: open a new run for the task.
+
 ## An orchestration will not close: `history_orchestration_pending`
 
 A run of the orchestration has not finished, or its result was never recorded.

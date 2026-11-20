@@ -540,7 +540,7 @@ class ManagedProjectExecutionProcessTests(ProjectExecutionProcessTests):
         self.service.close()
         self.jobs = AccountClaimJobs(self.base.views, SignatureIntakeLimits(2, 2, 512, 262_144, 2),
             SignatureWorkerLimits(2, 4*1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000),
-            SQLReadLimits(100_000, 1000, 2*1_048_576), open_limits=OpenOwnerLimits(4, 16, 1_048_576))
+            SQLReadLimits(100_000, 1000, 2*1_048_576), open_limits=OpenOwnerLimits(4, 1_048_576))  # OP-1: no cap on finished requests
         self.jobs.bootstrap()
         self.addCleanup(self.drain_jobs)
         self.service = AccountService(COLLECTOR_RUNTIME_DIGEST, self.base.views, authorizer=self.authorize,

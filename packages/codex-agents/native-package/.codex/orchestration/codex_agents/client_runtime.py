@@ -274,11 +274,14 @@ def _status_account_capacity(value):
     """Each account limit with its live count (0.3.4 R9); None from a collector that does not report it."""
     # O0b B0 (narrowed): 0.8.38 also reports held run bindings and billing probes; an earlier collector does not.
     # O0b RS-A round 1 F14: a newer report also carries the holds by kind, shown apart (_status_account_holds).
+    # OP-3: a newer report also carries the open requests in flight against their limit.
     counts = {name: item for name, item in value.items() if name != 'holds'} if type(value) is dict else None
     if (counts is None or set(counts) not in ({'observations', 'cleanup_receipts'},
                                               {'observations', 'cleanup_receipts', 'pending_bindings',
-                                               'billing_probes'})
-            or ('holds' in value and len(counts) != 4)
+                                               'billing_probes'},
+                                              {'observations', 'cleanup_receipts', 'pending_bindings',
+                                               'billing_probes', 'open_requests'})
+            or ('holds' in value and len(counts) < 4)
             or any(type(item) is not dict or set(item) != {'live', 'limit'}
                    or not account_integer(item['live']) or not account_integer(item['limit'])
                    for item in counts.values())):
