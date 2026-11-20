@@ -44,7 +44,7 @@ def _stuck(notes, now_ms):
     return None
 
 
-def decide(notes, idle, previous, *, now_ms):
+def decide(notes, idle, previous, *, now_ms, mono_ns=None):
     """`ok`, `restart`, `wait` (something is running: `held` names it) or `suppressed` (H1c-5)."""
     notes = _checked(notes)
     stuck = None if notes is None else _stuck(notes, now_ms)
@@ -64,13 +64,21 @@ def decide(notes, idle, previous, *, now_ms):
         held['unknown'] = True  # the ledger could not say: never restart blind
     if any(held.values()):
         return {'action': 'wait', 'lane': lane, 'cause': cause, 'held': held}
-    # C4: `previous` is the last self-restart (record_restart), not the latest exit record.
-    if type(previous) is dict and type(previous.get('at_ms')) is int and now_ms - previous['at_ms'] < RESTART_EVERY_MS:
-        return {'action': 'suppressed', 'lane': lane, 'cause': cause, 'held': held}
+    # C4: `previous` is the last self-restart (last_restart), not the latest exit record. D2: history that
+    # cannot be read suppresses. D3: either clock saying less than an hour suppresses.
+    if previous == 'unreadable':
+        return {'action': 'suppressed', 'reason': 'history_unreadable', 'lane': lane, 'cause': cause, 'held': held}
+    if type(previous) is dict:
+        wall_recent = type(previous.get('at_ms')) is int and now_ms - previous['at_ms'] < RESTART_EVERY_MS
+        recorded = previous.get('mono_ns')
+        mono_recent = (type(mono_ns) is int and type(recorded) is int and mono_ns >= recorded
+                       and mono_ns - recorded < RESTART_EVERY_MS * 1_000_000)
+        if wall_recent or mono_recent:
+            return {'action': 'suppressed', 'reason': 'recent', 'lane': lane, 'cause': cause, 'held': held}
     return {'action': 'restart', 'lane': lane, 'cause': cause, 'held': held}
 
 
-def check(read_notes, read_idle, previous, *, now_ms):
+def check(read_notes, read_idle, previous, *, now_ms, mono_ns=None):
     """The decision from callables that may fail: notes that cannot be read never restart; a ledger
     that cannot say means wait (H1c-6). Never raises."""
     try:
@@ -82,21 +90,21 @@ def check(read_notes, read_idle, previous, *, now_ms):
     except Exception:
         idle = None
     try:
-        return decide(notes, idle, previous, now_ms=now_ms)
+        return decide(notes, idle, previous, now_ms=now_ms, mono_ns=mono_ns)
     except Exception:
         return {'action': 'ok', 'lane': None, 'cause': None, 'held': None}
 
 
-def record_restart(state_root, *, lane, cause, now_ms) -> bool:
+def record_restart(state_root, *, lane, cause, now_ms, mono_ns) -> bool:
     """C4: keep this self-restart (time, lane, fixed cause) durably before stopping; False if it could
     not be kept, and then the restart does not happen."""
     try:
         if not (type(lane) is str and lane in LANES and type(cause) is str and _CODE.fullmatch(cause)
-                and type(now_ms) is int):
+                and type(now_ms) is int and type(mono_ns) is int):
             return False
         target = Path(state_root) / RECORD_NAME
         temporary = target.with_name(f'.{target.name}.{os.getpid()}.{secrets.token_hex(8)}')
-        data = json.dumps({'at_ms': now_ms, 'lane': lane, 'cause': cause}, sort_keys=True).encode()
+        data = json.dumps({'at_ms': now_ms, 'mono_ns': mono_ns, 'lane': lane, 'cause': cause}, sort_keys=True).encode()
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
         try:
             try:
@@ -108,6 +116,11 @@ def record_restart(state_root, *, lane, cause, now_ms) -> bool:
             finally:
                 os.close(descriptor)
             os.replace(temporary, target)
+            folder = os.open(target.parent, os.O_RDONLY)  # D4: the rename itself is durable
+            try:
+                os.fsync(folder)
+            finally:
+                os.close(folder)
         finally:
             try:
                 temporary.unlink()
@@ -119,15 +132,19 @@ def record_restart(state_root, *, lane, cause, now_ms) -> bool:
 
 
 def last_restart(state_root):
-    """C4/C5: the last self-restart kept, or None when there is none or it is malformed. Never raises."""
+    """C4/C5: the last self-restart kept; None when there is none; 'unreadable' when one exists but cannot
+    be read or checked (D2: that suppresses a restart). Never raises."""
     try:
         path = Path(state_root) / RECORD_NAME
-        if path.is_symlink() or not path.is_file():
+        if not path.exists() and not path.is_symlink():
             return None
+        if path.is_symlink() or not path.is_file():
+            return 'unreadable'
         record = json.loads(path.read_bytes()[:4096])
-        if (type(record) is dict and set(record) == {'at_ms', 'lane', 'cause'} and type(record['at_ms']) is int
+        if (type(record) is dict and set(record) == {'at_ms', 'mono_ns', 'lane', 'cause'}
+                and type(record['at_ms']) is int and type(record['mono_ns']) is int
                 and record['lane'] in LANES and type(record['cause']) is str and _CODE.fullmatch(record['cause'])):
             return record
     except Exception:
         pass
-    return None
+    return 'unreadable'

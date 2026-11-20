@@ -339,6 +339,7 @@ def _status_collector_fields(health):
             # malformed new field never costs the collector its ready.
             'account_lanes': health.get('account_lanes'), 'account_slots': health.get('account_slots'),
             'account_restart': health.get('account_restart'),  # S1-H1c: the host's latest decision
+            'account_restart_last': health.get('account_restart_last'),  # D5: its last self-restart
             'collector_startup_ms': phases,  # S1-U9a: milliseconds per start-up phase, or None
             'collector_schema_version': health['schema_version'],
             'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
@@ -470,13 +471,14 @@ def _account_health(report):
     malformed new field only makes this unknown (C2)."""
     raw_lanes, raw_slots = report.pop('account_lanes', None), report.pop('account_slots', None)
     restart = report.pop('account_restart', None)
+    last = report.pop('account_restart_last', None)
     try:
         health = _account_health_of(report, raw_lanes, raw_slots)
     except Exception:
         health = None
     if health is not None:
         try:
-            health['attention'] += _restart_attention(restart)
+            health['attention'] += _restart_attention(restart) + _last_restart_attention(last)
             if type(restart) is dict and restart.get('action') == 'suppressed':
                 health['reasons'] = [*health['reasons'], 'account_restart_suppressed']  # C6
         except Exception:
@@ -489,6 +491,17 @@ def _account_health(report):
                 'lanes': None, 'slots': None, 'attention': []}
 
 
+def _last_restart_attention(last):
+    """S1-H1c D5: the last self-restart kept, whatever the current decision."""
+    from datetime import datetime, timezone
+    if (type(last) is not dict or not account_integer(last.get('at_ms')) or last.get('lane') not in _LANE_LABELS
+            or not matches(last.get('cause'), _HEALTH_CODE)):
+        return []
+    when = datetime.fromtimestamp(last['at_ms'] / 1000, timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    return [f"the account restarted itself at {when}: the {_LANE_LABELS[last['lane']]} lane was stuck "
+            f"({last['cause']})"]
+
+
 def _restart_attention(decision):
     """S1-H1c-4/6: why a stuck account is not restarting itself, in plain words (counts only)."""
     if type(decision) is not dict or decision.get('action') not in {'wait', 'suppressed'}:
@@ -496,8 +509,10 @@ def _restart_attention(decision):
     cause = decision.get('cause')
     cause = f" ({cause})" if type(cause) is str and _HEALTH_CODE.fullmatch(cause) else ''
     if decision['action'] == 'suppressed':
-        return [f"the account is stuck{cause}; it restarted itself less than an hour ago, so it waits "
-                "(restart the collector when you are ready)"]
+        why = {'history_unreadable': "its record of earlier self-restarts cannot be read",
+               'unrecorded': "it could not record this restart, so it did not restart",
+               }.get(decision.get('reason'), "it restarted itself less than an hour ago")
+        return [f"the account is stuck{cause}; {why}, so it waits (restart the collector when you are ready)"]
     held = decision.get('held') if type(decision.get('held')) is dict else {}
     parts = []
     for name, text in (('run_slots', 'run slots'), ('probes', 'probes')):

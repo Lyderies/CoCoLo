@@ -96,12 +96,14 @@ def main(argv: list[str] | None = None) -> int:
                 # S1-H1c (owner: restart automatically): only when stuck and nothing is running.
                 # The decision and the stop are made here, between two owner steps: only the owner admits
                 # claims and probes, so none can be admitted in between (review 040-s1-h1c, C2).
-                now_ms = time.time_ns() // 1_000_000
-                decision = account_restart.check(account.health_notes, ledger.machine_idle,
-                                                 account_restart.last_restart(state.root), now_ms=now_ms)
+                now_ms, mono_ns = time.time_ns() // 1_000_000, time.monotonic_ns()
+                last = account_restart.last_restart(state.root)
+                server.account_restart_last = last if type(last) is dict else None  # D5
+                decision = account_restart.check(account.health_notes, ledger.machine_idle, last,
+                                                 now_ms=now_ms, mono_ns=mono_ns)
                 if decision["action"] == "restart" and not account_restart.record_restart(
-                        state.root, lane=decision["lane"], cause=decision["cause"], now_ms=now_ms):
-                    decision = {**decision, "action": "suppressed"}  # C4: not kept, so not restarted
+                        state.root, lane=decision["lane"], cause=decision["cause"], now_ms=now_ms, mono_ns=mono_ns):
+                    decision = {**decision, "action": "suppressed", "reason": "unrecorded"}  # C4/D6
                 server.account_restart = decision
                 if decision["action"] == "restart":
                     stopping["restart"] = decision["cause"]

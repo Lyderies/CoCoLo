@@ -11220,9 +11220,14 @@ class LearningLedger:
         with self._lock:
             # C1 (review 040-s1-h1c): any unreleased slot claimed in the last day, counted or not, since
             # its child may outlive its counted life.
+            # D1 (review 040-s1-h1c-2): or still counted by the two-clock rule, whatever its age.
+            mono = time.monotonic_ns()
             runs = self._connection.execute(
                 "SELECT DISTINCT project_id FROM active_run_capacity WHERE released_at_ms IS NULL "
-                "AND claimed_at_ms>=? ORDER BY project_id", (now_ms - LEGACY_RUN_MAX_MS,)).fetchall()
+                "AND (claimed_at_ms>=:legacy OR (deadline_at_ms IS NOT NULL AND NOT (deadline_at_ms+:grace<:now "
+                "AND (execution_deadline_ns+:grace_ns<=:mono OR clock_reference_ns>:mono)))) ORDER BY project_id",
+                {"legacy": now_ms - LEGACY_RUN_MAX_MS, "now": now_ms, "mono": mono, "grace": CRASHED_CLAIM_GRACE_MS,
+                 "grace_ns": CRASHED_CLAIM_GRACE_MS * 1_000_000}).fetchall()
             probes = self._connection.execute(
                 "SELECT DISTINCT project_id FROM account_billing_probe_requests WHERE state='admitted' "
                 "ORDER BY project_id").fetchall()
@@ -11804,6 +11809,7 @@ class CollectorServer:
         # S1-H1a, set by collector_host: the account lanes' published notes (a no-lock view).
         self.account_lanes = None
         self.account_restart = None  # S1-H1c, set by collector_host: its latest restart decision
+        self.account_restart_last = None  # S1-H1c D5: the last self-restart kept (time, lane, cause)
         self.thread_error: BaseException | None = None
         self._clients = client_capabilities or load_client_capabilities(
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
@@ -12062,6 +12068,7 @@ class CollectorServer:
                     "startup_phases": self.startup_phases,
                     "account_services": self.account_services,
                     "account_restart": self.account_restart,
+                    "account_restart_last": self.account_restart_last,
                 }
                 if self.account_lanes is not None:
                     try:
