@@ -184,6 +184,7 @@ class AccountObservationJobs:
         self._counts[project] -= 1
         if not self._counts[project]:
             del self._counts[project]
+        self._publish_health()  # S1-H1a C5
 
     def submit(self, project, runtime, caller, identity, request, context, before_publish, *, _ingress=None,
                _billing_parent=None):
@@ -234,6 +235,7 @@ class AccountObservationJobs:
                         self._queues[project] = deque()
                         self._rotation.append(project)
                     self._queues[project].append(ticket)
+                self._publish_health()  # S1-H1a C5: counted before the owner drives
                 return ticket
             except BaseException:
                 self._drop(ticket, job)
