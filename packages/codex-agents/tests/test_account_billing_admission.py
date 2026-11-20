@@ -172,6 +172,88 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual([fresh], list(self.owner._reserved_inputs))
         self.assertEqual({}, self.owner._signatures)
 
+    def expiring_with_work(self):
+        """O0b RS-A round 2 G3: two reservations, one whose signature work has returned and one whose work is
+        queued (prepared, never offered); the clock then passes both deadlines."""
+        returned_original, queued_original = self.reserve('probe-returned'), self.reserve('probe-queued')
+        returned = self.prepared(returned_original)
+        queued = self.owner.prepare(queued_original)
+        self.assertIn(queued, self.intake._jobs)
+        self.clock = max(returned_original.deadline, queued_original.deadline) + 1
+        return returned, queued
+
+    def sweep(self, *, thread=False):
+        def run():
+            with mock.patch.object(self.ledger, '_capacity_clock_reference', return_value=0):
+                outcome.append(self.ledger.release_due_account_holds(limit=64))
+        outcome = []
+        if not thread:
+            run()
+        else:  # the collector's sweep thread, not the owner's
+            import threading
+            worker = threading.Thread(target=run)
+            worker.start()
+            worker.join(10)
+            self.assertFalse(worker.is_alive())
+        return outcome[0] if outcome else None
+
+    def assertForgotten(self, returned, queued):
+        self.assertEqual(({}, {}, {}), (self.owner._pending, self.owner._reserved_inputs, self.owner._signatures))
+        self.assertNotIn(returned, self.pool._returned)  # returned work discarded
+        self.assertNotIn(queued, self.intake._jobs)  # queued work cancelled
+        self.assertNotIn(queued, self.pool._returned)
+
+    def assertKept(self, returned, queued):
+        self.assertEqual(2, len(self.owner._pending))
+        self.assertEqual(2, len(self.owner._reserved_inputs))
+        self.assertEqual({returned, queued}, set(self.owner._signatures.values()))
+        self.assertIn(returned, self.pool._returned)
+        self.assertIn(queued, self.intake._jobs)
+
+    def test_RS_A_G3_a_committed_sweep_frees_owner_memory_with_no_later_request(self):
+        """Round 2 G3: right after the sweep commits the expired probes, the owner has forgotten them and their
+        signature work, with no further request (F6 alone waited for a new reservation)."""
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep())
+        self.assertEqual(['committed', 'committed'], [r['state'] for r in self.rows()])
+        self.assertForgotten(returned, queued)
+
+    def test_RS_A_G3_a_sweep_on_another_thread_is_forgotten_on_the_owner_s_next_step(self):
+        """Round 2 G3: the collector sweeps on its own thread; the owner touches its memory and the pool only on
+        its own thread, at its next step, with no request."""
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep(thread=True))
+        self.assertKept(returned, queued)  # nothing touched from the sweep's thread
+        self.owner.forget_expired()
+        self.assertForgotten(returned, queued)
+
+    def test_RS_A_G3_a_replay_of_the_expired_request_alone_frees_owner_memory(self):
+        """Round 2 G3: a replay of the expired request (no new reservation) frees the memory too."""
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep(thread=True))
+        replay = self.reserve('probe-returned')
+        self.assertEqual(('denied', 'probe_unlaunched_expired', True),
+                         (replay['probe'], replay['reason_code'], replay['known']))
+        self.assertForgotten(returned, queued)
+
+    def test_RS_A_G3_a_rolled_back_sweep_keeps_owner_memory(self):
+        """Round 2 G3: when the sweep's transaction rolls back after closing the probes, the rows stay reserved
+        and the owner keeps their memory and work, on the sweep and on the owner's next step."""
+        from codex_agents import account_billing_admission
+        returned, queued = self.expiring_with_work()
+        real = account_billing_admission.close_expired_reserved
+
+        def close_then_fail(*args, **kwargs):
+            real(*args, **kwargs)
+            raise RuntimeError('injected after the close')
+        with mock.patch.object(account_billing_admission, 'close_expired_reserved', side_effect=close_then_fail):
+            with self.assertRaisesRegex(RuntimeError, 'injected'):
+                self.sweep()
+        self.assertEqual(['reserved', 'reserved'], [r['state'] for r in self.rows()])
+        self.assertKept(returned, queued)
+        self.owner.forget_expired()
+        self.assertKept(returned, queued)
+
     def test_second_request_cannot_take_the_account_bootstrap_or_refresh_original_deadline(self):
         original = self.reserve()
         self.prepared(original)

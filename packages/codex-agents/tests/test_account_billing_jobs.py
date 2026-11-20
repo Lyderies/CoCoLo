@@ -111,6 +111,33 @@ class AccountBillingJobTests(unittest.TestCase):
     def launches(self):
         return [i for i in self.fixture.invocations('claude') if i['argv'][0] == '-p']
 
+    def test_RS_A_G3_the_owner_s_step_forgets_a_probe_the_sweep_expired_with_no_request(self):
+        """O0b RS-A round 2 G3: the collector's sweep thread commits an expired reservation; the owner's next
+        step (drive_claims, run by the owner loop whether or not a request came) forgets it and its work."""
+        import threading
+        owner = self.billing._owner
+        context = self.contexts[self.fixture.project_id]
+        original = owner.reserve(self.fixture.project_id, self.runtime, 'b'*64, 'probe-expiring', context,
+                                 before_commit=lambda: True)
+        queued = owner.prepare(original)
+        self.assertIn(queued, self.claims._intake._jobs)
+        clock = original.deadline + 1
+
+        def sweep():
+            with mock.patch.object(self.ledger, '_clock_ms', return_value=clock), \
+                    mock.patch.object(self.ledger, '_capacity_clock_reference', return_value=0):
+                swept.append(self.ledger.release_due_account_holds(limit=64))
+        swept = []
+        worker = threading.Thread(target=sweep)
+        worker.start()
+        worker.join(10)
+        self.assertEqual([1], swept)
+        self.assertIn(original, owner._reserved_inputs)  # untouched from the sweep's thread
+        with mock.patch.object(self.claims._pool, 'offer_next', return_value=None):
+            self.service.drive_claims()
+        self.assertEqual(({}, {}, {}), (owner._pending, owner._reserved_inputs, owner._signatures))
+        self.assertNotIn(queued, self.claims._intake._jobs)
+
     def test_complete_service_phases_use_one_signature_pool_and_recover_without_reprobe(self):
         with mock.patch.object(sqlite3, 'connect', side_effect=AssertionError('second SQL connection')):
             ticket = self.begin()
