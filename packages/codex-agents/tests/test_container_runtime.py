@@ -73,6 +73,7 @@ class FakePodman:
         self.host = host
         self.containers: dict[str, FakeContainer] = {}
         self.networks = {"podman": False}
+        self.network_labels: dict[str, dict] = {}  # C4: a per-run network carries its run's labels
         self.images = {"python:3.12-slim"}
         self.calls: list[tuple[str, ...]] = []
         self.missing = False
@@ -199,7 +200,8 @@ class FakePodman:
             name = args[-1]
             if name not in self.networks:
                 return cr.PodmanResult(125, "", f"Error: network {name}: network not found")
-            return cr.PodmanResult(0, json.dumps([{"name": name, "internal": self.networks[name]}]), "")
+            return cr.PodmanResult(0, json.dumps([{"name": name, "internal": self.networks[name],
+                                                   "labels": self.network_labels.get(name, {})}]), "")
         if head == "create":
             name = option_values(args, "--name")[0]
             if name in self.containers:
@@ -390,6 +392,9 @@ class LaunchIdentityTests(RuntimeCase):
 
     def test_internal_network_is_used(self):
         self.podman.networks["cocolo-run-net"] = True
+        # C4: the network must carry the run's own labels (tests/test_container_recovery.py, C4-9).
+        self.podman.network_labels["cocolo-run-net"] = {cr.RUN_LABEL: "run:" + "a" * 64,
+                                                        cr.PROJECT_LABEL: self.project}
         launched = self.launch(self.spec(network="cocolo-run-net"))
         self.assertTrue(launched.ok, launched)
         self.assertIn("--network=cocolo-run-net", self.podman.commands("create")[0])
@@ -975,7 +980,9 @@ class RealPodmanTests(unittest.TestCase):
     def test_real_internal_network_and_a_non_internal_one_refused(self):
         internal = "cocolo-test-net-" + secrets.token_hex(4)
         external = "cocolo-test-ext-" + secrets.token_hex(4)
-        self.assertEqual(0, self.podman("network", "create", "--internal", internal).returncode)
+        # C4: a per-run network carries its run's labels, or it is refused.
+        self.assertEqual(0, self.podman("network", "create", "--internal", f"--label={cr.RUN_LABEL}=run:internal",
+                                        f"--label={cr.PROJECT_LABEL}={self.project}", internal).returncode)
         self.assertEqual(0, self.podman("network", "create", external).returncode)
 
         def remove_networks():
