@@ -568,6 +568,36 @@ class ResultPersistenceTests(unittest.TestCase):
             resume.set()
             self.committed(handle)
 
+    def test_O10_D13_the_lane_says_when_its_writer_faulted_and_never_after_a_normal_close(self):
+        """O10 D13: the service stops itself on a writer fault, so the lane says so (and only then)."""
+        class WriterFault(BaseException):
+            pass
+
+        def fault(history, *args, **kwargs):
+            raise WriterFault("the writer stopped")
+        self.assertFalse(self.lane.faulted())
+        self.stop_lane(self.lane)
+        self.assertFalse(self.lane.faulted(), "a closed lane is not a faulted one")
+        lane = self.new_lane()
+        with mock.patch.object(ProjectHistory, "expire_results", fault):
+            lane.expire_results()
+            lane._writer.join(6)
+        self.assertFalse(lane._writer.is_alive())
+        self.assertTrue(lane.faulted())
+
+    def test_O10_D13_an_invalid_reason_code_in_an_earlier_request_never_faults_the_writer(self):
+        """O10 D13 (second path): the writer's handler rebuilds `HistoryError(error.reason_code)`; an
+        invalid code becomes `history_invalid_input` there, it does not raise, so the lane goes on."""
+        error = HistoryError("history_unavailable")
+        error.reason_code = "PRIVATE-INJECTED-REASON-CANARY"
+        with mock.patch.object(ProjectHistory, "expire_results", side_effect=error):
+            request = self.lane.expire_results()
+            self.wait(lambda: request.state != "queued")
+        self.assertEqual(("failed", "history_invalid_input"), (request.state, request.reason))
+        self.assertTrue(self.lane._writer.is_alive())
+        self.assertFalse(self.lane._fault)
+        self.answered(self.lane.expire_results())
+
     def answered(self, request):
         self.wait(lambda: request.state != "queued")
         self.assertEqual("done", request.state, request.reason)
