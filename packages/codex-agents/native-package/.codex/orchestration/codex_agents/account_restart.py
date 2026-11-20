@@ -116,11 +116,18 @@ def record_restart(state_root, *, lane, cause, now_ms, mono_ns) -> bool:
             finally:
                 os.close(descriptor)
             os.replace(temporary, target)
-            folder = os.open(target.parent, os.O_RDONLY)  # D4: the rename itself is durable
             try:
-                os.fsync(folder)
-            finally:
-                os.close(folder)
+                folder = os.open(target.parent, os.O_RDONLY)  # D4: the rename itself is durable
+                try:
+                    os.fsync(folder)
+                finally:
+                    os.close(folder)
+            except BaseException:
+                try:
+                    target.unlink()  # E2: not durable, so not a restart: never reported as one
+                except OSError:
+                    pass
+                raise
         finally:
             try:
                 temporary.unlink()
@@ -140,7 +147,11 @@ def last_restart(state_root):
             return None
         if path.is_symlink() or not path.is_file():
             return 'unreadable'
-        record = json.loads(path.read_bytes()[:4096])
+        with open(path, 'rb') as handle:  # E3: at most 4 KiB is read
+            raw = handle.read(4097)
+        if len(raw) > 4096:
+            return 'unreadable'
+        record = json.loads(raw)
         if (type(record) is dict and set(record) == {'at_ms', 'mono_ns', 'lane', 'cause'}
                 and type(record['at_ms']) is int and type(record['mono_ns']) is int
                 and record['lane'] in LANES and type(record['cause']) is str and _CODE.fullmatch(record['cause'])):

@@ -69,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     server.account_services = "starting"  # O10 ST1: until the account services listen
     try:
         server.previous_exit = read_exit(state.root)
+        last = account_restart.last_restart(state.root)  # E1: shown from start-up, account or not
+        server.account_restart_last = last if type(last) is dict else None
         server.start()
         phases["collector"] = int((time.monotonic() - phase_start) * 1000)
         phase_start = time.monotonic()

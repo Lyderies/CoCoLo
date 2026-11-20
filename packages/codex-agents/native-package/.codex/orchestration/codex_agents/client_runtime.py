@@ -393,8 +393,10 @@ def status_client(state_root, project_root):
     except (KeyError, TypeError, ValueError):
         report.update(reason_code='status_collector_unavailable', error='Collector status is unavailable.')
     owner_ready = False
+    this_project = None
     try:
         project_id, endpoint = _account_target(state, project_root)
+        this_project = project_id  # S1-H1c E4: marks the caller's own project among those holding work
         enroll_clients(state, project_root, None, account=endpoint)
         owner = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=1).owner_key()
         report['owner_key'] = {name: owner[name] for name in ('state', 'fingerprint', 'replacements', 'last_replaced_at_ms')}
@@ -420,7 +422,7 @@ def status_client(state_root, project_root):
         else:
             report.update(reason_code='status_account_unavailable', error='Account status is unavailable.')
     report['ready'] = collector_ready and owner_ready
-    report['account_health'] = _account_health(report)
+    report['account_health'] = _account_health(report, this_project)
     return report
 
 
@@ -466,7 +468,7 @@ def _checked_slots(slots):
     return {name: slots[name] for name in names}
 
 
-def _account_health(report):
+def _account_health(report, this_project=None):
     """S1-H1a-4: the account's own state from the collector's reply; `ready` is not changed, and a
     malformed new field only makes this unknown (C2)."""
     raw_lanes, raw_slots = report.pop('account_lanes', None), report.pop('account_slots', None)
@@ -478,7 +480,7 @@ def _account_health(report):
         health = None
     if health is not None:
         try:
-            health['attention'] += _restart_attention(restart) + _last_restart_attention(last)
+            health['attention'] += _restart_attention(restart, this_project) + _last_restart_attention(last)
             if type(restart) is dict and restart.get('action') == 'suppressed':
                 health['reasons'] = [*health['reasons'], 'account_restart_suppressed']  # C6
         except Exception:
@@ -502,7 +504,7 @@ def _last_restart_attention(last):
             f"({last['cause']})"]
 
 
-def _restart_attention(decision):
+def _restart_attention(decision, this_project=None):
     """S1-H1c-4/6: why a stuck account is not restarting itself, in plain words (counts only)."""
     if type(decision) is not dict or decision.get('action') not in {'wait', 'suppressed'}:
         return []
@@ -518,7 +520,8 @@ def _restart_attention(decision):
     for name, text in (('run_slots', 'run slots'), ('probes', 'probes')):
         projects = [p for p in held.get(name) or [] if matches(p, _PROJECT)] if type(held.get(name)) is list else []
         if projects:  # C6: named by their opaque project id
-            parts.append(f"{text} in project(s) {', '.join(projects[:8])}")
+            shown = [p + (' (this project)' if p == this_project else '') for p in projects[:8]]
+            parts.append(f"{text} in project(s) {', '.join(shown)}")
     lanes = held.get('lanes')
     if type(lanes) is dict and lanes:
         named = [f"{name} ({count})" for name, count in sorted(lanes.items())
