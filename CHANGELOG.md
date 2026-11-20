@@ -70,6 +70,33 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   upgrade carries on as before; the progress line fits the terminal's width. Codex package 0.8.23.
 - CI runs by stage: pull requests run unit tests on Linux and macOS and integration tests on Linux;
   `main`, tags and a nightly run add the rest on both systems. Each job uses every core.
+- A wait for the account's records is bounded: at most 750 ms each, 800 ms for one whole request. A
+  request that cannot get them in time is answered `account_busy` (or `open_account_busy` for a run open)
+  with a next step, never a hang or another failure; `learning-status` counts these refusals, even while
+  the records are busy (`ledger_waits`). Codex package 0.8.34 to 0.8.37.
+- Recording a hook event no longer reads all of the project's records (on a 418 MB ledger it took 889 ms;
+  now under a millisecond), and the collector's start-up check reads only the record types it needs. Both
+  come from indexes the ledger gains when it opens; nothing else in it changes.
+- The project's service upgrades its own records when it starts (format 16 to 17), under its own lock,
+  keeping a copy of the store as it was first (`history.sqlite3.before-17.<time>`, owner-only). A learning
+  move that fails while the service starts is kept, shown by `learning-status`, and cleared by the next
+  start that succeeds; a service that stops at once reports its own reason to setup.
+- A service started by setup from a clone prepares children from the project's own files, so Claude
+  children can be prepared again.
+- A run refused because running children hold the space for results is answered
+  `result_capacity_busy` (wait for them), no longer "the store is full"; `learning-status` shows the
+  results in flight (`results_in_flight`).
+- `dispatch` survives a slow service: a status check or result read the service did not answer in time is
+  tried again until the run's own wait ends; a service that is gone still ends the wait at once.
+- A Claude child's result is held to the result schema, as a Codex child's is (`--json-schema`), so an
+  extra field no longer loses the whole result; a run that gives no schema-valid result is refused
+  `structured_output_missing`. Claude Code 2.1.311 or later is needed.
+- The skills say what to do when a dispatch loses its reply: wait for the run to end, then close.
+- Expired run bookings and finished billing probes no longer count against their limits (4,096 each per
+  project), so neither can fill for good; `learning-status` shows both against their limits
+  (`account_capacity.pending_bindings`, `account_capacity.billing_probes`). Codex package 0.8.38.
+- A collector asked to stop always ends within 18 s: after 15 s its exit record names the step it was
+  stuck in (`cause: stop_forced`, `stalled_in`), and a kernel alarm ends it whatever it is doing.
 
 ## 0.3.4: no limit fills for good (Codex package 0.8.32)
 
