@@ -29,6 +29,12 @@ kernel shows nothing of that run still running, this driver asks the account
 to settle it (`account.settle_lost_run`): it ends abandoned, with an unknown
 outcome, and no longer counts against the limits. A service that stops
 gracefully settles its own runs this way after its threads have stopped.
+
+C2 (behind `container_launch.SETTINGS`, off as shipped): with containers switched
+on, the run's container intent is written to the journal before its claim is
+sent (no intent, no claim), the admitted claim is recorded on it, and the child
+is launched in that container (`container_launch`). Such entries are never
+settled by the process rule above; their recovery is a later slice (C4).
 """
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -51,6 +57,7 @@ from .codex_preparation import (
     preparation_payload,
 )
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
+from . import container_launch
 from .control_api import ControlScope
 from .dispatch_api import dispatch_request_digest
 from .execution_grant import ExecutionRegistrationInput, checked_execution_grant
@@ -211,6 +218,7 @@ class _Run:
     fence_at: float | None = None  # When a refused fence is asked again.
     publish_attempts: int = 0  # Failed publications of the run's result retried (O10 D4).
     publish_at: float | None = None  # When the failed publication is retried.
+    launch_token: str | None = None  # C2: its container intent's token (containers switched on only).
 
 
 class _Call(local):
@@ -317,6 +325,9 @@ class RunDriver:
         except JournalError:
             raise HistoryError('history_service_unavailable') from None
         runtime.pool._registry.launch_journal = self._journal
+        # C2: None while containers are switched off (`container_launch.SETTINGS`, as shipped).
+        self._containers = container_launch.launcher_for(scope.project_id, self._journal)
+        runtime.pool._registry.container_launch = self._containers
         # Runs of earlier service instances, by run handle: (host class, 'released' or 'held').
         self._lost, self._sweep, self._next_sweep = {}, None, 0.0
         self._expiry, self._next_expiry = None, 0.0  # The first cleanup runs at start (0.3.4 R2).
@@ -814,6 +825,12 @@ class RunDriver:
             raise HistoryError('history_conflict')  # An admitted claim keeps everything until its release.
         self._runtime.persistence.retire_denied(run.persistence)
         run.persistence, run.state = None, 'failed'
+        if run.launch_token is not None:
+            try:
+                # Nothing of it was admitted, and now nothing can be: its intent is done with.
+                self._journal.remove(run.launch_token)
+            except JournalError:
+                pass  # Left for the container's recovery, which finds it never admitted.
         self._give_back(run)
         run.closed = run.prepared is None
 
@@ -822,13 +839,18 @@ class RunDriver:
 
         The journal entry is written before anything can launch the run; if it
         cannot be written the run stops here, keeping what the account holds.
+        With containers, the admission is recorded on the run's intent, written
+        before its claim was sent.
         """
         run.receipt = receipt
-        self._journal.claimed(receipt['bridge_run_id'], run_handle=run.key[0], attempt=run.key[1],
-                              host_client=run.host_client,
-                              lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
-                              identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
-                              storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
+        if run.launch_token is not None:
+            self._journal.admitted(run.launch_token, receipt['bridge_run_id'], receipt['deadline_at_ms'])
+        else:
+            self._journal.claimed(receipt['bridge_run_id'], run_handle=run.key[0], attempt=run.key[1],
+                                  host_client=run.host_client,
+                                  lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
+                                  identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
+                                  storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
         run.binding = AttemptBinding(**{n: getattr(run.lease, n) for n in LEASE_SCOPE_FIELDS},
                                      claim_id=receipt['bridge_run_id'], claim_digest=receipt['receipt_digest'])
         self._runtime.persistence.bind_claim(run.persistence, run.binding, hard_deadline_at_ms=receipt['deadline_at_ms'])
@@ -1072,6 +1094,17 @@ class RunDriver:
             if state != 'claim_pending':
                 self._fail(run, 'run_failed')
                 return
+            if self._containers is not None and run.launch_token is None:
+                # C2: no intent, no claim. The run's container is on disk before the account is asked.
+                try:
+                    run.launch_token = self._containers.intent(
+                        run_handle=run.key[0], attempt=run.key[1], host_client=run.host_client,
+                        lease={n: getattr(run.lease, n) for n in run.lease.__dataclass_fields__},
+                        identity_digest=run.identity_digest, claim_request_id=run.claim_request_id,
+                        storage_evidence=run.evidence, workspace=run.prepared_inputs.workspace)
+                except Exception:
+                    self._fail(run, 'run_unavailable')
+                    return
             run.claim_sent = True
             self._account_call(run, 'account', 'claim_launch', run.key[0], run.identity_digest,
                                request_id=run.claim_request_id, custody=self._custody(run, storage=run.evidence))
@@ -1259,7 +1292,7 @@ class RunDriver:
                 run.released_at = self._clock()
                 try:
                     # Its capacity is released: nothing is left for a later service to settle.
-                    self._journal.remove(run.receipt['bridge_run_id'])
+                    self._journal.remove(run.launch_token or run.receipt['bridge_run_id'])
                 except JournalError:
                     pass  # A later settlement finds it released and keeps only a tombstone.
             if not run.result_admitted and self._clock() - run.released_at < RECORD_GRACE_SECONDS:

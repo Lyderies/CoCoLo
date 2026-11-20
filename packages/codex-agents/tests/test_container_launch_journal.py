@@ -23,7 +23,6 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass
 import json
-import math
 import os
 from pathlib import Path
 import secrets
@@ -39,7 +38,7 @@ import unittest
 from unittest import mock
 
 import tests.support  # noqa: F401
-from tests.support import ORCHESTRATION_ROOT, SHORT_TMP, TEMP_ROOT
+from tests.support import ORCHESTRATION_ROOT, SHORT_TMP
 from tests.test_container_runtime import (FakeClock, FakeHostFiles, FakePodman, REAL_IMAGE, REAL_PODMAN,
                                           REAL_SKIP_REASON)
 
@@ -63,8 +62,15 @@ CONTAINER_PROJECT = 'cocolo-test-project'
 
 @dataclass
 class Lease:
+    """Stands in for the run's ResultLeaseBinding: its scope fields and claim request."""
     project_id: str = PROJECT
+    primary_session_id: str = 'session-1'
+    runtime_digest: str = '3' * 64
+    supervisor_instance_id: str = 'supervisor-1'
+    supervisor_generation: int = 1
+    orchestration_handle: str = 'orchestration-1'
     run_handle: str = HANDLE
+    run_id: str = 'run-1'
     attempt: int = 1
     claim_request_id: str = CLAIM
 

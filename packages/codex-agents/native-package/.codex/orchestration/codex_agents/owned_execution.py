@@ -209,6 +209,10 @@ class _Owned:
     worker_pool: object = None
     worker_handle: object = None
     worker_returned: bool = False
+    # C2: the run's started container (`container_launch.StartedContainer`), and whether its stop
+    # found it gone (None: not stopped yet).
+    container: object = None
+    container_gone: bool | None = None
 
 
 class OwnedExecutionRegistry:
@@ -217,6 +221,10 @@ class OwnedExecutionRegistry:
         # With one, a child is created only after its `spawning` entry is on disk,
         # and its identity and its watchdog's are recorded as soon as they are known.
         self.launch_journal = None
+        # C2: a `container_launch.ContainerLauncher` while containers are switched on, else None.
+        # With one, the child runs in a container recorded before its claim; the local process
+        # this registry owns streams the container's output and ends with it.
+        self.container_launch = None
         self._pid = os.getpid()
         self._lock = threading.RLock()
         self._issued = weakref.WeakKeyDictionary()
@@ -487,11 +495,27 @@ class OwnedExecutionRegistry:
             if entry.state == "launching":
                 entry.state = "unknown"
             self._begin_cleanup(entry)
+        self._stop_container(entry)
+
+    def _stop_container(self, entry):
+        """C2: stop the run's container once (outside the lock); whether the OS says it is gone."""
+        with self._lock:
+            started, launcher = entry.container, self.container_launch
+            if started is None or entry.container_gone is not None:
+                return
+            entry.container_gone = False  # Not proven gone unless the stop says so.
+        try:
+            gone = launcher.stop(started) is True
+        except Exception:
+            gone = False
+        with self._lock:
+            entry.container_gone = gone
 
     def _abort_entry(self, entry):
         try:
             with self._lock:
                 self._begin_cleanup(entry)
+            self._stop_container(entry)
         finally:
             original = sys.exc_info()[1]
             try:
@@ -544,7 +568,7 @@ class OwnedExecutionRegistry:
             entry.process, entry.tree, entry.birth = process, tree, tree.root_birth
             entry.state = "active"
         journal = self.launch_journal
-        if journal is not None:
+        if journal is not None and entry.container is None:
             # Outside the lock. A failure stops the child before any output is read.
             try:
                 journal.launched(entry.key.bridge_run_id, process.pid, entry.birth, tree.run_tag)
@@ -557,8 +581,8 @@ class OwnedExecutionRegistry:
             if self._pending.get(ticket) is not entry or entry.state != "active":
                 raise ExecutionCustodyError()
         journal = self.launch_journal
-        if journal is None:
-            return None
+        if journal is None or entry.container is not None:
+            return None  # A container's end is asked of the OS, not confirmed by the local watchdog.
         try:
             return str(journal.marker_path(entry.key.bridge_run_id)), entry.key.bridge_run_id
         except Exception:
@@ -571,7 +595,7 @@ class OwnedExecutionRegistry:
                     or entry.process is None or pid == entry.process.pid):
                 raise ExecutionCustodyError()
         journal = self.launch_journal
-        if journal is None:
+        if journal is None or entry.container is not None:
             return
         # The watchdog is this process's unreaped child, so its pid is still its own.
         record = process_record(pid)
@@ -590,8 +614,26 @@ class OwnedExecutionRegistry:
         entry = self.enter(ticket)
         process = None
         try:
+            launcher = self.container_launch
+            if launcher is not None:
+                # C2: the child runs in its container, created only after its admitted intent was
+                # read back, with its deadline set on it; `started` is on disk before this returns.
+                # The local process streams the container's output and ends with it.
+                environment = options.get("env")
+                run_tag = environment.get(RUN_TAG_VARIABLE) if type(environment) is dict else None
+                if type(run_tag) is not str or RUN_TAG.fullmatch(run_tag) is None:
+                    raise ExecutionCustodyError()
+                try:
+                    started = launcher.start(entry.key.bridge_run_id, arguments, workspace=options.get("cwd"),
+                                             run_tag=run_tag, deadline_ns=entry.deadline_ns)
+                except Exception:
+                    raise ExecutionCustodyError() from None
+                with self._lock:
+                    entry.container = started
+                arguments = launcher.attach_arguments(started)
+                options = {**options, "env": {**os.environ, RUN_TAG_VARIABLE: run_tag}}
             journal = self.launch_journal
-            if journal is not None:
+            if journal is not None and launcher is None:
                 # Durably on disk before the child exists: a run whose entry never
                 # reached `spawning` provably never started one.
                 try:
@@ -658,6 +700,10 @@ class OwnedExecutionRegistry:
         # Kernel observations are outside the metadata lock and outside the
         # local timer/event-reader path. Failure/interrupt leaves unknown custody.
         confirmed = tree.cleanup_after_owned_wait(process)
+        if entry.container is not None:
+            # C2: a run in a container is clean only once the OS says its container is gone.
+            self._stop_container(entry)
+            confirmed = confirmed and entry.container_gone is True
         with self._lock:
             if confirmed:
                 entry.state = "cleaned"
