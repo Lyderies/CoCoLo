@@ -1030,7 +1030,9 @@ class WizardTerminalTests(unittest.TestCase):
             ' echo "{\\"ready\\": false, \\"reason_code\\": \\"${FAKE_STATUS_REASON:-status_collector_transport_unavailable}\\"}";'
             ' exit 2; fi;'
             # S4-3: FAKE_STATUS_REPLY replaces the ready reply (its provider_attestations).
-            ' if [ -n "${FAKE_STATUS_REPLY:-}" ]; then echo "$FAKE_STATUS_REPLY"; exit 0; fi;'
+            # From call FAKE_STATUS_REPLY_FROM on (default the first), so the collector can be ready first.
+            ' if [ -n "${FAKE_STATUS_REPLY:-}" ] && [ "$n" -ge "${FAKE_STATUS_REPLY_FROM:-1}" ]; then'
+            ' echo "$FAKE_STATUS_REPLY"; exit 0; fi;'
             ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;; esac; fi\n'
             'case "$*" in *"attest.py scratch setup-"*)'
             f' out=$("{TRUSTED_PY}" "$@"); rc=$?; printf "%s\\n" "$out" >> "{self.scratch_log}";'

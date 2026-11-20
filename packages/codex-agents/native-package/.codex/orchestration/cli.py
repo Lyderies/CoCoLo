@@ -369,7 +369,7 @@ def _close_ledger(ledger: LearningLedger | _RestartingLedger) -> None:
 # Codex's sandbox blocks the collector's socket and state, so a sandboxed primary
 # gets this alongside the unchanged error.
 BILLING_ATTESTATION_HINT = (
-    'Run ./setup.sh for this project and choose "Re-run the billing attestation only".'
+    'Run ./setup.sh for this project and choose Configure, then "Re-run the billing attestation only".'
 )
 
 CODEX_SANDBOX_HINT = (

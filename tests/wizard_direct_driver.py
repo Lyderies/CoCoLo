@@ -204,7 +204,7 @@ class DirectDriverMixin:
                 if n <= int(env.get("FAKE_STATUS_STARTING") or 0):
                     reason = env.get("FAKE_STATUS_REASON") or "status_collector_transport_unavailable"
                     return 2, f'{{"ready": false, "reason_code": "{reason}"}}\n'.encode(), b""
-                if env.get("FAKE_STATUS_REPLY"):  # S4-3
+                if env.get("FAKE_STATUS_REPLY") and n >= int(env.get("FAKE_STATUS_REPLY_FROM") or 1):  # S4-3
                     return 0, (env["FAKE_STATUS_REPLY"] + "\n").encode(), b""
                 return 0, b'{"ready": true, "collector_runtime_version": "0.0.0"}\n', b""
         if matches('*attest.py scratch setup-*'):  # out=$(...): trailing newlines dropped, one printed

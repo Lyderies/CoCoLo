@@ -31,7 +31,7 @@ If it then says the key file has another link elsewhere, make a fresh copy in `~
 
 ## I lost my owner key passphrase
 
-Run `./setup.sh`, pick the project and choose "Replace a lost owner key". It creates a new key with a new
+Run `./setup.sh`, pick the project and choose Configure, then "Replace a lost owner key". It creates a new key with a new
 passphrase, then signs for that project. If the wizard says the project's orchestrator differs from this
 setup, choose Configure, then "Update the install and walk through every step" first and skip the attestation step.
 
@@ -50,7 +50,7 @@ signature is the old key's: release those candidates again, or empty the registr
 
 The owner key file in your records no longer matches the key the ledger recorded, so nothing can be signed
 and billing statements stop counting. If you did not change it, a program may have, so find out what ran
-before going further. To go on, choose "Replace a lost owner key" in `./setup.sh`.
+before going further. To go on, choose Configure, then "Replace a lost owner key" in `./setup.sh`.
 
 ## Codex reports the collector unreachable or "filesystem operation failed"
 

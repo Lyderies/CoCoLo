@@ -282,7 +282,7 @@ class Wizard:
     def runtime_refusal(self) -> None:
         self.failure_detail("The installed orchestrator does not match this setup",
                             "This step needs the project's installed orchestrator to be this setup's exact version. "
-                            "Update the install (choose 'Update the install and walk through every step'), or "
+                            "Update the install (choose Configure, then 'Update the install and walk through every step'), or "
                             "restore the project's files with git.")
         self.t.list_sub(f"Reason: {self.runtime_why}")
 
@@ -1248,7 +1248,7 @@ class Wizard:
         line = steps.owner_key_notice(effects.owner_key_report())
         if line == "mismatch":
             self.t.list_add("warn", "The owner key file does not match its record, so nothing can be signed or run.")
-            self.t.list_sub("If you did not change it, a program may have. Choose Replace a lost owner key.")
+            self.t.list_sub("If you did not change it, a program may have. Choose Configure, then Replace a lost owner key.")
         elif line:
             self.t.list_add("info", f"Owner key last replaced: {line}. If that was not you, replace it again.")
 
@@ -1365,7 +1365,7 @@ class Wizard:
             self.mark_step(6, "ok", "owner key replaced; project signed")
         else:
             t.list_add("fail", f"This did not finish cleanly (exit code {status}, see its message)")
-            t.list_sub("If the key was replaced, choose Re-run the billing attestation only. If not, choose this option "
+            t.list_sub("If the key was replaced, choose Configure, then Re-run the billing attestation only. If not, choose this option "
                        "again.")
             self.mark_step(6, "fail", "owner key replacement incomplete")
         t.pause()

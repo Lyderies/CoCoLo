@@ -1232,7 +1232,7 @@ def offer_retry() -> bool:
     """After a wrong passphrase: True to try again (the default), False to give up."""
 
     print("That passphrase did not unlock the key.")
-    print("If it is lost, exit and choose Replace a lost owner key in ./setup.sh.")
+    print("If it is lost, exit and choose Configure, then Replace a lost owner key in ./setup.sh.")
     while True:
         answer = input("Try again or Exit? [T/e] ").strip().lower()
         if answer in ("", "t", "try", "try again"):
@@ -1341,7 +1341,7 @@ SIGNER_LINE = re.compile(
 EXTRA_SIGNERS = (
     "the owner key record does not hold exactly one owner key, so nothing will be signed. Do "
     "not attest until you know why. If you did not change it, a program may have: run ./setup.sh "
-    "and choose Replace a lost owner key"
+    "and choose Configure, then Replace a lost owner key"
 )
 
 
@@ -1412,12 +1412,12 @@ def ensure_owner_key(target: Path, state_root: Path, cli_state: Path | None) -> 
 ENROLLED_MISMATCH = (
     "the owner key now configured is not the key shown above, so nothing was signed. Do not "
     "attest until you know why. If you did not change it, a program may have: run ./setup.sh "
-    "and choose Replace a lost owner key"
+    "and choose Configure, then Replace a lost owner key"
 )
 
 NOT_A_PATH = (
     "That is not a file location. If you typed your passphrase here, it was not shown, but "
-    "you can change it from ./setup.sh (Change the owner key passphrase) if you are unsure."
+    "you can change it from ./setup.sh (Configure, then Change the owner key passphrase) if you are unsure."
 )
 
 
@@ -1567,7 +1567,7 @@ def replace_owner_key(target: Path, state_root: Path, cli_state: Path | None) ->
     else:
         if configured is None and not _owner_key_on_record(state_root):
             raise AttestError("no owner key is configured yet, so there is nothing to replace. "
-                              "Choose Re-run the billing attestation only")
+                              "Choose Configure, then Re-run the billing attestation only")
     print(REPLACE_ADVICE)
     print(f"Owner key now: {shown}")
     if input("Type REPLACE to continue: ").strip() != "REPLACE":

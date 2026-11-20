@@ -148,7 +148,7 @@ from .account_claim_contracts import (
 
 # The one line `install_owner_public_key` writes; the allowed-signers file holds nothing else.
 # The owner's allowed-signers file is read whole up to this size; anything longer refuses.
-OWNER_KEY_REPLACE_HINT = "run ./setup.sh and choose Replace a lost owner key"
+OWNER_KEY_REPLACE_HINT = "run ./setup.sh and choose Configure, then Replace a lost owner key"
 DEFAULT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 # A project whose learning history moved to its own project store. The ledger
 # keeps that project's account rows and account-owned evidence; it accepts no
