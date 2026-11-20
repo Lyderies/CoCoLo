@@ -83,6 +83,14 @@ class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
         self.assertEqual(0, self.counted(ledger))
         self.assertTrue(ledger.drained())
 
+    def test_RS_A_F8_a_recent_earlier_run_is_eligible_a_day_after_its_claim(self):
+        ledger = self.upgrade_with_runs(learning_store.HOUR if hasattr(learning_store, "HOUR") else HOUR)
+        claimed = ledger._connection.execute(
+            "SELECT claimed_at_ms FROM active_run_capacity WHERE kind='legacy_unknown' AND released_at_ms IS NULL"
+        ).fetchone()[0]
+        status = ledger.account_holds_status(self.project)["run_slot"]
+        self.assertEqual(claimed + learning_store.LEGACY_RUN_MAX_MS + 1, status["next_eligible"])
+
     def test_the_bound_is_a_cautious_day(self):
         # Not a proof: a native 0.2.x child had no enforced deadline, and a bridged one
         # could outlive a dispatch process that was killed outright.

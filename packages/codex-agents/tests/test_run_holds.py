@@ -124,7 +124,41 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.assertEqual(row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS + 1,
                          status["run_slot"]["next_eligible"])
         self.assertIn("binding", status)
-        self.assertEqual({"held": 0, "past_due": 0, "next_eligible": None}, status["probe"])
+        # Round 1 F8 (requirement, design draft 4 item 4): each kind shows its nearest deadline, and probes
+        # how many only evidence can release.
+        self.assertEqual({"held": 0, "past_due": 0, "next_eligible": None, "deadline": None,
+                          "release_by_evidence": 0}, status["probe"])
+
+    def status_at(self, now, monotonic):
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=now), \
+                mock.patch.object(self.ledger, "_capacity_clock_reference", return_value=monotonic):
+            return self.ledger.account_holds_status(self.project)["run_slot"]
+
+    def test_RS_A_F8_next_eligible_waits_for_the_monotonic_clock_too(self):
+        """Round 1 F8: wall time past the deadline, monotonic clock not: the slot is not eligible yet."""
+        self.case.claim()
+        row = self.rows()[0]
+        grace = learning_store.CRASHED_CLAIM_GRACE_MS
+        now = row["deadline_at_ms"] + grace + 1
+        monotonic = row["clock_reference_ns"] + 1
+        remaining_ns = row["execution_deadline_ns"] + grace * 1_000_000 - monotonic
+        status = self.status_at(now, monotonic)
+        self.assertEqual(0, status["past_due"])
+        self.assertEqual(now - (-remaining_ns // 1_000_000), status["next_eligible"])  # now + ceil(ms)
+        self.assertGreater(status["next_eligible"], now)
+        self.assertEqual(row["deadline_at_ms"], status["deadline"])
+
+    def test_RS_A_F8_after_a_reboot_only_the_wall_deadline_remains(self):
+        self.case.claim()
+        row = self.rows()[0]
+        grace = learning_store.CRASHED_CLAIM_GRACE_MS
+        status = self.status_at(row["deadline_at_ms"], row["clock_reference_ns"] - 1)
+        self.assertEqual(row["deadline_at_ms"] + grace + 1, status["next_eligible"])
+
+    def test_RS_A_F8_next_eligible_is_unknown_while_the_wall_clock_is_behind_the_claim(self):
+        self.case.claim()
+        row = self.rows()[0]
+        self.assertIsNone(self.status_at(row["claimed_at_ms"] - 1, row["clock_reference_ns"] + 1)["next_eligible"])
 
     def schema_fourteen(self, *, backup):
         """The ledger as 0.8.38 leaves it (schema 14): no register, no release kinds."""
