@@ -165,6 +165,7 @@
  "codex:tests.test_rate_limit_contracts": "unit",
  "codex:tests.test_refusal_steps": "unit",
  "codex:tests.test_required_host_open": "integration",
+ "codex:tests.test_result_commit_busy": "integration",
  "codex:tests.test_result_denial_lane": "integration",
  "codex:tests.test_result_diagnostics": "unit",
  "codex:tests.test_result_lease_lane": "integration",
