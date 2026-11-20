@@ -396,6 +396,8 @@ class CodexWorkerPool:
             if self._closed:
                 return
             self._closed = True
+            # C3: the service is closing, so each run's container is stopped as `service_close`.
+            self._registry.closing()
             for slot in self._slots:
                 if slot.current is not None:
                     job = self._jobs.get(slot.current)

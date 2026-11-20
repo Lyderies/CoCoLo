@@ -101,8 +101,8 @@ class ExecutionTicket:
     def abort_handoff(self):
         self._registry.abort_handoff(self)
 
-    def begin_cleanup(self):
-        self._registry.begin_cleanup(self)
+    def begin_cleanup(self, reason="run_ended"):
+        self._registry.begin_cleanup(self, reason)
 
     def stop_requested(self):
         return self._registry.stop_requested(self)
@@ -126,6 +126,10 @@ class ExecutionTicket:
     def watchdog_marker(self):
         """(path, bridge run id) for the watchdog's cleanup confirmation, or None without a journal."""
         return self._registry.watchdog_marker(self)
+
+    def watchdog_container(self):
+        """C3: the container the detached watchdog stops once its service has died, or None."""
+        return self._registry.watchdog_container(self)
 
     def _signal_stop(self, process):
         self._registry._signal_stop(self, process)
@@ -213,6 +217,11 @@ class _Owned:
     # found it gone (None: not stopped yet).
     container: object = None
     container_gone: bool | None = None
+    # C3: a stop of the container was asked for on the launcher's helper thread; and whether the
+    # local process that streamed its output was confirmed clean when it finished (a later proof
+    # that the container is gone then confirms the run clean).
+    container_stop_requested: bool = False
+    local_confirmed: bool = False
 
 
 class OwnedExecutionRegistry:
@@ -225,6 +234,9 @@ class OwnedExecutionRegistry:
         # With one, the child runs in a container recorded before its claim; the local process
         # this registry owns streams the container's output and ends with it.
         self.container_launch = None
+        # C3: the service is closing (its worker pool's close): a cancel is then recorded as
+        # `service_close` on the run's container.
+        self.is_closing = False
         self._pid = os.getpid()
         self._lock = threading.RLock()
         self._issued = weakref.WeakKeyDictionary()
@@ -348,7 +360,38 @@ class OwnedExecutionRegistry:
             except ActivityUnavailable:
                 pass  # Failed timing never skips the actual owned stop.
             finally:
-                self._signal_owned_group(entry)
+                try:
+                    self._request_container_stop(entry)
+                finally:
+                    self._signal_owned_group(entry)
+
+    def closing(self):
+        """C3: the service is closing; its runs' containers are stopped as `service_close`."""
+        with self._lock:
+            self.is_closing = True
+
+    def _container_reason(self, entry, fallback):
+        reason = entry.stop_reason or fallback
+        return "service_close" if self.is_closing and reason == "cancel_requested" else reason
+
+    def _request_container_stop(self, entry):
+        """C3, under the lock: the run's container is stopped on the launcher's helper thread, once."""
+        launcher = self.container_launch
+        if entry.container is None or launcher is None or entry.container_stop_requested:
+            return
+        entry.container_stop_requested = True
+        try:
+            launcher.request_stop(entry.container, self._container_reason(entry, "cancel_requested"),
+                                  on_gone=lambda: self._container_proven_gone(entry))
+        except Exception:
+            pass  # The cleanup's own stop still runs, and only the OS's answer confirms anything.
+
+    def _container_proven_gone(self, entry):
+        """C3: the OS says the run's container is gone (now or after a retried stop)."""
+        with self._lock:
+            entry.container_gone = True
+            if entry.state == "unknown" and entry.local_confirmed:
+                entry.state = "cleaned"
 
     def _signal_stop(self, ticket, process):
         """Whole-process signal guard only; never an RPC/primary capability.
@@ -489,33 +532,36 @@ class OwnedExecutionRegistry:
             finally:
                 entry.cleanup_started = True
 
-    def begin_cleanup(self, ticket):
+    def begin_cleanup(self, ticket, reason="run_ended"):
         with self._lock:
             entry = self._entry(ticket)
             if entry.state == "launching":
                 entry.state = "unknown"
             self._begin_cleanup(entry)
-        self._stop_container(entry)
+        self._stop_container(entry, reason)
 
-    def _stop_container(self, entry):
-        """C2: stop the run's container once (outside the lock); whether the OS says it is gone."""
+    def _stop_container(self, entry, reason="run_ended"):
+        """C2/C3: stop the run's container (outside the lock) through the launcher's one stop action,
+        joining a stop already asked for; whether the OS says it is gone. A later proof (a retried
+        stop) arrives through `_container_proven_gone`."""
         with self._lock:
             started, launcher = entry.container, self.container_launch
             if started is None or entry.container_gone is not None:
                 return
             entry.container_gone = False  # Not proven gone unless the stop says so.
+            reason = self._container_reason(entry, reason)
         try:
-            gone = launcher.stop(started) is True
+            gone = launcher.stop(started, reason, on_gone=lambda: self._container_proven_gone(entry)) is True
         except Exception:
             gone = False
         with self._lock:
-            entry.container_gone = gone
+            entry.container_gone = entry.container_gone or gone
 
     def _abort_entry(self, entry):
         try:
             with self._lock:
                 self._begin_cleanup(entry)
-            self._stop_container(entry)
+            self._stop_container(entry, "launch_refused")
         finally:
             original = sys.exc_info()[1]
             try:
@@ -588,6 +634,20 @@ class OwnedExecutionRegistry:
         except Exception:
             raise ExecutionCustodyError() from None
 
+    def watchdog_container(self, ticket):
+        """C3: the launcher's watchdog configuration for this run's container, or None."""
+        with self._lock:
+            entry = self._entry(ticket)
+            if self._pending.get(ticket) is not entry or entry.state != "active":
+                raise ExecutionCustodyError()
+            started, launcher = entry.container, self.container_launch
+        if started is None or launcher is None:
+            return None
+        try:
+            return launcher.watchdog_config(started)
+        except Exception:
+            raise ExecutionCustodyError() from None
+
     def watched(self, ticket, pid):
         with self._lock:
             entry = self._entry(ticket)
@@ -630,6 +690,8 @@ class OwnedExecutionRegistry:
                     raise ExecutionCustodyError() from None
                 with self._lock:
                     entry.container = started
+                    if entry.stop_requested:
+                        self._request_container_stop(entry)  # C3: asked for while it was being created
                 arguments = launcher.attach_arguments(started)
                 options = {**options, "env": {**os.environ, RUN_TAG_VARIABLE: run_tag}}
             journal = self.launch_journal
@@ -703,8 +765,11 @@ class OwnedExecutionRegistry:
         if entry.container is not None:
             # C2: a run in a container is clean only once the OS says its container is gone.
             self._stop_container(entry)
-            confirmed = confirmed and entry.container_gone is True
         with self._lock:
+            if entry.container is not None:
+                # C3: a later proof that the container is gone confirms it then.
+                entry.local_confirmed = confirmed is True
+                confirmed = confirmed and entry.container_gone is True
             if confirmed:
                 entry.state = "cleaned"
             return confirmed

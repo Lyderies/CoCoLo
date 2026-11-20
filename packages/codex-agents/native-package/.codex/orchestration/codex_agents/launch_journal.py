@@ -34,7 +34,9 @@ bridge run id comes with the account's reply, and their states are:
   The container is created only after the admitted intent was read back
   (`check_intent`, the container primitive's ``record``).
 - ``stopping``, then ``gone`` (the OS says so) or ``stop_failed`` (not proven
-  gone: the slot stays held; a stop may be tried again).
+  gone: the slot stays held; a stop may be tried again). C3: each stop records
+  the reason the container was first stopped for (`CONTAINER_STOP_REASONS`,
+  kept across retries) and counts its attempts.
 - ``settled``: the account no longer counts the run.
 
 The process rule (`tree_state`) never reads a container entry as gone: only the
@@ -66,6 +68,22 @@ from .process_tree import (GONE, RUN_TAG, _born_before, process_gone, process_re
 STATES = frozenset({'claimed', 'spawning', 'launched', 'watched', 'settled'})
 CONTAINER_STATES = frozenset({'intent', 'started', 'stopping', 'gone', 'stop_failed', 'settled'})
 CONTAINER_KIND_LABELS = ('cocolo.project', 'cocolo.run', 'cocolo.kind')
+# C3: why a run's container was stopped: the liveness clock's reasons (`liveness_clock.LIVENESS_STOP_REASONS`),
+# the run's own end, the service closing, a refused launch, and a start that could not be recorded.
+CONTAINER_STOP_REASONS = frozenset({
+    'cancel_requested', 'startup_silence', 'work_silence', 'absolute_deadline', 'monitor_unavailable',
+    'service_close', 'run_ended', 'launch_refused', 'record_failed',
+})
+# Plain words for status, one per reason.
+STOP_REASON_WORDS = {
+    'cancel_requested': 'it was cancelled', 'startup_silence': 'it stayed silent at startup',
+    'work_silence': 'it went silent while working', 'absolute_deadline': 'it reached its deadline',
+    'monitor_unavailable': 'its monitor stopped', 'service_close': 'its service was closing',
+    'run_ended': 'its run had ended', 'launch_refused': 'its launch was refused',
+    'record_failed': 'its start could not be recorded',
+}
+# The container states status counts (settled entries are no longer held).
+CONTAINER_HELD_STATES = ('intent', 'started', 'stopping', 'gone', 'stop_failed')
 MAX_STOP_DETAIL = 600
 MAX_ENTRY_BYTES = 65_536
 # Entries read per listing; successive listings go round every file (O10 D6).
@@ -99,7 +117,7 @@ _FIELDS = {'version', 'state', 'instance', 'bridge_run_id', 'run_handle', 'attem
 _CONTAINER_FIELDS = {'version', 'kind', 'state', 'instance', 'token', 'project_id', 'container_name', 'labels',
                      'run_handle', 'attempt', 'host_client', 'lease', 'identity_digest', 'claim_request_id',
                      'storage_evidence', 'workspace', 'bridge_run_id', 'deadline_at_ms', 'container_id',
-                     'cgroup_path', 'stop_detail', 'outcome', 'settled_at_ms'}
+                     'cgroup_path', 'stop_detail', 'stop_reason', 'stop_attempts', 'outcome', 'settled_at_ms'}
 
 
 def new_token():
@@ -153,6 +171,9 @@ def _checked_container_entry(value):
         return None
     if value['stop_detail'] is not None and (type(value['stop_detail']) is not str
                                              or len(value['stop_detail']) > MAX_STOP_DETAIL):
+        return None
+    if (value['stop_reason'] is not None and value['stop_reason'] not in CONTAINER_STOP_REASONS) or (
+            type(value['stop_attempts']) is not int or not 0 <= value['stop_attempts'] <= 1_000_000):
         return None
     if value['state'] == 'settled':
         if value['outcome'] not in {'settled', 'released'} or type(value['settled_at_ms']) is not int:
@@ -319,7 +340,7 @@ class LaunchJournal:
                  'storage_evidence': storage_evidence.hex(),
                  'workspace': None if workspace is None else str(workspace), 'bridge_run_id': None,
                  'deadline_at_ms': None, 'container_id': None, 'cgroup_path': None, 'stop_detail': None,
-                 'outcome': None, 'settled_at_ms': None}
+                 'stop_reason': None, 'stop_attempts': 0, 'outcome': None, 'settled_at_ms': None}
         if checked_entry(value) is None:
             raise JournalError('launch entry is invalid')
         if self._path(token).exists():
@@ -372,10 +393,14 @@ class LaunchJournal:
         self._write(token, {**value, 'state': 'started', 'container_id': container_id,
                             'cgroup_path': cgroup_path or None})
 
-    def stopping(self, token):
-        """Written before a stop: from a started container, a refused launch's, or a failed stop."""
-        value = self._container(token, {'intent', 'started', 'stop_failed'})
-        self._write(token, {**value, 'state': 'stopping'})
+    def stopping(self, token, reason='run_ended'):
+        """Written before each stop attempt: from a started container, a refused launch's, a failed stop,
+        or one interrupted part way. The first reason is kept; the attempts are counted (C3)."""
+        if reason not in CONTAINER_STOP_REASONS:
+            raise JournalError('stop reason is invalid')
+        value = self._container(token, {'intent', 'started', 'stop_failed', 'stopping'})
+        self._write(token, {**value, 'state': 'stopping', 'stop_reason': value['stop_reason'] or reason,
+                            'stop_attempts': min(value['stop_attempts'] + 1, 1_000_000)})
 
     def stopped(self, token, gone, detail):
         """The stop's answer: `gone` only when the OS says so, else `stop_failed` (the slot stays held)."""
@@ -627,6 +652,65 @@ def unresolved(directory, *, now_ms=None):
     found.sort(key=lambda item: (-item['age_ms'], item['bridge_run_id']))
     report.update(count=len(found), oldest_age_ms=found[0]['age_ms'] if found else None,
                   entries=found[:MAX_UNRESOLVED_LISTED])
+    return report
+
+
+def container_holds(directory, *, now_ms=None):
+    """C3 (RS-C-12): the project's run containers by state, for status, and an owner alert for each
+    one that could not be stopped.
+
+    Every container entry not yet settled is counted, whichever service instance wrote it. Each
+    `stop_failed` one is named (at most MAX_UNRESOLVED_LISTED, the oldest first) with the reason it
+    was stopped for, the last stop's answer and the attempts, and gets one plain line for the
+    owner: its slot stays held, and how to end it by hand. Read only: nothing is written, removed
+    or asked of podman.
+    """
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    counts = {state: 0 for state in CONTAINER_HELD_STATES}
+    report = {'counts': counts, 'stop_failed': [], 'summary': 'Run containers: none held.', 'attention': []}
+    directory = Path(directory)
+    try:
+        info = os.lstat(directory)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            return report
+        names = sorted(name for name in os.listdir(directory)
+                       if name.endswith('.json') and _matches(name[:-5], _TOKEN))
+    except OSError:
+        return report
+    failed = []
+    for name in names:
+        path = directory / name
+        value = _read_entry(path)
+        if value is None or value['version'] != 2 or value['state'] not in counts:
+            continue
+        counts[value['state']] += 1
+        if value['state'] != 'stop_failed':
+            continue
+        try:
+            changed_ms = os.lstat(path).st_mtime_ns // 1_000_000
+        except OSError:
+            changed_ms = now_ms
+        failed.append({'container': value['container_name'], 'reason': value['stop_reason'],
+                       'detail': value['stop_detail'], 'attempts': value['stop_attempts'],
+                       'age_ms': max(0, now_ms - changed_ms)})
+    failed.sort(key=lambda item: (-item['age_ms'], item['container']))
+    report['stop_failed'] = failed[:MAX_UNRESOLVED_LISTED]
+    words = (('started', 'running'), ('intent', 'being started'), ('stopping', 'stopping'),
+             ('gone', 'stopped, their slot not yet settled'), ('stop_failed', 'could not be stopped (slot held)'))
+    parts = [f'{counts[state]} {text}' for state, text in words if counts[state]]
+    if parts:
+        report['summary'] = 'Run containers: ' + ', '.join(parts) + '.'
+    for item in report['stop_failed']:
+        why = STOP_REASON_WORDS.get(item['reason'], 'it was stopped')
+        attempts = item['attempts']
+        report['attention'].append(
+            f"Run container {item['container']} could not be stopped after {attempts} attempt"
+            f"{'s' if attempts != 1 else ''} (stopped because {why}): {item['detail'] or 'no answer'}. "
+            f"Its run slot stays held while the project's service keeps trying; to end it yourself: "
+            f"podman rm --force {item['container']}")
+    if len(failed) > len(report['stop_failed']):
+        report['attention'].append(f'{len(failed) - len(report["stop_failed"])} more run container(s) could not '
+                                   'be stopped; their slots stay held.')
     return report
 
 

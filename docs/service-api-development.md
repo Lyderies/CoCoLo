@@ -454,6 +454,28 @@ of the run can still be running:
   container is not proven gone is never confirmed clean. `tree_state` never reads a
   container entry as gone: recovery after a restart is slice C4. Tests:
   `tests/test_container_launch_journal.py`.
+- Container stops (0.4.0 slice C3, container mode only). One stop action,
+  `ContainerLauncher.stop` over `ContainerRuntime.stop` (SIGTERM, the grace, SIGKILL to
+  every process in the container, removal, "gone" asked of the OS), for every reason: the
+  liveness clock's (`supervisor.request_stop`, run on the launcher's helper thread since the
+  request is made under the registry lock), the bridge's own deadline and end
+  (`begin_cleanup(reason)`), the service closing (`CodexWorkerPool.close` marks the registry
+  `closing`, so a cancel is recorded as `service_close`), a refused launch. Each attempt
+  writes `stopping` with the first reason (`stop_reason`, kept) and counts `stop_attempts`.
+  Stops of one container are serialized (a stop under way is joined; one proven gone is never
+  repeated). A `stop_failed` run stays unconfirmed (slot held) and is retried by the live
+  sweep (`retry_stops`, 1 s doubling to 300 s); a later "gone" confirms the run clean through
+  the registry (`_container_proven_gone`), so its normal release goes on. The driver settles
+  its own failed admitted runs whose container is `gone` (`_settle_own_ended`:
+  `settle_lost_run`, entry `settled`, preparation given back) while it runs; at its own stop
+  it stops what is left once more (`service_close`) and settles what is gone; another
+  instance's container entries wait for C4. The detached watchdog gets the container
+  (`--container <json>`, the podman client's environment only) and stops it through the same
+  primitive once its service has died (its parent pid changed); while the service lives it
+  leaves the container to it. Status: `learning-status` `container_holds` (counts by state,
+  each `stop_failed` with reason, detail, attempts) and one owner alert per `stop_failed`
+  container in `account_health.attention`, naming `podman rm --force <name>`. Tests:
+  `tests/test_container_stop.py`, `tests/test_hold_lifecycle.py` (ContainerRunHoldTests).
 - Instance lock. Each driver holds an exclusive `flock` on its own
   `<instance>.lock` for as long as any of its threads may launch or own a child: the
   kernel frees it when the process dies, and a graceful stop frees it only after every
