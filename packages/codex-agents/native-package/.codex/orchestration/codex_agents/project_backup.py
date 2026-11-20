@@ -37,7 +37,17 @@ _MANIFEST_SCHEMA = (
     "CREATE TABLE cocolo_backup_manifest(format TEXT NOT NULL,format_version INTEGER NOT NULL,"
     "ledger_schema_version INTEGER NOT NULL,project_id TEXT NOT NULL,manifest BLOB NOT NULL)"
 )
-_REFERENCE: list[set[tuple[str, str, str]]] = []
+_REFERENCE: dict[int, set[tuple[str, str, str]]] = {}
+# O0b RS-A (round 1 F3): the tables each ledger version added to a format-3 file. A file holds exactly its own
+# version's objects, so a file an earlier release wrote still verifies (its indexes go with their tables).
+_ADDED_IN = {15: ("run_holds",)}
+
+
+def _file_schema(schema_version: int) -> str:
+    """The format-3 file schema for one ledger version: the restore schema without later versions' tables."""
+    later = [table for version, tables in _ADDED_IN.items() if schema_version < version for table in tables]
+    return (_store()._BACKUP_RESTORE_SCHEMA + ";\n" + _MANIFEST_SCHEMA + ";\n"
+            + "".join(f"DROP TABLE {table};\n" for table in later))
 
 
 def _store():
@@ -136,7 +146,7 @@ def write(connection: sqlite3.Connection, path: Path, project_id: str, schema_ve
         target.execute("PRAGMA journal_mode=OFF")
         target.execute("PRAGMA synchronous=OFF")
         target.execute("PRAGMA foreign_keys=ON")
-        target.executescript(store._BACKUP_RESTORE_SCHEMA + ";\n" + _MANIFEST_SCHEMA + ";")
+        target.executescript(_file_schema(schema_version))
         target.execute("BEGIN")
         target.execute(
             f"INSERT INTO projects({','.join(store._BACKUP_PROJECT_COLUMNS)}) "
@@ -185,21 +195,25 @@ def file_digest(descriptor: int) -> str:
     return digest.hexdigest()
 
 
-def _reference_objects() -> set[tuple[str, str, str]]:
-    """Every schema object a format-3 file may hold: the restore schema and the manifest."""
-    if not _REFERENCE:
+def _reference_objects(schema_version: int) -> set[tuple[str, str, str]]:
+    """Every schema object a format-3 file of this ledger version holds: its restore schema and the manifest."""
+    if schema_version not in _REFERENCE:
         reference = sqlite3.connect(":memory:")
         try:
-            reference.executescript(_store()._BACKUP_RESTORE_SCHEMA + ";\n" + _MANIFEST_SCHEMA + ";")
-            _REFERENCE.append(_objects(reference))
+            reference.executescript(_file_schema(schema_version))
+            _REFERENCE[schema_version] = _objects(reference)
         finally:
             reference.close()
-    return _REFERENCE[0]
+    return _REFERENCE[schema_version]
 
 
 def _objects(connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
     return {(str(kind), str(name), " ".join(str(sql or "").split())) for kind, name, sql in connection.execute(
         "SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_autoindex_%'")}
+
+
+def store_versions() -> frozenset[int]:
+    return frozenset({5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
 
 
 def open_backup(path: Path) -> sqlite3.Connection:
@@ -237,10 +251,15 @@ def verify(path: Path, *, project_id: str, schema_version: int | None = None,
     backup = open_backup(path)
     try:
         try:
-            if _objects(backup) != _reference_objects():
+            # The manifest says which version's objects the file must hold exactly (round 1 F3).
+            try:
+                rows = backup.execute("SELECT format,format_version,ledger_schema_version,project_id,manifest "
+                                      "FROM cocolo_backup_manifest").fetchall()
+            except sqlite3.Error:
+                raise _error("project backup schema is invalid") from None
+            if (len(rows) != 1 or type(rows[0][2]) is not int or rows[0][2] not in store_versions()
+                    or _objects(backup) != _reference_objects(rows[0][2])):
                 raise _error("project backup schema is invalid")
-            rows = backup.execute("SELECT format,format_version,ledger_schema_version,project_id,manifest "
-                                  "FROM cocolo_backup_manifest").fetchall()
             if len(rows) != 1:
                 raise _error("project backup manifest is invalid")
             kind, version, ledger_version, owner, raw = rows[0]
