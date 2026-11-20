@@ -11888,8 +11888,12 @@ class LearningLedger:
             ).fetchone() is not None:
                 raise LedgerError("project_has_active_billing_probe")
             if self._connection.execute(
-                "SELECT 1 FROM active_run_capacity WHERE project_id=? AND released_at_ms IS NULL LIMIT 1",
-                (project_id,),
+                # O0b RS-A (draft 4b): a slot released lost or crashed inside machine_idle's day still blocks
+                # deletion, as its unreleased row did before, since its child may still be running.
+                "SELECT 1 FROM active_run_capacity a WHERE a.project_id=? AND (a.released_at_ms IS NULL OR "
+                "(a.claimed_at_ms>=? AND EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=a.project_id "
+                "AND r.kind='run_slot' AND r.identity=a.handle_digest AND r.release_kind IN ('lost','crashed')))) LIMIT 1",
+                (project_id, (now_ms if now_ms is not None else self._clock_ms()) - LEGACY_RUN_MAX_MS),
             ).fetchone() is not None:
                 raise LedgerError("project_has_active_launch_capacity")
             # Account restrictions are read from every project, so deleting the
