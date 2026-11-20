@@ -11509,6 +11509,36 @@ class LearningLedger:
                        "next_eligible": None if row[2] is None else int(row[2])}
                 for name, row in (("run_slot", slot), ("binding", binding), ("probe", probe))}
 
+    def withdraw_open(self, project_id: str, *, run_handle: str) -> dict[str, Any]:
+        """O0b RS-A-2: withdraw a run opened but never claimed, so its binding ends now, not at its expiry.
+
+        In one account transaction, serialized with claim admission (both take the ledger's write lock): the
+        binding must be this project's and still pending, and no claim may exist for it. It is then
+        abandoned with reason `withdrawn` (its register row is released `withdrawn` by the trigger), and every
+        later claim refuses it as not pending. An identical repeat answers the same, `known`. The caller's
+        authority (the project's service, or the host session that opened it) is checked by the account."""
+        if type(run_handle) is not str or not re.fullmatch(r"hrn_[0-9a-f]{48}", run_handle):
+            raise LedgerError("withdrawal is unavailable")
+        handle = keyed_digest(self.state.digest_key(), run_handle)
+        with self._account_transaction():
+            row = self._connection.execute(
+                "SELECT binding_state,abandoned_reason FROM host_run_bindings WHERE project_id=? AND handle_digest=?",
+                (project_id, handle)).fetchone()
+            if row is None:
+                raise LedgerError("withdrawal is unavailable")
+            if row["binding_state"] == "abandoned" and row["abandoned_reason"] == "withdrawn":
+                return {"state": "withdrawn", "run_handle": run_handle, "known": True}
+            claimed = self._connection.execute(
+                "SELECT 1 FROM launch_claims WHERE project_id=? AND handle_digest=? UNION ALL "
+                "SELECT 1 FROM active_run_capacity WHERE project_id=? AND handle_digest=? LIMIT 1",
+                (project_id, handle, project_id, handle)).fetchone()
+            if row["binding_state"] != "pending" or claimed is not None:
+                raise LedgerError("withdrawal is unavailable")
+            self._connection.execute(
+                "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='withdrawn' "
+                "WHERE project_id=? AND handle_digest=? AND binding_state='pending'", (project_id, handle))
+        return {"state": "withdrawn", "run_handle": run_handle, "known": False}
+
     def release_due_account_holds(self, *, limit: int = 64) -> int:
         """O0b RS-A: release the account holds whose own predicate now says so, writing each decision once.
 

@@ -170,8 +170,8 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.assertEqual(("released", "withdrawn"), self.binding_hold(launch.run_handle))
         self.assertEqual("withdrawn", first["state"])
         self.assertEqual({**first, "known": True}, self.ledger.withdraw_open(project, run_handle=launch.run_handle))
-        with self.assertRaises(ClaimError):  # a claim after the withdrawal is refused
-            self.claim((project, launch), "after-withdrawal")
+        denied = self.claim((project, launch), "after-withdrawal")  # a claim after it is refused
+        self.assertEqual(("denied", "claim_not_open"), (denied["state"], denied["reason_code"]))
 
     def test_RS_A_2_a_binding_whose_claim_was_admitted_is_never_withdrawn(self):
         project, launch = self.new_attempt()
