@@ -95,6 +95,13 @@ MAX_RETAINED_WORKERS = 64
 # Retired runs whose status this host still answers as not found (newest kept).
 MAX_RETIRED_RUNS = 256
 _RETRYING = object()
+
+
+def _wall_ms():
+    """Wall-clock milliseconds, the clock of a claim's `deadline_at_ms`."""
+    return time.time_ns() // 1_000_000
+
+
 # A fence the account refused (anything but unreachable), or one that could not be
 # built, is asked again after this long, doubling up to the cap, at most this many
 # times. Then the run gives its preparation back and keeps its lease; the account's
@@ -118,6 +125,13 @@ CLEANUP_RETRY_MAX_SECONDS = 60.0
 # stays listed (its workspace may still be there), so its place is never counted free.
 MAX_CLEANUP_ATTEMPTS = 12
 MAX_FORGET_ATTEMPTS = 12
+# O10 D4: a result publication that failed while this service runs is retried from the packet
+# the writer still holds, after this long, doubling up to the cap, until it commits or the
+# run's own deadline (its claim's `deadline_at_ms`) passes. These refusals can never succeed
+# on a retry of the same packet, so they stop the run at once.
+PUBLISH_RETRY_SECONDS = 1.0
+PUBLISH_RETRY_MAX_SECONDS = 60.0
+_PUBLISH_REFUSALS = frozenset({'history_invalid_input', 'history_conflict', 'history_result_not_ready'})
 # How often the journal is checked for runs of stopped earlier services, and how long
 # one settlement request may take.
 SWEEP_SECONDS = 1.0
@@ -195,6 +209,8 @@ class _Run:
     closed: bool = False  # Failed and holding nothing: no lease, no preparation, nothing to reconcile.
     fence_attempts: int = 0  # Fences the account refused or that could not be sent.
     fence_at: float | None = None  # When a refused fence is asked again.
+    publish_attempts: int = 0  # Failed publications of the run's result retried (O10 D4).
+    publish_at: float | None = None  # When the failed publication is retried.
 
 
 class _Call(local):
@@ -751,6 +767,32 @@ class RunDriver:
         delay = min(FENCE_RETRY_MAX_SECONDS, FENCE_RETRY_SECONDS * 2 ** (run.fence_attempts - 1))
         run.fence_at = self._clock() + delay
 
+    def _retry_publication(self, run, reason):
+        """A failed publication of the run's result is published again from the packet the writer kept.
+
+        The child is never launched again: only the writer's own publication step is queued again, and
+        the history returns the stored delivery for a result it already committed, so there is one
+        terminal, outbox and usage record. The run stops when its deadline passes or the refusal can
+        never succeed, keeping what the account holds.
+        """
+        now = self._clock()
+        if reason in _PUBLISH_REFUSALS or _wall_ms() >= run.receipt['deadline_at_ms']:
+            run.publish_at = None
+            self._fail(run, 'run_failed')
+            return
+        if run.publish_at is None:
+            run.publish_attempts += 1
+            run.publish_at = now + min(PUBLISH_RETRY_MAX_SECONDS,
+                                       PUBLISH_RETRY_SECONDS * 2 ** (run.publish_attempts - 1))
+            return
+        if now < run.publish_at:
+            return
+        run.publish_at = None
+        try:
+            self._runtime.persistence.retry(run.persistence)
+        except HistoryError:
+            pass  # Still failed: the next step waits longer and asks again.
+
     def _close(self, run):
         """The lease is expired in the history: drop its input, then give the preparation back."""
         if run.receipt is not None or run.binding is not None:
@@ -1118,7 +1160,11 @@ class RunDriver:
                                                   lane.prepared_inputs_digest(run.persistence), inputs.export_info)
             run.state = 'ready'
         elif run.state == 'ready':
-            if lane.snapshot(run.persistence)['state'] not in {'committed'}:
+            snapshot = lane.snapshot(run.persistence)
+            if snapshot['state'] == 'failed':
+                self._retry_publication(run, snapshot['reason_code'])
+                return
+            if snapshot['state'] != 'committed':
                 return
             run.state = 'reporting'
             self._advance(run)

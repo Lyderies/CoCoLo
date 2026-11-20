@@ -204,8 +204,11 @@ class PreparedDispatchService:
             job.state = 'publishing'
         elif job.state == 'publishing':
             state = self._lane.snapshot(job.context.persistence)['state']
-            if state in {'failed', 'unknown'}:
+            if state == 'unknown':
                 raise DispatchError('dispatch_unavailable')
+            # O10 D4: a failed publication is retried by the run's owner from the packet the writer
+            # kept; the dispatch waits for it. When the owner stops the run, the dispatch is no
+            # longer authorized (`_current` above) and ends as before.
             if state == 'committed':
                 selected = self._owner.result(job.context.binding, self._pool, job.context.worker)
                 report = parse_bounded_json(selected.packet.report, max_bytes=12_288)
