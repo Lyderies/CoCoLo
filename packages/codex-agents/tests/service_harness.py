@@ -170,7 +170,11 @@ class ServiceHarness:
         patcher = mock.patch.object(project_driver.RunDriver, '_advance', driver_advance)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.threads = [threading.Thread(target=self.collector, name='test-collector')]
+        # HT-1: a cleanup, not only tearDown, which unittest skips when setUp fails after this point;
+        # added last, so it runs before the patches above are undone.
+        self.addCleanup(self._end_services, self.stop)
+        # HT-1: daemon, so a thread that a stop cannot reach never keeps the interpreter alive.
+        self.threads = [threading.Thread(target=self.collector, name='test-collector', daemon=True)]
         self.threads[0].start()
         self.wait_for(lambda: capability_path(self.paths, None, 'account').exists())
         if project_host:
@@ -235,7 +239,9 @@ class ServiceHarness:
             self.failures.append(repr(error))
 
     def start_project_host(self, project, stop=None):
-        stopped = (stop or self.stop).is_set
+        # HT-1: the harness's stop ends this host too, so a test that fails before its own stop never leaves it.
+        def stopped():
+            return self.stop.is_set() or (stop is not None and stop.is_set())
 
         def serve():
             try:
@@ -246,7 +252,7 @@ class ServiceHarness:
             except BaseException as error:
                 self.failures.append(repr(error))
 
-        thread = threading.Thread(target=serve, name='test-project-host-' + project.name)
+        thread = threading.Thread(target=serve, name='test-project-host-' + project.name, daemon=True)
         self.threads.append(thread)
         thread.start()
         self.wait_for(lambda: runtime_hint_path(self.paths, project).exists())
@@ -259,6 +265,12 @@ class ServiceHarness:
             code = cli.main()
         self.assertEqual(expected, code, stdout.getvalue())
         return json.loads(stdout.getvalue())
+
+    def _end_services(self, stop):
+        """Stop and join whatever this test's services left, however setUp or the test ended."""
+        stop.set()
+        for thread in reversed(self.threads):
+            thread.join(20)
 
     def stop_services(self):
         self.stop.set()
