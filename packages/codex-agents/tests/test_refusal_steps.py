@@ -75,10 +75,12 @@ class RefusalStepTests(unittest.TestCase):
         import io
         import json
         from tests.test_bridge import cli
+        # H1b-1 refined: a not-ready reply without a reason code is a report (host-command reports and
+        # validation reports), not a refusal, and gets no step.
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            cli._print({'ready': False, 'error': 'something unavailable'})  # no reason code at all
-        self.assertEqual(refusal_steps.DEFAULT, json.loads(out.getvalue())['next_step'])
+            cli._print({'ready': False, 'error': 'something unavailable'})
+        self.assertNotIn('next_step', json.loads(out.getvalue()))
         self.assertIn('no run is active', refusal_steps.next_step('history_service_unavailable'))
         run = refusal_steps.next_step('run_lost_held')
         self.assertIn('learning-run-status', run)

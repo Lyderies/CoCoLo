@@ -33,16 +33,16 @@ EXACT = {
 }
 
 FAMILY = {
-    'history': "The project's records refused this: run learning-status, and if it repeats, restart the project's "
-               "service (learning-start-project-service).",
+    'history': "The project's records refused this: run learning-status; if it repeats and no run is active, "
+               "restart the project's service (learning-start-project-service).",
     'claim': "The account refused the launch claim: run learning-status for held slots, then dispatch again with a "
              "new run (never retry a fenced one).",
     'preparation': "The child's workspace could not be prepared: check the project is committed and readable, then "
                    "dispatch a new run.",
     'open': "The account refused the run's open: run learning-status, then open the run again.",
     'probe': "The billing probe did not complete: wait a moment and run provider-observe again.",
-    'run': "The run ended without a result: classify it abandoned (learning-classify-host-run-abandoned) and "
-           "dispatch a new one.",
+    'run': "Check the run with learning-run-status first: only if it says the run has ended, classify it "
+           "abandoned (learning-classify-host-run-abandoned) and dispatch a new one.",
     'account': "The account services did not answer as expected: run learning-status; if it says faulted or "
                "unknown, restart the collector.",
     'dispatch': "The dispatch could not be completed: run learning-run-status for this run, then decide whether to "

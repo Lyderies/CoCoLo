@@ -288,7 +288,8 @@ def _bounded_json_input(path: str) -> dict:
 def _print(data: object) -> None:
     if type(data) is dict and data.get("ready") is False and type(data.get("reason_code")) is str:
         from codex_agents.refusal_steps import next_step
-        # S1-H1b: what to do next, always the table's fixed text (never a supplied value).
+        # S1-H1b: what to do next for every refusal with a reason code, always the table's fixed text
+        # (never a supplied value). A not-ready reply without one is a report, not a refusal.
         data = {**data, "next_step": next_step(data["reason_code"])}
     print(json.dumps(data, indent=2, sort_keys=True))
 
