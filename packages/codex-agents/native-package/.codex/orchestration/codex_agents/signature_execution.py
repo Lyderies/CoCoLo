@@ -126,7 +126,7 @@ def _cleanup_process(context):
         return False
 
 
-def _cleanup_process_checked(context):
+def _cleanup_process_checked(context, timeout_s=None):
     if context.spawn_ambiguous:
         return False
     process = context.process
@@ -144,7 +144,7 @@ def _cleanup_process_checked(context):
                     # check. No external ps call/group signal/foreign PID input.
                     process.kill()
         try:
-            process.wait(timeout=context.cleanup_ns / 1_000_000_000)
+            process.wait(timeout=context.cleanup_ns / 1_000_000_000 if timeout_s is None else timeout_s)
         except (OSError, subprocess.TimeoutExpired):
             return False
         context.reaped = True
@@ -157,6 +157,33 @@ def _cleanup_process_checked(context):
     context.tree = None
     context.guarded = False
     context.reaped = False
+    return True
+
+
+def children_ended(context):
+    """O0c M8: True only when no process this unconfirmed execution started can still run.
+
+    The evidence is the normal release's own (`_cleanup_process_checked`): every helper root it started
+    was reaped by this process after a fresh birth check, and had reported ready from inside its
+    no-fork confinement, so it could have had no descendant. A root left unreaped is killed (only that
+    actual Popen child, after the birth check) and reaped without waiting; one not reaped yet is asked
+    again at the next check. A spawn that may have started a child it holds no handle for is never
+    proven gone. Its scratch folder is removed when it can be (a file, not a child). Never raises."""
+    try:
+        if context.spawn_ambiguous:
+            return False
+        if context.process is not None and not _cleanup_process_checked(context, timeout_s=0):
+            return False
+        if context.process is not None:
+            return False
+    except BaseException:  # noqa: BLE001 - nothing proven
+        return False
+    try:
+        if context.scratch is not None:
+            shutil.rmtree(context.scratch)
+            context.scratch = None
+    except BaseException:  # noqa: BLE001 - a folder left behind holds no child
+        pass
     return True
 
 

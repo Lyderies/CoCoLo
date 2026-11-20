@@ -53,13 +53,10 @@ def decide(notes, idle, previous, *, now_ms, mono_ns=None):
     lane, cause = stuck
     idle = idle if type(idle) is dict else {}
     held = {'run_slots': list(idle.get('run_slots') or []), 'probes': list(idle.get('probes') or []),
-            # Kept work is what makes it stuck; busy or queued work is still running (H1c-2).
-            # C3: kept work counts too, except the stuck lane's own (and billing's when the probe worker
-            # is stuck, since its kept jobs are what hold it).
-            'lanes': {name: count for name in LANES
-                      if (count := notes[name]['busy'] + notes[name]['queued']
-                          + (0 if name == lane or (lane == 'probe_worker' and name == 'billing')
-                             else notes[name]['kept']))}}
+            # Busy or queued work is still running (H1c-2). O0c M8 (replacing C3): kept work, in any lane,
+            # is held unknown work the restart exists to end, so it never blocks one; what C3 guarded
+            # against, a child that may still run, is checked by `check` before any restart.
+            'lanes': {name: count for name in LANES if (count := notes[name]['busy'] + notes[name]['queued'])}}
     if type(idle) is not dict or 'run_slots' not in idle or 'probes' not in idle:
         held['unknown'] = True  # the ledger could not say: never restart blind
     if any(held.values()):
@@ -78,9 +75,14 @@ def decide(notes, idle, previous, *, now_ms, mono_ns=None):
     return {'action': 'restart', 'lane': lane, 'cause': cause, 'held': held}
 
 
-def check(read_notes, read_idle, previous, *, now_ms, mono_ns=None):
+def check(read_notes, read_idle, previous, *, now_ms, mono_ns=None, read_children=None):
     """The decision from callables that may fail: notes that cannot be read never restart; a ledger
-    that cannot say means wait (H1c-6). Never raises."""
+    that cannot say means wait (H1c-6). Never raises.
+
+    O0c M8-M10: a restart frees every slot the account holds in memory, so it happens only once
+    `read_children` (the account host's `unended_children`) says every child its lanes started is
+    proven gone. It is asked only when a restart is due; it returns the lanes whose children are not,
+    and while any is (or it cannot say) the decision is `wait`, naming them in `held['children']`."""
     try:
         notes = read_notes()
     except Exception:
@@ -90,9 +92,21 @@ def check(read_notes, read_idle, previous, *, now_ms, mono_ns=None):
     except Exception:
         idle = None
     try:
-        return decide(notes, idle, previous, now_ms=now_ms, mono_ns=mono_ns)
+        decision = decide(notes, idle, previous, now_ms=now_ms, mono_ns=mono_ns)
     except Exception:
         return {'action': 'ok', 'lane': None, 'cause': None, 'held': None}
+    if decision['action'] != 'restart':
+        return decision
+    try:
+        pending = read_children()
+        if type(pending) not in (list, tuple) or any(name not in LANES for name in pending):
+            raise ValueError()
+        pending = sorted(set(pending))
+    except Exception:
+        pending = ['unknown']  # never restart blind
+    if pending:
+        return {**decision, 'action': 'wait', 'held': {**decision['held'], 'children': pending}}
+    return decision
 
 
 def record_restart(state_root, *, lane, cause, now_ms, mono_ns) -> bool:

@@ -659,6 +659,11 @@ def _restart_attention(decision, this_project=None):
         named = [f"{name} ({count})" for name, count in sorted(lanes.items())
                  if name in _LANE_LABELS and account_integer(count)]
         parts.append("work in lane(s) " + ', '.join(named))
+    children = held.get('children')
+    if type(children) is list and children:  # O0c M8-M10: the restart waits until they are proven gone
+        named = [_LANE_LABELS[name] for name in children if name in _LANE_LABELS]
+        parts.append(f"a child process of the {', '.join(named)} lane(s) may still be running" if named
+                     else "it cannot yet say that every child process it started has ended")
     if held.get('unknown') is True:
         parts.append("the ledger could not say what is running")
     what = ', '.join(parts) or 'work still running'

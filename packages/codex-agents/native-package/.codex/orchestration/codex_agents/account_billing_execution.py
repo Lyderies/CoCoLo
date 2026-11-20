@@ -109,6 +109,19 @@ class AccountBillingExecutions:
         handle = self._reservations.get(reservation)
         return handle is None or self._job(handle).ticket is not None
 
+    def child_ended(self, reservation):
+        """O0c M10: whether no model this reservation's preparation launched can still be running: its
+        worker is not executing and its ticket was confirmed cleaned or never started a child. With no
+        preparation left (never prepared, or retired after confirmed cleanup), nothing runs."""
+        self._guard()
+        handle = self._reservations.get(reservation)
+        if handle is None:
+            return True
+        job = self._jobs[handle]
+        if job.ticket is None and self.ticketed(reservation):
+            return False  # a ticket this proof does not hold (C9d): never settled
+        return self._workers.children_ended(job.worker, job.ticket)
+
     def snapshot(self, handle):
         job = self._job(handle)
         actual = self._workers.snapshot(job.worker)
