@@ -137,7 +137,7 @@ REASON_CODES = frozenset({
     # longer counted), or not yet, because something of it may still run.
     'run_lost', 'run_lost_held',
     # The project's result store has no free place (0.3.4 R3): close finished orchestrations.
-    'result_capacity_full',
+    'result_capacity_full', 'result_capacity_busy',
 }) | PREPARATION_STAGE_REASONS
 _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 'assignment', 'task', 'route',
                     'parent_grant'}
@@ -146,6 +146,9 @@ _ACTIVE = frozenset({'recording_registration', 'reading', 'preparing', 'observin
                      'registering', 'provenance', 'consuming', 'closing', 'settling', 'withdrawing', 'fencing'})
 # A run that can never launch closes itself through these, then ends 'failed' and closed.
 _CLOSING = frozenset({'closing', 'settling', 'withdrawing', 'fencing'})
+# O10 RC-1: the store's capacity refusals, as the run's failure reasons.
+_CAPACITY_REASONS = {'history_result_capacity': 'result_capacity_full',
+                     'history_result_capacity_busy': 'result_capacity_busy'}
 _AFTER = frozenset({'ready', 'reporting', 'terminal', 'acknowledging', 'cleanup', 'releasing', 'retiring', 'released'})
 
 
@@ -976,16 +979,16 @@ class RunDriver:
             try:
                 run.persistence = lane.prepare_lease(run.lease, run.prepared_inputs.worker)
             except HistoryError as error:
-                if error.reason_code != 'history_result_capacity':
+                if error.reason_code not in _CAPACITY_REASONS:
                     raise
-                self._fail(run, 'result_capacity_full')  # 0.3.4 R3: named, never the generic run_failed.
+                self._fail(run, _CAPACITY_REASONS[error.reason_code])  # 0.3.4 R3, O10 RC-1: named
                 return
             run.state = 'leasing'
         elif run.state == 'leasing':
             snapshot = lane.snapshot(run.persistence)
             state = snapshot['state']
-            if state == 'failed' and snapshot['reason_code'] == 'history_result_capacity':
-                self._fail(run, 'result_capacity_full')  # 0.3.4 R3
+            if state == 'failed' and snapshot['reason_code'] in _CAPACITY_REASONS:
+                self._fail(run, _CAPACITY_REASONS[snapshot['reason_code']])  # 0.3.4 R3, O10 RC-1
                 return
             if state != 'preparing':
                 lane.arm(run.persistence)

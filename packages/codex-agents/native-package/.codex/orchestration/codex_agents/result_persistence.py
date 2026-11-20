@@ -263,7 +263,7 @@ class ResultPersistenceLane:
                     raise HistoryError("history_conflict")
                 return previous
             if len(self._jobs) >= self._maximum:
-                raise HistoryError("history_result_capacity")
+                raise HistoryError("history_result_capacity_busy")  # O10 RC-1: running results
         with self._pool._registry._lock:
             original = self._pool._job(worker_handle)
             if original.state != "prepared" or type(original.payload) is not bytes:

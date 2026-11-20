@@ -3944,6 +3944,9 @@ def main() -> int:
         if exc.reason_code == "result_capacity_full":
             error = ("the project's result store is full: close finished orchestrations "
                      "(learning-close-orchestration), or wait for their results to pass their retention")
+        elif exc.reason_code == "result_capacity_busy":  # O10 RC-1
+            error = ("the space for results is held by children still running in this project: "
+                     "wait for them to finish, then dispatch again")
         _print({"ready": False, "error": error, "reason_code": exc.reason_code})
         return 2
     except RuntimeOpenError as exc:

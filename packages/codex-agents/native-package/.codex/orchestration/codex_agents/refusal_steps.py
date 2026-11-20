@@ -13,6 +13,8 @@ EXACT = {
     'status_ledger_busy': "The collector's records were busy: run learning-status again in a moment.",  # S1-H1a-6c
     'result_capacity_full': "Close finished orchestrations (learning-close-orchestration), or wait for their "
                             "results to pass their retention.",
+    'result_capacity_busy': "Children still running in this project hold the space for results: wait for them "
+                            "to finish, then dispatch again.",  # O10 RC-1
     'open_service_other_version': "The project's service is an earlier version's: when no run is active, start "
                                   "this version's with learning-start-project-service.",
     'open_service_not_running': "Start the project's service with learning-start-project-service, then try again.",

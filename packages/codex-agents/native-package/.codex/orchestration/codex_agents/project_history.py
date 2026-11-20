@@ -984,7 +984,7 @@ class ProjectHistory:
         try:
             self._check_result_capacity()
         except HistoryError as error:
-            if error.reason_code != "history_result_capacity":
+            if error.reason_code not in {"history_result_capacity", "history_result_capacity_busy"}:
                 raise
             try:
                 self.expire_results(limit=RECLAIM_BATCH)
@@ -998,6 +998,17 @@ class ProjectHistory:
         # Only live entries count (0.3.4 R1): an expired result keeps its tombstone, so its attempt can
         # never be armed again, but no longer takes a place. In 0.8.29 every row ever written counted,
         # so a project could record only max_entries results in its whole life.
+        entries, charged, written = self._result_counts()
+        if entries >= self._result_capacity.max_entries:
+            raise HistoryError("history_result_capacity")
+        if (charged + 1) * MAX_RESULT_BODY_BYTES + written > self._result_capacity.max_reserved_bytes:
+            # O10 RC-1: running results hold the space (busy: wait for them); with none running, the
+            # written results fill it (full).
+            raise HistoryError("history_result_capacity_busy" if charged else "history_result_capacity")
+
+    def _result_counts(self):
+        """Live entries, results in flight (charged a whole body) and bytes written: the counts the
+        result limits use, and so the counts learning-status shows (0.3.4 R9)."""
         counts = self._connection.execute(
             "SELECT SUM(CASE WHEN state!='expired' THEN 1 ELSE 0 END),"
             "SUM(CASE WHEN state='reserved' OR (state!='expired' AND body_size IS NULL) THEN 1 ELSE 0 END),"
@@ -1020,9 +1031,7 @@ class ProjectHistory:
             if value.state not in {"bound", "expired"}:
                 entries += 1
                 charged += 1
-        if (entries >= self._result_capacity.max_entries
-                or (charged + 1) * MAX_RESULT_BODY_BYTES + written > self._result_capacity.max_reserved_bytes):
-            raise HistoryError("history_result_capacity")
+        return entries, charged, written
 
     def _insert_result_reservation(self, value):
         binding = value.binding

@@ -8,7 +8,7 @@ from .account_claim_contracts import CLAIM_DENIAL_CODES
 from .preparation_reasons import PREPARATION_STAGE_REASONS
 
 FAILED_BEFORE_OPEN_REASONS = frozenset({
-    'run_failed', 'run_unavailable', 'result_capacity_full', 'run_account_call_failed', 'run_client_changed',
+    'run_failed', 'run_unavailable', 'result_capacity_full', 'result_capacity_busy', 'run_account_call_failed', 'run_client_changed',
     'service_stopped',
 }) | PREPARATION_STAGE_REASONS | CLAIM_DENIAL_CODES
 # Registrations kept per orchestration (the report's MAX_RUNS).

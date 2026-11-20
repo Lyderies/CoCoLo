@@ -56,7 +56,7 @@ START_REASONS = frozenset({
     # An earlier service's run the project's service is still closing (0.3.3, C3d).
     'run_settling',
     # The project's result store has no free place (0.3.4 R3).
-    'result_capacity_full',
+    'result_capacity_full', 'result_capacity_busy',
 }) | ACCOUNT_REASON_CODES | CLAIM_DENIAL_CODES | PREPARATION_STAGE_REASONS
 # A run whose project service stopped or crashed: ended abandoned with an unknown outcome.
 # Its capacity is released once the next service saw nothing of it still running.
