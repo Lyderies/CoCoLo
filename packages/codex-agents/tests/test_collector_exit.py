@@ -311,7 +311,8 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
     def wait_gone(self):
         end = time.monotonic() + 20
         while self.processes('collector_host.py'):
-            self.assertLess(time.monotonic(), end, 'collector did not stop')
+            self.assertLess(time.monotonic(), end,
+                            f'collector did not stop: {self.late_stop()}' if time.monotonic() >= end else '')
             time.sleep(.05)
 
     def ready_status(self):

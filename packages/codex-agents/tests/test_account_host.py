@@ -57,6 +57,17 @@ class AccountHostTests(unittest.TestCase):
                                 stdout=subprocess.PIPE, text=True, check=False)
         return sorted(int(value) for value in listed.stdout.split())
 
+    def late_stop(self):
+        """O10 SD: after a missed stop deadline, give the collector up to 30 s more, then report its
+        exit record's step timings (stop_ms) so the slow step is named. Diagnostic only."""
+        from codex_agents import collector_exit
+        end = time.monotonic() + 30
+        while self.processes('collector_host.py') and time.monotonic() < end:
+            time.sleep(.1)
+        record = collector_exit.read_exit(self.state.root)
+        return {'stopped_after_s': round(30 - max(0.0, end - time.monotonic()), 1),
+                'cause': record and record.get('cause'), 'stop_ms': record and record.get('stop_ms')}
+
     def stop_services(self):
         for pid in self.processes('project_host.py'):
             os.kill(pid, signal.SIGTERM)
@@ -70,7 +81,7 @@ class AccountHostTests(unittest.TestCase):
                 ages = subprocess.run(['ps', '-o', 'pid=,etime=,stat=', '-p',
                                        ','.join(str(pid) for pids in left.values() for pid in pids) or '0'],
                                       stdout=subprocess.PIPE, text=True, check=False).stdout.split('\n')
-                self.fail(f'service processes did not stop on SIGTERM: {left} {ages}')
+                self.fail(f'service processes did not stop on SIGTERM: {left} {ages} {self.late_stop()}')
             time.sleep(.05)
 
     def cli(self, command, *args, project=None, expected=0, terminal=False):
@@ -228,7 +239,7 @@ class AccountHostTests(unittest.TestCase):
             os.kill(pid, signal.SIGTERM)
         end = time.monotonic() + 20
         while self.processes('collector_host.py'):
-            self.assertLess(time.monotonic(), end)
+            self.assertLess(time.monotonic(), end, self.late_stop() if time.monotonic() >= end else '')
             time.sleep(.05)
         self.assertFalse(Path(endpoint).exists())
         self.assertFalse((self.paths.root / 'client-runtimes' / 'account.cap').exists())
