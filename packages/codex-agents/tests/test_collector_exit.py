@@ -45,6 +45,25 @@ class ExitRecordTests(unittest.TestCase):
                                   detail='not a fixed cause /x')
         self.assertIsNone(collector_exit.read_exit(self.root)['error'])
 
+    def test_SD1_each_shutdown_step_is_timed_in_the_record(self):
+        stop = {'account_close': 3, 'account_drain': 10_000, 'server_stop': 5_012}
+        collector_exit.write_exit(self.root, started_at_ms=5, cause='signal', error=None, stop_ms=stop)
+        self.assertEqual(stop, collector_exit.read_exit(self.root)['stop_ms'])
+        collector_exit.write_exit(self.root, started_at_ms=5, cause='signal', error=None)  # a step not reached
+        record = collector_exit.read_exit(self.root)
+        self.assertEqual('signal', record['cause'])
+        self.assertNotIn('stop_ms', record)
+
+    def test_SD1_a_malformed_stop_timing_is_not_written_and_not_read(self):
+        for stop in ({'account_close': -1, 'account_drain': 0, 'server_stop': 0}, {'account_close': 1.5},
+                     {'account_close': 0, 'account_drain': 0, 'server_stop': 0, 'other': 0}, ['x'], 'x'):
+            with self.subTest(stop=stop):
+                collector_exit.write_exit(self.root, started_at_ms=5, cause='signal', error=None, stop_ms=stop)
+                self.assertNotIn('stop_ms', collector_exit.read_exit(self.root))  # left out, record kept
+                record = {'schema_version': 1, 'stopped_at_ms': 1, 'started_at_ms': 1, 'cause': 'signal',
+                          'error': None, 'where': [], 'stop_ms': stop}
+                self.assertIsNone(collector_exit.checked(record))
+
     def test_C10_a_record_round_trips_owner_only(self):
         collector_exit.write_exit(self.root, started_at_ms=5, cause='error', error=RuntimeError('a secret value'))
         record = collector_exit.read_exit(self.root)
@@ -336,6 +355,9 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         self.wait_gone()
         record, _ = self.previous_exit()
         self.assertEqual('requested', record['cause'])
+        # SD1: the host times its own shutdown steps, and status shows them with the previous exit.
+        self.assertEqual({'account_close', 'account_drain', 'server_stop'}, set(record['stop_ms']))
+        self.assertTrue(all(type(value) is int and value >= 0 for value in record['stop_ms'].values()))
 
     def test_C10_an_error_in_the_account_loop_is_recorded_without_its_message(self):
         process = subprocess.Popen([sys.executable, '-I', '-B', '-S', '-c', WRAPPER, str(ORCHESTRATION_ROOT),
