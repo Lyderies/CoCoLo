@@ -11824,7 +11824,8 @@ class CollectorServer:
     def start(self) -> None:
         if not hasattr(socket, "AF_UNIX") or fcntl is None:
             raise CollectorError("local Unix sockets are unavailable")
-        if self._thread and self._thread.is_alive():
+        if (self._thread and self._thread.is_alive()) or (self._sweeps and self._sweeps.is_alive()):
+            # G4: refused before anything changes, so a sweep left from a stop stays cancelled.
             raise CollectorError("collector is already running")
         self._stop.clear()
         self._sweeps_stop.clear()  # before the thread starts, so a stop right after start is kept (G1)
@@ -11860,10 +11861,21 @@ class CollectorServer:
         listener.listen(16)
         listener.settimeout(0.1)
         self._started_at_ms = time.time_ns() // 1_000_000
+        # S1-H1a-6b: the sweeps run on their own thread, so no request waits behind one. G5: one that
+        # cannot start is a start-up failure, before ready is published.
+        try:
+            sweeps = threading.Thread(target=self._sweep_loop, name="collector-sweeps", daemon=True)
+            sweeps.start()
+        except Exception as exc:
+            self._startup_error = exc
+            self._ready.set()
+            listener.close()
+            self._socket = None
+            with contextlib.suppress(FileNotFoundError):
+                self.state.socket.unlink()
+            return
+        self._sweeps = sweeps
         self._ready.set()
-        # S1-H1a-6b: the sweeps run on their own thread, so no request waits behind one.
-        self._sweeps = threading.Thread(target=self._sweep_loop, name="collector-sweeps", daemon=True)
-        self._sweeps.start()
         try:
             while not self._stop.is_set():
                 try:
