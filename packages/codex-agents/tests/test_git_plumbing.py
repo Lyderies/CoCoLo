@@ -349,15 +349,20 @@ class RepositoryLayoutTests(unittest.TestCase):
         self.assertEqual("0", git_plumbing.GIT_ENVIRONMENT["GIT_TERMINAL_PROMPT"])
         self.assertEqual("", git_plumbing.GIT_ENVIRONMENT["GIT_ALLOW_PROTOCOL"])
         self.assertEqual("1", git_plumbing.GIT_ENVIRONMENT["GIT_NO_LAZY_FETCH"])
-        source = "".join(
-            path.read_text() for path in sorted(
-                (BUNDLE_ROOT / ".codex" / "orchestration" / "codex_agents").glob("*.py")
-            )
-        )
-        # Every git call in the runtime is plumbing that reads refs and objects.
-        calls = re.findall(r"(?:run_git\(|_git\(|\brun\(\[)[^)]*?\"([a-z-]+)\"", source)
+        modules = sorted((BUNDLE_ROOT / ".codex" / "orchestration" / "codex_agents").glob("*.py"))
+        pattern = r"(?:run_git\(|_git\(|\brun\(\[)[^)]*?\"([a-z-]+)\""
+        # Every git call in the runtime is plumbing that reads refs and objects, except
+        # hardened_git (M3-16, M3-17), whose writing plumbing its own allow-list confines to
+        # COCOLO's private object store (tests.test_hardened_git proves it).
+        source = "".join(path.read_text() for path in modules if path.name != "hardened_git.py")
+        calls = re.findall(pattern, source)
         self.assertTrue(calls)
         self.assertLessEqual(set(calls), {"rev-parse", "ls-tree", "cat-file", "config"})
+        hardened = re.findall(pattern, (modules[0].parent / "hardened_git.py").read_text())
+        self.assertTrue(hardened)
+        self.assertLessEqual(set(hardened), {
+            "version", "rev-parse", "ls-tree", "cat-file", "config", "read-tree", "apply", "write-tree",
+        })
         self.assertNotIn('"git", "-C"', source)
 
 
