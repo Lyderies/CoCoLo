@@ -19,6 +19,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - Leases a stopped service left are released by the service's own regular pass; a restarted service recognises what
   its predecessor left; leases that were never admitted no longer use up cleanup slots.
 - Claim and capacity lookups stay fast as a project's history grows.
+- A run the account settled as lost, or released as crashed, no longer keeps a cleanup receipt counted against
+  the project's limit of 4,096 (`learning-status` -> `account_capacity.cleanup_receipts`); before, each such run
+  counted for good, and at the limit every new run of the project was refused `claim_cleanup_unavailable`.
+  Runs lost or crashed before the update stop counting too. A late release for such a run is refused plainly
+  (`claim_cleanup_conflict`).
 - A collector's stop signal is never lost, whatever it was doing when the signal arrived.
 - The setup wizard is now Python. `./setup.sh` is a short launcher: it checks `python3` before it
   runs, as before, then starts the wizard, which shows the same screens, asks the same questions and
