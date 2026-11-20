@@ -11213,6 +11213,24 @@ class LearningLedger:
                 (project_id, code, timestamp),
             )
 
+    def machine_idle(self) -> dict[str, list[str]]:
+        """S1-H1c: the projects that still have a run slot counted or an admitted probe, read only. A
+        slot counts unless it is past crashed_claim's grace on both clocks (or rebooted) or is an
+        earlier version's slot past LEGACY_RUN_MAX_MS; this errs on the side of "still running"."""
+        now_ms, mono = time.time_ns() // 1_000_000, time.monotonic_ns()
+        with self._lock:
+            runs = self._connection.execute(
+                "SELECT DISTINCT project_id FROM active_run_capacity WHERE released_at_ms IS NULL "
+                "AND NOT (deadline_at_ms IS NOT NULL AND deadline_at_ms+:grace<:now AND "
+                "(execution_deadline_ns+:grace_ns<=:mono OR clock_reference_ns>:mono)) "
+                "AND NOT (deadline_at_ms IS NULL AND claimed_at_ms<:legacy) ORDER BY project_id",
+                {"now": now_ms, "mono": mono, "grace": CRASHED_CLAIM_GRACE_MS,
+                 "grace_ns": CRASHED_CLAIM_GRACE_MS * 1_000_000, "legacy": now_ms - LEGACY_RUN_MAX_MS}).fetchall()
+            probes = self._connection.execute(
+                "SELECT DISTINCT project_id FROM account_billing_probe_requests WHERE state='admitted' "
+                "ORDER BY project_id").fetchall()
+        return {"run_slots": [row[0] for row in runs], "probes": [row[0] for row in probes]}
+
     def account_slot_health(self, project_id: str) -> dict[str, Any]:
         """S1-H1a: this project's account slots still held, read only. Never waits on the ledger lock
         (`ledger_busy`), and stops at SLOT_HEALTH_STEPS SQLite steps (`budget_spent`, never a partial

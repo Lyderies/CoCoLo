@@ -19,7 +19,9 @@ import sys
 import time
 from pathlib import Path
 
-CAUSES = frozenset({'signal', 'requested', 'state_removed', 'thread_ended', 'error'})
+CAUSES = frozenset({'signal', 'requested', 'state_removed', 'thread_ended', 'error', 'account_restart'})
+# S1-H1c: a self-restart records only the fixed cause that made the account stuck, in `error`.
+_RESTART_CAUSE = re.compile(r'[a-z][a-z_]{2,63}')
 MAX_LOCATIONS = 8
 MAX_RECORD_BYTES = 4096
 _TYPE = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
@@ -90,13 +92,15 @@ def _locations(error):
     return found
 
 
-def write_exit(state_root, *, started_at_ms, cause, error) -> None:
+def write_exit(state_root, *, started_at_ms, cause, error, detail=None) -> None:
     """Best effort: a record that cannot be written is skipped, and stopping carries on."""
     with contextlib.suppress(Exception):
         record = {'schema_version': 1, 'stopped_at_ms': time.time_ns() // 1_000_000,
                   'started_at_ms': started_at_ms if type(started_at_ms) is int else None,
                   'cause': cause if cause in CAUSES else 'error',
-                  'error': _error_name(error) if cause == 'error' else None,
+                  'error': (_error_name(error) if cause == 'error' else
+                            detail if cause == 'account_restart' and type(detail) is str
+                            and _RESTART_CAUSE.fullmatch(detail) else None),
                   'where': _locations(error) if cause == 'error' else []}
         if record['cause'] == 'error' and record['error'] is None:
             record['error'] = 'Exception'
@@ -133,6 +137,10 @@ def checked(record):
         if record['cause'] == 'error':
             # An error always names its type.
             if type(record['error']) is not str or not _TYPE.fullmatch(record['error']):
+                return None
+        elif record['cause'] == 'account_restart':
+            if record['where'] or (record['error'] is not None and (
+                    type(record['error']) is not str or not _RESTART_CAUSE.fullmatch(record['error']))):
                 return None
         elif record['error'] is not None or record['where']:
             return None
