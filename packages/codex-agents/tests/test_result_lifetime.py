@@ -104,7 +104,9 @@ class ResultLifetimeTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
         self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
         capacity = self.cli('learning-status')['account_capacity']
-        self.assertEqual({'observations', 'cleanup_receipts'}, set(capacity))
+        # Corrected for O0b B0 (narrowed, requirement): status also shows the run bindings and billing
+        # probes still held, against their limits.
+        self.assertEqual({'observations', 'cleanup_receipts', 'pending_bindings', 'billing_probes'}, set(capacity))
         for name in capacity:
             self.assertEqual(4096, capacity[name]['limit'], name)
             self.assertIs(int, type(capacity[name]['live']), name)

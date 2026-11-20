@@ -53,6 +53,14 @@ class HoldLifecycleTests(ResultLifetimeTests):
         self.wait_for(lambda: self.held()['pending_bindings'] == 0, seconds=30)
         self.assertEqual({'live_results': 0, 'account_slots': 0, 'pending_bindings': 0}, self.held())
 
+    def test_B0_narrowed_status_shows_a_held_binding(self):
+        """O0b B0 (narrowed): learning-status shows each binding still held, so the hold is never invisible."""
+        before = self.cli('learning-status')['account_capacity']['pending_bindings']
+        self.open_run()
+        after = self.cli('learning-status')['account_capacity']['pending_bindings']
+        self.assertEqual(before['live'] + 1, after['live'])
+        self.assertEqual(4096, after['limit'])
+
     def test_B0_6_a_completed_run_frees_every_hold(self):
         """Control: today's successful lifecycle already frees what it took (once recorded)."""
         context, route_path, orchestration, run_handle = self.open_run()
