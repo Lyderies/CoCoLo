@@ -870,6 +870,55 @@ class RunHoldTests(ActiveRunCapacityTests):
             self.assertIn("run_holds_due", plan, statement)
             self.assertNotIn("host_run_bindings_live", plan, statement)
 
+    def steps_of(self, call):
+        """SQLite VM steps of one call (a progress handler counting every step) and its result."""
+        steps = [0]
+
+        def count():
+            steps[0] += 1
+            return 0
+        self.ledger._connection.set_progress_handler(count, 1)
+        try:
+            result = call()
+        finally:
+            self.ledger._connection.set_progress_handler(None, 0)
+        return steps[0], result
+
+    def rolled_back_history(self):
+        """A claimed binding released `expired` by the sweep, then the clock back at the claim's time, so the
+        binding (and 2,000 historical copies added after the first measurement) are not past expiry on it."""
+        self.case.claim()
+        binding = next(b for b in self.bindings() if b["binding_state"] == "pending")
+        row = self.rows()[0]
+        self.assertEqual(1, self.sweep(binding["expires_at_ms"] + 1, row["clock_reference_ns"] + 1))
+        self.assertLess(self.ledger._clock_ms(), binding["expires_at_ms"])
+        return binding["expires_at_ms"]
+
+    def test_RS_A_G12_the_status_count_after_a_rollback_does_not_grow_with_history(self):
+        """Round 2 G12: the status's binding count reads held register rows, so 2,000 released claimed
+        bindings back inside their expiry by a clock rollback cost no work and are not counted."""
+        expires = self.rolled_back_history()
+        before, report = self.steps_of(lambda: self.ledger.account_capacity(self.project))
+        self.add_released_claimed_history(2000, expires)
+        after, again = self.steps_of(lambda: self.ledger.account_capacity(self.project))
+        self.assertEqual(report["pending_bindings"], again["pending_bindings"])
+        self.assertLessEqual(after, before + 200, (before, after))
+
+    def test_RS_A_G12_the_legacy_open_cap_after_a_rollback_does_not_grow_with_history(self):
+        """Round 2 G12: open_host_run's cap reads held register rows: an open does the same work with 2,000
+        released claimed bindings back inside their expiry, and still admits by the status's count."""
+        expires = self.rolled_back_history()
+        self.new_attempt()  # warm: the first open compiles what the second reuses
+        before, _ = self.steps_of(self.new_attempt)
+        self.add_released_claimed_history(2000, expires)
+        after, _ = self.steps_of(self.new_attempt)
+        self.assertLessEqual(after, before + 500, (before, after))
+        live = self.ledger.account_capacity(self.project)["pending_bindings"]["live"]
+        with mock.patch.object(learning_store, "MAX_PENDING_HOST_RUNS", live + 1):
+            self.new_attempt()  # the cap's last place, by the status's count
+            with self.assertRaisesRegex(LedgerError, "pending host run capacity is exhausted"):
+                self.new_attempt()
+
 
 def load_tests(loader, tests, pattern):
     """Only this module's own tests: the inherited capacity tests run in test_active_run_capacity."""

@@ -36,6 +36,8 @@ import tests.support  # noqa: E402,F401  (puts the package on the path)
 from tests.test_run_holds import RunHoldTests  # noqa: E402
 
 from codex_agents import admission_metadata, learning_store  # noqa: E402
+from codex_agents.learning_contracts import content_digest  # noqa: E402
+from codex_agents.run_holds_schema import DECISION_RELEASED, check_run_holds_consistency  # noqa: E402
 
 BATCH_BUDGET_MS = 50.0
 HOLD_BUDGET_MS = float(learning_store.LEDGER_LOCK_WAIT_MS)
@@ -130,13 +132,26 @@ def add_expired_claimed_runs(case: RunHoldTests, count: int, expired_at: int) ->
     for row in rows["capacity_completions"]:
         tokens.add(row["terminal_record_id"])
 
-    def copied(value, index):
+    slot = next(row for row in rows["run_holds"] if row["kind"] == "run_slot")
+    if slot["evidence"] is None:
+        raise AssertionError("the drained run's decision has no evidence")
+
+    def mapping(index):
+        """Each copy's own identifiers; its decision's evidence names them, so its receipt (the slot's release
+        digest) is recomputed from the copied evidence, as the validator checks (G1, G10)."""
+        replaced = {token: hashlib.sha256(b"%d:" % index + token.encode()).hexdigest()[:len(token)]
+                    for token in tokens}
+        replaced[slot["receipt"]] = content_digest(json.loads(copied(slot["evidence"], replaced)))
+        return replaced
+
+    def copied(value, replaced):
         if type(value) is not str:
             return value
-        for token in tokens:
+        for token, replacement in replaced.items():
             if token in value:
-                value = value.replace(token, hashlib.sha256(b"%d:" % index + token.encode()).hexdigest()[:len(token)])
+                value = value.replace(token, replacement)
         return value
+    maps = [mapping(index) for index in range(count)]
     connection.execute("BEGIN IMMEDIATE")
     try:
         for table in RUN_TABLES:
@@ -145,14 +160,14 @@ def add_expired_claimed_runs(case: RunHoldTests, count: int, expired_at: int) ->
                 verb = "INSERT OR REPLACE" if table == "run_holds" else "INSERT"
                 connection.executemany(
                     f"{verb} INTO {table}({','.join(columns)}) VALUES({','.join('?' * len(columns))})",
-                    (tuple(copied(row[c], index) for c in columns) for index in range(count)))
+                    (tuple(copied(row[c], replaced) for c in columns) for replaced in maps))
         connection.execute("COMMIT")
     except BaseException:
         connection.execute("ROLLBACK")
         raise
 
 
-def startup_ms(case: RunHoldTests) -> float:
+def startup_ms(case: RunHoldTests) -> tuple[float, list[tuple[float, str]]]:
     """The ledger's warm start-up: one open discarded, then the median of five (each closed after)."""
     fixture = case.fixture
     case.ledger.close()
@@ -165,6 +180,7 @@ def startup_ms(case: RunHoldTests) -> float:
         ledger.close()
         if start:
             times.append(elapsed)
+    statements = open_statements(case)
     ledger = learning_store.LearningLedger(fixture.state, client_capabilities=fixture.clients,
                                            allow_schema_upgrade=True)
     case.case.ledger = ledger
@@ -172,7 +188,63 @@ def startup_ms(case: RunHoldTests) -> float:
     clock = mock.patch.object(ledger, "_clock_ms", side_effect=lambda: case.case.stamp)  # the fixture's clock
     clock.start()
     case.addCleanup(clock.stop)
+    return statistics.median(times), statements
+
+
+def median_ms(call) -> float:
+    """Warm: one call discarded, then the median of five."""
+    times = []
+    for start in range(STARTS + 1):
+        begun = time.perf_counter()
+        call()
+        if start:
+            times.append((time.perf_counter() - begun) * 1000)
     return statistics.median(times)
+
+
+def open_statements(case: RunHoldTests) -> list[tuple[float, str]]:
+    """Every statement one ledger open runs, with its time (the open's connection is traced and timed)."""
+    from codex_agents import sql_read_budget
+    fixture, timed, real = case.fixture, [], sql_read_budget.SQLReadConnection.execute
+
+    def execute(self, sql, *arguments):
+        begun = time.perf_counter()
+        try:
+            return real(self, sql, *arguments)
+        finally:
+            timed.append(((time.perf_counter() - begun) * 1000, " ".join(sql.split())))
+    with mock.patch.object(sql_read_budget.SQLReadConnection, "execute", execute):
+        learning_store.LearningLedger(fixture.state, client_capabilities=fixture.clients,
+                                      allow_schema_upgrade=True).close()
+    return timed
+
+
+def startup_parts(case: RunHoldTests, statements: list[tuple[float, str]]) -> dict:
+    """G11: RS-A's own open-time work (the register checks, and its decision exemption in the completion
+    coverage check) apart from the older checks, each the warm median of five on the open ledger."""
+    connection = case.ledger._connection
+    exemption = f"AND NOT ({DECISION_RELEASED} AND (c.terminal_record_id IS NULL OR e.owner_digest IS NOT NULL)) "
+    coverage = next(sql for _, sql in statements if "LEFT JOIN capacity_completions c" in sql
+                    and "FROM active_run_capacity a" in sql)
+    claims = next(sql for _, sql in statements if sql.startswith("SELECT 1 FROM launch_claims c LEFT JOIN "
+                                                                  "active_run_capacity a"))
+    older = " ".join(coverage.replace(" ".join(exemption.split()), "").split())
+    if older == coverage:
+        raise AssertionError("the completion coverage check no longer carries RS-A's exemption")
+
+    def run(sql):
+        return lambda: connection.execute(sql).fetchone()
+    with_exemption, without_exemption = median_ms(run(coverage)), median_ms(run(older))
+    register = median_ms(lambda: check_run_holds_consistency(connection))
+    return {
+        "register_checks_ms": round(register, 1),
+        "completion_coverage_ms": round(with_exemption, 1),
+        "completion_coverage_without_rs_a_exemption_ms": round(without_exemption, 1),
+        "rs_a_exemption_ms": round(max(0.0, with_exemption - without_exemption), 1),
+        "rs_a_added_ms": round(register + max(0.0, with_exemption - without_exemption), 1),
+        "older_claim_coverage_ms": round(median_ms(run(claims)), 1),
+        "slowest_open_statements": [[round(ms, 1), sql[:140]] for ms, sql in sorted(statements, reverse=True)[:8]],
+    }
 
 
 def empty_batch(case: RunHoldTests, now: int, monotonic: int) -> dict:
@@ -239,13 +311,15 @@ def measure(claims: int, bindings: int, history: int) -> dict:
         now, monotonic = due_clocks(case)
         without = drain(case, now, monotonic)
         without["empty_batch_after_drain"] = empty_batch(case, now, monotonic)
-        startup_before = startup_ms(case)
+        startup_before, statements = startup_ms(case)
+        parts_before = startup_parts(case, statements)
         begun = time.monotonic()
         if history:
             add_tombstones(case, history, now)
             add_expired_claimed_runs(case, history, case.case.stamp - 1)
         history_s = time.monotonic() - begun
-        startup_after = startup_ms(case)
+        startup_after, statements = startup_ms(case)
+        parts_after = startup_parts(case, statements)
         empty_with_history = empty_batch(case, now, monotonic)
         begun = time.monotonic()
         build(case, claims, bindings, "again")
@@ -264,6 +338,8 @@ def measure(claims: int, bindings: int, history: int) -> dict:
             "empty_batch_under_50_ms": all(run["ms"] < BATCH_BUDGET_MS for run in (
                 without["empty_batch_after_drain"], empty_with_history, with_history["empty_batch_after_drain"])),
             "startup_at_most_200_ms_slower": startup_after - startup_before <= STARTUP_BUDGET_MS,
+            # G11: RS-A's own open-time checks with the history, at most the start-up budget on their own
+            "rs_a_startup_checks_at_most_200_ms": parts_after["rs_a_added_ms"] <= STARTUP_BUDGET_MS,
         }
         return {
             "batch_limit": learning_store.ACCOUNT_HOLD_RELEASE_BATCH, "build_s": round(built_s, 1),
@@ -272,6 +348,7 @@ def measure(claims: int, bindings: int, history: int) -> dict:
             "without_history": without, "with_history": with_history,
             "startup_warm_median_ms_without_history": round(startup_before, 1),
             "startup_warm_median_ms_with_history": round(startup_after, 1),
+            "startup_parts_without_history": parts_before, "startup_parts_with_history": parts_after,
             "checks": checks, "within_budget": all(checks.values()),
         }
     finally:
