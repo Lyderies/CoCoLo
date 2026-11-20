@@ -14,6 +14,7 @@ import unittest
 from unittest import mock
 
 from tests.test_bridge import null_filled, result
+from tests.test_lost_run_settlement import LostRunAfterStopTests
 from tests.test_result_lifetime import ResultLifetimeTests
 
 from codex_agents import codex_preparation
@@ -61,12 +62,38 @@ class HoldLifecycleTests(ResultLifetimeTests):
         self.wait_for(lambda: self.held()['account_slots'] == 0 and self.held()['live_results'] <= 1, seconds=30)
 
 
+class LostServiceHoldTests(LostRunAfterStopTests):
+    """Holds left by a service that stops mid-run (the lost-run fixture restarts it)."""
+
+    def reservation_terminal(self, run_handle):
+        """The lost run's result reservation: (state, has a terminal), read without the service."""
+        import sqlite3
+        (path,) = list(self.state.root.rglob('history.sqlite3'))
+        connection = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
+        try:
+            row = connection.execute('SELECT state, terminal_record_id IS NOT NULL FROM result_reservations '
+                                     'WHERE run_handle=?', (run_handle,)).fetchone()
+        finally:
+            connection.close()
+        return None if row is None else (row[0], bool(row[1]))
+
+    def test_B0_2_a_reservation_left_by_a_service_that_stopped_gets_its_lost_terminal(self):
+        """B0-2 (fails on 0.8.37): the next service settles the lost run at the account, but its result
+        reservation keeps no terminal, so the orchestration can never close and the row is never purged."""
+        orchestration, run_handle = self.stopped_in('ready', [
+            {'type': 'thread.started', 'thread_id': 'orphan'}, {'sleep': 30},
+            {'type': 'turn.completed', 'usage': {'input_tokens': 1}}], reached=self.launches)
+        self.assertIsNotNone(self.reservation_terminal(run_handle))  # the hold was taken
+        self.wait_for(lambda: self.reservation_terminal(run_handle)[1], seconds=30)
+
+
 def load_tests(loader, tests, pattern):
-    """Only this module's own tests: the inherited lifetime tests run in test_result_lifetime."""
+    """Only this module's own tests: the inherited ones run in their own modules."""
     suite = unittest.TestSuite()
-    for name in loader.getTestCaseNames(HoldLifecycleTests):
-        if name in HoldLifecycleTests.__dict__:
-            suite.addTest(HoldLifecycleTests(name))
+    for case in (HoldLifecycleTests, LostServiceHoldTests):
+        for name in loader.getTestCaseNames(case):
+            if name in case.__dict__:
+                suite.addTest(case(name))
     return suite
 
 
