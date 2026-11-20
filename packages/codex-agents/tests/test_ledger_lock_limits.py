@@ -195,6 +195,17 @@ class LedgerLockLimitTests(unittest.TestCase):
         self.assertEqual([], client_runtime._ledger_waits_attention({}))
         self.assertEqual([], client_runtime._ledger_waits_attention(None))
 
+    def test_E1a_3_a_busy_status_still_shows_the_refusals(self):
+        """Review 040-m4b-e1a-code-2 (medium): the counts matter most while the ledger is busy, when the
+        project's health reply is ledger_busy."""
+        from codex_agents import client_runtime
+        report = {}
+        self.assertFalse(client_runtime._apply_health(report, {'ledger_busy': True, 'ledger_waits': {'append': 3}}))
+        self.assertEqual({'append': 3}, report['ledger_waits'])
+        health = client_runtime._account_health(report)
+        self.assertIn("The account's records were busy 3 times; requests were refused and can be retried.",
+                      health['attention'])
+
     def test_E1a_2_reader_counts_are_read_under_the_readers_lock(self):
         """Review 040-m4b-e1a-code (low): every consumer reads the count through _readers()."""
         for name in ('learning_store.py', 'learning_source_image.py'):
