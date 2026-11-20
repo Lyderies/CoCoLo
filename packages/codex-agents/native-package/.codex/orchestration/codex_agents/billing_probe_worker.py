@@ -411,13 +411,14 @@ class BillingProbeWorkers:
                                                          or self._jobs[slot.current].state == 'unknown'))
                        for slot in self._slots)
 
-    def children_ended(self, handle=None, ticket=None):
-        """O0c M10: whether no child these workers (or, given a handle, that one job) started can still run.
+    def unproven_children(self, handle=None, ticket=None):
+        """O0c M10: the children these workers (or, given a handle, that one job) started that are not
+        proven gone, as [{'pid', 'why'}]; [] when none can still run.
 
-        A job queued for, inside or just past its execution may hold a child: not proven. Otherwise
+        A job queued for, inside or just past its execution may hold a child (`running`). Otherwise
         every execution ticket must be released, confirmed cleaned (its tree proven empty, the normal
-        release's evidence) or never have tried to start a child. `ticket` adds one the job may not
-        hold (issued, then never bound). Owner thread; never raises."""
+        release's evidence) or never have had a child possible (OwnedExecutionRegistry). `ticket` adds
+        one the job may not hold (issued, then never bound). Owner thread; never raises."""
         try:
             with self._registry._lock:
                 if handle is None:
@@ -426,12 +427,16 @@ class BillingProbeWorkers:
                     job = self._jobs.get(handle) if type(handle) is ProbeWorkerHandle else None
                     jobs = [] if job is None else [job]
                 if any(job.state in {'queued', 'active', 'finishing'} for job in jobs):
-                    return False
+                    return [{'pid': None, 'why': 'running'}]
                 if handle is None:
-                    return self._registry.children_ended()
-                return all(self._registry.ticket_ended(t) for t in {*(job.ticket for job in jobs), ticket})
+                    return self._registry.unproven_children()
+                return [item for t in {*(job.ticket for job in jobs), ticket} for item in self._registry.ticket_unproven(t)]
         except Exception:
-            return False
+            return [{'pid': None, 'why': 'unchecked'}]
+
+    def children_ended(self, handle=None, ticket=None):
+        """O0c M10: whether no child these workers (or that one job) started can still run."""
+        return self.unproven_children(handle, ticket) == []
 
     def prepare(self, payload):
         self._owner()

@@ -226,9 +226,6 @@ class _Owned:
     # factory) and cleared only when the factory provably left none. With it unset when the worker
     # returns, the execution never launched: nothing is left to clean up.
     child_possible: bool = False
-    # O0c M10: set before anything that may start a child (container or process); an entry without it
-    # provably never started one.
-    spawn_attempted: bool = False
 
 
 class OwnedExecutionRegistry:
@@ -692,8 +689,6 @@ class OwnedExecutionRegistry:
         if options.get("start_new_session") is not True:
             raise ExecutionCustodyError()
         entry = self.enter(ticket)
-        with self._lock:
-            entry.spawn_attempted = True
         process = None
         try:
             launcher = self.container_launch
@@ -826,32 +821,52 @@ class OwnedExecutionRegistry:
                 entry.state = "cleaned"
             return confirmed
 
-    def children_ended(self):
-        """O0c M10: whether no execution this registry issued can still have a child: each one not yet
-        released was confirmed cleaned (its tree proven empty by `finish`) or never tried to start one.
-        Takes the registry lock; never raises."""
+    def unproven_children(self):
+        """O0c M10: the executions this registry issued whose child is not proven gone, as
+        [{'pid', 'why'}] ([] when none can still have one). Each one not yet released must be confirmed
+        cleaned (its tree proven empty by `finish`, the normal release's evidence) or never have had a
+        child possible (`child_possible`, O0c M1: set before a container start or the process factory,
+        cleared when the factory provably left none, review M2). Takes the registry lock; never raises."""
         try:
             with self._lock:
-                return all(self._entry_ended(entry) for entry in self._pending.values())
+                return [item for entry in self._pending.values() if (item := self._entry_unproven(entry))]
         except Exception:
-            return False
+            return [{"pid": None, "why": "unchecked"}]
+
+    def children_ended(self):
+        """O0c M10: whether no execution this registry issued can still have a child."""
+        return self.unproven_children() == []
 
     @staticmethod
-    def _entry_ended(entry):
+    def _entry_unproven(entry):
+        """None when this entry's child is proven gone, else {'pid', 'why'}."""
         if entry is None:
-            return False
+            return {"pid": None, "why": "unchecked"}
         if entry.state in {"cleaned", "released"}:
-            return True
-        return (not entry.spawn_attempted and entry.process is None and entry.container is None
-                and entry.state in {"issued", "unknown"})
+            return None
+        if (not entry.child_possible and entry.process is None and entry.container is None
+                and entry.state in {"issued", "unknown"}):
+            return None
+        process = entry.process
+        if process is None:
+            return {"pid": None, "why": "no_handle"}
+        pid = getattr(process, "pid", None)
+        pid = pid if type(pid) is int else None
+        return {"pid": pid, "why": "not_reaped" if getattr(process, "returncode", None) is None
+                else "tree_not_confirmed"}
 
-    def ticket_ended(self, ticket):
-        """O0c M10: `children_ended` for one ticket (None: no ticket, so nothing started). Never raises."""
+    def ticket_unproven(self, ticket):
+        """O0c M10: `unproven_children` for one ticket (None: no ticket, so nothing started)."""
         try:
             with self._lock:
-                return ticket is None or self._entry_ended(self._issued.get(ticket))
+                item = None if ticket is None else self._entry_unproven(self._issued.get(ticket))
+            return [] if item is None else [item]
         except Exception:
-            return False
+            return [{"pid": None, "why": "unchecked"}]
+
+    def ticket_ended(self, ticket):
+        """O0c M10: whether this ticket's child is proven gone (None: nothing started). Never raises."""
+        return self.ticket_unproven(ticket) == []
 
     def key(self, ticket, *, cleaned=False):
         with self._lock:

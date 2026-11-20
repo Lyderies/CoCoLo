@@ -15,9 +15,11 @@ A restart here is what the collector does: the old account objects are abandoned
 and new ones are built on the same ledger.
 """
 import contextlib
+import subprocess
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import tests.support  # noqa: F401
@@ -94,12 +96,39 @@ class LaneRestartDecisionTests(unittest.TestCase):
         self.check(notes_of(signature=lane(faulted=True), claims=lane(busy=1)), children=lambda: asked.append(1) or [])
         self.assertEqual([], asked)
 
-    def test_M8_status_names_the_lane_whose_child_may_still_run(self):
+    def test_M3_status_names_each_process_still_held_and_the_next_step(self):
+        # Review M3 (replacing "a child process of the … lane(s) may still be running"): the wait names
+        # the process it waits for, how to check it, and what to do then.
+        processes = [{'lane': 'signature', 'pid': 4242, 'why': 'not_reaped'},
+                     {'lane': 'observations', 'pid': 5151, 'why': 'group_not_empty'},
+                     {'lane': 'probe_worker', 'pid': None, 'why': 'no_handle'}]
         decision = {'action': 'wait', 'lane': 'signature', 'cause': 'signature_execution_unconfirmed',
-                    'held': {'run_slots': [], 'probes': [], 'lanes': {}, 'children': ['signature', 'probe_worker']}}
+                    'held': {'run_slots': [], 'probes': [], 'lanes': {},
+                             'children': ['observations', 'probe_worker', 'signature'], 'processes': processes}}
         text = ' '.join(client_runtime._restart_attention(decision))
         self.assertIn('signature_execution_unconfirmed', text)
-        self.assertIn('a child process of the signature, probe worker lane(s) may still be running', text)
+        self.assertIn('signature helper process 4242 has not exited (check: ps -p 4242)', text)
+        self.assertIn('a process is still in the group of observation process 5151 (check: pgrep -g 5151)', text)
+        self.assertIn('the probe worker lane may have started a process whose id it does not have', text)
+        self.assertIn('once nothing is listed, restart the collector (./setup.sh repairs it)', text)
+        self.assertNotIn('may still be running', text)
+        # Without process details (an older decision), it still says what to do.
+        bare = {**decision, 'held': {**decision['held'], 'processes': None}}
+        self.assertIn('restart the collector', ' '.join(client_runtime._restart_attention(bare)))
+
+    def test_M3_the_processes_the_lanes_name_reach_the_decision(self):
+        notes = notes_of(signature=lane(faulted=True, kept=1))
+        named = {'signature': [{'pid': 4242, 'why': 'not_reaped'}], 'probe_worker': [{'pid': None, 'why': 'no_handle'}]}
+        decision = self.check(notes, children=lambda: named)
+        self.assertEqual(('wait', ['probe_worker', 'signature']), (decision['action'], decision['held']['children']))
+        self.assertEqual([{'lane': 'probe_worker', 'pid': None, 'why': 'no_handle'},
+                          {'lane': 'signature', 'pid': 4242, 'why': 'not_reaped'}], decision['held']['processes'])
+        for bad in ({'signature': [{'pid': 'x', 'why': 'not_reaped'}]}, {'signature': [{'pid': 1, 'why': 'other'}]},
+                    {'signature': 'pid'}):
+            with self.subTest(bad=bad):
+                decision = self.check(notes, children=lambda bad=bad: bad)
+                self.assertEqual(('wait', ['unknown']), (decision['action'], decision['held']['children']))
+        self.assertEqual('restart', self.check(notes, children=lambda: {'signature': []})['action'])
 
 
 class Unproven:
@@ -252,6 +281,86 @@ class SignatureLaneRestartTests(unittest.TestCase):
             self.assertTrue(started.wait(5))
             self.assertEqual(['signature'], account_host.unended_children(c.jobs._pool, None))
             gate.set()
+
+
+    def restart_and_claim(self):
+        c = self.claims
+        pool = c.jobs._pool
+        self.addCleanup(self.remove_scratch, pool)
+        notes = notes_of(signature=pool.health.view(), claims=c.jobs.health.view())
+        decision = account_restart.check(lambda: notes, lambda: IDLE, None, now_ms=NOW,
+                                         read_children=lambda: account_host.unended_children(pool, None))
+        self.assertEqual(('restart', 'signature'), (decision['action'], decision['lane']), decision)
+        jobs, service = self.restarted()
+        request = c.request('after-restart')
+        ticket = service.begin(encode_account_request(request), c.token)
+        self.assertEqual('claimed', decode_account_response(self.pump(jobs, service, ticket), request)['state'])
+
+    def until_proven(self, pool, timeout=15):
+        end = time.monotonic() + timeout
+        while account_host.unended_children(pool, None):
+            self.assertLess(time.monotonic(), end, account_host.unended_processes(pool, None))
+            time.sleep(.05)
+
+    def test_M1_a_helper_that_exited_before_reporting_ready_is_proven_gone_and_the_restart_comes(self):
+        # Review M1 (R3): the root was reaped by this process but never reported ready. It ran under the
+        # sandbox that refuses every new process from the moment sandbox-exec applied it (macOS), or its
+        # group and session are empty once it was reaped (Linux): nothing of it can remain.
+        c = self.claims
+        with mock.patch.object(execution, '_BOOTSTRAP', 'raise SystemExit(3)\n'):
+            c.begin()
+            self.drive_until(c.jobs, lambda: c.jobs._pool.health.view()['kept'] >= 1)
+        c.jobs.drive()
+        slot = next(s for s in c.jobs._pool._slots if s.retained is not None)
+        self.assertIsNotNone(slot.retained.process.returncode)  # reaped, never guarded
+        self.assertFalse(slot.retained.guarded)
+        self.assertEqual([], account_host.unended_children(c.jobs._pool, None))
+        self.restart_and_claim()
+
+    def test_M1_a_helper_whose_birth_check_failed_is_ended_and_proven_gone(self):
+        # The birth check failed, so the execution never identified its root and left it unreaped
+        # (unconfirmed). The proof ends that root (this process's own unreaped child) and then proves it.
+        c = self.claims
+        with mock.patch.object(execution, 'process_record', return_value=None):
+            c.begin()
+            self.drive_until(c.jobs, lambda: c.jobs._pool.health.view()['kept'] >= 1)
+        c.jobs.drive()
+        slot = next(s for s in c.jobs._pool._slots if s.retained is not None)
+        self.assertIsNone(slot.retained.tree)
+        self.until_proven(c.jobs._pool)
+        self.assertIsNotNone(slot.retained.process is None or slot.retained.process.returncode)
+        self.restart_and_claim()
+
+    def test_M2_a_helper_whose_fork_failed_leaves_no_child_and_no_held_worker(self):
+        # Review M2 (R4b): Popen failed before creating a child (fork refused): no child exists, so the
+        # job ends as an ordinary failure, nothing is kept and the next claim needs no restart.
+        c = self.claims
+        request = c.request()
+        with mock.patch.object(subprocess.Popen, '_execute_child',
+                               side_effect=BlockingIOError(11, 'Resource temporarily unavailable')):
+            raw = c.pump(c.begin(request))
+        with self.assertRaises(AccountError):
+            decode_account_response(raw, request)
+        view = c.jobs._pool.health.view()
+        self.assertEqual((False, 0), (view['faulted'], view['kept']))
+        retry = c.request('retry')
+        self.assertEqual('claimed', decode_account_response(c.pump(c.begin(retry)), retry)['state'])
+
+    def test_M2_a_spawn_interrupted_or_with_its_child_unreaped_stays_in_doubt(self):
+        from codex_agents.process_tree import create_child
+        for error, created, child_left in ((BlockingIOError(11, 'again'), False, False),
+                                           (KeyboardInterrupt(), False, True)):
+            with self.subTest(error=type(error).__name__):
+                with mock.patch.object(subprocess.Popen, '_execute_child', side_effect=error):
+                    process, raised, left = create_child(subprocess.Popen, ['/bin/echo'], {})
+                self.assertIsNone(process)
+                self.assertIs(error, raised)
+                self.assertEqual(child_left, left)
+        process, raised, left = create_child(subprocess.Popen, ['/nonexistent/x'], {'start_new_session': True})
+        self.assertEqual((None, FileNotFoundError, False), (process, type(raised), left))  # reaped by Popen
+        process, raised, left = create_child(subprocess.Popen, ['/bin/echo'], {'stdout': subprocess.DEVNULL})
+        self.assertEqual((None, True), (raised, left))
+        process.wait(5)
 
 
 @unittest.skipUnless(SIGNATURE_WORKER, 'original fixed macOS signature worker guard')
@@ -427,9 +536,12 @@ class BillingLaneRestartTests(unittest.TestCase):
         self.assertEqual([], self.ledger.machine_idle()['probes'])
         self.assert_restarts('billing')
         self.services = self.build()
-        # Two product rules, not held slots, are passed here: the five-minute cooldown after an admitted
-        # probe (the next test shows it still applies), and the account's one bootstrap admission, which
-        # the lost probe spent without keeping its records (an earlier run's billing reading stands in).
+
+    def completes_after_the_restart(self):
+        # Two product rules, not held slots, are passed here for a probe that never ran: the five-minute
+        # cooldown after an admitted probe (test_M10_the_cooldown_still_applies_after_the_restart), and the
+        # account's one bootstrap admission, which that admission spent (an earlier run's billing reading
+        # stands in).
         self.seed_billing(minutes_ago=10)
         with mock.patch.object(account_billing_admission, 'PROBE_COOLDOWN_MS', 0):
             answer = self.take('after-restart')
@@ -447,18 +559,91 @@ class BillingLaneRestartTests(unittest.TestCase):
             account_fingerprint=fingerprint, observed_at_ms=observed)
         self.ledger._store_provider_observations(self.fixture.project_id, records, timestamp=observed)
 
-    def test_M10_an_unknown_probe_execution_restarts_the_account_and_a_probe_succeeds(self):
+    def billing_records(self):
+        return self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM records WHERE record_type='provider_billing'").fetchone()[0]
+
+    def test_M10_M5_an_unknown_probe_execution_keeps_its_records_restarts_and_the_next_probe_reuses_them(self):
+        # Review M5: the probe ran and returned its records; only its workspace could not be removed.
+        # Its child is proven gone, so its records are committed with its row (nothing is seeded here).
+        self.assertEqual(0, self.billing_records())
         self.restart_after_unknown_probe(self.fail_workspace_removal_after_the_probe_ran)
+        row = self.ledger._connection.execute(
+            "SELECT state, references_json FROM account_billing_probe_requests").fetchone()
+        self.assertEqual('committed', row[0])
+        self.assertEqual('completed', __import__('json').loads(row[1])['probe'])
+        self.assertGreaterEqual(self.billing_records(), 1)
+        answer = self.take('after-restart')  # no cooldown or billing patched
+        self.assertEqual('reused', answer['probe'], answer)
+        self.assertEqual(1, len([i for i in self.fixture.invocations('claude') if i['argv'][0] == '-p']))
+        # A replay of the lost request reads its kept answer.
+        known = self.take('held')
+        self.assertEqual(('completed', True), (known['probe'], known['known']))
 
     def test_M10_a_ticket_issued_but_never_handed_off_restarts_the_account_and_a_probe_succeeds(self):
         self.restart_after_unknown_probe(self.fail_handoff_after_issue)
+        self.completes_after_the_restart()
 
     def test_M10_the_cooldown_still_applies_after_the_restart(self):
-        self.unknown_probe(self.fail_workspace_removal_after_the_probe_ran)
-        self.drive_until(lambda: self.admitted() == 0)
-        self.services = self.build()
+        self.restart_after_unknown_probe(self.fail_handoff_after_issue)
         answer = self.take('after-restart')
         self.assertEqual(('denied', 'probe_cooldown'), (answer['probe'], answer['reason_code']))
+
+    def busy_once(self, owner, name):
+        """`owner.name` refused once as a held ledger lock refuses (sql_read_busy), then as it was."""
+        from codex_agents.sql_read_budget import SQLReadError
+        real, calls = getattr(owner, name), []
+
+        def busy_once(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise SQLReadError('sql_read_busy')
+            return real(*args, **kwargs)
+        return calls, mock.patch.object(owner, name, side_effect=busy_once)
+
+    def test_R1_a_settlement_refused_by_a_busy_ledger_is_retried_and_the_restart_comes(self):
+        # Review H1 (R1): one refusal must not stop settlement for good.
+        calls, patcher = self.busy_once(self.services['billing']._owner, 'settle_ended')
+        with patcher:
+            self.unknown_probe(self.fail_handoff_after_issue)
+            self.drive_until(lambda: self.admitted() == 0)
+        self.assertEqual(2, len(calls))
+        self.assert_restarts('billing')
+
+    def test_R1_a_record_commit_refused_by_a_busy_ledger_is_retried_and_the_restart_comes(self):
+        calls, patcher = self.busy_once(self.services['billing']._executions, 'complete_ended')
+        with patcher:
+            self.unknown_probe(self.fail_workspace_removal_after_the_probe_ran)
+            self.drive_until(lambda: self.admitted() == 0)
+        self.assertEqual(2, len(calls))
+        self.assertGreaterEqual(self.billing_records(), 1)
+        self.assert_restarts('billing')
+
+    def test_M2_a_probe_whose_client_could_not_be_executed_is_settled_and_the_restart_comes(self):
+        # Review M2 (R4): Popen raised FileNotFoundError after reaping its child (an exec failure): no
+        # child exists, so the probe is settled and its worker does not hold the restart.
+        real = subprocess.Popen._execute_child
+
+        def vanished(popen, args, *rest, **options):
+            if Path(str(args[0])).name == 'claude' and list(args)[1:2] == ['-p']:  # the probe's model only
+                args = ['/nonexistent/claude-updated-away', *args[1:]]
+                failed.append(1)
+            return real(popen, args, *rest, **options)
+        failed = []
+        with mock.patch.object(subprocess.Popen, '_execute_child', vanished):
+            self.take_or_refusal('held')
+        self.assertEqual([1], failed)  # the probe reached its launch, and the exec failed
+        self.drive_until(lambda: self.admitted() == 0)
+        self.assertEqual([], account_host.unended_children(self.services['claims']._pool, self.services['workers']))
+        decision = account_restart.check(lambda: self.lane_notes(), self.ledger.machine_idle, None, now_ms=NOW,
+                                         read_children=lambda: [])
+        self.assertNotEqual('wait', decision['action'], decision)
+
+    def take_or_refusal(self, identity):
+        try:
+            return self.take(identity)
+        except AccountError as refused:
+            return refused.reason_code
 
     def test_M10_a_probe_whose_child_may_still_run_is_never_settled_and_holds_the_restart(self):
         from codex_agents.process_tree import ProcessTree
@@ -480,6 +665,88 @@ class BillingLaneRestartTests(unittest.TestCase):
         decision = account_restart.check(lambda: self.lane_notes(), self.ledger.machine_idle, None, now_ms=NOW,
                                          read_children=lambda: ['probe_worker'])
         self.assertEqual('wait', decision['action'])
+
+
+class ObservationLaneRestartTests(unittest.TestCase):
+    """Review M4 (R5): the observation lane's provider CLIs are children of the account process too."""
+
+    def setUp(self):
+        from tests import test_account_observation_jobs as observation_tests
+        self.obs = observation_tests.AccountObservationJobTests('test_C5_a_submitted_observation_is_counted_before_the_owner_drives')
+        self.obs.setUp()
+        self.addCleanup(lambda: self.assertTrue(self.obs.doCleanups()))
+        self.children = []
+        self.addCleanup(self.kill_children)
+
+    def kill_children(self):
+        import os
+        import signal
+        for process in self.children:
+            if process.returncode is None:
+                with contextlib.suppress(OSError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait(5)
+
+    def unended(self):
+        return account_host.unended_children(None, None, self.obs.jobs)
+
+    def test_M4_a_normal_observation_leaves_no_child_unproven(self):
+        request = self.obs.request()
+        self.obs.take(self.obs.begin(request), request)
+        self.assertEqual([], self.unended())
+
+    def test_M4_an_observation_in_flight_is_not_proven_gone(self):
+        entered, resume, patcher = self.obs.hold_first_project()
+        with patcher:
+            self.obs.begin()
+            self.obs.wait(entered.is_set)
+            self.assertEqual(['observations'], self.unended())
+            resume.set()
+
+    def leave_a_child(self, providers_module):
+        """The probe starts a provider CLI through the popen it was given, then its worker faults."""
+        def observe(root, *, popen, **kwargs):
+            process = popen(['/bin/sleep', '60'], start_new_session=True, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.children.append(process)
+            raise KeyboardInterrupt  # not an ordinary error: the worker faults
+        return mock.patch.object(providers_module, 'observe_codex', side_effect=observe)
+
+    def test_M4_a_child_a_faulted_observation_left_is_ended_by_the_group_and_proven_gone(self):
+        from codex_agents import providers
+        with self.leave_a_child(providers):
+            self.obs.begin()
+            self.obs.wait(lambda: self.obs.jobs.health.view()['faulted'])
+        self.obs.keeps_custody = True
+        end = time.monotonic() + 15
+        while self.unended():
+            self.assertLess(time.monotonic(), end, account_host.unended_processes(None, None, self.obs.jobs))
+            time.sleep(.05)
+        self.assertIsNotNone(self.children[0].returncode)  # its group was killed and it was reaped
+        notes = notes_of(observations=self.obs.jobs.health.view())
+        decision = account_restart.check(lambda: notes, lambda: IDLE, None, now_ms=NOW,
+                                         read_children=lambda: account_host.unended_children(None, None, self.obs.jobs))
+        self.assertEqual(('restart', 'observations'), (decision['action'], decision['lane']))
+
+    def test_M4_a_child_that_cannot_be_ended_holds_the_restart_and_is_named(self):
+        import os
+        from codex_agents import providers
+        with self.leave_a_child(providers), mock.patch.object(os, 'killpg', side_effect=PermissionError(1, 'no')), \
+                mock.patch.object(subprocess.Popen, 'send_signal'):
+            self.obs.begin()
+            self.obs.wait(lambda: self.obs.jobs.health.view()['faulted'])
+            self.obs.keeps_custody = True
+            end = time.monotonic() + 15  # the worker first tries for 5 s to end it itself
+            while (named := account_host.unended_processes(None, None, self.obs.jobs)) == {
+                    'observations': [{'pid': None, 'why': 'running'}]}:
+                self.assertLess(time.monotonic(), end)
+                time.sleep(.05)
+            self.assertEqual({'observations': [{'pid': self.children[0].pid, 'why': 'not_reaped'}]}, named)
+            notes = notes_of(observations=self.obs.jobs.health.view())
+            decision = account_restart.check(lambda: notes, lambda: IDLE, None, now_ms=NOW,
+                                             read_children=lambda: account_host.unended_processes(None, None, self.obs.jobs))
+            self.assertEqual(('wait', ['observations']), (decision['action'], decision['held']['children']))
+
 
 if __name__ == '__main__':
     unittest.main()

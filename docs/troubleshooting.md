@@ -226,6 +226,17 @@ The probe names the step that stopped it before launching anything:
   confirmed, or has stopped, and only a restart frees it. Restart the collector (`setup.sh` repairs it),
   then probe again.
 
+## "the account is stuck … and waits to restart itself until it can prove the processes it started have ended"
+
+An account lane (signature checks, billing probes or provider observations) holds work whose end it could not
+confirm, so it restarts its own services, but only once it has proved that no process it started can still be
+running. The line names each process it is waiting for and the command that checks it (`ps -p <pid>`,
+`pgrep -g <pid>` for a process group, `pgrep -s <pid>` for a session). It checks again every minute and
+restarts by itself once they are gone. If one stays listed, look at it: a leftover COCOLO helper can be stopped
+(`kill <pid>`). Once nothing is listed, restart the collector (`./setup.sh` repairs it). A lane that "may have
+started a process whose id it does not have" cannot name one: check `ps -ax` for a leftover COCOLO helper
+before restarting the collector.
+
 ## `probe_busy`
 
 The Claude billing probe needs one of its account's six run slots, and none was free, or another probe

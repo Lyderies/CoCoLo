@@ -488,29 +488,35 @@ class SignatureWorkerPool:
         return frozenset(slot.current.handle for slot in self._slots
                          if slot.current is not None and slot.current.unknown)
 
-    def children_ended(self):
-        """O0c M8: whether every child these workers started is proven gone, for a restart. Owner thread.
+    def unproven_children(self):
+        """O0c M8: the processes these workers started that are not proven gone, as [{'pid', 'why'}]
+        ([] when none can still run), for a restart. Owner thread.
 
-        A worker inside an execution, or an ordinary job not yet returned, may hold a child: not proven.
+        A worker inside an execution, or an ordinary job not yet returned, may hold a child (`running`).
         A held slot (faulted or unconfirmed) is sealed, so a job that reaches it later never starts, and
-        its retained execution must prove its own children gone (`signature_execution.children_ended`:
-        every root reaped inside its no-fork confinement). Never raises."""
+        its retained execution names what it cannot prove (`signature_execution.unproven_children`).
+        Never raises."""
         try:
+            pending = []
             for slot in self._slots:
                 held = slot.fault.is_set() or (slot.current is not None and slot.current.unknown)
                 with slot.custody:
-                    if slot.executing:
-                        return False
-                    if held:
+                    executing = slot.executing
+                    if held and not executing:
                         slot.sealed = True
                     retained = slot.retained
-                if slot.current is not None and not held:
-                    return False
-                if retained is not None and not execution.children_ended(retained):
-                    return False
-            return True
+                if executing or (slot.current is not None and not held):
+                    pending.append({'pid': None, 'why': 'running'})
+                    continue
+                if retained is not None:
+                    pending.extend(execution.unproven_children(retained))
+            return pending
         except Exception:
-            return False
+            return [{'pid': None, 'why': 'unchecked'}]
+
+    def children_ended(self):
+        """O0c M8: whether every child these workers started is proven gone (see unproven_children)."""
+        return self.unproven_children() == []
 
     def _reply_fault(self, slot):
         """S1-H1a C4: an invalid reply or time faults its slot; noted once, with no exception."""
