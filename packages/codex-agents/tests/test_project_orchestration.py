@@ -122,6 +122,20 @@ class ProjectOrchestrationTests(unittest.TestCase):
         from codex_agents.project_orchestration_report import orchestration_report
         return orchestration_report(self.store, snapshot['orchestration_id'])['runs']
 
+    def test_P10_the_report_finds_its_orchestration_however_many_the_project_has(self):
+        """O0c P10 (ANALYSIS-0.4.0-lifetime-caps.md): the report counted every orchestration row of any state
+        and refused past 1,024, so about 11 orchestrations a day made every report fail. It now finds its
+        orchestration by its keyed id with no count of the project's rows."""
+        from codex_agents import project_orchestration_report as report
+        snapshots = [self.call('open', identity=f'open-{i}')['current']['snapshot'] for i in range(3)]
+        with mock.patch.object(report, 'MAX_ORCHESTRATIONS', 2, create=True):
+            for snapshot in snapshots:
+                self.assertEqual(snapshot['orchestration_handle'],
+                                 report._orchestration(self.store, snapshot['orchestration_id'])[0])
+                self.assertIsInstance(report.orchestration_report(self.store, snapshot['orchestration_id']), dict)
+        with self.assertRaisesRegex(HistoryError, 'history_not_found'):
+            report.orchestration_report(self.store, 'orc:' + 'f' * 64)
+
     def test_R6_9_only_listed_reasons_are_stored(self):
         handle = self.opened()['orchestration_handle']
         run = 'hrn_' + 'c' * 48
