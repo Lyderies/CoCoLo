@@ -9,6 +9,8 @@ Requirements (DESIGN-0.4.0-M3.md draft 2 §3.2, spike S11):
 - A filesystem without them is found by a probe (`support_problem`) that creates two files under
   reserved names, exchanges them, checks the inodes really swapped, checks a no-replace rename
   refuses an existing name and moves to a free one, then removes both; it never touches other names.
+  What a probe killed midway leaves is removed by `remove_leftovers` (the merge's recovery, which
+  knows the probe's unique names from its journal).
 
 S11 (2026-11-21): on this Mac (APFS, macOS 27.2, arm64) both work and a case variant is refused;
 on FAT, ExFAT and HFS+ disk images both answer ENOTSUP (HFS+ has the no-replace rename but no
@@ -160,13 +162,29 @@ def support_problem(directory: int, prefix: str) -> str | None:
                     os.unlink(name, dir_fd=directory)
 
 
-def _probe_file(directory: int, name: str) -> bool:
+def remove_leftovers(directory: int, prefix: str) -> list[str]:
+    """Remove what an interrupted `support_problem(directory, prefix)` left behind (the prefix is the
+    caller's unique one): each of its names only while it is a probe file or an empty file (created,
+    not yet written). The names removed."""
+
+    removed = []
+    for name in (f"{prefix}a", f"{prefix}b", f"{prefix}c"):
+        if _probe_file(directory, name, empty=True):
+            with contextlib.suppress(OSError):
+                os.unlink(name, dir_fd=directory)
+                removed.append(name)
+    return removed
+
+
+def _probe_file(directory: int, name: str, *, empty: bool = False) -> bool:
     try:
         descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
     except OSError:
         return False
     try:
         info = os.fstat(descriptor)
+        if empty and stat.S_ISREG(info.st_mode) and info.st_size == 0:
+            return True
         return stat.S_ISREG(info.st_mode) and info.st_size == 1 and os.read(descriptor, 2) in (b"a", b"b")
     finally:
         os.close(descriptor)
