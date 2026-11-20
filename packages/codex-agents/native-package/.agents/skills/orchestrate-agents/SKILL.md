@@ -113,9 +113,12 @@ says `dispatch: native`, stop and report it.
    once more while the project's service still runs: it returns the same fenced
    result, which you record. If that is no longer possible, close the orchestration
    once the run is released; the run is counted abandoned.
-   A failure after launch without a usable report leaves no result to record:
-   pause the orchestration, confirm the child is gone, classify that run abandoned
-   (`host_confirmed_gone`), and resume. Never reconstruct a missing result.
+   A failure after launch without a usable report leaves no result to record: run
+   `learning-run-status` until the run has ended, then close the orchestration once
+   the run is released (it is counted abandoned). Only a run that never took a lease
+   is classified abandoned instead (pause, confirm the child is gone,
+   `learning-classify-host-run-abandoned --reason host_confirmed_gone`, resume); for
+   any other run that is refused. Never reconstruct a missing result.
    While `dispatch` waits, a second protected command can run `cli.py
    learning-run-status --project-root <exact-root> --orchestration-handle <orc>
    --run-handle <handle>` for the
