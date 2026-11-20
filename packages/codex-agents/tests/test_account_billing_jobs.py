@@ -425,6 +425,8 @@ class AccountBillingJobTests(unittest.TestCase):
         self.until(lambda: not self.billing._jobs)
         noted = [(call.args[1], type(call.args[2]).__name__) for call in notes.call_args_list]
         self.assertIn(('probe_cleanup_failed', 'OSError'), noted)
+        failure = self.billing.health.view()['last_failure']  # round 3: never replaced by an older reason
+        self.assertEqual(('probe_cleanup_failed', 'OSError'), (failure['cause'], failure['type']))
 
     def test_C6_a_probe_worker_held_by_a_kept_billing_job_is_held_in_the_probe_lane(self):
         from types import SimpleNamespace

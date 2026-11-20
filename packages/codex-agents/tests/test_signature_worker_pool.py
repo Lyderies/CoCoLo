@@ -132,6 +132,7 @@ class SignatureWorkerPoolTests(unittest.TestCase):
         view = pool.health.view()
         self.assertEqual((True, 'signature_offer_failed', 'RuntimeError'),
                          (view['faulted'], view['last_failure']['cause'], view['last_failure']['type']))
+        self.assertEqual((1, 0), (view['kept'], view['busy']))  # its job is unknown, not busy
 
     def test_H1a_an_internal_failure_is_noted_with_its_type_and_no_fault(self):
         pool = self.make_pool()
