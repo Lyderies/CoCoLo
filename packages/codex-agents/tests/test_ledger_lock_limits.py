@@ -219,35 +219,90 @@ class LedgerLockLimitTests(unittest.TestCase):
             self.assertEqual([], [line for line in direct if line not in allowed], name)
 
     def test_E1a_1_every_acquisition_is_bounded_or_listed_as_kept(self):
-        """No `with <x>._lock`, `<x>._lock.acquire()` without a timeout, or alias of either, outside the
-        functions E1a keeps waiting."""
+        """No `with <x>._lock`, `<x>._lock.acquire()` without a bounded timeout, or alias of either, outside
+        the functions E1a keeps waiting."""
         found = []
         for name in BOUNDED_MODULES:
-            tree = ast.parse((Path(ORCHESTRATION_ROOT) / 'codex_agents' / name).read_text())
-            for function in ast.walk(tree):
-                if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                for node in ast.walk(function):
-                    waits = False
-                    if isinstance(node, ast.With):
-                        # Review 040-m4b-e1a-code: both branches of a conditional context count too.
-                        def lock_exprs(expr):
-                            if isinstance(expr, ast.IfExp):
-                                return lock_exprs(expr.body) + lock_exprs(expr.orelse)
-                            return [expr] if isinstance(expr, ast.Attribute) and expr.attr == '_lock' else []
-                        waits = any(lock_exprs(item.context_expr) for item in node.items)
-                    elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                          and node.func.attr == 'acquire' and isinstance(node.func.value, ast.Attribute)
-                          and node.func.value.attr == '_lock'):
-                        keywords = {keyword.arg: keyword.value for keyword in node.keywords}
-                        blocking = node.args[0] if node.args else keywords.get('blocking')
-                        nonblocking = isinstance(blocking, ast.Constant) and blocking.value is False
-                        timed = len(node.args) > 1 or 'timeout' in keywords
-                        waits = not nonblocking and not timed  # acquire(), acquire(True), acquire(blocking=True)
-                    if waits and function.name not in KEPT_WAITING.get(name, set()):
-                        found.append(f'{name}:{node.lineno} {function.name}')
+            source = (Path(ORCHESTRATION_ROOT) / 'codex_agents' / name).read_text()
+            found += [f'{name}:{where}' for where in unbounded_waits(source, KEPT_WAITING.get(name, set()))]
         self.assertEqual([], sorted(set(found)))
 
+    def test_E1a_1_the_inventory_catches_aliases_and_unbounded_timeouts(self):
+        """Review 040-m4b-e1a-code-2 (medium): the checker itself is proved on examples."""
+        caught = {
+            'alias acquire': 'def f(self):\n    lock = self._lock\n    lock.acquire()\n',
+            'alias with': 'def f(self):\n    lock = self._lock\n    with lock:\n        pass\n',
+            'negative timeout': 'def f(self):\n    self._lock.acquire(timeout=-1)\n',
+            'long timeout': 'def f(self):\n    self._lock.acquire(timeout=30)\n',
+            'unknown timeout': 'def f(self, t):\n    self._lock.acquire(timeout=t)\n',
+            'conditional with': 'def f(self, x):\n    with self._lock if x else nothing():\n        pass\n',
+            'plain with': 'def f(self):\n    with self._lock:\n        pass\n',
+        }
+        for label, source in caught.items():
+            with self.subTest(label):
+                self.assertEqual(1, len(unbounded_waits(source, set())), source)
+        allowed = {
+            'cap': 'def f(self):\n    self._lock.acquire(timeout=ledger_waits.wait_seconds())\n',
+            'nonblocking': 'def f(self):\n    self._lock.acquire(blocking=False)\n',
+            'bounded alias': 'def f(self, r):\n    lock = self._lock\n    lock.acquire(timeout=min(0.1, r))\n',
+            'named wait': 'def f(self):\n    self._lock.acquire(timeout=HEALTH_LEDGER_WAIT_MS / 1000)\n',
+            'kept': 'def close(self):\n    with self._lock:\n        pass\n',
+        }
+        for label, source in allowed.items():
+            with self.subTest(label):
+                self.assertEqual([], unbounded_waits(source, {'close'}), source)
+
+
+def _bounded_timeout(expr):
+    """A timeout E1a accepts: the shared cap, a named *_WAIT_MS in seconds, a constant within the cap, or
+    the smaller of values one of which is bounded."""
+    if isinstance(expr, ast.Constant):
+        return type(expr.value) in (int, float) and 0 <= expr.value <= learning_store.LEDGER_LOCK_WAIT_MS / 1000
+    if isinstance(expr, ast.Call):
+        callee = expr.func.attr if isinstance(expr.func, ast.Attribute) else getattr(expr.func, 'id', '')
+        if callee == 'wait_seconds':
+            return True
+        if callee == 'min':
+            return any(_bounded_timeout(arg) for arg in expr.args)
+        return False
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
+        name = expr.left.attr if isinstance(expr.left, ast.Attribute) else getattr(expr.left, 'id', '')
+        return (name.endswith('_WAIT_MS') and isinstance(expr.right, ast.Constant) and expr.right.value == 1000)
+    return False
+
+
+def unbounded_waits(source, kept):
+    """Each `line function` in `source` that can wait on a ledger lock without a bound."""
+    found = []
+    for function in ast.walk(ast.parse(source)):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) or function.name in kept:
+            continue
+        aliases = {target.id for node in ast.walk(function) if isinstance(node, ast.Assign)
+                   and isinstance(node.value, ast.Attribute) and node.value.attr == '_lock'
+                   for target in node.targets if isinstance(target, ast.Name)}
+
+        def is_lock(expr):
+            return ((isinstance(expr, ast.Attribute) and expr.attr == '_lock')
+                    or (isinstance(expr, ast.Name) and expr.id in aliases))
+
+        def lock_exprs(expr):
+            if isinstance(expr, ast.IfExp):
+                return lock_exprs(expr.body) + lock_exprs(expr.orelse)
+            return [expr] if is_lock(expr) else []
+        for node in ast.walk(function):
+            waits = False
+            if isinstance(node, ast.With):
+                waits = any(lock_exprs(item.context_expr) for item in node.items)
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                  and node.func.attr == 'acquire' and is_lock(node.func.value)):
+                keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+                blocking = node.args[0] if node.args else keywords.get('blocking')
+                nonblocking = isinstance(blocking, ast.Constant) and blocking.value is False
+                timeout = node.args[1] if len(node.args) > 1 else keywords.get('timeout')
+                waits = not nonblocking and (timeout is None or not _bounded_timeout(timeout))
+            if waits:
+                found.append(f'{node.lineno} {function.name}')
+    return found
 
 if __name__ == '__main__':
     unittest.main()
