@@ -63,7 +63,7 @@ class ClaimLookupGrowthTests(unittest.TestCase):
         return tuple(probes[name] for name in re.findall(r"(project_id|handle_digest|run_id)=\?", query))
 
     def test_queries_found(self):
-        self.assertGreaterEqual(len(claim_lookup_queries()), 3)
+        self.assertGreaterEqual(len(claim_lookup_queries()), 2)
         source = Path(learning_store.__file__).read_text(encoding="utf-8")
         self.assertNotRegex(source, r"(launch_claims|active_run_capacity) WHERE[^\n]*\(handle_digest=\? OR run_id=\?\)")
 

@@ -604,6 +604,20 @@ def _claim_exists(connection, project_id, handle_digest, run_id):
         (project_id, handle_digest, project_id, run_id)).fetchone() is not None
 
 
+def _capacity_exists(connection, project_id, handle_digest, run_id):
+    """Whether a capacity row holds this handle or this run id (D11).
+
+    active_run_capacity has no index on run_id, so `handle_digest=? OR run_id=?` scanned the
+    project's rows. A capacity row's (handle, run id) must match its launch claim (foreign key),
+    so the run id is found through the claim's unique (project_id, run_id) index.
+    """
+    return connection.execute(
+        "SELECT 1 FROM active_run_capacity WHERE project_id=? AND handle_digest=? UNION ALL "
+        "SELECT 1 FROM launch_claims c JOIN active_run_capacity a ON a.project_id=c.project_id "
+        "AND a.handle_digest=c.handle_digest WHERE c.project_id=? AND c.run_id=? LIMIT 1",
+        (project_id, handle_digest, project_id, run_id)).fetchone() is not None
+
+
 _LAUNCH_CLAIMS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS launch_claims (
     project_id TEXT NOT NULL,
@@ -6815,8 +6829,7 @@ class LearningLedger:
             orchestration_digest = self._claim_original_orchestration_digest(expected, 'claim_denial_unavailable')
             # Any durable consumed/unknown launch or capacity is contradictory.
             if (_claim_exists(self._connection, project_id, context.handle, expected.run_id)
-                    or self._connection.execute('SELECT 1 FROM active_run_capacity WHERE project_id=? AND (handle_digest=? OR run_id=?) LIMIT 1',
-                                                (project_id, context.handle, expected.run_id)).fetchone() is not None):
+                    or _capacity_exists(self._connection, project_id, context.handle, expected.run_id)):
                 raise ClaimError('claim_denial_unavailable')
             def legacy_intent():
                 return self._connection.execute(
@@ -6884,9 +6897,7 @@ class LearningLedger:
                                            (project_id, context.handle)).fetchone()
         if (binding is None or binding['run_id'] != expected.run_id
                 or _claim_exists(self._connection, project_id, context.handle, expected.run_id)
-                or self._connection.execute('SELECT 1 FROM active_run_capacity WHERE project_id=? AND (handle_digest=? '
-                                            'OR run_id=?) LIMIT 1',
-                                            (project_id, context.handle, expected.run_id)).fetchone() is not None):
+                or _capacity_exists(self._connection, project_id, context.handle, expected.run_id)):
             raise ClaimError('claim_denial_unavailable')
         now = self._clock_ms()
         if type(now) is not int or not 0 <= now <= MAX_CLAIM_INTEGER:
