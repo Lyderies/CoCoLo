@@ -10,7 +10,7 @@ K04 compound commands and shell constructs; K05 interpreters and shells; K06 the
 A01 no owner policy refused (at the gate); A03 a grant-only path the task did not request refused;
 A04 an owner policy changed after routing never widens. R00-R11 are the adversarial review's
 findings (R00 the root cause: default deny over arguments; R11 the review's own harness cases);
-R12-R19 are the second review's (R19 its harness cases).
+R12-R19 are the second review's (R19 its harness cases); R20-R23 the third review's follow-up.
 Every table row is one subTest named by its case, so a failure names the row.
 
 `cat .git/config` was allowed here before R00; an argument naming an always-denied path is now
@@ -349,7 +349,10 @@ class K02OutOfScope(TableMixin, unittest.TestCase):
         ]
         self.check_rows([(c, r, ESCALATE, rule) for c, r, rule in rows])
         self.check_rows([(c, r, ALLOW, "write_in_scope" if r["tool_name"] != "Bash" else "command_allowed")
-                         for c, r, _ in rows], pol=policy(escalate=()))
+                         for c, r, _ in rows if not r["tool_input"].get("command", "").startswith("mv ")],
+                        pol=policy(escalate=()))
+        self.check_rows([("mv may move a folder or link (R22)", bash("mv src/a.py src/b.py"), REFUSE,
+                          "write_tree")], pol=policy(escalate=()))
 
 
 class K03DenyClasses(TableMixin, unittest.TestCase):
@@ -1633,8 +1636,8 @@ class R18PythonDashX(TableMixin, unittest.TestCase):
 
     def test_x_options_are_a_fixed_list_and_writing_ones_are_refused(self):
         self.check_rows([
-            ("pycache_prefix as a separate word is assignment-shaped",
-             bash("python3 -X pycache_prefix=docs src/a.py"), REFUSE, "command_assignment"),
+            ("pycache_prefix as a separate word", bash("python3 -X pycache_prefix=docs src/a.py"), REFUSE,
+             "command_write_option"),
             ("pycache_prefix attached", bash("python3 -Xpycache_prefix=src src/a.py"), REFUSE,
              "command_write_option"),
             ("importtime", bash("python3 -X importtime src/a.py"), ALLOW, "command_allowed"),
@@ -1693,6 +1696,86 @@ class R19ReviewHarnessRound2(unittest.TestCase):
                 decision = gp.decide(policies[name], req)
                 expected = (ALLOW,) if label in REVIEW2_CONTROLS else (REFUSE, ESCALATE)
                 self.assertIn(decision.outcome, expected, f"{label}: {decision.reason}")
+
+
+# --------------------------------------------------------------------------------------------
+# Round 3 follow-up (R20-R24)
+# --------------------------------------------------------------------------------------------
+
+class R20GrantOnlyByPattern(TableMixin, unittest.TestCase):
+    """M1: build and test configuration that holds or loads code, by name and by pattern."""
+
+    NAMED = ["src/vite.config.ts", "vitest.workspace.ts", "babel.config.js", ".babelrc", "playwright.config.ts",
+             "cypress.config.js", "webpack.config.js", "eslint.config.js", ".eslintrc.js", ".prettierrc.js",
+             ".pnpmfile.cjs", "phpunit.xml", "Directory.Build.props", "Directory.Build.targets",
+             "Package.swift", "mix.exs", "gradlew", "gradle.properties", ".mvn/extensions.xml", "lefthook.yml",
+             "hatch.toml", "pixi.toml", "meson.build", "BUILD.bazel", ".bazelrc", "Dockerfile",
+             "rust-toolchain.toml", ".coveragerc", ".pylintrc"]
+    PATTERNED = ["src/app.config.json", ".lintstagedrc.json", "src/.swcrc", "mvnw", "gradlew.bat",
+                 "gradle/wrapper/gradle-wrapper.properties", ".mvn/wrapper/maven-wrapper.properties",
+                 "Dockerfile.dev", "docker/ci.dockerfile", "Containerfile", "BUILD", "WORKSPACE",
+                 "tools/defs.bzl", "MODULE.bazel", "src/App.csproj.props", "phpunit.xml.dist"]
+    ORDINARY = ["src/config.py", "src/app_config.ts", "src/configs/x.py", "docs/config.md", "src/build.py",
+                "src/builder.ts", "src/props.py", "src/targets.py", "src/docker.py", "src/rc.py",
+                "src/source.rc", "src/dockerfile_parser.py", "src/workspace.py", "src/BUILDING.md"]
+
+    def test_named_and_patterned_configs_are_grant_only(self):
+        paths = self.NAMED + self.PATTERNED
+        self.check_rows([(p, write("/workspace/" + p), REFUSE, "write_conditional_ungranted") for p in paths],
+                        pol=wide())
+
+    def test_ordinary_source_stays_writable(self):
+        self.check_rows([(p, write("/workspace/" + p), ALLOW, "write_in_scope") for p in self.ORDINARY],
+                        pol=wide())
+
+
+class R21PreserveAbbreviations(TableMixin, unittest.TestCase):
+    """L1: cp accepts abbreviations of --preserve's attributes (l, li, al) and of --preserve."""
+
+    def test_any_preserve_value_that_can_mean_links_or_all_is_refused(self):
+        rows = [("l", "cp --preserve=l src/a src/b"), ("li", "cp --preserve=li src/a src/b"),
+                ("al", "cp --preserve=al src/a src/b"), ("a", "cp --preserve=a src/a src/b"),
+                ("in a list", "cp --preserve=mode,li src/a src/b"),
+                ("abbreviated option", "cp --pres=links src/a src/b"),
+                ("abbreviated option and value", "cp --preser=l src/a src/b")]
+        self.check_rows([(c, bash(cmd), REFUSE, "command_symlink") for c, cmd in rows], pol=wide())
+        self.check_rows([
+            ("mode", bash("cp --preserve=mode src/a src/b"), ALLOW, "command_allowed"),
+            ("abbreviated mode", bash("cp --preserve=m,timestamps src/a src/b"), ALLOW, "command_allowed"),
+        ], pol=wide())
+
+
+class R22MovesAsTrees(TableMixin, unittest.TestCase):
+    """L2: mv may move a link or a folder; it asks the owner whatever the deletion setting."""
+
+    def test_a_move_always_asks_as_a_tree(self):
+        no_deletion = policy(escalate=("unlisted_command", "unlisted_write", "test_edit",
+                                       "dependency_manifest"))
+        self.check_rows([
+            ("deletion off", bash("mv src/link src/deep/er/link"), ESCALATE, "write_tree"),
+        ], pol=no_deletion)
+        self.check_rows([
+            ("nothing escalates", bash("mv src/link src/deep/er/link"), REFUSE, "write_tree"),
+        ], pol=policy(escalate=()))
+        decision = gp.decide(policy(), bash("mv src/link src/deep/er/link"))
+        self.assertEqual((ESCALATE, "write_deletion"), (decision.outcome, decision.rule))
+        self.assertIn("folder or link", decision.reason)
+
+
+class R23PythonXValues(TableMixin, unittest.TestCase):
+    """Usability: the value of python -X is read by the fixed -X list, not as an assignment."""
+
+    def test_x_values_are_read_by_the_x_list(self):
+        self.check_rows([
+            ("int_max_str_digits", bash("python3 -X int_max_str_digits=0 src/a.py"), ALLOW, "command_allowed"),
+            ("frozen_modules", bash("python3 -X frozen_modules=off src/a.py"), ALLOW, "command_allowed"),
+            ("in a cluster", bash("python3 -BX frozen_modules=off src/a.py"), ALLOW, "command_allowed"),
+            ("pycache_prefix", bash("python3 -X pycache_prefix=docs src/a.py"), REFUSE, "command_write_option"),
+            ("presite runs a module", bash("python3 -X presite=src.evil src/a.py"), ESCALATE,
+             "command_unknown_option"),
+            ("a script's own argument", bash("python3 src/a.py -X FOO=1"), REFUSE, "command_assignment"),
+            ("after -m", bash("python3 -m pytest -X FOO=1"), REFUSE, "command_assignment"),
+        ], pol=wide())
 
 
 if __name__ == "__main__":
