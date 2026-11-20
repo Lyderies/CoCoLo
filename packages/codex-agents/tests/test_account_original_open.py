@@ -240,7 +240,9 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
             self.assertIsNone(self.pump(self.submit()).reason)
         finally:
             self.ledger._connection.set_trace_callback(None)
-        cap = [s for s in statements if 'FROM host_run_bindings h' in s and "binding_state='pending'" in s
+        # The cap's statement, found by what it reads, not by its FROM clause (corrected with the code: the first
+        # filter named the old statement's 'FROM host_run_bindings h'; the requirement, the plan, is unchanged).
+        cap = [s for s in statements if 'host_run_bindings h' in s and "binding_state='pending'" in s
                and 'expires_at_ms>' in s and s.lstrip().startswith('SELECT')]
         self.assertEqual(1, len(cap), statements)
         plan = ' | '.join(r[3] for r in self.ledger._connection.execute('EXPLAIN QUERY PLAN ' + cap[0]))

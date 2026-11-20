@@ -429,7 +429,7 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
     from .admission_metadata import API_KEY_VARIABLES
     from .claim_admission import PreparedClaimAdmission, admission_signature_rows
     from .account_open_admission import open_admission_inputs, evaluate_original_open
-    from .learning_store import BINDING_HELD, HOST_RUN_TTL_MS, MAX_PENDING_HOST_RUNS
+    from .learning_store import HOST_RUN_TTL_MS, LIVE_BINDINGS, MAX_PENDING_HOST_RUNS
     _owner(ledger)
     if (type(request) is not OriginalOpenRequest or request.origin is not ledger._attestation_origin
             or request.journal_seal is None or not callable(before_commit)):
@@ -480,9 +480,8 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
             if passed:
                 pending = ledger._connection.transaction_read_call(work_limits, lambda: ledger._connection.execute(
                     # O0b B0-1 (narrowed): only live bindings count, pending and not past their expiry, so
-                    # expired ones never fill a project for good.
-                    "SELECT h.handle_digest FROM host_run_bindings h WHERE h.project_id=? AND h.binding_state='pending' "
-                    f"AND h.expires_at_ms>? AND {BINDING_HELD} LIMIT ?",
+                    # expired ones never fill a project for good (O0b RS-A round 2 G12: from held register rows).
+                    "SELECT h.handle_digest " + LIVE_BINDINGS + " LIMIT ?",
                     (request.project_id, now, MAX_PENDING_HOST_RUNS)).fetchall())
                 if len(pending) >= MAX_PENDING_HOST_RUNS:
                     raise OpenError('open_busy')

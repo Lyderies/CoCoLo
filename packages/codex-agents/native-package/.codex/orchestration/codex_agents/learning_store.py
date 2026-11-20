@@ -210,8 +210,13 @@ REPAIR_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000
 MAX_PENDING_REPAIR_RECEIPTS = 4096
 MAX_PENDING_HOST_RUNS = 4096
 # O0b RS-A (F7): a binding the register released (expired) never counts again, whatever the wall clock says.
-BINDING_HELD = ("NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=h.project_id AND r.kind='binding' "
-                "AND r.identity=h.handle_digest AND r.state='released')")
+# Round 2 G12: every binding cap counts from held register rows (run_holds_due), so the work is bounded by the
+# holds still held, never by released history a clock rollback brings back inside its expiry. Parameters: the
+# project and the time; the count equals "pending, not past expiry, not released by the register", as every
+# pending binding has its register row (check_run_holds_consistency).
+LIVE_BINDINGS = ("FROM run_holds r INDEXED BY run_holds_due CROSS JOIN host_run_bindings h "
+                 "ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.state<>'released' "
+                 "AND r.kind='binding' AND r.project_id=? AND h.binding_state='pending' AND h.expires_at_ms>?")
 HOST_RUN_TTL_MS = 24 * 60 * 60 * 1000
 OPERATIONAL_CHECK_TTL_MS = 60 * 60 * 1000
 UPGRADE_RECONCILIATION_TTL_MS = 10 * 60 * 1000
@@ -5299,12 +5304,11 @@ class LearningLedger:
                         raise LedgerError("fallback receipt is unavailable for this run")
                 # O0b RS-A round 2 G4: the cap counts as the status and the signature open do, only live
                 # bindings (pending, not past expiry, and not released by the register), so a released claimed
-                # binding kept pending for its settlement never fills it, even after a clock rollback.
+                # binding kept pending for its settlement never fills it, even after a clock rollback (G12: from
+                # held register rows).
                 pending = int(
                     self._connection.execute(
-                        "SELECT COUNT(*) FROM host_run_bindings h WHERE h.project_id=? "
-                        f"AND h.binding_state='pending' AND h.expires_at_ms>? AND {BINDING_HELD}",
-                        (project_id, timestamp),
+                        "SELECT COUNT(*) " + LIVE_BINDINGS, (project_id, timestamp),
                     ).fetchone()[0]
                 )
                 if pending >= MAX_PENDING_HOST_RUNS:
@@ -11499,9 +11503,8 @@ class LearningLedger:
                 "SELECT COUNT(*) FROM account_observation_origins WHERE project_id=?", (project_id,)).fetchone()[0]
             receipts = live_cleanup_receipts(self, project_id)
             # O0b B0 (narrowed): the holds the open and probe caps count, by the rule each cap uses.
-            bindings = self._connection.execute(
-                "SELECT COUNT(*) FROM host_run_bindings h WHERE h.project_id=? AND h.binding_state='pending' "
-                f"AND h.expires_at_ms>? AND {BINDING_HELD}", (project_id, self._clock_ms())).fetchone()[0]
+            bindings = self._connection.execute(  # G12: from held register rows
+                "SELECT COUNT(*) " + LIVE_BINDINGS, (project_id, self._clock_ms())).fetchone()[0]
             probes = self._connection.execute(
                 "SELECT COUNT(*) FROM account_billing_probe_requests WHERE project_id=? AND state<>'committed'",
                 (project_id,)).fetchone()[0]
@@ -11549,24 +11552,27 @@ class LearningLedger:
             now = self._clock_ms()
             monotonic = self._capacity_clock_reference()
             crashed, parameters = crashed_claim("a", now, monotonic)
+            # O0b RS-A round 2 G12: each kind is read from its held register rows (run_holds_due), so the status
+            # costs what is held, never the project's released history.
             held = self._connection.execute(
                 "SELECT a.kind,a.claimed_at_ms,a.deadline_at_ms,a.execution_deadline_ns,a.clock_reference_ns,"
                 "CASE WHEN " + crashed + " THEN 1 ELSE 0 END AS due "
-                "FROM active_run_capacity a JOIN run_holds r ON r.project_id=a.project_id AND r.kind='run_slot' "
-                "AND r.identity=a.handle_digest WHERE a.project_id=? AND r.state='held'",
+                "FROM run_holds r INDEXED BY run_holds_due CROSS JOIN active_run_capacity a "
+                "ON a.project_id=r.project_id AND a.handle_digest=r.identity WHERE r.state<>'released' "
+                "AND r.state='held' AND r.kind='run_slot' AND r.project_id=?",
                 (*parameters, project_id)).fetchall()
             binding = self._connection.execute(
                 "SELECT COUNT(*),COALESCE(SUM(CASE WHEN h.expires_at_ms<=? THEN 1 ELSE 0 END),0),"
-                "MIN(h.expires_at_ms),MIN(h.expires_at_ms) FROM host_run_bindings h JOIN run_holds r "
-                "ON r.project_id=h.project_id AND r.kind='binding' AND r.identity=h.handle_digest "
-                "WHERE h.project_id=? AND r.state='held'",
+                "MIN(h.expires_at_ms),MIN(h.expires_at_ms) FROM run_holds r INDEXED BY run_holds_due "
+                "CROSS JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity "
+                "WHERE r.state<>'released' AND r.state='held' AND r.kind='binding' AND r.project_id=?",
                 (now, project_id)).fetchone()
             probe = self._connection.execute(
                 "SELECT COUNT(*),COALESCE(SUM(CASE WHEN p.state='reserved' AND p.deadline_at_ms<? THEN 1 ELSE 0 END),0),"
                 "MIN(CASE WHEN p.state='reserved' THEN p.deadline_at_ms+1 END),MIN(p.deadline_at_ms),"
-                "COALESCE(SUM(p.state='admitted'),0) FROM account_billing_probe_requests p "
-                "JOIN run_holds r ON r.project_id=p.project_id AND r.kind='probe' AND r.identity=p.request_key "
-                "WHERE p.project_id=? AND r.state='held'", (now, project_id)).fetchone()
+                "COALESCE(SUM(p.state='admitted'),0) FROM run_holds r INDEXED BY run_holds_due "
+                "CROSS JOIN account_billing_probe_requests p ON p.project_id=r.project_id AND p.request_key=r.identity "
+                "WHERE r.state<>'released' AND r.state='held' AND r.kind='probe' AND r.project_id=?", (now, project_id)).fetchone()
         eligible = [t for t in (self._slot_eligible(row, now, monotonic) for row in held if not row["due"])
                     if t is not None]
         deadlines = [row["deadline_at_ms"] for row in held if row["deadline_at_ms"] is not None]
