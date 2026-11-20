@@ -4,6 +4,19 @@ from dataclasses import replace
 from codex_agents.claim_storage import lease_state_seal
 
 
+SCHEMA_18_TABLES = ('project_holds', 'project_result_contexts', 'project_result_publications',
+                    'project_account_settlements')
+
+
+def legacy_project_holds_layout(store):
+    """Remove only the empty schema18 register and custody tables (slice SB, SH-1) from an older fixture."""
+    for name in SCHEMA_18_TABLES:
+        if store._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0]:
+            raise AssertionError('legacy fixture contains a hold, context, publication or settlement row')
+    for name in SCHEMA_18_TABLES:
+        store._connection.execute('DROP TABLE ' + name)
+
+
 def legacy_registered_run_layout(store):
     """Remove only the empty schema17 registered-run table (S1-R6) from an older fixture."""
     if store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0]:
