@@ -254,7 +254,7 @@ class StartMigrationFailureTests(unittest.TestCase):
         self.assertEqual('migration_failed', start_failure(state, project)['reason_code'])
         record_start_failure(state, project, 'some_other_reason')  # HS-9: a fixed list, not a pattern
         self.assertEqual('migration_failed', start_failure(state, project)['reason_code'])
-        files = list((state.root / 'learning-migration-failures').iterdir())
+        files = list((state.root / 'learning-migration-failures').glob('*.json'))  # HS-14 adds a .lock beside it
         self.assertEqual(1, len(files))  # HS-9: one file per project
         self.assertEqual(0o600, stat.S_IMODE(os.stat(files[0]).st_mode))
         other = Path(temporary.name) / 'other'

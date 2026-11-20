@@ -516,7 +516,7 @@ class ProjectHistory:
         copy in progress is removed and the upgrade does not happen."""
         name = f"history.sqlite3.before-{_SCHEMA_VERSION}.{time.time_ns()}"
         temporary = self._directory / f".{name}.{secrets.token_hex(8)}.partial"
-        published = False
+        final, published = None, False
         try:
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
             try:
@@ -533,15 +533,28 @@ class ProjectHistory:
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
-            os.rename(temporary, self._directory / name)
+            # HS-16: published without replacing anything: a hard link fails if the name exists.
+            for attempt in range(8):
+                candidate = self._directory / (name if attempt == 0 else f"{name}.{secrets.token_hex(4)}")
+                try:
+                    os.link(temporary, candidate, follow_symlinks=False)
+                except FileExistsError:
+                    continue
+                final = candidate
+                break
+            if final is None:
+                raise OSError("no free name for the copy")
+            os.unlink(temporary)
+            os.fsync(self._directory_fd)  # HS-15: the folder's sync is part of success
             published = True
-            os.fsync(self._directory_fd)
         except (OSError, sqlite3.Error):
             raise HistoryError("history_unavailable") from None
         finally:
-            if not published:
-                with contextlib.suppress(OSError):
-                    temporary.unlink()
+            if not published:  # HS-15: every file this attempt made goes, its final name too
+                for path in (temporary, final):
+                    if path is not None:
+                        with contextlib.suppress(OSError):
+                            path.unlink()
 
     def _initialize_results(self) -> None:
         check = keyed_digest(self._result_key, "project-result-key-v1:" + self.project_id)

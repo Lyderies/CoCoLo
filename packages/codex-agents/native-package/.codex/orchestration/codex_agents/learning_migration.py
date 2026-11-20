@@ -26,6 +26,8 @@ records were written after the cutover (`history_learning_reconciliation`).
 
 from __future__ import annotations
 
+import contextlib
+
 from .history_contracts import HistoryError
 from .learning_source_transfer import stage_source
 from .project_learning_activation import (
@@ -147,8 +149,36 @@ def _start_failure_path(state, project_root):
     return state.root / START_FAILURES / f"{digest}.json"
 
 
+@contextlib.contextmanager
+def _start_failure_lock(state, project_root):
+    """O10 HS-14: one per-project lock for recording and clearing, taken without waiting; yields whether
+    it is held. Never blocks a start."""
+    import fcntl
+    import os
+    descriptor = None
+    try:
+        path = _start_failure_path(state, project_root).with_suffix(".lock")
+        os.makedirs(path.parent, mode=0o700, exist_ok=True)
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        held = True
+    except Exception:
+        held = False
+    try:
+        yield held
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def record_start_failure(state, project_root, reason) -> None:
     """Best effort: never stops, and never blocks, the start it describes."""
+    with _start_failure_lock(state, project_root) as held:
+        if held:
+            _record_start_failure(state, project_root, reason)
+
+
+def _record_start_failure(state, project_root, reason) -> None:
     import json
     import os
     import secrets
@@ -182,16 +212,19 @@ def clear_start_failure(state, project_root, *, since_ms=None) -> None:
     """O10 HS-13: a successful start clears only a failure kept before it began (`since_ms`), never a
     newer one another start kept meanwhile."""
     import os
-    try:
-        if since_ms is not None:
-            kept = start_failure(state, project_root)
-            if kept is not None and kept["at_ms"] >= since_ms:
-                return
-        path = _start_failure_path(state, project_root)
-        if not path.is_symlink():
-            os.unlink(path)
-    except Exception:
-        pass
+    with _start_failure_lock(state, project_root) as held:
+        if not held:
+            return  # HS-14: another start is keeping a failure now; leave it
+        try:
+            if since_ms is not None:
+                kept = start_failure(state, project_root)
+                if kept is not None and kept["at_ms"] >= since_ms:
+                    return
+            path = _start_failure_path(state, project_root)
+            if not path.is_symlink():
+                os.unlink(path)
+        except Exception:
+            pass
 
 
 def start_failure(state, project_root):
@@ -208,7 +241,7 @@ def start_failure(state, project_root):
     try:
         info = os.fstat(descriptor)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600
-                or info.st_size > 4096):
+                or info.st_nlink != 1 or info.st_size > 4096):  # HS-17: one link only
             return None
         entry = json.loads(os.read(descriptor, 4096))
     except Exception:
