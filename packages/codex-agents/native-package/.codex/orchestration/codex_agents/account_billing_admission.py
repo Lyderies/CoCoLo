@@ -176,8 +176,10 @@ class AccountBillingAdmission:
                     raise ProbeAdmissionError('probe_conflict')
                 self._authorize(context, snapshot, before_commit)
                 return original
-            count = self._one('SELECT COUNT(*) FROM (SELECT 1 FROM account_billing_probe_origins '
-                'WHERE project_id=? LIMIT ?)', (project, MAX_PROBE_REQUESTS+1))[0]
+            # O0b B0-5 (narrowed): only probes in progress count, so finished ones never fill a project
+            # for good; their records stay, so a replay still finds its stored answer.
+            count = self._one("SELECT COUNT(*) FROM (SELECT 1 FROM account_billing_probe_requests "
+                "WHERE project_id=? AND state<>'committed' LIMIT ?)", (project, MAX_PROBE_REQUESTS+1))[0]
             if count >= MAX_PROBE_REQUESTS:
                 raise ProbeAdmissionError('probe_full')
             if (len(self._pending) >= MAX_PENDING_PROBES
