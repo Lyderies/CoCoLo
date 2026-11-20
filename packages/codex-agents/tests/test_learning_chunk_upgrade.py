@@ -91,7 +91,7 @@ class LearningChunkUpgradeTests(unittest.TestCase):
             self.assertEqual(self.original, self.rows(connection))
         store = ProjectHistory(self.directory, PROJECT, allow_schema_upgrade=True)
         try:
-            self.assertEqual(17, store._connection.execute('PRAGMA user_version').fetchone()[0])
+            self.assertEqual(18, store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) SB: schema 18
             self.assertEqual(self.original, self.rows(store._connection))
             with self.assertRaisesRegex(HistoryError, '^history_learning_incomplete$'):
                 store.learning_import_chunk('old-import', 0)

@@ -4,6 +4,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- The project's records gain format 18: four empty tables for the run supervisor's project-side holds, kept
+  results' contexts, prepared publications and account settlements, with checks that run at every open and
+  inside the upgrade. The service upgrades a project when it starts, keeping a copy as it was
+  (`history.sqlite3.before-18.<time>`); a failed check leaves format 17 untouched. An earlier 0.4.0 build
+  refuses a format-18 project.
 - `learning-status` shows launches the service cannot settle (`unresolved_launches`: how many, the oldest's age, and
   up to 16 by run and state), instead of keeping them out of sight. The launch journal now reads every entry however
   many there are, and removes lock files a stopped service left behind.
