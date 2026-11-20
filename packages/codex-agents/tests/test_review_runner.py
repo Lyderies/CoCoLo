@@ -96,6 +96,51 @@ class ReviewRunnerTests(unittest.TestCase):
         self.assertEqual('provider-observe', cli.calls[-1])
 
 
+class ReviewCorrectionTests(ReviewRunnerTests):
+    def test_F1_a_symlinked_work_entry_is_refused_and_its_target_untouched(self):
+        outside = Path(self.work.parent) / 'outside.json'
+        outside.write_text('keep')
+        self.work.mkdir(parents=True)
+        (self.work / 'task.json').symlink_to(outside)
+        with self.assertRaises(review_runner.ReviewError) as stopped:
+            self.run_step('worker', FakeCli())
+        self.assertEqual('review_unsafe_work_dir', stopped.exception.reason_code)
+        self.assertEqual('keep', outside.read_text())
+
+    def test_F2_a_failed_rerun_never_lets_the_next_stage_use_the_earlier_marker(self):
+        self.run_step('worker', FakeCli())
+        with self.assertRaises(review_runner.ReviewError):
+            self.run_step('worker', FakeCli(verdicts=(None,)))  # rerun without a verdict
+        with self.assertRaises(review_runner.ReviewError) as stopped:
+            self.run_step('verify', FakeCli())
+        self.assertEqual('review_stage_not_ready', stopped.exception.reason_code)
+
+    def test_F3_F4_paths_are_absolute_and_the_close_status_is_passed_on(self):
+        import os
+        calls = []
+
+        def cli(name, *args):
+            calls.append((name, args))
+            return FakeCli()(name, *args)
+        relative_work = os.path.relpath(self.work)
+        review_runner.run('worker', self.spec, relative_work, os.path.relpath(self.root), cli=cli)
+        roots = [args[args.index('--project-root') + 1] for _, args in calls if '--project-root' in args]
+        self.assertTrue(roots and all(Path(root).is_absolute() for root in roots))
+        files = [arg for _, args in calls for arg in args if arg.endswith('.json')]
+        self.assertTrue(files and all(Path(item).is_absolute() for item in files))
+        review_runner.run('verify', self.spec, self.work, self.root, cli=cli)
+        review_runner.run('finish', self.spec, self.work, self.root, cli=cli, status='failed')
+        close = [args for name, args in calls if name == 'learning-close-orchestration'][0]
+        self.assertEqual('failed', close[close.index('--status') + 1])
+
+    def test_F5_evidence_values_are_checked_before_any_step(self):
+        cli = FakeCli()
+        for evidence in ([{'id': [], 'description': None}], [{'id': '', 'description': 'x'}]):
+            with self.subTest(evidence=evidence), self.assertRaises(review_runner.ReviewError):
+                review_runner.run('worker', {**self.spec, 'evidence': evidence}, self.work, self.root, cli=cli)
+        self.assertEqual([], cli.calls)
+
+
 class ReviewCommandTests(ReviewRunnerTests):
     def test_H1d_1_4_the_learning_review_command_refuses_a_bad_spec_with_its_next_step(self):
         import contextlib
