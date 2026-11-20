@@ -64,7 +64,13 @@ class AccountHostTests(unittest.TestCase):
             os.kill(pid, signal.SIGTERM)
         end = time.monotonic() + 20
         while self.processes('project_host.py') or self.processes('collector_host.py'):
-            self.assertLess(time.monotonic(), end, 'service processes did not stop on SIGTERM')
+            if time.monotonic() >= end:
+                # O10: which process outlived the signal, and how long it had run, for the next report.
+                left = {entry: self.processes(entry) for entry in ('project_host.py', 'collector_host.py')}
+                ages = subprocess.run(['ps', '-o', 'pid=,etime=,stat=', '-p',
+                                       ','.join(str(pid) for pids in left.values() for pid in pids) or '0'],
+                                      stdout=subprocess.PIPE, text=True, check=False).stdout.split('\n')
+                self.fail(f'service processes did not stop on SIGTERM: {left} {ages}')
             time.sleep(.05)
 
     def cli(self, command, *args, project=None, expected=0, terminal=False):
