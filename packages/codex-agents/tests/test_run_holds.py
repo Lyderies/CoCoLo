@@ -156,6 +156,38 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.assertEqual(len(holds), len(set(
             (row["kind"], row["identity"]) for row in ledger._connection.execute("SELECT kind, identity FROM run_holds"))))
 
+    def binding_hold(self, handle):
+        from codex_agents.learning_contracts import keyed_digest
+        digest = keyed_digest(self.ledger.state.digest_key(), handle)
+        row = self.ledger._connection.execute(
+            "SELECT state, release_kind FROM run_holds WHERE kind='binding' AND project_id=? AND identity=?",
+            (self.project, digest)).fetchone()
+        return None if row is None else tuple(row)
+
+    def test_RS_A_2_a_never_claimed_binding_is_withdrawn_for_good(self):
+        project, launch = self.new_attempt()
+        first = self.ledger.withdraw_open(project, run_handle=launch.run_handle)
+        self.assertEqual(("released", "withdrawn"), self.binding_hold(launch.run_handle))
+        self.assertEqual("withdrawn", first["state"])
+        self.assertEqual({**first, "known": True}, self.ledger.withdraw_open(project, run_handle=launch.run_handle))
+        with self.assertRaises(ClaimError):  # a claim after the withdrawal is refused
+            self.claim((project, launch), "after-withdrawal")
+
+    def test_RS_A_2_a_binding_whose_claim_was_admitted_is_never_withdrawn(self):
+        project, launch = self.new_attempt()
+        self.claim((project, launch), "admitted")
+        with self.assertRaises(LedgerError):
+            self.ledger.withdraw_open(project, run_handle=launch.run_handle)
+        self.assertEqual(("held", None), self.binding_hold(launch.run_handle))
+
+    def test_RS_A_5_withdrawal_for_another_project_or_handle_changes_nothing(self):
+        project, launch = self.new_attempt()
+        other = self.second_project()
+        for target, handle in ((other, launch.run_handle), (project, "hrn_" + "0" * 48)):
+            with self.subTest(target=target, handle=handle), self.assertRaises(LedgerError):
+                self.ledger.withdraw_open(target, run_handle=handle)
+        self.assertEqual(("held", None), self.binding_hold(launch.run_handle))
+
     def test_RS_A_1_each_account_hold_has_its_register_row(self):
         self.case.claim()
         holds = [dict(r) for r in self.ledger._connection.execute(
