@@ -80,6 +80,7 @@
  "codex:tests.test_execution_activity": "unit",
  "codex:tests.test_execution_limits": "unit",
  "codex:tests.test_git_plumbing": "integration",
+ "codex:tests.test_health_contention": "integration",
  "codex:tests.test_history_api": "integration",
  "codex:tests.test_hook_client_boundary": "integration",
  "codex:tests.test_hook_config": "integration",

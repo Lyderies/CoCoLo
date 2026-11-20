@@ -1581,6 +1581,19 @@ class WizardTerminalTests(unittest.TestCase):
         self.assertEqual("4", (self.base / "status.count").read_text().strip())
         self.assertNotIn("not ready", self.screen)
 
+    def test_H1a_6c_setup_waits_for_a_collector_whose_ledger_is_busy(self) -> None:
+        project, checks = self.make_project()
+        self.drive_to_commit_menu(project, checks, {"FAKE_REGISTER": '{"ready": true, "state_moved": null}',
+                                                    "FAKE_STATUS_STARTING": "2",
+                                                    "FAKE_STATUS_REASON": "status_ledger_busy"})
+        self.send("\r")
+        self.expect("Continue")
+        self.send("\r")
+        self.expect("Register now")
+        self.send("\r")
+        self.expect("Collector status: ready")
+        self.assertEqual("3", (self.base / "status.count").read_text().strip())
+
     def test_C6_any_other_reason_still_fails_at_once(self) -> None:
         project, checks = self.make_project()
         self.drive_to_commit_menu(project, checks, {"FAKE_REGISTER": '{"ready": true, "state_moved": null}',
