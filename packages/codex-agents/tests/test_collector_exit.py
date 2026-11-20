@@ -349,8 +349,13 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         process = self.run_wrapper(RESTART_WRAPPER)
         process.wait(timeout=60)
         self.wait_gone()
+        # C5 (review 040-s1-h1c): the exit record keeps a cause older readers know; the restart's lane
+        # and cause are in account-restart.json.
         record, _ = self.previous_exit()
-        self.assertEqual(('account_restart', 'ingress_cleanup_failed'), (record['cause'], record['error']))
+        self.assertEqual('requested', record['cause'])
+        from codex_agents import account_restart
+        last = account_restart.last_restart(self.state.root)
+        self.assertEqual(('ingress', 'ingress_cleanup_failed'), (last['lane'], last['cause']))
 
     def test_C10a_an_error_in_the_collector_thread_is_recorded(self):
         process = self.run_wrapper(THREAD_WRAPPER)

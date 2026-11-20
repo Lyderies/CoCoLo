@@ -55,24 +55,57 @@ class RestartDecisionTests(unittest.TestCase):
         decision = self.decide(busy)
         self.assertEqual(('wait', {'observations': 1}), (decision['action'], decision['held']['lanes']))
 
+    def test_C3_kept_work_outside_the_stuck_lane_means_wait(self):
+        notes = lanes(ingress=lane(faulted=True), billing=lane(kept=1))
+        decision = self.decide(notes)
+        self.assertEqual(('wait', {'billing': 1}), (decision['action'], decision['held']['lanes']))
+
     def test_H1c_2_kept_work_that_makes_it_stuck_does_not_count_as_running(self):
         notes = lanes(probe_worker=lane(kept=1, held_since_ms=NOW - 20 * MINUTE),
                       billing=lane(kept=1))
         self.assertEqual('restart', self.decide(notes)['action'])
 
-    def test_H1c_5_at_most_one_self_restart_an_hour(self):
+    def test_H1c_5_C4_at_most_one_self_restart_an_hour_by_the_last_restart_kept(self):
+        # C4 (review 040-s1-h1c): `previous` is the last self-restart (account-restart.json), not the
+        # latest exit record, so an ordinary exit in between never resets the hour.
         notes = lanes(ingress=lane(faulted=True))
-        recent = {'cause': 'account_restart', 'stopped_at_ms': NOW - 30 * MINUTE}
-        self.assertEqual('suppressed', self.decide(notes, previous=recent)['action'])
-        older = {'cause': 'account_restart', 'stopped_at_ms': NOW - 61 * MINUTE}
-        self.assertEqual('restart', self.decide(notes, previous=older)['action'])
-        other = {'cause': 'signal', 'stopped_at_ms': NOW - MINUTE}
-        self.assertEqual('restart', self.decide(notes, previous=other)['action'])
+        self.assertEqual('suppressed', self.decide(notes, previous={'at_ms': NOW - 30 * MINUTE})['action'])
+        self.assertEqual('suppressed', self.decide(notes, previous={'at_ms': NOW - 60 * MINUTE + 1})['action'])
+        self.assertEqual('restart', self.decide(notes, previous={'at_ms': NOW - 61 * MINUTE})['action'])
+        self.assertEqual('restart', self.decide(notes, previous=None)['action'])
 
     def test_missing_or_malformed_notes_never_restart(self):
         for notes in (None, {}, {'ingress': 'x'}, lanes(ingress={'faulted': True})):
             with self.subTest(notes=notes):
                 self.assertEqual('ok', self.decide(notes)['action'])
+
+
+class RestartRecordTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    def test_C4_C5_the_last_self_restart_is_kept_owner_only_and_read_back(self):
+        import os
+        self.assertIsNone(account_restart.last_restart(self.root))
+        self.assertTrue(account_restart.record_restart(self.root, lane='ingress', cause='ingress_cleanup_failed',
+                                                       now_ms=NOW))
+        self.assertEqual({'at_ms': NOW, 'lane': 'ingress', 'cause': 'ingress_cleanup_failed'},
+                         account_restart.last_restart(self.root))
+        self.assertEqual(0o600, os.stat(self.root / 'account-restart.json').st_mode & 0o777)
+
+    def test_C4_a_restart_that_cannot_be_recorded_does_not_happen(self):
+        from unittest import mock
+        with mock.patch.object(account_restart.os, 'replace', side_effect=OSError('full')):
+            self.assertFalse(account_restart.record_restart(self.root, lane='ingress', cause='x_failed', now_ms=NOW))
+        self.assertIsNone(account_restart.last_restart(self.root))
+
+    def test_a_malformed_record_reads_as_none(self):
+        (self.root / 'account-restart.json').write_text('{"at_ms": "soon"}')
+        self.assertIsNone(account_restart.last_restart(self.root))
 
 
 class RestartCheckTests(unittest.TestCase):
