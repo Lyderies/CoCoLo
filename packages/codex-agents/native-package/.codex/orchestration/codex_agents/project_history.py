@@ -453,37 +453,46 @@ class ProjectHistory:
             # O10 HS-5/HS-6: every check passes before anything is written, and the store is kept as it
             # was, under this writer lock, on every path that upgrades.
             self._check_result_identity_before_upgrade(version)
-            self._keep_copy_before_upgrade(version)
-            with self._transaction():
-                additions = ((_RESULT_SCHEMA if version == 1 else "") + (_LEASE_SCHEMA if version < 3 else "")
-                             + (_EXECUTION_SCHEMA if version < 4 else "")
-                             + (ORCHESTRATION_SCHEMA if version < 5 else "")
-                             + (_HOST_OPEN_SCHEMA if version < 6 else "")
-                             + (CHECK_SCHEMA if version < 7 else "") + (QA_SCHEMA if version < 8 else ""))
-                for statement in additions.split(";"):
-                    if statement.strip():
-                        connection.execute(statement)
-                if version < 9:
-                    connection.execute('ALTER TABLE result_leases ADD COLUMN cleanup_reservation_digest TEXT')
-                elif version == 9:
-                    connection.execute('ALTER TABLE project_cleanup_reservations ADD COLUMN account_release_digest TEXT')
-                for statement in ((CLEANUP_SCHEMA if version < 9 else '') + (ACK_SCHEMA if version < 10 else '')
-                                  + (LEARNING_SCHEMA if version < 11 else '')
-                                  + (LEARNING_OUTCOME_INDEX if version < 12 else '')
-                                  + (LEARNING_QA_SCHEMA if version < 13 else '')
-                                  + (LEARNING_CHUNK_SCHEMA if version < 14 else '')
-                                  + (LEARNING_SOURCE_SCHEMA if version < 15 else '')
-                                  + (ACTIVATION_SCHEMA if version < 16 else '')
-                                  + REGISTERED_RUN_SCHEMA).split(';'):
-                    if statement.strip():
-                        connection.execute(statement)
-                connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+            copy = self._keep_copy_before_upgrade(version)
+            try:
+                self._upgrade(connection, version)
+            except BaseException:
+                # O10 HS-18: the store is unchanged, so the copy made for this attempt goes too.
+                with contextlib.suppress(OSError):
+                    copy.unlink()
+                raise
         elif (
             version != _SCHEMA_VERSION or application != _APPLICATION_ID
             or actual_schema != schema_set(_SCHEMA)
         ):
             raise HistoryError("history_incompatible")
         self._check_schema_identity(_COLUMNS)
+
+    def _upgrade(self, connection, version) -> None:
+        with self._transaction():
+            additions = ((_RESULT_SCHEMA if version == 1 else "") + (_LEASE_SCHEMA if version < 3 else "")
+                         + (_EXECUTION_SCHEMA if version < 4 else "")
+                         + (ORCHESTRATION_SCHEMA if version < 5 else "")
+                         + (_HOST_OPEN_SCHEMA if version < 6 else "")
+                         + (CHECK_SCHEMA if version < 7 else "") + (QA_SCHEMA if version < 8 else ""))
+            for statement in additions.split(";"):
+                if statement.strip():
+                    connection.execute(statement)
+            if version < 9:
+                connection.execute('ALTER TABLE result_leases ADD COLUMN cleanup_reservation_digest TEXT')
+            elif version == 9:
+                connection.execute('ALTER TABLE project_cleanup_reservations ADD COLUMN account_release_digest TEXT')
+            for statement in ((CLEANUP_SCHEMA if version < 9 else '') + (ACK_SCHEMA if version < 10 else '')
+                              + (LEARNING_SCHEMA if version < 11 else '')
+                              + (LEARNING_OUTCOME_INDEX if version < 12 else '')
+                              + (LEARNING_QA_SCHEMA if version < 13 else '')
+                              + (LEARNING_CHUNK_SCHEMA if version < 14 else '')
+                              + (LEARNING_SOURCE_SCHEMA if version < 15 else '')
+                              + (ACTIVATION_SCHEMA if version < 16 else '')
+                              + REGISTERED_RUN_SCHEMA).split(';'):
+                if statement.strip():
+                    connection.execute(statement)
+            connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
 
     def _check_schema_identity(self, tables: dict) -> None:
         for name, columns in tables.items():
@@ -547,6 +556,7 @@ class ProjectHistory:
             os.unlink(temporary)
             os.fsync(self._directory_fd)  # HS-15: the folder's sync is part of success
             published = True
+            return final
         except (OSError, sqlite3.Error):
             raise HistoryError("history_unavailable") from None
         finally:

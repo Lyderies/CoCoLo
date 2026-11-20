@@ -197,7 +197,7 @@ def _ended_report(path):
             value = json.loads(os.read(descriptor, 4096) or b'{}')
         finally:
             os.close(descriptor)
-    except (OSError, ValueError):
+    except Exception:  # O10 HS-19: whatever the file holds, never an error
         return {}
     reason = value.get('reason_code') if type(value) is dict else None
     return {'reason_code': reason} if type(reason) is str and reason in SERVICE_START_REASONS else {}
