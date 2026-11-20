@@ -6,11 +6,19 @@ once an hour; when something is running it waits and names what is held.
 """
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+
 LANES = ('signature', 'claims', 'observations', 'ingress', 'billing', 'probe_worker')
 _LANE_KEYS = {'faulted', 'kept', 'busy', 'queued', 'last_failure', 'held_since_ms'}
 PROBE_HELD_MS = 10 * 60_000
 CHECK_EVERY_SECONDS = 60  # H1c-6: at most once a minute
 RESTART_EVERY_MS = 60 * 60_000
+RECORD_NAME = 'account-restart.json'  # C4: the last self-restart, owner-only, kept apart from exit records
+_CODE = re.compile(r'[a-z][a-z_]{2,63}')
 
 
 def _checked(notes):
@@ -46,14 +54,18 @@ def decide(notes, idle, previous, *, now_ms):
     idle = idle if type(idle) is dict else {}
     held = {'run_slots': list(idle.get('run_slots') or []), 'probes': list(idle.get('probes') or []),
             # Kept work is what makes it stuck; busy or queued work is still running (H1c-2).
-            'lanes': {name: notes[name]['busy'] + notes[name]['queued'] for name in LANES
-                      if notes[name]['busy'] + notes[name]['queued']}}
+            # C3: kept work counts too, except the stuck lane's own (and billing's when the probe worker
+            # is stuck, since its kept jobs are what hold it).
+            'lanes': {name: count for name in LANES
+                      if (count := notes[name]['busy'] + notes[name]['queued']
+                          + (0 if name == lane or (lane == 'probe_worker' and name == 'billing')
+                             else notes[name]['kept']))}}
     if type(idle) is not dict or 'run_slots' not in idle or 'probes' not in idle:
         held['unknown'] = True  # the ledger could not say: never restart blind
     if any(held.values()):
         return {'action': 'wait', 'lane': lane, 'cause': cause, 'held': held}
-    if (type(previous) is dict and previous.get('cause') == 'account_restart'
-            and type(previous.get('stopped_at_ms')) is int and now_ms - previous['stopped_at_ms'] < RESTART_EVERY_MS):
+    # C4: `previous` is the last self-restart (record_restart), not the latest exit record.
+    if type(previous) is dict and type(previous.get('at_ms')) is int and now_ms - previous['at_ms'] < RESTART_EVERY_MS:
         return {'action': 'suppressed', 'lane': lane, 'cause': cause, 'held': held}
     return {'action': 'restart', 'lane': lane, 'cause': cause, 'held': held}
 
@@ -73,3 +85,49 @@ def check(read_notes, read_idle, previous, *, now_ms):
         return decide(notes, idle, previous, now_ms=now_ms)
     except Exception:
         return {'action': 'ok', 'lane': None, 'cause': None, 'held': None}
+
+
+def record_restart(state_root, *, lane, cause, now_ms) -> bool:
+    """C4: keep this self-restart (time, lane, fixed cause) durably before stopping; False if it could
+    not be kept, and then the restart does not happen."""
+    try:
+        if not (type(lane) is str and lane in LANES and type(cause) is str and _CODE.fullmatch(cause)
+                and type(now_ms) is int):
+            return False
+        target = Path(state_root) / RECORD_NAME
+        temporary = target.with_name(f'.{target.name}.{os.getpid()}.{secrets.token_hex(8)}')
+        data = json.dumps({'at_ms': now_ms, 'lane': lane, 'cause': cause}, sort_keys=True).encode()
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        try:
+            try:
+                os.fchmod(descriptor, 0o600)
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(descriptor, view):]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, target)
+        finally:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+        return True
+    except Exception:
+        return False
+
+
+def last_restart(state_root):
+    """C4/C5: the last self-restart kept, or None when there is none or it is malformed. Never raises."""
+    try:
+        path = Path(state_root) / RECORD_NAME
+        if path.is_symlink() or not path.is_file():
+            return None
+        record = json.loads(path.read_bytes()[:4096])
+        if (type(record) is dict and set(record) == {'at_ms', 'lane', 'cause'} and type(record['at_ms']) is int
+                and record['lane'] in LANES and type(record['cause']) is str and _CODE.fullmatch(record['cause'])):
+            return record
+    except Exception:
+        pass
+    return None

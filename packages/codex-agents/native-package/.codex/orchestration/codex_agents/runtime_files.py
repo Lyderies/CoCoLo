@@ -166,6 +166,7 @@ RUNTIME_FILES = (
     "codex_agents/result_persistence.py",
     "codex_agents/result_read_api.py",
     "codex_agents/result_read_service.py",
+    "codex_agents/review_runner.py",
     "codex_agents/routing.py",
     "codex_agents/run_failure_reasons.py",
     "codex_agents/run_provenance.py",

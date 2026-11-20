@@ -11214,18 +11214,15 @@ class LearningLedger:
             )
 
     def machine_idle(self) -> dict[str, list[str]]:
-        """S1-H1c: the projects that still have a run slot counted or an admitted probe, read only. A
-        slot counts unless it is past crashed_claim's grace on both clocks (or rebooted) or is an
-        earlier version's slot past LEGACY_RUN_MAX_MS; this errs on the side of "still running"."""
-        now_ms, mono = time.time_ns() // 1_000_000, time.monotonic_ns()
+        """S1-H1c: the projects that still have an unreleased run slot from the last day or an admitted
+        probe, read only; this errs on the side of "still running"."""
+        now_ms = time.time_ns() // 1_000_000
         with self._lock:
+            # C1 (review 040-s1-h1c): any unreleased slot claimed in the last day, counted or not, since
+            # its child may outlive its counted life.
             runs = self._connection.execute(
                 "SELECT DISTINCT project_id FROM active_run_capacity WHERE released_at_ms IS NULL "
-                "AND NOT (deadline_at_ms IS NOT NULL AND deadline_at_ms+:grace<:now AND "
-                "(execution_deadline_ns+:grace_ns<=:mono OR clock_reference_ns>:mono)) "
-                "AND NOT (deadline_at_ms IS NULL AND claimed_at_ms<:legacy) ORDER BY project_id",
-                {"now": now_ms, "mono": mono, "grace": CRASHED_CLAIM_GRACE_MS,
-                 "grace_ns": CRASHED_CLAIM_GRACE_MS * 1_000_000, "legacy": now_ms - LEGACY_RUN_MAX_MS}).fetchall()
+                "AND claimed_at_ms>=? ORDER BY project_id", (now_ms - LEGACY_RUN_MAX_MS,)).fetchall()
             probes = self._connection.execute(
                 "SELECT DISTINCT project_id FROM account_billing_probe_requests WHERE state='admitted' "
                 "ORDER BY project_id").fetchall()

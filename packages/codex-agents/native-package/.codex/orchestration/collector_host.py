@@ -94,14 +94,21 @@ def main(argv: list[str] | None = None) -> int:
             if account is not None and time.monotonic() - restart_checked >= account_restart.CHECK_EVERY_SECONDS:
                 restart_checked = time.monotonic()
                 # S1-H1c (owner: restart automatically): only when stuck and nothing is running.
-                decision = account_restart.check(account.health_notes, ledger.machine_idle, server.previous_exit,
-                                                 now_ms=time.time_ns() // 1_000_000)
+                # The decision and the stop are made here, between two owner steps: only the owner admits
+                # claims and probes, so none can be admitted in between (review 040-s1-h1c, C2).
+                now_ms = time.time_ns() // 1_000_000
+                decision = account_restart.check(account.health_notes, ledger.machine_idle,
+                                                 account_restart.last_restart(state.root), now_ms=now_ms)
+                if decision["action"] == "restart" and not account_restart.record_restart(
+                        state.root, lane=decision["lane"], cause=decision["cause"], now_ms=now_ms):
+                    decision = {**decision, "action": "suppressed"}  # C4: not kept, so not restarted
                 server.account_restart = decision
                 if decision["action"] == "restart":
                     stopping["restart"] = decision["cause"]
                     break
-        # Read before teardown: server.stop() sets the same flag (C10d).
-        stopping["requested"] = server._stop.is_set()
+        # Read before teardown: server.stop() sets the same flag (C10d). A self-restart is a request:
+        # the exit record keeps a cause older readers know (review 040-s1-h1c, C5).
+        stopping["requested"] = server._stop.is_set() or stopping["restart"] is not None
     except SystemExit as stop:
         if not stopping["signal"]:
             stopping["error"] = stop  # Not from a signal: recorded as an error (C10b).
@@ -137,13 +144,10 @@ def main(argv: list[str] | None = None) -> int:
                 cause = "signal"
             elif stopping["removed"]:
                 cause = "state_removed"
-            elif stopping["restart"] is not None:
-                cause = "account_restart"
             else:
                 cause = "requested" if stopping["requested"] else "thread_ended"
             if state.root.is_dir():
-                write_exit(state.root, started_at_ms=server._started_at_ms, cause=cause, error=error,
-                           detail=stopping["restart"])
+                write_exit(state.root, started_at_ms=server._started_at_ms, cause=cause, error=error)
         except BaseException:
             pass
         finally:
