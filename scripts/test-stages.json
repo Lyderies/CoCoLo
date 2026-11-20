@@ -86,6 +86,7 @@
  "codex:tests.test_event_shapes": "unit",
  "codex:tests.test_execution_activity": "unit",
  "codex:tests.test_execution_limits": "unit",
+ "codex:tests.test_gate_policy": "unit",
  "codex:tests.test_git_plumbing": "integration",
  "codex:tests.test_hardened_git": "integration",
  "codex:tests.test_health_contention": "integration",
