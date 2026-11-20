@@ -141,6 +141,31 @@ class ReviewCorrectionTests(ReviewRunnerTests):
         self.assertEqual([], cli.calls)
 
 
+class ReviewVerifierCorrectionTests(ReviewRunnerTests):
+    def test_an_existing_folder_outside_the_project_is_refused_as_the_packet(self):
+        (self.root.parent / 'outside').mkdir()  # it exists, so only the inside-the-project check refuses it
+        cli = FakeCli()
+        with self.assertRaises(review_runner.ReviewError) as stopped:
+            review_runner.run('worker', {**self.spec, 'packet': '../outside'}, self.work, self.root, cli=cli)
+        self.assertEqual(('review_invalid_spec', []), (stopped.exception.reason_code, cli.calls))
+
+    def test_an_empty_verdict_is_no_verdict_and_a_verifier_without_one_is_named(self):
+        with self.assertRaises(review_runner.ReviewError) as stopped:
+            review_runner.run('worker', self.spec, self.work, self.root, cli=FakeCli(verdicts=('',)))
+        self.assertEqual(('review_no_verdict', 'worker'), (stopped.exception.reason_code, stopped.exception.detail))
+        review_runner.run('worker', self.spec, self.work, self.root, cli=FakeCli())
+        with self.assertRaises(review_runner.ReviewError) as stopped:
+            review_runner.run('verify', self.spec, self.work, self.root, cli=FakeCli(verdicts=(None,)))
+        self.assertEqual(('review_no_verdict', 'verifier'), (stopped.exception.reason_code, stopped.exception.detail))
+
+    def test_a_malformed_child_reply_stops_the_review_instead_of_crashing(self):
+        def cli(name, *args):
+            return {'ready': True} if name == 'learning-route' else FakeCli()(name, *args)
+        with self.assertRaises(review_runner.ReviewError) as stopped:
+            review_runner.run('worker', self.spec, self.work, self.root, cli=cli)
+        self.assertEqual('review_step_unreadable', stopped.exception.reason_code)
+
+
 class ReviewCommandTests(ReviewRunnerTests):
     def test_H1d_1_4_the_learning_review_command_refuses_a_bad_spec_with_its_next_step(self):
         import contextlib
