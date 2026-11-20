@@ -313,6 +313,153 @@ class LedgerLockLimitTests(unittest.TestCase):
         time.sleep(0.1)
         self.assertEqual(count, len(calls))
 
+    def controlled_sweep_loop(self, release, clock, *, interval=60.0, until=300.0, at_wait=None, due_check=None):
+        """O0b RS-A round 2 G6: the collector's sweep loop on this thread under a controlled clock (`clock[0]`,
+        in seconds, from 0). Each wait advances the clock by its length, and a stop ends the run once past
+        `until`; `at_wait(now, seconds)` sees each wait as it begins. Every sweep but the release is a no-op;
+        `due_check`, when given, stands in for the ledger's check for due holds. Returns the full cycles'
+        times and every wait's length."""
+        import types
+        from unittest import mock
+        cycles, waits = [], []
+
+        class Stop:  # the sweeps' stop event, its waits on the controlled clock
+            flag = False
+
+            def is_set(self):
+                return self.flag
+
+            def set(self):
+                self.flag = True
+
+            def wait(self, seconds):
+                waits.append(seconds)
+                if len(waits) > 100_000:  # a loop that spins without advancing the clock
+                    self.flag = True
+                if at_wait is not None:
+                    at_wait(clock[0], seconds)
+                clock[0] += max(0.0, seconds)
+                if clock[0] > until:
+                    self.flag = True
+                return self.flag
+        controlled = types.SimpleNamespace(**{name: getattr(time, name) for name in dir(time)
+                                              if not name.startswith('_')})
+        controlled.monotonic = lambda: clock[0]
+        server = learning_store.CollectorServer(self.ledger)
+        server._sweeps_stop = Stop()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(learning_store, 'time', controlled))
+            stack.enter_context(mock.patch.object(learning_store, 'WORKER_RESULT_SWEEP_SECONDS', interval))
+            stack.enter_context(mock.patch.object(self.ledger, 'sweep_worker_results',
+                                                  side_effect=lambda: cycles.append(clock[0])))
+            for name in ('sweep_event_retention', 'sweep_account_retention'):
+                stack.enter_context(mock.patch.object(self.ledger, name, return_value=0))
+            stack.enter_context(mock.patch.object(self.ledger, 'release_due_account_holds', side_effect=release))
+            if due_check is not None:
+                stack.enter_context(mock.patch.object(self.ledger, 'account_holds_due', create=True,
+                                                      side_effect=due_check))
+            server._sweep_loop()
+        self.assertLessEqual(len(waits), 100_000, 'the sweep loop spun without waiting')
+        self.assertIsNone(server.sweep_error)
+        return cycles, waits
+
+    def test_RS_A_G6_a_burst_arriving_while_idle_clears_within_60_seconds_of_its_arrival(self):
+        """O0b RS-A round 2 G6 (draft 3 item 6; review 040-rsa-code-r2-3): 1,000 due holds that appear just
+        after an idle wait begins (after the first full cycle, so the next is nearly a whole interval away)
+        are all released within 60 s of their arrival on a free ledger, the gaps between batches included."""
+        for armed in range(3):  # just after the first, second or third wait past the first full cycle begins
+            with self.subTest(armed=armed):
+                clock, remaining, arrival, batches, waits_seen = [0.0], [1000], [], [], []
+
+                def at_wait(now, seconds):
+                    if arrival or now < 60.0 or seconds <= 0.001:  # the first full cycle runs at 60 s
+                        return
+                    waits_seen.append(now)
+                    if len(waits_seen) > armed:
+                        arrival.append(now + 0.001)
+
+                def due():
+                    return bool(arrival) and clock[0] >= arrival[0] and remaining[0] > 0
+
+                def release(*, limit):
+                    if not due():
+                        return 0
+                    done = min(limit, remaining[0])
+                    remaining[0] -= done
+                    batches.append(clock[0])
+                    return done
+                self.controlled_sweep_loop(release, clock, until=400.0, at_wait=at_wait, due_check=due)
+                self.assertTrue(arrival, 'the burst arrived')
+                self.assertEqual(0, remaining[0])
+                self.assertEqual(16, len(batches))  # 1,000 holds in batches of 64
+                self.assertLessEqual(batches[-1] - arrival[0], 60.0,
+                                     f'the last hold was released {batches[-1] - arrival[0]:.3f} s after arrival')
+
+    def test_RS_A_G6_an_idle_ledger_with_nothing_due_is_checked_often_by_one_cheap_read(self):
+        """O0b RS-A round 2 G6: while idle the due holds are checked well inside the 60-second interval; with
+        nothing due a check is a read alone (no transaction, no write, no release batch beyond the full
+        cycles'), and every statement it runs finds its rows by an index, never by a table scan."""
+        import re
+        from unittest import mock
+        clock, released, checks, statements = [0.0], [], [], []
+        real = getattr(self.ledger, 'account_holds_due', lambda: False)
+
+        def check():
+            checks.append(clock[0])
+            return real()
+        connection = self.ledger._connection
+        connection.set_trace_callback(statements.append)
+        self.addCleanup(connection.set_trace_callback, None)
+        with mock.patch.object(self.ledger, 'account_holds_due', create=True, side_effect=check):
+            cycles, _ = self.controlled_sweep_loop(lambda *, limit: released.append(clock[0]) or 0, clock,
+                                                   until=300.0)
+        connection.set_trace_callback(None)
+        self.assertEqual(5, len(cycles))
+        self.assertEqual(cycles, released)  # a release batch with each full cycle, none for an idle check
+        self.assertTrue(checks, 'the idle ledger was checked for due holds')
+        gaps = [later - earlier for earlier, later in zip([0.0, *checks], [*checks, 300.0])]
+        self.assertLessEqual(max(gaps), 10.0)  # well inside the 60-second full sweep
+        self.assertTrue(statements, 'the check reads the ledger')
+        for statement in statements:
+            with self.subTest(statement=statement[:80]):
+                self.assertTrue(statement.lstrip().upper().startswith('SELECT'), statement)
+                plan = [row[3] for row in connection.execute('EXPLAIN QUERY PLAN ' + statement).fetchall()]
+                self.assertEqual([], [d for d in plan if re.fullmatch(r'SCAN \S+', d)], plan)
+
+    def test_RS_A_G6_a_stop_during_an_idle_wait_ends_the_sweep_at_once(self):
+        """O0b RS-A round 2 G6: shutdown while the sweep waits between idle checks ends it at once."""
+        server, thread, cycles = self.sweep_loop(lambda *, limit: 0, 60.0)
+        time.sleep(0.3)
+        started = time.monotonic()
+        server._sweeps_stop.set()
+        thread.join(1)
+        self.assertFalse(thread.is_alive())
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertEqual([], cycles)
+
+    def test_RS_A_G6_a_held_ledger_does_not_make_idle_checks_spin_or_count_refusals(self):
+        """O0b RS-A round 2 G6: while another caller holds the ledger, an idle check passes without waiting
+        for the lock, counts no lock refusal and comes back at the idle pace, not in a tight loop."""
+        clock, released, checks = [0.0], [], []
+        leave, entered = threading.Event(), threading.Event()
+
+        def occupy():
+            with self.ledger._lock:
+                entered.set()
+                leave.wait(30)
+        occupant = threading.Thread(target=occupy, daemon=True)
+        occupant.start()
+        self.addCleanup(occupant.join, 5)
+        self.addCleanup(leave.set)
+        self.assertTrue(entered.wait(5))
+        _, waits = self.controlled_sweep_loop(lambda *, limit: released.append(limit) or 0, clock, until=59.0,
+                                              due_check=lambda: checks.append(clock[0]) or True)
+        self.assertEqual([], released)
+        self.assertEqual([], checks)  # never run without the lock
+        self.assertEqual({}, self.ledger.lock_refusals())
+        self.assertLessEqual(len(waits), 30)
+        self.assertEqual([], [w for w in waits if w < 1.0])
+
     def test_E1a_T4_maintenance_never_runs_while_a_reader_is_inside(self):
         """Review 040-m4b-e1a-code-2: a reader enters under the ledger lock and the sweep holds that lock for
         its whole cycle after checking for readers, so sweep work never overlaps a reader, however they race."""
