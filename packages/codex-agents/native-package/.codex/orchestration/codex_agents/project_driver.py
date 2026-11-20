@@ -1539,14 +1539,19 @@ class RunDriver:
         except Exception:
             pass
 
-    def settle_on_exit(self):
+    def settle_on_exit(self, *, settle=True):
         """After every thread of this host stopped: settle its own runs, then let later hosts settle the rest.
 
         An in-flight sweep and account call are waited for first, so nothing of
         this host writes its journal or reaches the account after its lock is gone.
+        Without `settle` (O10 D13: its result writer faulted) it settles nothing and
+        only frees its journal lock, so the next host settles its runs.
         """
         self._sweeper.shutdown(wait=True)
         self._executor.shutdown(wait=True)
+        if not settle:
+            self._journal.release()
+            return
         install_enrollment(self._preamble, owner=self._owner_name)
         try:
             self._settle_lost(True)

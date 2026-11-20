@@ -620,6 +620,18 @@ class ProjectServiceHost:
         return bool(len(runtime.pool._jobs) or len(runtime.persistence._jobs)
                     or (self._driver is not None and self._driver.busy()))
 
+    def faulted(self):
+        """O10 D13: whether this host's result writer faulted; it then stops and settles nothing itself."""
+        self._owner()
+        persistence = self._runtime.persistence
+        return persistence is not None and persistence.faulted()
+
+    def settle_lost_runs_later(self):
+        """O10 D13: once closed with every thread stopped, free the journal lock and settle nothing here:
+        the next host settles this one's runs as those of a stopped instance."""
+        if self._driver is not None and self.threads_stopped():
+            self._driver.settle_on_exit(settle=False)
+
     def idle_ns(self):
         """Time since the last enrolled connection, or 0 while any run is held."""
         if self.holding():

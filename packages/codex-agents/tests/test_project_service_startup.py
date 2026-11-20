@@ -148,5 +148,55 @@ class ProjectServiceStartupTests(unittest.TestCase):
         self.assertFalse(runtime_hint_path(self.paths, self.project).exists())
 
 
+    def test_O10_D13_a_faulted_lane_writer_stops_the_service_and_the_next_one_settles(self):
+        """O10 D13: a service whose result-persistence writer faulted stops itself at once, by its normal
+        stop path, with an exit record naming the cause. It settles nothing itself; the next start does.
+
+        Before D13 it served on for ever while holding (`holding` counted the lane's jobs), so its
+        lost-run settlement never began: bounded here so the test fails, not hangs."""
+        from unittest import mock
+        from codex_agents import project_driver, project_history, service_host
+
+        class WriterFault(BaseException):
+            """Escapes the writer's per-request handling, so the lane faults."""
+
+        def fault(history, *args, **kwargs):
+            raise WriterFault('the writer stopped')
+        settled, original = [], project_driver.RunDriver._settle_lost
+
+        def settle_lost(driver, own):
+            settled.append(own)
+            return original(driver, own)
+        stop, reports = threading.Event(), []
+        self.addCleanup(stop.set)  # Never left serving if the service does not stop by itself.
+        with mock.patch.object(project_history.ProjectHistory, 'expire_results', fault), \
+                mock.patch.object(project_driver.RunDriver, '_settle_lost', settle_lost), \
+                mock.patch.object(service_host.ProjectServiceHost, 'holding', lambda host: True):
+            served = threading.Thread(daemon=True, target=lambda: reports.append(serve_project(
+                self.state.root, self.project, stopped=stop.is_set, idle_stop_ns=3600 * 10**9)))
+            served.start()
+            served.join(15)
+            alive = served.is_alive()
+            stop.set()
+            served.join(15)
+        self.assertFalse(alive, 'a service whose writer faulted kept serving')
+        self.assertEqual([{'ready': True, 'stopped': True, 'reason_code': 'writer_fault'}], reports)
+        self.assertNotIn(True, settled, 'the faulted service settled its own runs itself')
+        self.assertFalse(runtime_hint_path(self.paths, self.project).exists())
+        self.assertFalse(capability_path(self.paths, self.project, 'host').exists())
+
+        # The next start takes the project's locks, settles the stopped instance's runs, and idles out.
+        settled.clear()
+        with mock.patch.object(project_driver.RunDriver, '_settle_lost', settle_lost):
+            again = threading.Thread(daemon=True, target=lambda: reports.append(serve_project(
+                self.state.root, self.project, stopped=lambda: False,
+                idle_stop_ns=1_500_000_000)))
+            again.start()
+            again.join(15)
+        self.assertFalse(again.is_alive(), 'the next service did not start and idle out')
+        self.assertEqual({'ready': True, 'stopped': True}, reports[-1])
+        self.assertIn(False, settled, "the next service swept the stopped instance's runs")
+
+
 if __name__ == '__main__':
     unittest.main()
