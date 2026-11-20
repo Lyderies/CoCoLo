@@ -353,11 +353,20 @@ class RepositoryLayoutTests(unittest.TestCase):
         pattern = r"(?:run_git\(|_git\(|\brun\(\[)[^)]*?\"([a-z-]+)\""
         # Every git call in the runtime is plumbing that reads refs and objects, except
         # hardened_git (M3-16, M3-17), whose writing plumbing its own allow-list confines to
-        # COCOLO's private object store (tests.test_hardened_git proves it).
-        source = "".join(path.read_text() for path in modules if path.name != "hardened_git.py")
+        # COCOLO's private object store (tests.test_hardened_git proves it), and write_merge
+        # (M3-21), whose calls all go through hardened_git and only read: a raw tree comparison,
+        # attributes from a tree, and the index's skip-worktree flags (tests.test_write_merge).
+        special = ("hardened_git.py", "write_merge.py")
+        source = "".join(path.read_text() for path in modules if path.name not in special)
         calls = re.findall(pattern, source)
         self.assertTrue(calls)
         self.assertLessEqual(set(calls), {"rev-parse", "ls-tree", "cat-file", "config"})
+        merge = (modules[0].parent / "write_merge.py").read_text()
+        self.assertNotIn("run_git(", merge)
+        self.assertNotIn("subprocess.run(", merge)
+        merge_calls = re.findall(pattern, merge)
+        self.assertTrue(merge_calls)
+        self.assertLessEqual(set(merge_calls), {"rev-parse", "config", "cat-file", "diff-tree", "check-attr", "ls-files"})
         hardened = re.findall(pattern, (modules[0].parent / "hardened_git.py").read_text())
         self.assertTrue(hardened)
         self.assertLessEqual(set(hardened), {

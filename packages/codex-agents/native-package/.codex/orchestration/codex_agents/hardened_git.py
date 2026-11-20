@@ -7,7 +7,8 @@ Requirements (DESIGN-0.4.0-M3.md draft 3, slice 1):
   credential helpers, signing and the global attributes file; no transport is allowed. Only an
   allow-list of plumbing runs (`run_hardened_git` refuses anything else before starting git):
   reads (`rev-parse`, `cat-file` without filters or textconv, `ls-tree`, `config --get*`,
-  `version`) anywhere, and the writing plumbing (`read-tree` without `-u`, `apply --cached`,
+  `version`, and for the merge of slice 2 `diff-tree` as a raw tree comparison, `check-attr -z
+  --source=<tree id>` and `ls-files -z -v`) anywhere, and the writing plumbing (`read-tree` without `-u`, `apply --cached`,
   `hash-object -w --no-filters`, `write-tree --missing-ok`) only inside COCOLO's private store.
   A call that can write an object never has the owner's objects reachable: git "freshens" (sets
   the modification time of) an existing object it is asked to write, in an alternate object
@@ -82,7 +83,14 @@ HARDENED_OPTIONS = (
 )
 HARDENED_ENVIRONMENT = {**GIT_ENVIRONMENT, "GIT_ATTR_NOSYSTEM": "1"}
 
-READ_SUBCOMMANDS = frozenset({"version", "rev-parse", "cat-file", "ls-tree", "config"})
+READ_SUBCOMMANDS = frozenset({
+    "version", "rev-parse", "cat-file", "ls-tree", "config", "diff-tree", "check-attr", "ls-files",
+})
+# The merge's reads (slice 2), in fixed shapes only: a raw tree comparison (no diff program, no
+# textconv, no rename detection), attributes read from a tree (not the working tree), and the
+# index's skip-worktree flags.
+DIFF_TREE_OPTIONS = ("-r", "-z", "--raw", "--no-renames", "--full-index")
+LS_FILES_OPTIONS = ("-z", "-v", "--")
 WRITE_SUBCOMMANDS = frozenset({"read-tree", "apply", "hash-object", "write-tree"})
 CONFIG_READS = frozenset({"--get", "--get-all", "--get-regexp"})
 APPLY_OPTIONS = frozenset({"--cached", "--check", "--numstat", "-R", "-z", "--whitespace=nowarn"})
@@ -174,6 +182,15 @@ def _call_problem(arguments: tuple[str, ...], private: PrivateRepository | None)
         return "only reading git config is allowed"
     if subcommand == "cat-file" and any(item.startswith(CAT_FILE_HELPERS) for item in rest):
         return "git cat-file may not run filters or textconv"
+    if subcommand == "diff-tree" and (
+        len(rest) != len(DIFF_TREE_OPTIONS) + 2 or rest[:-2] != DIFF_TREE_OPTIONS
+        or any(_HEX.fullmatch(item) is None for item in rest[-2:])
+    ):
+        return "git diff-tree runs only as a raw comparison of two tree ids"
+    if subcommand == "check-attr" and not _attribute_read(rest):
+        return "git check-attr runs only as check-attr -z --source=<tree id> <attributes> -- <paths>"
+    if subcommand == "ls-files" and (len(rest) < 4 or rest[:3] != LS_FILES_OPTIONS):
+        return "git ls-files runs only as ls-files -z -v -- <paths>"
     if subcommand == "read-tree" and (not rest or any(item.startswith("-") for item in rest)):
         return "git read-tree takes tree-ish arguments only"
     if subcommand == "apply":
@@ -191,6 +208,18 @@ def _call_problem(arguments: tuple[str, ...], private: PrivateRepository | None)
     if writes_objects and private is not None and private.alternates:
         return f"git {subcommand} may not run with the owner's objects reachable"
     return None
+
+
+def _attribute_read(rest: tuple[str, ...]) -> bool:
+    if len(rest) < 5 or rest[0] != "-z" or not rest[1].startswith("--source="):
+        return False
+    if _HEX.fullmatch(rest[1][len("--source="):]) is None or "--" not in rest[2:]:
+        return False
+    separator = rest.index("--", 2)
+    names, paths = rest[2:separator], rest[separator + 1:]
+    return bool(names) and bool(paths) and all(
+        re.fullmatch(r"[a-z][a-z0-9-]*", name) is not None for name in names
+    )
 
 
 def run_hardened_git(
