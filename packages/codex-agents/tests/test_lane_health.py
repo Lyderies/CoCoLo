@@ -97,6 +97,33 @@ class LaneHealthTests(unittest.TestCase):
             self.owner.publish(busy=1)  # dropped, not raised
         self.assertEqual(0, self.lane.view()['busy'])
 
+    def test_SD3_1_an_interruption_inside_instrumentation_is_never_swallowed(self):
+        """O10 SD3-1: a stop signal's SystemExit (or Ctrl-C's KeyboardInterrupt) raised while a note is
+        written must reach the caller; only an ordinary error is dropped (C1 as restated)."""
+        def failing(error):
+            return mock.Mock(side_effect=error)
+        cases = {
+            'safely': lambda error: lane_health.safely(failing(error)),
+            'Slot.publish': lambda error: self._with(lane_health, 'replace', error, lambda: self.owner.publish(busy=1)),
+            'note_failure': lambda error: self._with(lane_health, '_wall_ms', error,
+                                                     lambda: self.lane.note_failure(self.owner, 'probe_step_failed', None)),
+            'note_failure_named': lambda error: self._with(lane_health, '_wall_ms', error,
+                                                           lambda: self.lane.note_failure_named(self.owner, 'probe_step_failed', None)),
+            'enter_held': lambda error: self._with(lane_health, '_wall_ms', error, self.lane.enter_held),
+            'leave_held': lambda error: self._with(lane_health, '_Episode', error, self.lane.leave_held),
+        }
+        for name, call in cases.items():
+            for interruption in (SystemExit(0), KeyboardInterrupt()):
+                with self.subTest(name=name, interruption=type(interruption).__name__):
+                    with self.assertRaises(type(interruption)):
+                        call(interruption)
+            with self.subTest(name=name, error='ValueError'):
+                call(ValueError('dropped'))  # an ordinary error is still dropped, never raised
+
+    def _with(self, module, attribute, error, call):
+        with mock.patch.object(module, attribute, side_effect=error):
+            call()
+
     def test_C5_a_job_kept_is_never_also_busy(self):
         token = lane_health.new_token()
         self.owner.publish(busy_tokens=frozenset({token}))  # the owner still counts it busy
