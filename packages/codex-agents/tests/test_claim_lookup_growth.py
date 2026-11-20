@@ -11,7 +11,7 @@ from pathlib import Path
 
 import tests.support  # noqa: F401
 
-from codex_agents import learning_store
+from codex_agents import active_run_capacity, learning_store
 from codex_agents.learning_store import _LAUNCH_CLAIMS_SCHEMA, _LAUNCH_RECEIPT_PARENT_SCHEMA
 
 PROBES = ("project", "a" * 64, "run-absent")
@@ -24,7 +24,9 @@ def claim_lookup_queries():
             if isinstance(node, ast.Constant) and isinstance(node.value, str)
             and node.value.startswith("SELECT 1 FROM launch_claims WHERE")
             and "active_run_capacity" not in node.value and ("run_id=?" in node.value
-                                                                          or "handle_digest=?" in node.value)]
+                                                                          or "handle_digest=?" in node.value)
+            or isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and node.value.startswith("SELECT 1 FROM active_run_capacity WHERE") and "run_id=?" in node.value]
 
 
 class ClaimLookupGrowthTests(unittest.TestCase):
@@ -33,10 +35,16 @@ class ClaimLookupGrowthTests(unittest.TestCase):
         connection.execute("CREATE TABLE projects(project_id TEXT PRIMARY KEY)")
         connection.execute(_LAUNCH_CLAIMS_SCHEMA)
         connection.execute(_LAUNCH_RECEIPT_PARENT_SCHEMA)
+        connection.execute(active_run_capacity.CAPACITY_PARENT_SCHEMA)
+        connection.execute(active_run_capacity.CAPACITY_SCHEMA)
         connection.execute("INSERT INTO projects VALUES('project')")
         connection.executemany(
             "INSERT INTO launch_claims VALUES('project',?,?,'claimed',1,?)",
             [(f"{index:064x}", f"run-{index}", "brg_" + f"{index:032x}") for index in range(rows)])
+        connection.executemany(
+            "INSERT INTO active_run_capacity(project_id,handle_digest,run_id,kind,claimed_at_ms) "
+            "VALUES('project',?,?,'legacy_unknown',1)",
+            [(f"{index:064x}", f"run-{index}") for index in range(rows)])
         return connection
 
     def steps(self, connection, query, parameters):
@@ -55,9 +63,9 @@ class ClaimLookupGrowthTests(unittest.TestCase):
         return tuple(probes[name] for name in re.findall(r"(project_id|handle_digest|run_id)=\?", query))
 
     def test_queries_found(self):
-        self.assertGreaterEqual(len(claim_lookup_queries()), 1)
+        self.assertGreaterEqual(len(claim_lookup_queries()), 3)
         source = Path(learning_store.__file__).read_text(encoding="utf-8")
-        self.assertNotRegex(source, r"launch_claims WHERE[^\n]*\(handle_digest=\? OR run_id=\?\)")
+        self.assertNotRegex(source, r"(launch_claims|active_run_capacity) WHERE[^\n]*\(handle_digest=\? OR run_id=\?\)")
 
     def test_plan_has_no_project_wide_scan(self):
         connection = self.database(10)
