@@ -146,7 +146,7 @@ _REASONS = {
     "write_conditional_ungranted": ("{s} holds code that runs later (CI, hooks, build or test "
                                     "configuration) and this assignment was not granted it"),
     "write_outside_scope": "{s} is outside this assignment's allowed paths",
-    "write_tree": ("copying the folder to {s} brings in files and links the supervisor cannot see (agent "
+    "write_tree": ("{s} may receive a folder or link whose contents the supervisor cannot see (agent "
                    "configuration or code that runs later could be among them)"),
     "write_deletion": "deleting or moving {s} needs the owner's yes",
     "write_test_edit": "changing the existing test {s} needs the owner's yes",
@@ -193,7 +193,7 @@ _REASONS = {
 
 # Which escalation wins when several parts of one request escalate.
 _ESCALATION_ORDER = ("write_outside_scope", "command_not_allowed", "command_unknown_program",
-                     "command_unknown_option", "write_tree", "write_deletion", "write_test_edit",
+                     "command_unknown_option", "write_deletion", "write_tree", "write_test_edit",
                      "write_dependency_manifest")
 
 
@@ -413,10 +413,24 @@ _CONDITIONAL_NAMES = frozenset({
     ".pytest.ini", "pytest.toml", ".pytest.toml", "mypy.ini", ".rspec", "rakefile", "build.gradle",
     "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "pom.xml", "cmakelists.txt",
     "bunfig.toml", "deno.json", "deno.jsonc", "taskfile.yml", "taskfile.yaml",
+    ".pnpmfile.cjs", "phpunit.xml", "phpunit.xml.dist", "package.swift", "mix.exs", "gradlew",
+    "gradlew.bat", "mvnw", "mvnw.cmd", "gradle.properties", "lefthook.yml", "lefthook.yaml",
+    ".lefthook.yml", "hatch.toml", "pixi.toml", "meson.build", "meson_options.txt",
+    "rust-toolchain", "rust-toolchain.toml", "containerfile", "dockerfile",
 })
-_CONDITIONAL_SUFFIXES = (".pth", ".mk")
+_CONDITIONAL_SUFFIXES = (".pth", ".mk", ".props", ".targets", ".bazel", ".bzl", ".dockerfile")
+# Name patterns, since a list of names is never complete: tool configuration (`x.config.js`,
+# `x.workspace.ts`), dot-rc files (`.babelrc`, `.eslintrc.js`) and Dockerfile variants. Matched on the
+# file name only, so `src/config.py` or `src/rc.py` stay ordinary source.
+_CONDITIONAL_PATTERN = re.compile(
+    r"^(.+\.(config|workspace)\.[^.]+|\.[a-z0-9_.-]*rc|\.[a-z0-9_-]*rc\.[a-z0-9]+"
+    r"|(dockerfile|containerfile)\..+)$")
+# Bazel's BUILD and WORKSPACE files, matched in their own case so that build/ output folders stay
+# ordinary.
+_CONDITIONAL_EXACT_CASE = frozenset({"BUILD", "WORKSPACE"})
 _CONDITIONAL_PREFIXES = ("jest.config.", "vitest.config.", ".mocharc", "karma.conf.")
-_CONDITIONAL_SEQUENCES = ((".github",), (".gitlab",), (".circleci",), (".buildkite",),
+_CONDITIONAL_SEQUENCES = ((".github",), (".gitlab",), (".circleci",), (".buildkite",), (".mvn",),
+                          ("gradle", "wrapper"),
                           (".devcontainer",), (".githooks",), (".husky",), (".agents",), (".vscode",),
                           (".idea",), (".cargo", "config.toml"), (".cargo", "config"))
 _TEST_DIRS = frozenset({"test", "tests", "__tests__", "spec", "specs"})
@@ -449,7 +463,8 @@ def _conditional(rel: tuple[str, ...]) -> bool:
     keys = tuple(_key(p) for p in rel)
     base = keys[-1]
     if (base in _CONDITIONAL_NAMES or base.endswith(_CONDITIONAL_SUFFIXES)
-            or base.startswith(_CONDITIONAL_PREFIXES)):
+            or base.startswith(_CONDITIONAL_PREFIXES) or _CONDITIONAL_PATTERN.match(base)
+            or rel[-1] in _CONDITIONAL_EXACT_CASE):
         return True
     return any(keys[i:i + len(seq)] == seq for seq in _CONDITIONAL_SEQUENCES
                for i in range(len(keys)))
@@ -944,6 +959,30 @@ _UNITTEST = _g("vqfcb", "kspt", long=("--verbose", "--quiet", "--failfast", "--c
 _PYTHON_GRAMMAR = _g("BdEhIOPqsSuvVbRx", "WXm", stop="m", permute=False,
                      long=("--version", "--help"), long_value=("--check-hash-based-pycs",),
                      refuse={"-c": "command_inline_code", "-i": "command_interactive"})
+def _python_x_values(args: list[str]) -> frozenset[int]:
+    """Indices of separate `-X` values among python's own options (read by the fixed -X list, so
+    not checked as NAME=value); options end at -m, -c, '-', '--' or the first operand."""
+
+    found = set()
+    i = 0
+    while i < len(args) and args[i].startswith("-") and args[i] not in ("-", "--"):
+        word = args[i]
+        if word.startswith("--"):
+            i += 1
+            continue
+        for index, letter in enumerate(word[1:]):
+            if letter in "WXmc":
+                if index + 2 == len(word):
+                    if letter == "X":
+                        found.add(i + 1)
+                    i += 1
+                if letter in "mc":
+                    return frozenset(found)
+                break
+        i += 1
+    return frozenset(found)
+
+
 # python -X options: the ones that only change how the run behaves, and the ones that write files.
 _PYTHON_X = frozenset({"dev", "utf8", "importtime", "faulthandler", "tracemalloc",
                        "warn_default_encoding", "no_debug_ranges", "frozen_modules",
@@ -1340,8 +1379,9 @@ class _Commands:
             raise _Refused("command_wrapper", name)
         if name in _REPLS:
             raise _Refused("command_interactive", name)
-        for word in args:
-            if _ASSIGNMENT.match(word):
+        values = _python_x_values(args) if _PYTHON.match(name) else frozenset()
+        for index, word in enumerate(args):
+            if _ASSIGNMENT.match(word) and index not in values:
                 # NAME=value after a command name: an environment setting under bash -k, make's
                 # variables, and the like.
                 raise _Refused("command_assignment")
@@ -1633,8 +1673,14 @@ class _Commands:
         elif name == "sort":
             reading.writes = [(p, "replace") for p in _values(options, "-o", "--output")]
         elif name in ("cp", "mv"):
-            for value in _values(options, "--preserve"):
-                if {"links", "all"} & set(value.split(",")):
+            # cp takes abbreviations of --preserve and of its attributes (l, li, al): any value
+            # that can mean links or all keeps links as links.
+            preserved = _values(options, "--preserve") + [
+                word.partition("=")[2] for word in reading.unknown
+                if len(word.partition("=")[0]) > 2 and "--preserve".startswith(word.partition("=")[0])]
+            for value in preserved:
+                if any(item and ("links".startswith(item) or "all".startswith(item))
+                       for item in value.split(",")):
                     raise _Refused("command_symlink")
             self.copy(name, options, operands, reading)
         return reading
@@ -1656,8 +1702,11 @@ class _Commands:
                 if base not in ("", ".", ".."):
                     landed.append(destination.rstrip("/") + "/" + base)
         if name == "mv":
+            # A move may carry a folder or a link (a relative link points elsewhere from a new
+            # depth): it asks as a tree, whatever the deletion setting.
             reading.writes = [(s, "delete") for s in sources] + [(p, "replace") for p in landed]
             reading.trees = landed
+            reading.copies_tree = True
         else:
             reading.writes = [(p, "replace") for p in landed]
             if _has(options, "-a", "-r", "-R", "--recursive", "--archive"):
@@ -1867,8 +1916,8 @@ class _Commands:
             rel = self.checker.resolve(raw, self.base)
             if rel and _holds_conditional(rel):
                 raise _Refused("write_conditional_ungranted", raw)
-            if reading.copies_tree:
-                parts.append(self.checker.unlisted("unlisted_write", "write_tree", raw))
+        if reading.copies_tree and reading.trees:
+            parts.append(self.checker.unlisted("unlisted_write", "write_tree", reading.trees[0]))
         return parts
 
 
