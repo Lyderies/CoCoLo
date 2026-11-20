@@ -97,6 +97,35 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual(0, self.ledger._connection.execute('SELECT COUNT(*) FROM launch_claims').fetchone()[0])
         self.assertNotIn(b'client_path', canonical_json(self.rows()))
 
+    def earlier_probes(self, count, state):
+        """`count` earlier probe requests of this project, finished ('committed') or still in progress."""
+        connection = self.ledger._connection
+        with self.ledger._lock, connection:
+            for number in range(count):
+                key = f'{state}-{number}'.ljust(64, '0')
+                connection.execute('INSERT INTO account_billing_probe_origins VALUES(?,?,?,?,?)',
+                                   (self.fixture.project_id, key, 'p' * 64, 1, 's' * 64))
+                connection.execute('INSERT INTO account_billing_probe_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (self.fixture.project_id, key, 'p' * 64, 'r' * 64, 'c' * 64, 1, 2, state, None, None, None,
+                     '[]' if state == 'committed' else None, 's' * 64))
+
+    def test_B0_5_finished_probes_do_not_count_against_the_probe_cap(self):
+        """O0b B0-5 (narrowed): only probes in progress count, so finished ones never fill a project for
+        good; their records stay, so a replay still finds its stored answer."""
+        from codex_agents import account_billing_admission
+        self.enterContext(mock.patch.object(account_billing_admission, 'MAX_PROBE_REQUESTS', 2))
+        self.earlier_probes(2, 'committed')
+        self.reserve()  # not probe_full
+        self.assertEqual(1, sum(row['state'] == 'reserved' for row in self.rows()))
+        self.assertEqual(2, sum(row['state'] == 'committed' for row in self.rows()))  # kept for replay
+
+    def test_B0_5_probes_in_progress_still_fill_the_cap(self):
+        from codex_agents import account_billing_admission
+        self.enterContext(mock.patch.object(account_billing_admission, 'MAX_PROBE_REQUESTS', 2))
+        self.earlier_probes(2, 'reserved')
+        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_full'):
+            self.reserve()
+
     def test_second_request_cannot_take_the_account_bootstrap_or_refresh_original_deadline(self):
         original = self.reserve()
         self.prepared(original)
