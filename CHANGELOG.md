@@ -35,6 +35,9 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   over ten minutes) and nothing is running anywhere, the collector restarts them by itself, at most
   once an hour, and its exit record says why (`account_restart`). While anything runs it never
   restarts; `learning-status` says so and what is held.
+- `learning-review worker|verify|finish` runs one review (the worker, its verifier, then operational QA)
+  as a COCOLO command, saving each step's reply; it stops at a refused step, or when a child gave no
+  verdict.
 - Every refusal the command line prints now carries `next_step`: what to do next, in plain words, for its
   reason code (`reason_code` and `error` are unchanged).
 - `learning-status` shows the account's own health (`account_health`): `ok`, `degraded` (work kept

@@ -171,6 +171,10 @@ says `dispatch: native`, stop and report it.
    closing. The router refuses an outcome that is unknown, from another provider or
    family, or from another orchestration. Open, dispatch, and finish the verifier
    through the same host lifecycle.
+   For a review, `cli.py learning-review worker|verify|finish --project-root <exact-root>
+   --spec <file> --work-dir <folder>` runs the worker, its verifier and operational QA in this order,
+   saving each reply, and stops (with the reason and next step) at a refused step or a result with
+   no verdict.
    Then run `learning-run-operational-checks --project-root <exact-root>
    --host-outcome-digest <worker digest> --verifier-host-outcome-digest <verifier
    digest>`. It may run only the exact commands in the committed, clean project file

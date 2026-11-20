@@ -116,6 +116,9 @@ markers, never set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, and never pass `--ba
    recorded worker only while it runs (it stops after twelve idle hours, or when the
    owner migrates or updates the project), and its result at most seven days, so
    verify and run operational QA in the same working session, before closing.
+   For a review, `learning-review worker|verify|finish --project-root <exact-root> --spec <file>
+   --work-dir <folder>` runs steps 2 to 9 in this order for one worker and its verifier, saving each
+   reply, and stops (with the reason and next step) at a refused step or a result with no verdict.
 8. **Operational QA.** With both digests, run
    `learning-run-operational-checks --project-root <exact-root>
    --host-outcome-digest <worker host_outcome_digest>
