@@ -78,6 +78,33 @@ class RunHoldTests(ActiveRunCapacityTests):
         with mock.patch.object(self.ledger, "_clock_ms", return_value=binding["expires_at_ms"] + 1):
             self.assertEqual(0, self.ledger.account_capacity(self.project)["pending_bindings"]["live"])
 
+    def test_RS_A_F7_an_expired_claimed_binding_never_counts_again_after_a_clock_rollback(self):
+        """Round 1 F7: the cap honours the written release, not only the wall clock."""
+        self.case.claim()
+        binding = next(b for b in self.bindings() if b["binding_state"] == "pending")
+        row = self.rows()[0]
+        self.assertEqual(1, self.sweep(binding["expires_at_ms"] + 1, row["clock_reference_ns"] + 1))
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=binding["expires_at_ms"] - 1):  # rolled back
+            self.assertEqual(0, self.ledger.account_capacity(self.project)["pending_bindings"]["live"])
+        self.assertEqual("pending", next(b for b in self.bindings()
+                                         if b["handle_digest"] == binding["handle_digest"])["binding_state"])  # settlement still needs it
+
+    def test_RS_A_F7_an_expired_unclaimed_binding_is_released_in_its_own_row_too(self):
+        """Round 1 F7: abandoned `expired`, so a claim after a clock rollback is refused as not open."""
+        project, launch = self.new_attempt()
+        from codex_agents.learning_contracts import keyed_digest
+        digest = keyed_digest(self.ledger.state.digest_key(), launch.run_handle)
+        expires = self.ledger._connection.execute(
+            "SELECT expires_at_ms FROM host_run_bindings WHERE handle_digest=?", (digest,)).fetchone()[0]
+        self.assertGreaterEqual(self.sweep(expires + 1, 1), 1)  # the fixture keeps its own binding too
+        state = tuple(self.ledger._connection.execute(
+            "SELECT binding_state, abandoned_reason FROM host_run_bindings WHERE handle_digest=?", (digest,)).fetchone())
+        self.assertEqual(("abandoned", "expired"), state)
+        self.assertEqual(("released", "expired"), self.binding_hold(launch.run_handle))
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=expires - 1):
+            denied = self.claim((project, launch), "after-expiry")
+        self.assertEqual(("denied", "claim_not_open"), (denied["state"], denied["reason_code"]))
+
     def test_RS_A_5_an_identical_sweep_releases_nothing_twice(self):
         self.case.claim()
         row = self.rows()[0]
