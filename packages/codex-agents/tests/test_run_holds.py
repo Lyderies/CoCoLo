@@ -234,6 +234,38 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.assertEqual(("released", "expired"), tuple(ledger._connection.execute(
             "SELECT state, release_kind FROM run_holds WHERE kind='binding' AND identity=?", (digest,)).fetchone()))
 
+    def streamed(self, version, name):
+        import os
+        from codex_agents import project_backup
+        path = self.fixture.state.root / f"{name}.sqlite"
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        project_backup.write(self.ledger._connection, path, self.project, version)
+        return path
+
+    def without_register(self, path):
+        raw = sqlite3.connect(path)
+        try:
+            raw.execute("DROP TABLE IF EXISTS run_holds")  # its index goes with it
+            raw.commit()
+        finally:
+            raw.close()
+
+    def test_RS_A_F3_a_streamed_backup_from_schema_14_still_verifies(self):
+        """Round 1 F3: a file 0.8.37 wrote has schema 14's objects, without the register."""
+        from codex_agents import project_backup
+        self.case.claim()
+        path = self.streamed(14, "old")
+        self.without_register(path)
+        project_backup.verify(path, project_id=self.project, schema_version=14)
+
+    def test_RS_A_F3_a_schema_15_backup_without_its_register_is_refused(self):
+        from codex_agents import project_backup
+        self.case.claim()
+        path = self.streamed(15, "new")
+        self.without_register(path)
+        with self.assertRaises(LedgerError):
+            project_backup.verify(path, project_id=self.project, schema_version=15)
+
     def binding_hold(self, handle):
         from codex_agents.learning_contracts import keyed_digest
         digest = keyed_digest(self.ledger.state.digest_key(), handle)
