@@ -19,6 +19,7 @@ def legacy_project_holds_layout(store):
 
 def legacy_registered_run_layout(store):
     """Remove only the empty schema17 registered-run table (S1-R6) from an older fixture."""
+    legacy_project_holds_layout(store)  # (requirement) SB: an older fixture predates schema 18 too
     if store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0]:
         raise AssertionError('legacy fixture contains a registered run')
     store._connection.execute('DROP TABLE project_registered_runs')

@@ -197,7 +197,7 @@ class ProjectOrchestrationTests(unittest.TestCase):
         self.store = ProjectHistory(self.directory, PROJECT_A, result_key=KEY, allow_schema_upgrade=True,
                                     result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000),
                                     result_clock_ms=lambda: self.now, orchestration_limits=self.limits)
-        self.assertEqual(17, self.store._connection.execute('PRAGMA user_version').fetchone()[0])
+        self.assertEqual(18, self.store._connection.execute('PRAGMA user_version').fetchone()[0])  # (requirement) SB: schema 18
         self.assertEqual(before, self.store._connection.execute('SELECT * FROM project_orchestration_checkpoints').fetchall())
         self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0])
 

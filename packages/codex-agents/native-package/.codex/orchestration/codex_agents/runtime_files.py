@@ -135,6 +135,7 @@ RUNTIME_FILES = (
     "codex_agents/project_cleanup.py",
     "codex_agents/project_driver.py",
     "codex_agents/project_history.py",
+    "codex_agents/project_holds_schema.py",
     "codex_agents/project_host_client.py",
     "codex_agents/project_host_open.py",
     "codex_agents/project_ingress.py",

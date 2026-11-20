@@ -44,6 +44,8 @@ from .project_learning_qa import QA_SCHEMA as LEARNING_QA_SCHEMA, QA_COLUMNS as 
 from .project_learning_chunks import CHUNK_SCHEMA as LEARNING_CHUNK_SCHEMA, CHUNK_COLUMNS as LEARNING_CHUNK_COLUMNS
 from .project_learning_source import SOURCE_SCHEMA as LEARNING_SOURCE_SCHEMA, SOURCE_COLUMNS as LEARNING_SOURCE_COLUMNS
 from .project_learning_activation import ACTIVATION_SCHEMA, ACTIVATION_COLUMNS
+from . import project_holds_schema
+from .project_holds_schema import PROJECT_HOLDS_COLUMNS, PROJECT_HOLDS_SCHEMA
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
     keyed_digest, parse_bounded_json, validate_execution_configuration, validate_learning_record,
@@ -55,7 +57,7 @@ from .result_contracts import (
 )
 
 _APPLICATION_ID = 0x43444831
-_SCHEMA_VERSION = 17
+_SCHEMA_VERSION = 18
 _RECORD_TYPES = frozenset({"event", "dispatch_intent", "dispatch_result", "outcome", "verification_binding",
                            "host_result_admission", "provider_usage", "observation_unavailable", "execution_provenance",
                            "host_open_provenance"})
@@ -179,8 +181,11 @@ REGISTERED_RUN_COLUMNS = {
     "project_registered_runs": ("project_id", "run_handle", "attempt", "orchestration_handle", "run_id",
                                 "service_instance", "registered_at_ms", "failed_reason", "failed_at_ms"),
 }
-_SCHEMA = _SCHEMA_V16 + REGISTERED_RUN_SCHEMA
+_SCHEMA_V17 = _SCHEMA_V16 + REGISTERED_RUN_SCHEMA
+# O0b slice SB (SH-1): RS-B's register and RS-D's custody tables, one step 17 -> 18 (project_holds_schema).
+_SCHEMA = _SCHEMA_V17 + PROJECT_HOLDS_SCHEMA
 _COLUMNS = {
+    **PROJECT_HOLDS_COLUMNS,
     **ACTIVATION_COLUMNS,
     **REGISTERED_RUN_COLUMNS,
     **LEARNING_SOURCE_COLUMNS,
@@ -432,19 +437,19 @@ class ProjectHistory:
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16} and application == _APPLICATION_ID
+        elif (version in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17} and application == _APPLICATION_ID
               and actual_schema == schema_set({1: _SCHEMA_V1, 2: _SCHEMA_V2, 3: _SCHEMA_V3, 4: _SCHEMA_V4,
                                                5: _SCHEMA_V5, 6: _SCHEMA_V6, 7: _SCHEMA_V7, 8: _SCHEMA_V8,
                                                9: _SCHEMA_V9, 10: _SCHEMA_V10, 11: _SCHEMA_V11,
                                                12: _SCHEMA_V12, 13: _SCHEMA_V13, 14: _SCHEMA_V14,
-                                               15: _SCHEMA_V15, 16: _SCHEMA_V16}[version])):
+                                               15: _SCHEMA_V15, 16: _SCHEMA_V16, 17: _SCHEMA_V17}[version])):
             if not self._allow_schema_upgrade:
                 # Only the separately authorized, drained persistence-owner
                 # upgrade path may opt in; ordinary API startup never does.
                 raise HistoryError("history_incompatible")
             # Validate the complete old schema and project identity before any
             # fixed migration write. No unknown trigger/schema is ever executed.
-            omitted = {*REGISTERED_RUN_COLUMNS, *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
+            omitted = {*PROJECT_HOLDS_COLUMNS, *(REGISTERED_RUN_COLUMNS if version < 17 else set()), *(ACTIVATION_COLUMNS if version < 16 else set()), *(LEARNING_SOURCE_COLUMNS if version < 15 else set()), *(LEARNING_CHUNK_COLUMNS if version < 14 else set()), *(LEARNING_QA_COLUMNS if version < 13 else set()), *(LEARNING_COLUMNS if version < 11 else set()), *(ACK_COLUMNS if version < 10 else set()), *(CLEANUP_COLUMNS if version < 9 else set()), *(QA_COLUMNS if version < 8 else set()), *(CHECK_COLUMNS if version < 7 else set()), *({"project_host_opens"} if version < 6 else set()), *(ORCHESTRATION_COLUMNS if version < 5 else set()), *({"project_execution_consumptions"} if version < 4 else set()), *({"result_leases"} if version < 3 else set()),
                        *({"result_identity", "result_reservations"} if version == 1 else set())}
             old_columns = {name: (columns[:-1] if ((name == 'result_leases' and version < 9)
                                                  or (name == 'project_cleanup_reservations' and version == 9)) else columns)
@@ -467,6 +472,13 @@ class ProjectHistory:
         ):
             raise HistoryError("history_incompatible")
         self._check_schema_identity(_COLUMNS)
+        self._check_project_holds()  # SH-7: at every open, so also of a restored copy
+
+    def _check_project_holds(self) -> None:
+        """SH-7: RS-B's register validator and RS-D's custody validator (project_holds_schema)."""
+        if not (project_holds_schema.register_consistent(self._connection)
+                and project_holds_schema.custody_consistent(self._connection, self._result_key)):
+            raise HistoryError("history_incompatible")
 
     def _upgrade(self, connection, version) -> None:
         with self._transaction():
@@ -489,9 +501,14 @@ class ProjectHistory:
                               + (LEARNING_CHUNK_SCHEMA if version < 14 else '')
                               + (LEARNING_SOURCE_SCHEMA if version < 15 else '')
                               + (ACTIVATION_SCHEMA if version < 16 else '')
-                              + REGISTERED_RUN_SCHEMA).split(';'):
+                              + (REGISTERED_RUN_SCHEMA if version < 17 else '')
+                              # SH-1: the four tables, empty (each later slice adopts its own holds).
+                              + PROJECT_HOLDS_SCHEMA).split(';'):
                 if statement.strip():
                     connection.execute(statement)
+            # SH-1: both validators inside the step, before it commits; a failure rolls everything back to the
+            # earlier format (and the copy made for it goes, O10 HS-18).
+            self._check_project_holds()
             connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
 
     def _check_schema_identity(self, tables: dict) -> None:
