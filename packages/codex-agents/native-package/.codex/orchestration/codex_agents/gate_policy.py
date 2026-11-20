@@ -8,34 +8,54 @@ the child is shown. `build_policy(grant, owner_policy)` makes the run's policy f
 requirement's grant intersected with the owner's per-project policy; the intersection is exact
 and never wider than either side. `record_row` shapes the ledger row for one request and answer.
 
-The policy (RESEARCH-0.4.0-checkin "Recommended design"):
+The policy (RESEARCH-0.4.0-checkin "Recommended design", made default-deny after the slice-3
+adversarial review):
 - Always refused, whatever the grant: anything outside /workspace; '..' anywhere; control and
   invisible characters in names; git internals and `.gitmodules` at any depth and in any case;
   agent configuration (`.claude/`, `.codex/`, `.mcp.json`, `CLAUDE.md`, `AGENTS.md` and their
   local and override forms) at any depth; `.env*`; COCOLO's own `.cocolo*` names; web tools and
-  MCP tools; network tools, package installs, privilege changes, git commands that change
-  history, configuration or the network, links, mode changes, recursive deletes outside the
-  scope, find's exec options; bare or interactive interpreters and shells; inline code (awk, and
-  sed scripts outside a small grammar of p, d, q, =, s and y with no w, r or e); wrappers that
-  run another command; shell constructs whose effect cannot be read from the text.
+  MCP tools; tools and tool fields the gate does not know; network tools, package installs,
+  privilege changes, git commands that change history, configuration or the network, links, mode
+  changes, recursive deletes outside the scope, find's exec options; bare or interactive
+  interpreters and shells, code read from standard input or a terminal; inline code (awk, -c/-e
+  forms, perl -M, node loaders given as URLs, sed scripts outside a small grammar); wrappers that
+  run another command in a changed context; shell constructs whose effect cannot be read.
+- Default deny over arguments: every argument, of every program, is split on '=', ':' and ',' (and
+  the attached values of clustered short options are included); any piece naming an always-
+  refused path is refused, and absolute pieces must lie inside /workspace. For each program the
+  gate knows (`_GRAMMARS`, git's subcommands, find, sed, python, pytest, node, perl, the shells)
+  an explicit list of options says which take a value; long options are matched exactly, an
+  abbreviation of a refused option is refused, and any other option the list does not name
+  escalates (or refuses, when the owner escalates nothing). The writes a known program makes
+  (output options, copy and move destinations and what lands inside them, in-place edits,
+  deletions) are checked as writes. A program with no grammar runs without asking only when its
+  whole argv is listed exactly in every layer of the policy. Runners (`uv run`, `poetry run`,
+  ...) are unwrapped and the inner command is checked as a command of its own.
 - Grant-only paths (code that runs later: CI, hooks, build and test configuration, lock files):
-  refused unless the requirement asked for the path and the owner's policy grants it.
+  refused unless the requirement asked for the path and the owner's policy grants it; a folder
+  copied or moved onto a place that could hold one is refused; a recursive copy escalates.
 - Allowed: writes inside the requirement's paths that the owner's policy also covers, commands
-  whose argv starts with a rule in both lists, and reads inside /workspace.
+  that pass the above and match a rule in both lists, and reads inside /workspace.
 - Everything else that is not refused escalates by default (the owner's choice O5, a parameter):
-  unlisted writes and commands, edits of existing tests, deletions, dependency manifests.
+  unlisted writes and commands, unknown options, edits of existing tests, deletions, dependency
+  manifests. An escalation names every reason found in the request and, for a command, the
+  full command.
 
 Paths are compared case-insensitively and after NFKC for the deny classes (the macOS workspace
 is case-insensitive) and exactly for grants, so a variant spelling can only narrow. Commands are
 read with a quote-aware scanner that refuses anything it cannot split safely, then split into
-words by `shlex`; it assumes a POSIX shell (bash or sh) runs them. Codex patches are read by
-their `*** Add File:`, `*** Update File:`, `*** Delete File:` and `*** Move to:` lines; a header
-with extra whitespace, an unknown header, or a misplaced one refuses the whole patch.
+words by `shlex`; it assumes a POSIX shell (bash, sh or dash) and GNU tools run them. Codex
+patches are read by their `*** Add File:`, `*** Update File:`, `*** Delete File:` and
+`*** Move to:` lines, relative to the call's workdir; a header with extra whitespace, an unknown
+header, or a misplaced one refuses the whole patch.
 
-What the gate cannot see (the container is the wall): effects inside an allowed program (a test
-run, a script, any other allowed program's own file writes); symlinks already in the workspace; a
-Claude `Write` that overwrites an existing test (treated as a create; the patch gate flags test
-changes); package.json and pyproject.toml lifecycle content (the patch gate's content checks).
+The gate is one layer, not the wall (DESIGN-0.4.0-M3 "Gate review, default deny"). What it
+cannot see: effects inside an allowed program (a test run, a script, what an allowed tool reads
+from its own configuration); symlinks already in the workspace; what a folder being moved holds;
+a Claude `Write` that overwrites an existing test (treated as a create); package.json and
+pyproject.toml lifecycle content. The container (workspace the only writable mount, .git and
+agent configuration read-only) and the slice-7 patch gate (deny classes and grant-only paths
+checked on the final diff before any merge) hold those.
 """
 from __future__ import annotations
 
@@ -88,6 +108,7 @@ class GatePolicy:
     write_layers: tuple[tuple[str, ...], ...]
     conditional_layers: tuple[tuple[str, ...], ...]
     command_rules: tuple[tuple[str, ...], ...]
+    command_layers: tuple[frozenset[tuple[str, ...]], ...]
     escalate: frozenset[str]
     record_reads: bool
     owner_wait_seconds: int
@@ -102,6 +123,10 @@ class GatePolicy:
 
 _REASONS = {
     "request_malformed": "the request could not be read, so it is refused",
+    "request_field_unknown": "the request has the field {s}, which the supervisor does not check",
+    "request_field_value": "the request's {s} setting is not allowed",
+    "request_ambiguous": "the request gives {s} twice, so what would happen cannot be known",
+    "pattern_unreadable": "the pattern {s} could not be read safely",
     "cwd_outside_workspace": "the working directory is outside /workspace",
     "tool_unknown": "the tool {s} is not available to this assignment",
     "network_tool": "web access is not available to this assignment",
@@ -109,13 +134,15 @@ _REASONS = {
     "path_odd_name": "the path has control or invisible characters",
     "path_traversal": "{s} uses '..'; name the path inside /workspace directly",
     "path_outside_workspace": "{s} is outside /workspace",
-    "write_git": "{s} is in git's own files; changes there are never allowed",
-    "write_agent_config": "{s} is agent configuration; changes there are never allowed",
-    "write_env": "{s} is an environment or secrets file; changes there are never allowed",
-    "write_cocolo": "{s} belongs to COCOLO; changes there are never allowed",
+    "write_git": "{s} names git's own files; changes there are never allowed",
+    "write_agent_config": "{s} names agent configuration; changes there are never allowed",
+    "write_env": "{s} names an environment or secrets file; changes there are never allowed",
+    "write_cocolo": "{s} names COCOLO's own files; changes there are never allowed",
     "write_conditional_ungranted": ("{s} holds code that runs later (CI, hooks, build or test "
                                     "configuration) and this assignment was not granted it"),
     "write_outside_scope": "{s} is outside this assignment's allowed paths",
+    "write_tree": ("copying the folder to {s} brings in files the supervisor cannot see (agent "
+                   "configuration or code that runs later could be among them)"),
     "write_deletion": "deleting or moving {s} needs the owner's yes",
     "write_test_edit": "changing the existing test {s} needs the owner's yes",
     "write_dependency_manifest": "changing the dependency list {s} needs the owner's yes",
@@ -148,19 +175,23 @@ _REASONS = {
     "command_exec_option": "{s} with that option runs commands or deletes files unchecked",
     "command_background": "background commands are not allowed",
     "command_not_allowed": "{s} is not on this assignment's command list",
+    "command_unknown_program": ("the supervisor cannot read the arguments of {s}, so only a "
+                                "command listed exactly runs without asking"),
+    "command_unknown_option": "{s} uses an option or form the supervisor does not know",
     "command_allowed": "the command is on this assignment's command list",
 }
 
 # Which escalation wins when several parts of one request escalate.
-_ESCALATION_ORDER = ("write_outside_scope", "command_not_allowed", "write_deletion",
-                     "write_test_edit", "write_dependency_manifest")
+_ESCALATION_ORDER = ("write_outside_scope", "command_not_allowed", "command_unknown_program",
+                     "command_unknown_option", "write_tree", "write_deletion", "write_test_edit",
+                     "write_dependency_manifest")
 
 
-def _show(value: object) -> str:
+def _show(value: object, limit: int | None = 160) -> str:
     text = value if isinstance(value, str) else repr(value)
     shown = "".join("?" if unicodedata.category(c)[0] == "C" or unicodedata.category(c) in
                     ("Zl", "Zp") else c for c in text)
-    return shown if len(shown) <= 160 else shown[:157] + "..."
+    return shown if limit is None or len(shown) <= limit else shown[:limit - 3] + "..."
 
 
 def _reason(rule: str, outcome: str, subject: object = "") -> str:
@@ -290,7 +321,9 @@ def build_policy(
 
     `grant` and `owner_policy` each hold `write_paths` and `conditional_paths` (path entries
     relative to the workspace: an exact path, a directory covering everything under it, or a
-    glob with `*`, `?` and `**`) and `commands` (argv prefix rules). A path is writable only if
+    glob with `*`, `?` and `**`) and `commands` (argv prefix rules for programs whose arguments
+    the gate reads, exact argv for any other program, which then must be listed exactly in every
+    layer; the intersection itself is unchanged). A path is writable only if
     every layer covers it, and a grant-only path also needs every layer's conditional grant.
     With `routed_owner_policy` the policy the route was checked against is a third layer, so a
     later change can only narrow (A04); with only its digest, a different current policy
@@ -335,6 +368,8 @@ def build_policy(
         "write_layers": tuple(layer["write_paths"] for layer in layers),
         "conditional_layers": tuple(layer["conditional_paths"] for layer in layers),
         "command_rules": tuple(rules),
+        "command_layers": tuple(frozenset(layer["commands"]) for layer in layers)
+        if state == "present" else (frozenset(),),
         "escalate": escalate,
         "record_reads": record_reads,
         "owner_wait_seconds": owner_wait_seconds,
@@ -344,7 +379,8 @@ def build_policy(
     plain = dict(fields, escalate=sorted(escalate),
                  write_layers=[list(x) for x in fields["write_layers"]],
                  conditional_layers=[list(x) for x in fields["conditional_layers"]],
-                 command_rules=[list(x) for x in fields["command_rules"]])
+                 command_rules=[list(x) for x in fields["command_rules"]],
+                 command_layers=[sorted(list(x) for x in layer) for layer in fields["command_layers"]])
     return GatePolicy(**fields, digest=hashlib.sha256(_canonical(plain)).hexdigest())
 
 
@@ -361,11 +397,15 @@ _CONDITIONAL_NAMES = frozenset({
     "makefile", "gnumakefile", "setup.py", "pytest.ini", "tox.ini",
     "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock",
     "uv.lock", "pipfile.lock", "cargo.lock", "gemfile.lock", "composer.lock", "go.sum",
+    "bun.lockb", "bun.lock", "pdm.lock", "pixi.lock", "deno.lock",
+    ".gitlab-ci.yml", ".travis.yml", "azure-pipelines.yml", "bitbucket-pipelines.yml", ".drone.yml",
+    "jenkinsfile", "build.rs", "justfile", ".justfile",
 })
 _CONDITIONAL_SUFFIXES = (".pth", ".mk")
 _CONDITIONAL_PREFIXES = ("jest.config.", "vitest.config.", ".mocharc", "karma.conf.")
-_CONDITIONAL_SEQUENCES = ((".github", "workflows"), (".husky",), (".agents",),
-                          (".vscode", "tasks.json"))
+_CONDITIONAL_SEQUENCES = ((".github",), (".gitlab",), (".circleci",), (".buildkite",),
+                          (".devcontainer",), (".githooks",), (".husky",), (".agents",), (".vscode",),
+                          (".idea",), (".cargo", "config.toml"), (".cargo", "config"))
 _TEST_DIRS = frozenset({"test", "tests", "__tests__", "spec", "specs"})
 _TEST_NAME = re.compile(r"^(test_.*\.py|.*_test\.[a-z0-9]+|.*\.(test|spec)\.[cm]?[jt]sx?|.*_spec\.rb)$")
 _DEPENDENCY_NAMES = frozenset({"package.json", "pyproject.toml", "pipfile", "setup.cfg",
@@ -407,8 +447,18 @@ def _is_test(rel: tuple[str, ...]) -> bool:
     return any(k in _TEST_DIRS for k in keys[:-1]) or bool(_TEST_NAME.match(keys[-1]))
 
 
+def _holds_conditional(rel: tuple[str, ...]) -> bool:
+    """True when a folder written at rel could hold a grant-only path below it."""
+
+    keys = tuple(_key(p) for p in rel)
+    return any(len(keys) - i < len(seq) and seq[:len(keys) - i] == keys[i:]
+               for seq in _CONDITIONAL_SEQUENCES for i in range(len(keys)))
+
+
 def _is_dependency(rel: tuple[str, ...]) -> bool:
     base = _key(rel[-1])
+    if len(rel) > 1 and _key(rel[-2]) == "requirements" and base.endswith((".txt", ".in")):
+        return True
     return base in _DEPENDENCY_NAMES or bool(_DEPENDENCY_NAME.match(base))
 
 
@@ -450,6 +500,8 @@ class _Checker:
             raise _Refused("request_malformed")
         if any(_odd_char(c) for c in raw):
             raise _Refused("path_odd_name")
+        if raw.startswith("~"):
+            raise _Refused("path_outside_workspace", raw)
         parts = raw.split("/")
         if ".." in parts:
             raise _Refused("path_traversal", raw)
@@ -562,6 +614,7 @@ def _patch_ops(text: object) -> list[tuple[str, str]]:
 # --------------------------------------------------------------------------------------------
 
 _WORD_STOP = frozenset(" ;&|<>")
+_ASCII_DIGITS = re.compile(r"^[0-9]+$")
 _SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "mksh", "fish", "csh", "tcsh", "ash",
                      "rbash", "yash", "posh"})
 _PRIVILEGE = frozenset({"sudo", "su", "doas", "pkexec", "runuser", "sg", "newgrp"})
@@ -572,6 +625,11 @@ _WRAPPERS = frozenset({
     "prlimit", "systemd-run", "cd", "pushd", "popd", "export", "set", "unset", "alias", "trap",
     "ulimit", "umask", "declare", "typeset", "local", "readonly", "shopt", "hash", "enable",
 })
+# Runners that run the command after their subcommand (`uv run pytest`): unwrapped, and the inner
+# command is checked as a command of its own.
+_RUNNERS = {"uv": "run", "poetry": "run", "pipenv": "run", "pdm": "run", "hatch": "run",
+            "rye": "run", "pixi": "run", "conda": "run", "mamba": "run", "micromamba": "run",
+            "bundle": "exec"}
 _REPLS = frozenset({
     "irb", "ipython", "ipython3", "ghci", "pry", "jshell", "vi", "vim", "nvim", "view", "vimdiff",
     "nano", "pico", "emacs", "ed", "ex", "less", "more", "most", "man", "top", "htop", "tmux",
@@ -586,11 +644,9 @@ _NETWORK = frozenset({
 _MODE_CHANGE = frozenset({"chmod", "chown", "chgrp", "chattr", "setfacl"})
 _FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0",
                         "-fprintf", "-fls"})
-_DELETERS = frozenset({"rm", "rmdir", "unlink", "shred", "mv"})
-_WRITERS = frozenset({"cp", "install", "touch", "mkdir", "tee", "truncate", "mkfifo", "mknod"})
-_GIT_GLOBAL_DENIED = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--exec-path",
-                                "--namespace", "--config-env", "--super-prefix", "-p",
-                                "--paginate", "--list-cmds"})
+_GIT_GLOBAL_ALLOWED = frozenset({"--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs",
+                                 "--noglob-pathspecs", "--glob-pathspecs", "--icase-pathspecs",
+                                 "--no-replace-objects", "--version"})
 _GIT_DENIED = frozenset({
     "push", "commit", "reset", "clean", "config", "remote", "fetch", "pull", "clone",
     "submodule", "update-ref", "update-index", "symbolic-ref", "apply", "am", "checkout",
@@ -598,12 +654,15 @@ _GIT_DENIED = frozenset({
     "worktree", "filter-branch", "filter-repo", "replace", "notes", "gc", "prune", "repack",
     "init", "hook", "daemon", "instaweb", "send-email", "difftool", "mergetool", "credential",
     "bundle", "fast-import", "archive", "upload-pack", "receive-pack", "ls-remote",
-    "maintenance", "sparse-checkout", "lfs",
+    "maintenance", "sparse-checkout", "lfs", "add", "stage", "bisect", "checkout-index",
+    "format-patch", "fetch-pack", "send-pack", "http-fetch", "http-push", "read-tree",
+    "write-tree", "commit-tree", "update-server-info", "upload-archive", "merge-file",
+    "merge-index", "mktag", "mktree", "hash-object", "unpack-objects", "pack-refs", "reflog",
+    "rerere", "imap-send", "svn", "p4", "cvsimport", "quiltimport", "request-pull",
 })
-_GIT_DENIED_OPTIONS = frozenset({"--output", "--ext-diff", "--textconv", "--exec",
-                                 "--upload-pack", "--receive-pack", "--open-files-in-pager"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
 _PIP = re.compile(r"^pip\d*(\.\d+)?$")
+_PYTHON = re.compile(r"^(python\d*(\.\d+)?|pypy\d*(\.\d+)?)$")
 _INTERPRETER = re.compile(
     r"^(python\d*(\.\d+)?|pypy\d*(\.\d+)?|node|nodejs|bun|deno|perl\d*(\.\d+)*|ruby\d*(\.\d+)*"
     r"|php\d*(\.\d+)*|lua\d*(\.\d+)*|luajit|R|Rscript|julia|tclsh\d*(\.\d+)*|wish|osascript)$")
@@ -612,7 +671,7 @@ _INTERPRETER = re.compile(
 _FAMILIES = {
     "python": ("c", "i", "m", "WX"),
     "node": ("ep", "i", "", "rC"),
-    "perl": ("eE", "", "", ""),
+    "perl": ("eEmM", "d", "", "I"),
     "ruby": ("e", "", "", ""),
     "php": ("r", "a", "", ""),
     "lua": ("e", "i", "", "l"),
@@ -623,9 +682,17 @@ _FAMILIES = {
 _LONG_INLINE = frozenset({"--eval", "--print", "--command", "--exec", "--expression"})
 _LONG_VALUE = frozenset({"--require", "--import", "--loader", "--experimental-loader",
                          "--conditions", "--check-hash-based-pycs"})
+# Python modules that read code from the terminal, or run code given on the command line.
+_MODULES_INTERACTIVE = frozenset({"code", "pdb", "asyncio", "idlelib", "sqlite3", "turtledemo",
+                                  "tkinter"})
+_MODULES_INLINE = frozenset({"timeit"})
 _PACKAGE_SUBCOMMANDS = {
-    "npm": {"install", "i", "ci", "add", "update", "upgrade", "up", "exec", "x", "link", "create",
-            "init", "rebuild", "uninstall", "remove", "rm"},
+    "npm": {"install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal",
+            "isntall", "add", "ci", "clean-install", "ic", "install-clean", "isntall-clean",
+            "install-test", "it", "install-ci-test", "cit", "clean-install-test", "sit", "update",
+            "upgrade", "up", "udpate", "exec", "x", "link", "ln", "create", "init", "innit",
+            "rebuild", "rb", "uninstall", "remove", "rm", "r", "un", "unlink", "dedupe", "ddp",
+            "prune"},
     "pnpm": {"install", "i", "add", "update", "up", "dlx", "exec", "create", "remove", "rm",
              "link"},
     "yarn": {"install", "add", "upgrade", "up", "dlx", "create", "remove", "link"},
@@ -638,6 +705,9 @@ _PACKAGE_SUBCOMMANDS = {
     "micromamba": {"install", "create", "update", "remove"},
     "poetry": {"add", "install", "update", "lock", "remove", "self"},
     "pipenv": {"install", "update", "sync", "lock", "uninstall"},
+    "pdm": {"add", "install", "sync", "update", "remove", "lock", "self"},
+    "pixi": {"add", "install", "update", "upgrade", "remove", "global", "exec"},
+    "deno": {"add", "install", "uninstall", "remove"},
     "composer": {"install", "require", "update", "remove"},
     "bundle": {"install", "add", "update"},
     "uv": {"add", "remove", "sync", "tool", "pip", "lock", "venv"},
@@ -647,6 +717,334 @@ _PACKAGE_ALWAYS = frozenset({"npx", "pnpx", "bunx", "pipx", "uvx", "brew", "apt"
                              "dpkg", "dnf", "yum", "apk", "pacman", "zypper", "port", "snap",
                              "flatpak", "easy_install"})
 _PIP_INSTALL = frozenset({"install", "download", "wheel", "uninstall"})
+_URL_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+@dataclass(frozen=True)
+class _Grammar:
+    """The options one program accepts; anything else is unknown (default deny).
+
+    Long options are matched exactly, never as abbreviations: an unknown long option that is a
+    prefix of a refused one is refused, any other unknown option escalates.
+    """
+
+    short: str = ""                       # letters without a value
+    short_value: str = ""                 # letters with a value (attached or the next word)
+    short_optional: str = ""              # letters whose value can only be attached
+    long: frozenset = frozenset()         # long options without a value
+    long_value: frozenset = frozenset()   # long options with a value (=VALUE or the next word)
+    long_optional: frozenset = frozenset()  # long options whose value can only follow '='
+    refuse: Mapping = None                # option ('-x' or '--name') -> the refusing rule
+    stop: str = ""                        # value letters after which every word is an operand
+    numeric: bool = False                 # -NUM is an option (a count)
+    permute: bool = True                  # GNU: options may follow operands
+    literal: bool = False                 # echo: words that are not all known letters are text
+    operands: bool = True                 # operands are accepted at all
+
+
+def _g(short="", short_value="", short_optional="", long=(), long_value=(), long_optional=(),
+       refuse=None, **kwargs) -> _Grammar:
+    return _Grammar(short, short_value, short_optional, frozenset(long), frozenset(long_value),
+                    frozenset(long_optional), dict(refuse or {}), **kwargs)
+
+
+def _parse(grammar: _Grammar, args: list[str], clean: set[int] | None = None, offset: int = 0):
+    """(options, operands, unknown) as the program would read args. Indices (plus offset) of
+    short-option clusters read completely are added to clean: their attached values are known,
+    so the argument check uses those values instead of every tail of the word."""
+
+    options: list[tuple[str, str | None]] = []
+    operands: list[str] = []
+    unknown: list[str] = []
+    refuse = grammar.refuse or {}
+    i, n = 0, len(args)
+    while i < n:
+        arg = args[i]
+        if arg == "--":
+            operands.extend(args[i + 1:])
+            break
+        if arg.startswith("--"):
+            name, eq, value = arg.partition("=")
+            if name in refuse:
+                raise _Refused(refuse[name], arg)
+            if name in grammar.long_value:
+                if not eq:
+                    if i + 1 >= n:
+                        unknown.append(arg)
+                        break
+                    i += 1
+                    value = args[i]
+                options.append((name, value))
+            elif name in grammar.long_optional:
+                options.append((name, value if eq else None))
+            elif name in grammar.long and not eq:
+                options.append((name, None))
+            else:
+                for refused, rule in refuse.items():
+                    if refused.startswith("--") and len(name) > 2 and refused.startswith(name):
+                        raise _Refused(rule, arg)
+                unknown.append(arg)
+            i += 1
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            letters = arg[1:]
+            if grammar.numeric and _ASCII_DIGITS.match(letters):
+                options.append(("-NUM", letters))
+                i += 1
+                continue
+            if grammar.literal and not all(c in grammar.short for c in letters):
+                operands.append(arg)
+                i += 1
+                continue
+            stop = False
+            start, complete = i, True
+            for index, letter in enumerate(letters):
+                key = "-" + letter
+                if key in refuse:
+                    raise _Refused(refuse[key], arg)
+                if letter in grammar.short_value:
+                    value = letters[index + 1:]
+                    if not value:
+                        if i + 1 >= n:
+                            unknown.append(arg)
+                            break
+                        i += 1
+                        value = args[i]
+                    options.append((key, value))
+                    stop = letter in grammar.stop
+                    break
+                if letter in grammar.short_optional:
+                    options.append((key, letters[index + 1:] or None))
+                    break
+                if letter in grammar.short:
+                    options.append((key, None))
+                    continue
+                unknown.append(arg)
+                complete = False
+                break
+            if complete and clean is not None:
+                clean.add(start + offset)
+            i += 1
+            if stop:
+                operands.extend(args[i:])
+                break
+            continue
+        if not grammar.permute:
+            operands.extend(args[i:])
+            break
+        operands.append(arg)
+        i += 1
+    return options, operands, unknown
+
+
+def _has(options: list[tuple[str, str | None]], *names: str) -> bool:
+    return any(name in names for name, _ in options)
+
+
+def _values(options: list[tuple[str, str | None]], *names: str) -> list[str]:
+    return [value for name, value in options if name in names and value is not None]
+
+
+_LS = _g("aAlhRtrS1dFpinsxmCgoGUvcuXQkLHB",
+         long=("--all", "--almost-all", "--human-readable", "--recursive", "--reverse", "--classify",
+               "--directory", "--inode", "--numeric-uid-gid", "--size", "--group-directories-first",
+               "--full-time", "--dereference", "--literal", "--quote-name", "--no-group", "--si",
+               "--ignore-backups"),
+         long_value=("--sort", "--time", "--format", "--width", "--block-size", "--ignore", "--hide",
+                     "--quoting-style"),
+         long_optional=("--color", "--colour"))
+_CAT = _g("AbeEnstTuv", long=("--show-all", "--number-nonblank", "--show-ends", "--number",
+                              "--squeeze-blank", "--show-tabs", "--show-nonprinting"))
+_HEAD = _g("qvz", "nc", numeric=True, long=("--quiet", "--silent", "--verbose", "--zero-terminated"),
+           long_value=("--lines", "--bytes"))
+_WC = _g("clmwL", long=("--bytes", "--chars", "--lines", "--words", "--max-line-length"))
+_GREP = _g("EFGPiyvwxcLloqsbHhnTZzarRU", "efmABC", numeric=True,
+           long=("--extended-regexp", "--fixed-strings", "--basic-regexp", "--perl-regexp",
+                 "--ignore-case", "--no-ignore-case", "--invert-match", "--word-regexp",
+                 "--line-regexp", "--count", "--files-without-match", "--files-with-matches",
+                 "--only-matching", "--quiet", "--silent", "--no-messages", "--byte-offset",
+                 "--with-filename", "--no-filename", "--line-number", "--initial-tab", "--null",
+                 "--null-data", "--text", "--recursive", "--dereference-recursive",
+                 "--line-buffered"),
+           long_value=("--regexp", "--file", "--max-count", "--after-context", "--before-context",
+                       "--context", "--include", "--exclude", "--exclude-dir", "--label",
+                       "--binary-files"),
+           long_optional=("--color", "--colour"))
+_ECHO = _g("neE", literal=True)
+_SORT = _g("bdfgiMhnRrsuVcCzm", "ktSo",
+           long=("--ignore-leading-blanks", "--dictionary-order", "--ignore-case",
+                 "--general-numeric-sort", "--ignore-nonprinting", "--month-sort",
+                 "--human-numeric-sort", "--numeric-sort", "--random-sort", "--reverse",
+                 "--version-sort", "--merge", "--stable", "--unique", "--zero-terminated"),
+           long_value=("--key", "--field-separator", "--output", "--buffer-size", "--parallel", "--sort"),
+           long_optional=("--check",),
+           refuse={"--compress-program": "command_exec_option"})
+_DIFF = _g("uqrNwbBiTtasy", "Cx", "U",
+           long=("--recursive", "--brief", "--new-file", "--ignore-all-space", "--ignore-space-change",
+                 "--ignore-blank-lines", "--ignore-case", "--text", "--report-identical-files",
+                 "--side-by-side", "--no-dereference", "--strip-trailing-cr", "--expand-tabs"),
+           long_value=("--exclude", "--context"), long_optional=("--unified", "--color"))
+_TOUCH = _g("acm", "dt", long=("--no-create",), long_value=("--date",))
+_MKDIR = _g("pv", long=("--parents", "--verbose"))
+_RM = _g("rRfvd", long=("--recursive", "--force", "--verbose", "--dir", "--preserve-root"),
+         refuse={"--no-preserve-root": "command_delete_outside_scope"})
+_RMDIR = _g("pv", long=("--parents", "--ignore-fail-on-non-empty", "--verbose"))
+_SYMLINK = {"-s": "command_symlink", "-l": "command_symlink", "--symbolic-link": "command_symlink",
+            "--link": "command_symlink"}
+_CP = _g("aRrfinpuvLPHTxd", "t",
+         long=("--recursive", "--archive", "--force", "--no-clobber", "--interactive", "--verbose",
+               "--dereference", "--no-dereference", "--no-target-directory", "--one-file-system"),
+         long_value=("--target-directory",),
+         long_optional=("--preserve", "--update", "--reflink", "--sparse"),
+         refuse=_SYMLINK)
+_MV = _g("finuvT", "t", long=("--force", "--no-clobber", "--interactive", "--verbose",
+                              "--no-target-directory"),
+         long_value=("--target-directory",), long_optional=("--update",), refuse=_SYMLINK)
+_TEE = _g("ai", long=("--append", "--ignore-interrupts"))
+_PLAIN = _g()
+_PWD = _g("LP")
+_PYTEST = _g("qvxsl", "kmWr",
+             long=("--quiet", "--verbose", "--exitfirst", "--lf", "--last-failed", "--ff",
+                   "--failed-first", "--nf", "--new-first", "--sw", "--stepwise", "--co",
+                   "--collect-only", "--showlocals", "--strict-markers", "--strict-config",
+                   "--no-header", "--no-summary", "--disable-warnings", "--version", "--markers",
+                   "--fixtures", "--setup-show", "--runxfail"),
+             long_value=("--maxfail", "--tb", "--durations", "--durations-min", "--deselect",
+                         "--ignore", "--import-mode", "--capture"),
+             long_optional=("--color",),
+             refuse={"--pdb": "command_interactive", "--trace": "command_interactive",
+                     "--pdbcls": "command_interactive"})
+_UNITTEST = _g("vqfcb", "kspt", long=("--verbose", "--quiet", "--failfast", "--catch", "--buffer",
+                                      "--locals"), long_value=("--durations",))
+_PYTHON_GRAMMAR = _g("BdEhIOPqsSuvVbRx", "WXm", stop="m", permute=False,
+                     long=("--version", "--help"), long_value=("--check-hash-based-pycs",),
+                     refuse={"-c": "command_inline_code", "-i": "command_interactive"})
+_NODE_LOADERS = frozenset({"-r", "--require", "--import", "--loader", "--experimental-loader"})
+_NODE = _g("", "rC", permute=False,
+           long=("--test", "--test-only", "--enable-source-maps", "--no-warnings", "--trace-warnings",
+                 "--trace-uncaught", "--experimental-vm-modules", "--no-deprecation",
+                 "--throw-deprecation"),
+           long_value=("--require", "--import", "--loader", "--experimental-loader",
+                       "--max-old-space-size", "--stack-size", "--test-reporter", "--test-name-pattern",
+                       "--test-concurrency", "--unhandled-rejections", "--conditions"),
+           refuse={"-e": "command_inline_code", "-p": "command_inline_code",
+                   "--eval": "command_inline_code", "--print": "command_inline_code",
+                   "-i": "command_interactive", "--interactive": "command_interactive"})
+_PERL = _g("wWXTtcnpas", "I", "l0", permute=False,
+           refuse={"-e": "command_inline_code", "-E": "command_inline_code",
+                   "-M": "command_inline_code", "-m": "command_inline_code",
+                   "-d": "command_interactive"})
+
+_GRAMMARS = {
+    "ls": _LS, "cat": _CAT, "head": _HEAD, "tail": _HEAD, "wc": _WC, "grep": _GREP, "echo": _ECHO,
+    "sort": _SORT, "diff": _DIFF, "touch": _TOUCH, "mkdir": _MKDIR, "rm": _RM, "rmdir": _RMDIR,
+    "cp": _CP, "mv": _MV, "tee": _TEE, "true": _PLAIN, "false": _PLAIN, "pwd": _PWD,
+    "pytest": _PYTEST, "py.test": _PYTEST, "node": _NODE, "nodejs": _NODE,
+}
+
+# git: global options other than these are refused (the subcommand could not be found); each
+# subcommand the gate knows has its own grammar; the others are refused or escalate.
+_GIT_REFUSE_DIFF = {"--output": "command_git_denied", "--ext-diff": "command_git_denied",
+                    "--textconv": "command_git_denied"}
+_GIT_DIFF_LONG = ("--numstat", "--shortstat", "--name-only", "--name-status", "--summary", "--patch",
+                  "--no-patch", "--raw", "--cached", "--staged", "--no-color", "--ignore-all-space",
+                  "--ignore-space-change", "--ignore-blank-lines", "--ignore-space-at-eol",
+                  "--exit-code", "--quiet", "--check", "--text", "--no-renames", "--full-index",
+                  "--binary", "--minimal", "--patience", "--histogram", "--function-context",
+                  "--no-ext-diff", "--no-textconv", "--no-prefix", "--merge-base",
+                  "--compact-summary", "--irreversible-delete")
+_GIT_DIFF_OPTIONAL = ("--stat", "--color", "--word-diff", "--color-words", "--find-renames",
+                      "--find-copies", "--abbrev", "--relative", "--dirstat", "--unified")
+_GIT_DIFF = _g("pusRawzbWD", "", "MCBU", long=_GIT_DIFF_LONG,
+               long_value=("--diff-filter", "--inter-hunk-context", "--src-prefix", "--dst-prefix"),
+               long_optional=_GIT_DIFF_OPTIONAL, refuse=_GIT_REFUSE_DIFF)
+_GIT_LOG_LONG = _GIT_DIFF_LONG + (
+    "--oneline", "--graph", "--no-decorate", "--all", "--reverse", "--first-parent", "--merges",
+    "--no-merges", "--follow", "--abbrev-commit", "--no-abbrev-commit", "--date-order",
+    "--topo-order", "--left-right", "--cherry-pick", "--boundary", "--source", "--use-mailmap",
+    "--full-history", "--simplify-merges", "--ancestry-path", "--regexp-ignore-case",
+    "--extended-regexp", "--fixed-strings", "--all-match", "--invert-grep", "--count")
+_GIT_LOG = _g("pusRawzbWDgiEFmct", "nSG", "MCBU", numeric=True, long=_GIT_LOG_LONG,
+              long_value=("--diff-filter", "--max-count", "--skip", "--since", "--after", "--until",
+                          "--before", "--author", "--committer", "--grep", "--format", "--date",
+                          "--inter-hunk-context"),
+              long_optional=_GIT_DIFF_OPTIONAL + ("--decorate", "--pretty", "--branches", "--tags",
+                                                  "--remotes", "--no-walk"),
+              refuse=_GIT_REFUSE_DIFF)
+_GIT_GRAMMARS = {
+    "diff": _GIT_DIFF,
+    "log": _GIT_LOG,
+    "show": _GIT_LOG,
+    "status": _g("sbvz", "", "u",
+                 long=("--short", "--branch", "--long", "--verbose", "--ahead-behind",
+                       "--no-ahead-behind", "--show-stash", "--renames", "--no-renames", "--no-column"),
+                 long_optional=("--porcelain", "--untracked-files", "--ignored", "--ignore-submodules",
+                                "--find-renames", "--column")),
+    "grep": _g("nilvwcEFPGhHIqzLo", "efABCm", numeric=True,
+               long=("--cached", "--untracked", "--exclude-standard", "--line-number", "--column",
+                     "--ignore-case", "--invert-match", "--word-regexp", "--count",
+                     "--files-with-matches", "--name-only", "--files-without-match",
+                     "--extended-regexp", "--fixed-strings", "--perl-regexp", "--basic-regexp",
+                     "--full-name", "--heading", "--break", "--show-function", "--function-context",
+                     "--no-color", "--null", "--quiet", "--all-match", "--and", "--or", "--not",
+                     "--text", "--only-matching"),
+               long_value=("--threads", "--max-depth", "--context", "--after-context",
+                           "--before-context", "--max-count"),
+               long_optional=("--color",),
+               refuse={"-O": "command_git_denied", "--open-files-in-pager": "command_git_denied"}),
+    "blame": _g("lstnfecwpb", "L", "MC",
+                long=("--porcelain", "--line-porcelain", "--show-name", "--show-number",
+                      "--show-email", "--root", "--show-stats"),
+                long_optional=("--abbrev",)),
+    "ls-files": _g("cdmoiskuvftz", "x",
+                   long=("--cached", "--deleted", "--modified", "--others", "--ignored", "--stage",
+                         "--killed", "--unmerged", "--directory", "--no-empty-directory",
+                         "--exclude-standard", "--full-name", "--error-unmatch", "--eol",
+                         "--deduplicate"),
+                   long_value=("--exclude", "--format"), long_optional=("--abbrev",)),
+    "rev-parse": _g("q", long=("--show-toplevel", "--show-prefix", "--show-cdup", "--git-dir",
+                               "--git-common-dir", "--is-inside-work-tree", "--is-inside-git-dir",
+                               "--is-bare-repository", "--verify", "--quiet", "--symbolic",
+                               "--symbolic-full-name", "--all", "--absolute-git-dir"),
+                    long_optional=("--short", "--abbrev-ref")),
+    "describe": _g(long=("--tags", "--all", "--always", "--long", "--exact-match", "--first-parent",
+                         "--contains"),
+                   long_value=("--match", "--exclude", "--candidates"),
+                   long_optional=("--abbrev", "--dirty", "--broken")),
+    "rev-list": _g("", "n", numeric=True,
+                   long=("--count", "--all", "--reverse", "--first-parent", "--merges", "--no-merges",
+                         "--topo-order", "--date-order", "--left-right", "--cherry-pick",
+                         "--boundary"),
+                   long_value=("--max-count", "--skip", "--since", "--until", "--after", "--before",
+                               "--author", "--committer", "--grep")),
+    "merge-base": _g("a", long=("--is-ancestor", "--all", "--octopus", "--independent",
+                                "--fork-point")),
+    "ls-tree": _g("rdtlz", long=("--name-only", "--name-status", "--full-name", "--full-tree", "--long",
+                                 "--object-only"),
+                  long_value=("--format",), long_optional=("--abbrev",)),
+    "cat-file": _g("tspe"),
+    "shortlog": _g("nsec", long=("--numbered", "--summary", "--email", "--committer")),
+    "branch": _g("arvl", operands=False,
+                 long=("--all", "--remotes", "--verbose", "--list", "--show-current", "--no-color",
+                       "--no-column"),
+                 long_value=("--sort", "--format"), long_optional=("--color", "--abbrev")),
+    "version": _g(operands=False),
+}
+
+_FIND_PLAIN = frozenset({"-print", "-print0", "-empty", "-not", "-a", "-and", "-o", "-or", "-true",
+                         "-false", "-prune", "-depth", "-xdev", "-mount", "-readable", "-writable",
+                         "-executable", "-ls", "-quit", "-daystart", "(", ")", "!", ","})
+_FIND_VALUE = frozenset({"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-type",
+                         "-xtype", "-maxdepth", "-mindepth", "-newer", "-anewer", "-cnewer", "-size",
+                         "-mtime", "-mmin", "-atime", "-amin", "-ctime", "-cmin", "-perm", "-regex",
+                         "-iregex", "-regextype", "-samefile", "-links", "-printf", "-user",
+                         "-group", "-uid", "-gid", "-inum", "-used", "-lname", "-ilname",
+                         "-newermt"})
+_SED_LONG = frozenset({"--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered",
+                       "--null-data", "--zero-terminated", "--posix", "--sandbox", "--debug"})
+_SHELL_LETTERS = frozenset("euxvnlfaCc")
+_SHELL_LONG = frozenset({"--norc", "--noprofile", "--posix", "--login", "--verbose", "--noediting"})
+_ARG_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr"})
 
 
 def _first_word(args: list[str]) -> str | None:
@@ -762,7 +1160,7 @@ class _Shell:
         elif nxt == "&":
             i = self.skip(i + 1)
             target, i = self.word(i) if i < n and text[i] not in _WORD_STOP else ("", i)
-            if not target.isdigit():
+            if not _ASCII_DIGITS.match(target):
                 raise self.construct("a redirection to a descriptor other than a number")
             return ("dup", target), i
         elif nxt in ("|", "("):
@@ -815,6 +1213,8 @@ class _Shell:
                 continue
             raw, i = self.word(i)
             if i < n and text[i] in "<>" and raw.isdigit():
+                if not _ASCII_DIGITS.match(raw):
+                    raise self.construct("a descriptor number in non-ASCII digits")
                 target, i = self.redirect(i, raw)
                 redirects.append(target)
             else:
@@ -840,6 +1240,21 @@ class _Shell:
         if len(parts) != 1:
             raise _Refused("command_malformed", "a word shlex cannot split")
         return parts[0]
+
+
+@dataclass
+class _Reading:
+    """What the gate read from one simple command's arguments under its program's grammar."""
+
+    known: bool                                        # the program has a grammar
+    unknown: list[str]                                 # options or forms not in the grammar
+    writes: list[tuple[str, str]]                      # (path, kind) the command writes
+    trees: list[str]                                   # destinations that may receive a folder
+    copies_tree: bool = False                          # a recursive copy (contents unseen)
+    recursive_delete: bool = False
+    exempt: frozenset = frozenset()                    # argument indices checked by the grammar
+    clean: set = None                                  # argv indices of completely read clusters
+    values: list = None                                # every option value the grammar read
 
 
 class _Commands:
@@ -890,8 +1305,9 @@ class _Commands:
         if name in _REPLS:
             raise _Refused("command_interactive", name)
         parts = self.redirections(redirects)
+        shell_unknown: list[str] = []
         if name in _SHELLS:
-            mode, script = self.shell_mode(args)
+            mode, script, shell_unknown = self.shell_mode(args)
             if mode == "interactive":
                 raise _Refused("command_interactive", name)
             if mode == "inline":
@@ -907,40 +1323,82 @@ class _Commands:
                 raise _Refused("command_interactive", name)
             if mode == "inline":
                 raise _Refused("command_inline_code", name)
+            if module is not None:
+                root = module.partition("\0")[0].split(".")[0]
+                if root in _MODULES_INTERACTIVE:
+                    raise _Refused("command_interactive", f"{name} -m {root}")
+                if root in _MODULES_INLINE:
+                    raise _Refused("command_inline_code", f"{name} -m {root}")
         if name in _INLINE_ALWAYS:
             raise _Refused("command_inline_code", name)
         if name in _NETWORK:
             raise _Refused("command_network", name)
+        if _RUNNERS.get(name) is not None and args[:1] == [_RUNNERS[name]]:
+            return parts + self.runner(argv, depth)
         if self.installs(name, args, module):
             raise _Refused("command_package_install", " ".join(argv[:3]))
-        if name == "git" and self.git_denied(args):
-            raise _Refused("command_git_denied")
-        if name == "ln" or (name == "cp" and any(
-                a in ("--symbolic-link", "--link") or (a.startswith("-") and not a.startswith("--")
-                                                       and ("s" in a or "l" in a)) for a in args)):
+        if name == "ln":
             raise _Refused("command_symlink")
         if name in _MODE_CHANGE:
             raise _Refused("command_mode_change")
-        if name == "find" and any(a in _FIND_EXEC for a in args):
-            raise _Refused("command_exec_option", name)
-        checked = args
-        if name == "sed":
-            scripts, indices, _, _, file_script = self.sed_parse(args)
-            if file_script or not scripts or not all(_sed_safe(x) for x in scripts):
-                raise _Refused("command_inline_code", name)
-            checked = [a for index, a in enumerate(args) if index not in indices]
-        for arg in checked:
-            self.argument(arg)
+        reading = self.read(name, args)
+        reading.unknown[:0] = shell_unknown
+        clean = reading.clean or set()
+        for index, word in enumerate(argv):
+            if index - 1 not in reading.exempt:
+                self.argument(word, program=index == 0, tails=index not in clean)
+        for value in reading.values or ():
+            self.argument(value, tails=False)
+        self.policy_state()
+        parts.extend(self.targets(reading))
+        for word in reading.unknown:
+            parts.append(self.checker.unlisted("unlisted_command", "command_unknown_option",
+                                               f"{name} {word}"))
+        parts.append(self.rule(argv, reading.known))
+        return parts
+
+    def policy_state(self) -> None:
         if self.policy.owner_policy_state == "missing":
             raise _Refused("owner_policy_missing")
         if self.policy.owner_policy_state == "changed":
             raise _Refused("owner_policy_changed")
-        parts.extend(self.targets(name, args))
-        if any(tuple(argv[:len(rule)]) == rule for rule in self.policy.command_rules):
-            parts.append(_Part(ALLOW, "command_allowed", name))
-        else:
-            parts.append(self.checker.unlisted("unlisted_command", "command_not_allowed",
-                                               " ".join(argv[:2])))
+
+    def rule(self, argv: list[str], known: bool) -> _Part:
+        """Allowed by the command rules: a prefix rule for a program whose arguments the gate
+        read completely; an exact rule in every layer for any other program."""
+
+        words = tuple(argv)
+        shown = shlex.join(argv)
+        prefixed = any(words[:len(rule)] == rule for rule in self.policy.command_rules)
+        if known and prefixed:
+            return _Part(ALLOW, "command_allowed", posixpath.basename(argv[0]))
+        if not known and all(words in layer for layer in self.policy.command_layers):
+            return _Part(ALLOW, "command_allowed", posixpath.basename(argv[0]))
+        if prefixed:
+            return self.checker.unlisted("unlisted_command", "command_unknown_program", shown)
+        return self.checker.unlisted("unlisted_command", "command_not_allowed", shown)
+
+    def runner(self, argv: list[str], depth: int) -> list[_Part]:
+        """`uv run CMD...` and the like: CMD is checked as a command of its own, and the runner
+        itself must be listed."""
+
+        for index, word in enumerate(argv[:2]):
+            self.argument(word, program=index == 0)
+        inner = argv[2:]
+        if not inner:
+            raise _Refused("command_malformed", "a runner without a command")
+        if inner[0].startswith("-"):
+            # The runner's own options (environments, extra packages): not read.
+            for word in inner:
+                self.argument(word)
+            self.policy_state()
+            return [self.checker.unlisted("unlisted_command", "command_unknown_option",
+                                          f"{' '.join(argv[:2])} {inner[0]}"),
+                    self.rule(argv, True)]
+        if depth + 1 > MAX_NESTING:
+            raise _Refused("command_nesting_too_deep")
+        parts = self.simple(inner, [], depth + 1)
+        parts.append(self.rule(argv, True))
         return parts
 
     def redirections(self, redirects: list[tuple[str, str]]) -> list[_Part]:
@@ -958,8 +1416,9 @@ class _Commands:
         return parts
 
     @staticmethod
-    def shell_mode(args: list[str]) -> tuple[str, str | None]:
+    def shell_mode(args: list[str]) -> tuple[str, str | None, list[str]]:
         inline = False
+        unknown: list[str] = []
         i = 0
         while i < len(args):
             arg = args[i]
@@ -967,16 +1426,20 @@ class _Commands:
                 i += 1
                 break
             if arg in ("-", "+"):
-                return "interactive", None
+                return "interactive", None, unknown
             if arg.startswith("--"):
+                if arg not in _SHELL_LONG:
+                    unknown.append(arg)
                 i += 2 if arg in ("--rcfile", "--init-file") else 1
                 continue
             if arg[0] in "-+":
                 letters = arg[1:]
                 if "i" in letters or "s" in letters:
-                    return "interactive", None
+                    return "interactive", None, unknown
                 if "c" in letters:
                     inline = True
+                if any(c not in _SHELL_LETTERS and c not in "oO" for c in letters):
+                    unknown.append(arg)
                 i += 2 if ("o" in letters or "O" in letters) else 1
                 continue
             break
@@ -984,10 +1447,10 @@ class _Commands:
         if inline:
             if not rest:
                 raise _Refused("command_malformed", "a shell -c without a command")
-            return "inline", rest[0]
+            return "inline", rest[0], unknown
         if not rest:
-            return "interactive", None
-        return "script", None
+            return "interactive", None, unknown
+        return "script", None, unknown
 
     @staticmethod
     def interpreter_mode(name: str, args: list[str]) -> tuple[str, str | None]:
@@ -1040,21 +1503,17 @@ class _Commands:
         rest = args[i:]
         if not rest:
             return "interactive", None
-        if "/" not in rest[0] and "." not in rest[0]:
-            # Not recognisably a script: an option's value read as one would leave the
-            # interpreter reading code from its input.
-            return "interactive", None
         return "script", None
 
-    @staticmethod
-    def installs(name: str, args: list[str], module: str | None) -> bool:
+    @classmethod
+    def installs(cls, name: str, args: list[str], module: str | None) -> bool:
         if module is not None:
             module_name, _, rest = module.partition("\0")
             root = module_name.split(".")[0]
             if root == "ensurepip":
                 return True
-            if _PIP.match(root):
-                return any(word in _PIP_INSTALL for word in rest.split())
+            if _PIP.match(root) or root in _PACKAGE_SUBCOMMANDS or root in _PACKAGE_ALWAYS:
+                return cls.installs(root, rest.split(), None)
             return False
         # Any word, not only the first: an option's value can stand before the subcommand.
         if name in _PACKAGE_ALWAYS:
@@ -1070,147 +1529,272 @@ class _Commands:
         return _first_word(args) in subcommands or any(
             len(word) > 1 and word in subcommands for word in args)
 
+    # reading a program's arguments ------------------------------------------------------------
+
+    def read(self, name: str, args: list[str]) -> _Reading:
+        """The program's arguments under its grammar: refusals raise; unknown forms are listed."""
+
+        clean: set[int] = set()
+        if name == "git":
+            values: list[str] = []
+            return _Reading(True, self.git(args, clean, values), [], [], clean=clean, values=values)
+        if name == "find":
+            return _Reading(True, self.find(args), [], [])
+        if name == "sed":
+            return self.sed(args)
+        if _PYTHON.match(name):
+            return self.python(args, clean)
+        if name.startswith("perl") and _INTERPRETER.match(name):
+            options, _, unknown = _parse(_PERL, args, clean, 1)
+            return _Reading(True, unknown, [], [], clean=clean,
+                            values=[v for _, v in options if v is not None])
+        if name in _SHELLS:
+            return _Reading(True, [], [], [])
+        grammar = _GRAMMARS.get(name)
+        if grammar is None:
+            return _Reading(False, [], [], [])
+        options, operands, unknown = _parse(grammar, args, clean, 1)
+        if not grammar.operands and operands:
+            unknown = unknown + operands
+        reading = _Reading(True, unknown, [], [], clean=clean,
+                           values=[v for _, v in options if v is not None])
+        if grammar is _NODE:
+            for option, value in options:
+                if option in _NODE_LOADERS:
+                    if value is not None and _URL_SCHEME.match(value):
+                        raise _Refused("command_inline_code", f"{name} {option}")
+                    reading.unknown.append(f"{option} {value}")
+        elif grammar is _PYTEST:
+            pass
+        elif name in ("touch", "mkdir"):
+            reading.writes = [(p, "replace") for p in operands]
+        elif name == "tee":
+            kind = "modify" if _has(options, "-a", "--append") else "replace"
+            reading.writes = [(p, kind) for p in operands]
+        elif name in ("rm", "rmdir"):
+            reading.writes = [(p, "delete") for p in operands]
+            reading.recursive_delete = name == "rm" and _has(options, "-r", "-R", "--recursive")
+        elif name == "sort":
+            reading.writes = [(p, "replace") for p in _values(options, "-o", "--output")]
+        elif name in ("cp", "mv"):
+            self.copy(name, options, operands, reading)
+        return reading
+
     @staticmethod
-    def git_denied(args: list[str]) -> bool:
+    def copy(name: str, options, operands: list[str], reading: _Reading) -> None:
+        directories = _values(options, "-t", "--target-directory")
+        if directories:
+            sources, destination, into = operands, directories[-1], True
+        elif operands[1:]:
+            sources, destination = operands[:-1], operands[-1]
+            into = not _has(options, "-T", "--no-target-directory")
+        else:
+            return
+        landed = [destination]
+        if into:
+            for source in sources:
+                base = posixpath.basename(source.rstrip("/"))
+                if base not in ("", ".", ".."):
+                    landed.append(destination.rstrip("/") + "/" + base)
+        if name == "mv":
+            reading.writes = [(s, "delete") for s in sources] + [(p, "replace") for p in landed]
+            reading.trees = landed
+        else:
+            reading.writes = [(p, "replace") for p in landed]
+            if _has(options, "-a", "-r", "-R", "--recursive", "--archive"):
+                reading.copies_tree = True
+                reading.trees = landed
+
+    def git(self, args: list[str], clean: set[int], values: list[str]) -> list[str]:
         i = 0
         while i < len(args) and args[i].startswith("-"):
-            if args[i].split("=", 1)[0] in _GIT_GLOBAL_DENIED:
-                return True
+            if args[i] not in _GIT_GLOBAL_ALLOWED:
+                raise _Refused("command_git_denied")
             i += 1
         if i >= len(args):
-            return False
+            return []
         sub, rest = args[i], args[i + 1:]
         if sub in _GIT_DENIED:
-            return True
-        for arg in rest:
-            if arg.split("=", 1)[0] in _GIT_DENIED_OPTIONS:
-                return True
-            if sub == "grep" and arg.startswith("-O"):
-                return True
-        return False
-
-    def argument(self, arg: str) -> None:
-        """Paths inside an argument: no '..', and absolute paths only inside the workspace."""
-
-        pieces = re.split(r"[=:,]", arg)
-        attached = re.match(r"^-[A-Za-z](/.*)$", arg)
-        if attached:
-            pieces.append(attached.group(1))
-        for piece in pieces:
-            if ".." in piece.split("/"):
-                raise _Refused("path_traversal", arg)
-        for piece in pieces:
-            if piece.startswith("/") and piece not in _DEVICES:
-                self.checker.resolve(piece, self.base)
-
-    def targets(self, name: str, args: list[str]) -> list[_Part]:
-        """The paths a known file-writing command writes, each checked as a write."""
-
-        targets: list[str] = []
-        kind = "delete" if name in _DELETERS else "replace"
-        if name in _DELETERS or name in _WRITERS:
-            options_done = False
-            skip = False
-            for arg in args:
-                if skip:
-                    skip = False
-                    continue
-                if not options_done and arg == "--":
-                    options_done = True
-                    continue
-                if not options_done and arg.startswith("-") and arg != "-":
-                    if (name, arg) in (("truncate", "-s"), ("mkdir", "-m"), ("install", "-m")):
-                        skip = True
-                    elif arg.startswith("--") and "=" in arg:
-                        # --target-directory=PATH and the like: the value may be written.
-                        targets.append(arg.split("=", 1)[1])
-                    elif (name in ("cp", "mv", "install") and not arg.startswith("--")
-                          and "t" in arg[1:] and arg[1:].split("t", 1)[1]):
-                        targets.append(arg[1:].split("t", 1)[1])
-                    continue
-                targets.append(arg)
-        elif name == "dd":
-            targets = [a[3:] for a in args if a.startswith("of=")]
-        elif name == "sed":
-            _, _, files, in_place, _ = self.sed_parse(args)
-            targets = files if in_place else []
-            kind = "modify"
-        recursive = name == "rm" and any(
-            a == "--recursive" or (a.startswith("-") and not a.startswith("--")
-                                   and ("r" in a or "R" in a)) for a in args)
-        parts = []
-        for raw in targets:
-            if raw in _DEVICES:
-                continue
-            rel = self.checker.resolve(raw, self.base)
-            if recursive and not rel:
-                raise _Refused("command_delete_outside_scope", raw)
-            try:
-                part = self.checker.write(rel, kind, raw)
-            except _Refused as refused:
-                if recursive and refused.rule == "write_outside_scope":
-                    raise _Refused("command_delete_outside_scope", raw) from None
-                raise
-            if recursive and part.rule == "write_outside_scope":
-                raise _Refused("command_delete_outside_scope", raw)
-            parts.append(part)
-        return parts
+            raise _Refused("command_git_denied")
+        grammar = _GIT_GRAMMARS.get(sub)
+        if grammar is None:
+            return [sub]
+        options, operands, unknown = _parse(grammar, rest, clean, i + 2)
+        values.extend(v for _, v in options if v is not None)
+        if not grammar.operands and operands:
+            unknown = unknown + operands
+        return unknown
 
     @staticmethod
-    def sed_parse(args: list[str]) -> tuple[list[str], set[int], list[str], bool, bool]:
-        """sed's scripts, the argument indices holding them, its files, -i, and -f."""
+    def find(args: list[str]) -> list[str]:
+        if any(a in _FIND_EXEC for a in args):
+            raise _Refused("command_exec_option", "find")
+        unknown: list[str] = []
+        i = 0
+        while i < len(args) and args[i] == "-P":
+            i += 1
+        while i < len(args) and not args[i].startswith("-") and args[i] not in _FIND_PLAIN:
+            i += 1
+        while i < len(args):
+            word = args[i]
+            if word in _FIND_PLAIN:
+                i += 1
+            elif word in _FIND_VALUE and i + 1 < len(args):
+                i += 2
+            else:
+                unknown.append(word)
+                i += 1
+        return unknown
+
+    def python(self, args: list[str], clean: set[int]) -> _Reading:
+        options, operands, unknown = _parse(_PYTHON_GRAMMAR, args, clean, 1)
+        values = [v for _, v in options if v is not None]
+        reading = _Reading(True, unknown, [], [], clean=clean, values=values)
+        modules = _values(options, "-m")
+        if not modules:
+            return reading
+        module = modules[-1]
+        grammar = {"pytest": _PYTEST, "unittest": _UNITTEST}.get(module)
+        if grammar is None:
+            reading.unknown.append(f"-m {module}")
+            return reading
+        more_options, _, more = _parse(grammar, operands, clean, 1 + len(args) - len(operands))
+        values.extend(v for _, v in more_options if v is not None)
+        reading.unknown.extend(more)
+        return reading
+
+    def sed(self, args: list[str]) -> _Reading:
+        """GNU sed: options anywhere; with -e or -f every operand is a file, else the first
+        operand is the script. Scripts are checked by their own small grammar."""
 
         scripts: list[str] = []
-        indices: set[int] = set()
-        files: list[str] = []
+        exempt: set[int] = set()
+        operands: list[tuple[int, str]] = []
+        unknown: list[str] = []
         in_place = file_script = False
-        i = 0
-        while i < len(args):
+        i, n = 0, len(args)
+        while i < n:
             arg = args[i]
+            if arg == "--":
+                operands.extend((j, args[j]) for j in range(i + 1, n))
+                break
             if arg.startswith("--"):
-                option, has_value, value = arg.partition("=")
-                if option == "--in-place":
-                    in_place = True
-                elif option in ("--expression", "--file"):
-                    file_script = file_script or option == "--file"
-                    if has_value:
+                name, eq, value = arg.partition("=")
+                if name in ("--expression", "--file"):
+                    file_script = file_script or name == "--file"
+                    if eq:
                         scripts.append(value)
-                        indices.add(i)
-                    elif i + 1 < len(args):
+                        exempt.add(i)
+                    elif i + 1 < n:
                         scripts.append(args[i + 1])
-                        indices.add(i + 1)
+                        exempt.add(i + 1)
                         i += 1
+                elif len(name) > 2 and ("--expression".startswith(name) or "--file".startswith(name)):
+                    raise _Refused("command_inline_code", "sed")
+                elif len(name) > 3 and "--in-place".startswith(name):
+                    in_place = True
+                    if eq or name != "--in-place":
+                        unknown.append(arg)
+                elif name == "--line-length" and eq:
+                    pass
+                elif name not in _SED_LONG or eq:
+                    unknown.append(arg)
                 i += 1
                 continue
             if arg.startswith("-") and len(arg) > 1:
                 letters = arg[1:]
                 for index, letter in enumerate(letters):
+                    attached = letters[index + 1:]
                     if letter == "i":
                         in_place = True
+                        if attached:
+                            unknown.append(arg)
                         break
                     if letter in "ef":
                         file_script = file_script or letter == "f"
-                        attached = letters[index + 1:]
                         if attached:
                             scripts.append(attached)
-                            indices.add(i)
-                        elif i + 1 < len(args):
+                            exempt.add(i)
+                        elif i + 1 < n:
                             scripts.append(args[i + 1])
-                            indices.add(i + 1)
+                            exempt.add(i + 1)
                             i += 1
                         break
-                    if letter == "l" and not letters[index + 1:]:
-                        i += 1
+                    if letter == "l":
+                        if not attached:
+                            i += 1
+                        break
+                    if letter not in "nErsuz":
+                        unknown.append(arg)
                         break
                 i += 1
                 continue
-            if not scripts:
-                scripts.append(arg)
-                indices.add(i)
-            else:
-                files.append(arg)
+            operands.append((i, arg))
             i += 1
-        return scripts, indices, files, in_place, file_script
+        if not scripts and not file_script and operands:
+            index, script = operands.pop(0)
+            scripts.append(script)
+            exempt.add(index)
+        if file_script or not scripts or not all(_sed_safe(x) for x in scripts):
+            raise _Refused("command_inline_code", "sed")
+        files = [arg for _, arg in operands]
+        writes = [(f, "modify") for f in files] if in_place else []
+        return _Reading(True, unknown, writes, [], exempt=frozenset(exempt))
+
+    # arguments and targets ----------------------------------------------------------------
+
+    def argument(self, arg: str, program: bool = False, tails: bool = True) -> None:
+        """Every argument, whatever the program: no '..'; no part naming git internals, agent
+        configuration, secrets files or COCOLO's own names; no standard input; absolute paths
+        only inside the workspace. For a short-option cluster the gate did not read completely,
+        every tail of the word is checked too, since any of them could be an attached value."""
+
+        words = [arg]
+        if tails and arg.startswith("-") and not arg.startswith("--"):
+            words.extend(arg[k:] for k in range(2, len(arg)))
+        pieces = [piece for word in words for piece in re.split(r"[=:,]", word)]
+        for piece in pieces:
+            if ".." in piece.split("/"):
+                raise _Refused("path_traversal", arg)
+        for piece in pieces:
+            denied = _deny_class(tuple(p for p in piece.split("/") if p) or ("",))
+            if denied:
+                raise _Refused(denied, arg)
+        if program:
+            return
+        for piece in pieces:
+            if piece == "/dev/stdin":
+                raise _Refused("command_interactive", arg)
+            if piece.startswith("/") and piece not in _ARG_DEVICES:
+                self.checker.resolve(piece, self.base)
+
+    def targets(self, reading: _Reading) -> list[_Part]:
+        """The paths the command writes, each checked as a write."""
+
+        parts = []
+        recursive = reading.recursive_delete
+        for raw, kind in reading.writes:
+            if raw in _DEVICES:
+                continue
+            rel = self.checker.resolve(raw, self.base)
+            if recursive and kind == "delete" and not rel:
+                raise _Refused("command_delete_outside_scope", raw)
+            try:
+                part = self.checker.write(rel, kind, raw)
+            except _Refused as refused:
+                if recursive and kind == "delete" and refused.rule == "write_outside_scope":
+                    raise _Refused("command_delete_outside_scope", raw) from None
+                raise
+            if recursive and kind == "delete" and part.rule == "write_outside_scope":
+                raise _Refused("command_delete_outside_scope", raw)
+            parts.append(part)
+        for raw in reading.trees:
+            rel = self.checker.resolve(raw, self.base)
+            if rel and _holds_conditional(rel):
+                raise _Refused("write_conditional_ungranted", raw)
+            if reading.copies_tree:
+                parts.append(self.checker.unlisted("unlisted_write", "write_tree", raw))
+        return parts
 
 
 def _sed_part_end(script: str, start: int, delimiter: str) -> int:
@@ -1306,19 +1890,123 @@ _COMMAND_TOOLS = frozenset({"Bash", "exec_command", "shell", "local_shell"})
 _PATCH_TOOLS = frozenset({"apply_patch"})
 _NETWORK_TOOLS = frozenset({"WebFetch", "WebSearch", "web_search", "web_fetch"})
 
+# The fields each tool may carry (Claude Code 2.1 and Codex 0.169); any other field is refused,
+# since what it would change is not known.
+_FIELDS = {
+    "Write": {"file_path", "content"},
+    "Edit": {"file_path", "old_string", "new_string", "replace_all"},
+    "MultiEdit": {"file_path", "edits"},
+    "NotebookEdit": {"notebook_path", "new_source", "cell_id", "cell_type", "edit_mode"},
+    "Read": {"file_path", "offset", "limit", "pages"},
+    "LS": {"path", "ignore"},
+    "NotebookRead": {"notebook_path", "cell_id"},
+    "view_image": {"path"},
+    "Glob": {"pattern", "path"},
+    "Grep": {"pattern", "path", "glob", "type", "output_mode", "-i", "-n", "-A", "-B", "-C",
+             "context", "multiline", "head_limit", "offset"},
+    "Bash": {"command", "description", "timeout", "run_in_background", "dangerouslyDisableSandbox",
+             "workdir"},
+    "exec_command": {"cmd", "workdir", "shell", "login", "tty", "yield_time_ms", "max_output_tokens",
+                     "sandbox_permissions", "justification", "prefix_rule", "additional_permissions",
+                     "environment_id"},
+    "shell": {"command", "workdir", "timeout_ms", "timeout", "sandbox_permissions", "justification",
+              "prefix_rule", "additional_permissions"},
+    "local_shell": {"command", "workdir", "timeout_ms", "env", "user"},
+    "apply_patch": {"command", "input", "workdir", "call_id"},
+}
+_UNSET_FIELDS = ("prefix_rule", "additional_permissions", "environment_id", "user")
+_SHELL_PATHS = frozenset({"bash", "sh", "dash", "/bin/bash", "/bin/sh", "/bin/dash", "/usr/bin/bash",
+                          "/usr/bin/sh", "/usr/bin/dash"})
+MAX_PATTERN_ALTERNATIVES = 256
 
-def _combine(parts: list[_Part]) -> _Part:
-    for part in parts:
-        if part.outcome == REFUSE:
-            return part
-    escalations = [p for p in parts if p.outcome == ESCALATE]
-    if escalations:
-        return min(escalations, key=lambda p: _ESCALATION_ORDER.index(p.rule)
-                   if p.rule in _ESCALATION_ORDER else len(_ESCALATION_ORDER))
-    return parts[0]
+
+def _check_fields(tool: str, tool_input: Mapping) -> None:
+    allowed = _FIELDS.get(tool, set())
+    for key in tool_input:
+        if key not in allowed:
+            raise _Refused("request_field_unknown", key)
+    for key in _UNSET_FIELDS:
+        if tool_input.get(key) is not None:
+            raise _Refused("request_field_value", key)
+    if tool_input.get("sandbox_permissions") not in (None, "use_default"):
+        raise _Refused("request_field_value", "sandbox_permissions")
+    if tool_input.get("dangerouslyDisableSandbox"):
+        raise _Refused("request_field_value", "dangerouslyDisableSandbox")
+    if tool_input.get("env"):
+        raise _Refused("request_field_value", "env")
+    if tool_input.get("login") not in (None, True, False):
+        raise _Refused("request_field_value", "login")
+    shell = tool_input.get("shell")
+    if shell is not None and shell not in _SHELL_PATHS:
+        raise _Refused("request_field_value", "shell")
+    tty = tool_input.get("tty")
+    if tty is not None and tty is not False:
+        raise _Refused("command_interactive", "a terminal (tty)")
 
 
-def _decide(policy: GatePolicy, request: object) -> tuple[_Part, bool]:
+def _alternatives(pattern: object) -> list[str]:
+    """A glob pattern's brace alternatives, each a pattern without braces."""
+
+    if not isinstance(pattern, str) or not pattern:
+        raise _Refused("request_malformed")
+    if "\\" in pattern:
+        raise _Refused("pattern_unreadable", pattern)
+
+    def sequence(i: int, stops: str) -> tuple[list[str], int]:
+        outs = [""]
+        while i < len(pattern):
+            c = pattern[i]
+            if c in stops:
+                return outs, i
+            if c == "}":
+                raise _Refused("pattern_unreadable", pattern)
+            if c == "{":
+                alternatives: list[str] = []
+                i += 1
+                while True:
+                    sub, i = sequence(i, ",}")
+                    alternatives.extend(sub)
+                    if i >= len(pattern):
+                        raise _Refused("pattern_unreadable", pattern)
+                    i += 1
+                    if pattern[i - 1] == "}":
+                        break
+                outs = [o + a for o in outs for a in alternatives]
+                if len(outs) > MAX_PATTERN_ALTERNATIVES:
+                    raise _Refused("pattern_unreadable", pattern)
+                continue
+            outs = [o + c for o in outs]
+            i += 1
+        return outs, i
+
+    outs, _ = sequence(0, "")
+    return outs
+
+
+def _read_pattern(checker: _Checker, pattern: object, base: tuple[str, ...] | None) -> None:
+    for alternative in _alternatives(pattern):
+        checker.read_path(alternative, base)
+
+
+def _base(checker: _Checker, workdir: object) -> tuple[str, ...]:
+    if workdir is None:
+        return checker.cwd
+    try:
+        return checker.resolve(workdir)
+    except _Refused:
+        raise _Refused("cwd_outside_workspace", workdir) from None
+
+
+def _patch_text(tool_input: Mapping) -> object:
+    if "command" in tool_input and "input" in tool_input:
+        raise _Refused("request_ambiguous", "the patch")
+    text = tool_input.get("command", tool_input.get("input"))
+    if isinstance(text, list) and len(text) == 2 and text[0] == "apply_patch":
+        text = text[1]
+    return text
+
+
+def _decide(policy: GatePolicy, request: object) -> tuple[list[_Part], bool, str | None]:
     if not isinstance(request, Mapping):
         raise _Refused("request_malformed")
     tool = request.get("tool_name")
@@ -1340,56 +2028,70 @@ def _decide(policy: GatePolicy, request: object) -> tuple[_Part, bool]:
         raise _Refused("network_tool")
     if tool.startswith("mcp__"):
         raise _Refused("mcp_tool")
+    if tool not in _FIELDS:
+        raise _Refused("tool_unknown", tool)
+    _check_fields(tool, tool_input)
     if tool in _WRITE_TOOLS:
         field, kind = _WRITE_TOOLS[tool]
-        return checker.write_path(tool_input.get(field), kind), True
+        return [checker.write_path(tool_input.get(field), kind)], True, None
     if tool in _READ_TOOLS:
         checker.read_path(tool_input.get(_READ_TOOLS[tool]))
-        return _Part(ALLOW, "read_in_workspace", ""), policy.record_reads
+        return [_Part(ALLOW, "read_in_workspace", "")], policy.record_reads, None
     if tool == "Glob":
         base = checker.read_path(tool_input["path"]) if tool_input.get("path") is not None else None
-        checker.read_path(tool_input.get("pattern"), base)
-        return _Part(ALLOW, "read_in_workspace", ""), policy.record_reads
+        _read_pattern(checker, tool_input.get("pattern"), base)
+        return [_Part(ALLOW, "read_in_workspace", "")], policy.record_reads, None
     if tool == "Grep":
         base = checker.read_path(tool_input["path"]) if tool_input.get("path") is not None else None
         if tool_input.get("glob") is not None:
-            checker.read_path(tool_input["glob"], base if base is not None else checker.cwd)
-        return _Part(ALLOW, "read_in_workspace", ""), policy.record_reads
+            _read_pattern(checker, tool_input["glob"], base if base is not None else checker.cwd)
+        return [_Part(ALLOW, "read_in_workspace", "")], policy.record_reads, None
     if tool in _PATCH_TOOLS:
-        text = tool_input.get("command", tool_input.get("input"))
-        if isinstance(text, list) and len(text) == 2 and text[0] == "apply_patch":
-            text = text[1]
-        parts = [checker.write_path(path, kind) for path, kind in _patch_ops(text)]
-        return _combine(parts), True
-    if tool in _COMMAND_TOOLS:
-        if tool_input.get("run_in_background"):
-            raise _Refused("command_background")
-        base = checker.cwd
-        workdir = tool_input.get("workdir")
-        if workdir is not None:
-            try:
-                base = checker.resolve(workdir)
-            except _Refused:
-                raise _Refused("cwd_outside_workspace", workdir) from None
-        commands = _Commands(checker, base)
-        command = tool_input.get("command", tool_input.get("cmd"))
-        parts = commands.shell(command, 0) if isinstance(command, str) else commands.argv(command)
-        combined = _combine(parts)
-        if combined.outcome == ALLOW:
-            combined = _Part(ALLOW, "command_allowed", "")
-        return combined, True
-    raise _Refused("tool_unknown", tool)
+        text = _patch_text(tool_input)
+        base = _base(checker, tool_input.get("workdir"))
+        parts = [checker.write_path(path, kind, base) for path, kind in _patch_ops(text)]
+        return parts, True, None
+    # A command tool.
+    if tool_input.get("run_in_background"):
+        raise _Refused("command_background")
+    commands = _Commands(checker, _base(checker, tool_input.get("workdir")))
+    command = tool_input.get("cmd" if tool == "exec_command" else "command")
+    if isinstance(command, str):
+        return commands.shell(command, 0), True, command
+    parts = commands.argv(command)
+    return parts, True, shlex.join(command)
+
+
+def _order(part: _Part) -> int:
+    return (_ESCALATION_ORDER.index(part.rule) if part.rule in _ESCALATION_ORDER
+            else len(_ESCALATION_ORDER))
 
 
 def decide(policy: GatePolicy, request: object) -> Decision:
-    """Allow, refuse or escalate one PreToolUse request. Pure: no I/O, no clock, no state."""
+    """Allow, refuse or escalate one PreToolUse request. Pure: no I/O, no clock, no state.
+
+    An escalation names every reason found in the request (one per part of a compound command
+    or patch), and a command's escalation ends with the full command, so the owner answers for
+    all of it at once."""
 
     try:
-        part, record = _decide(policy, request)
+        parts, record, full = _decide(policy, request)
     except _Refused as refused:
         return Decision(REFUSE, refused.rule, _reason(refused.rule, REFUSE, refused.subject), True)
-    if part.outcome != ALLOW:
-        record = True
+    escalations = sorted((p for p in parts if p.outcome == ESCALATE), key=_order)
+    if escalations:
+        texts: list[str] = []
+        for part in escalations:
+            text = _REASONS[part.rule].format(s=_show(part.subject))
+            if text not in texts:
+                texts.append(text)
+        reason = _PREFIX + "asking the owner: " + "; ".join(texts)
+        if full is not None:
+            reason += "; the full command: " + _show(full, limit=None)
+        return Decision(ESCALATE, escalations[0].rule, reason, True)
+    if full is not None:
+        return Decision(ALLOW, "command_allowed", _reason("command_allowed", ALLOW), record)
+    part = parts[0]
     return Decision(part.outcome, part.rule, _reason(part.rule, part.outcome, part.subject), record)
 
 
@@ -1402,15 +2104,17 @@ def _subject(request: object) -> str:
         return ""
     tool, tool_input = request.get("tool_name"), request["tool_input"]
     if tool in _PATCH_TOOLS:
-        text = tool_input.get("command", tool_input.get("input"))
-        if isinstance(text, list) and len(text) == 2 and text[0] == "apply_patch":
-            text = text[1]
+        try:
+            text = _patch_text(tool_input)
+        except _Refused:
+            return "\n".join(t for t in (tool_input.get("command"), tool_input.get("input"))
+                             if isinstance(t, str))
         try:
             return "\n".join(path for path, _ in _patch_ops(text))
         except _Refused:
             return text if isinstance(text, str) else ""
     if tool in _COMMAND_TOOLS:
-        command = tool_input.get("command", tool_input.get("cmd"))
+        command = tool_input.get("cmd" if tool == "exec_command" else "command")
         if isinstance(command, list) and all(isinstance(w, str) for w in command):
             return shlex.join(command)
         return command if isinstance(command, str) else ""

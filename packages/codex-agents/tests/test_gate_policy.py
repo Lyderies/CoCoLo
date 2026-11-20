@@ -1088,6 +1088,8 @@ class R01DenyClassWritesThroughListedPrograms(TableMixin, unittest.TestCase):
     def test_an_output_option_is_a_write_checked_like_any_other(self):
         self.check_rows([
             ("sort -o in scope", bash("sort -o src/out.txt src/a.txt"), ALLOW, "command_allowed"),
+            ("sort -o attached in scope", bash("sort -osrc/out.txt src/a.txt"), ALLOW, "command_allowed"),
+            ("sort -o attached outside", bash("sort -o/tmp/x src/a.txt"), REFUSE, "path_outside_workspace"),
             ("sort -o out of scope", bash("sort -o README.md src/a.txt"), ESCALATE, "write_outside_scope"),
             ("sort -o onto a grant-only path", bash("sort -o src/conftest.py src/a.txt"), REFUSE,
              "write_conditional_ungranted"),
@@ -1330,8 +1332,6 @@ class R10SmallerGaps(TableMixin, unittest.TestCase):
             ("non-ascii descriptor digit in .git", bash("ls >&٣", cwd="/workspace/.git/hooks"), REFUSE,
              "command_shell_construct"),
             ("non-ascii digit before a redirection", bash("ls ٣>src/x"), REFUSE, "command_shell_construct"),
-            ("sed reads p as a file when -e is given", bash("sed p -i -e s/a/b/"), ESCALATE,
-             "write_outside_scope"),
             ("grep clustered -f reads environ", bash("grep -hf/proc/self/environ -e zzz src/a.py"), REFUSE,
              "path_outside_workspace"),
             ("grep -rf clustered", bash("grep -rf/proc/self/environ src"), REFUSE, "path_outside_workspace"),
@@ -1340,7 +1340,7 @@ class R10SmallerGaps(TableMixin, unittest.TestCase):
              "path_outside_workspace"),
             ("grep glob brace", request("Grep", pattern="x", glob="{/etc/*,x}"), REFUSE,
              "path_outside_workspace"),
-            ("glob nested brace", request("Glob", pattern="src/{a,{/etc,b}}/*"), REFUSE,
+            ("glob nested brace", request("Glob", pattern="{src/a,{/etc,b}}/*"), REFUSE,
              "path_outside_workspace"),
             ("glob brace dotdot", request("Glob", pattern="{src,..}/x"), REFUSE, "path_traversal"),
             ("glob unbalanced brace", request("Glob", pattern="{src,/etc"), REFUSE, "pattern_unreadable"),
@@ -1356,6 +1356,10 @@ class R10SmallerGaps(TableMixin, unittest.TestCase):
             ("deno add", bash("deno add x"), REFUSE, "command_package_install"),
             ("deno install", bash("deno install x"), REFUSE, "command_package_install"),
         ], pol=wide())
+        self.check_rows([
+            ("sed reads p as a file when -e is given", bash("sed p -i -e s/a/b/"), ESCALATE,
+             "write_outside_scope"),
+        ])
 
 
 REVIEW_POLICY_GRANTS = {
