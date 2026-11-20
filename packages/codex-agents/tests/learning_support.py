@@ -555,7 +555,8 @@ arguments = sys.argv[3:]
 if arguments == ["--version"]:
     # Answers from <name>-version.txt, or a version inside the reviewed range.
     version = os.path.join(directory, name + "-version.txt")
-    default = {"claude": "2.1.200 (Claude Code)", "codex": "codex-cli 0.164.0"}[name]
+    # Corrected for O10 VF-6 (requirement): the fake Claude client is one that holds results to the schema.
+    default = {"claude": "2.1.311 (Claude Code)", "codex": "codex-cli 0.164.0"}[name]
     sys.stdout.write(open(version).read() if os.path.exists(version) else default + "\\n")
 elif name == "claude" and arguments[:2] == ["auth", "status"]:
     sys.stdout.write(open(os.path.join(directory, "claude-status.json")).read())

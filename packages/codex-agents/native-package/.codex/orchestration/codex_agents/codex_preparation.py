@@ -201,14 +201,12 @@ def _build(payload, scope):
                 raise PreparationError('preparation_invalid_input')
         root, bundle = Path(value['project_root']), Path(value['bundle_root'])
         stage = 'role_prompt'
-        if claude:
-            role_prompt, schema = bridge._claude_role_prompt(bundle, route), None
-        else:
-            role_prompt = bridge._codex_role_prompt(bundle, route)
-            from .learning_engine import _read_managed_bytes
-            schema = _read_managed_bytes(RUNTIME_ROOT, '.codex/orchestration/schemas/result.schema.json',
-                                         max_bytes=MAX_RESULT_BODY_BYTES)
-            bridge.codex_schemas(schema)
+        role_prompt = bridge._claude_role_prompt(bundle, route) if claude else bridge._codex_role_prompt(bundle, route)
+        # O10 VF-1: both providers' children are held to the same result schema.
+        from .learning_engine import _read_managed_bytes
+        schema = _read_managed_bytes(RUNTIME_ROOT, '.codex/orchestration/schemas/result.schema.json',
+                                     max_bytes=MAX_RESULT_BODY_BYTES)
+        bridge.codex_schemas(schema)
         stage = 'worker_input'
         worker_result = _worker_input(prospective, value['history_endpoint'], value['worker_result'])
         stage = 'read_paths'

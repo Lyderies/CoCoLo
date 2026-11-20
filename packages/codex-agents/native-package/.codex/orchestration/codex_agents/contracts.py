@@ -67,6 +67,11 @@ ONE_EVIDENCE_ENTRY_RULE = (
     "it in that entry's details, and set its outcome to the most severe of them ("
     + ", then ".join(EVIDENCE_OUTCOME_SEVERITY) + ")"
 )
+# O10 VF-3: the exact fields of an evidence entry (the validator's evidence_fields).
+EVIDENCE_FIELDS_RULE = (
+    "each evidence entry has exactly the fields criterion_id, type, outcome, reference and details: "
+    "put severity, impact, corrections and anything else in details"
+)
 FAILURE_REASONS = {
     "result_contract",
     "transient",
@@ -102,6 +107,8 @@ RESULT_VALIDATION_REASON_CODES = {
     "evidence_empty_reference",
     "evidence_unsupported_outcome",
     "evidence_details_not_text",
+    # O10 VF-2: a Claude child's client gave no schema-valid result.
+    "structured_output_missing",
 }
 # Durable bridge diagnostics also cover validators that raise an untyped error.
 # Never add exception text or caller-selected values to this vocabulary.
@@ -849,6 +856,7 @@ def result_preflight(assignment: Any) -> dict[str, Any]:
             "accepted admission requires completed execution; verdict remains independent",
             "completed execution must cover every required criterion",
             ONE_EVIDENCE_ENTRY_RULE,
+            EVIDENCE_FIELDS_RULE,
             "negative verdicts may contain fail or not_run evidence",
         ],
     }

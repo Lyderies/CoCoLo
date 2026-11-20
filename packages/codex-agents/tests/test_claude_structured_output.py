@@ -97,6 +97,12 @@ class StructuredOutputTests(BridgeTestCase):
                 self.dispatch(route, assigned, handle)
         self.assertEqual(launched, len([i for i in self.invocations("claude") if "-p" in i["argv"]]))
 
+    def test_VF_6_a_child_whose_client_reports_an_older_version_stops_at_init(self):
+        output = self.run_frames([init_frame(tools=STRUCTURED, claude_code_version="2.1.300"), {"sleep": 30},
+                                  final(result())])
+        self.assertEqual("init_client_unsupported", output["bridge_report"]["outcome"])
+        self.assertEqual("failed", output["result"]["execution_state"])
+
     def test_VF_3_the_rules_name_the_exact_evidence_fields_for_the_primary_and_the_child(self):
         from codex_agents.bridge import child_prompt
         from codex_agents.contracts import EVIDENCE_FIELDS_RULE, result_preflight

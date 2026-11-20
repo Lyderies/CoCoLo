@@ -30,6 +30,7 @@ from .claude_activity import ClaudeActivity, ClaudeActivityError
 from .codex_activity import CodexActivity, CodexActivityError
 from . import event_shapes
 from .contracts import (
+    EVIDENCE_FIELDS_RULE,
     ONE_EVIDENCE_ENTRY_RULE,
     effective_dispatch_bounds,
     effective_dispatch_limits,
@@ -92,6 +93,12 @@ MAX_STREAM_BYTES = 8 * 1024 * 1024
 MAX_LINE_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = MAX_RESULT_BODY_BYTES
 CLAUDE_TOOLS = ("Read", "Glob", "Grep")
+# O10 VF: the client's own output tool under --json-schema. It carries the child's result only, reads
+# nothing, and is allowed to a schema-held run alone; the result is taken from the result frame.
+CLAUDE_OUTPUT_TOOL = "StructuredOutput"
+CLAUDE_RUN_TOOLS = (*CLAUDE_TOOLS, CLAUDE_OUTPUT_TOOL)
+# O10 VF-6: the first client version shown to hold a result to --json-schema (a real run, 2026-11-20).
+CLAUDE_SCHEMA_MIN_VERSION = (2, 1, 311)
 # Known built-in plugins are switched off; the init-frame check still fails
 # closed if any plugin loads, so this list is a convenience, not the control.
 CLAUDE_DISABLED_PLUGINS = (
@@ -1113,6 +1120,7 @@ def child_prompt(assignment: dict[str, Any], *, worker_result_path: str | None =
         "with exactly one JSON object and no other text, filling in this template:\n"
         f"{json.dumps(template, indent=2)}\n"
         f"In the evidence list, {ONE_EVIDENCE_ENTRY_RULE}.\n"
+        f"Also, {EVIDENCE_FIELDS_RULE}.\n"
     )
 
 
@@ -1169,7 +1177,8 @@ def _claude_model_usage(model_usage: Any) -> list[dict[str, Any]]:
     return [merged[key] for key in sorted(merged)]
 
 
-def _check_claude_init(frame: dict[str, Any], model: str) -> str | None:
+def _check_claude_init(frame: dict[str, Any], model: str, allowed: tuple[str, ...] = CLAUDE_TOOLS,
+                       *, schema_held: bool = False) -> str | None:
     """Return the first init-frame violation, or None when the frame is clean."""
 
     if frame.get("apiKeySource") != "none":
@@ -1182,9 +1191,13 @@ def _check_claude_init(frame: dict[str, Any], model: str) -> str | None:
         return "mcp_server_loaded"
     tools = frame.get("tools")
     if not isinstance(tools, list) or any(
-        not isinstance(tool, str) or tool not in CLAUDE_TOOLS for tool in tools
+        not isinstance(tool, str) or tool not in allowed for tool in tools
     ):
         return "tool_not_allowed"
+    # O10 VF-6: a client that reports a version too old to hold its result to the schema stops here.
+    if (schema_held and frame.get("claude_code_version") is not None
+            and _client_version(frame.get("claude_code_version")) < CLAUDE_SCHEMA_MIN_VERSION):
+        return "client_unsupported"
     return None
 
 
@@ -1216,10 +1229,13 @@ def run_claude(
     deadline_seconds: float,
     max_turns: int,
     executable: str,
+    schema: bytes,
     worker_result_path: str | None = None,
     _execution: ExecutionTicket | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     model = route["model"]
+    # O10 VF-1: the same strict schema a Codex child gets, so the client holds the result to it.
+    original_schema, strict_schema = codex_schemas(schema)
     settings = _private_file(
         control / "settings.json", json.dumps(claude_settings(model)).encode()
     )
@@ -1239,6 +1255,7 @@ def run_claude(
         # Partial messages give a long message liveness; fences below apply to them too.
         "--include-partial-messages",
         "--max-turns", str(max_turns),
+        "--json-schema", strict_schema.decode(),
         "--append-system-prompt-file", str(system_prompt),
         # The prompt starts with the assignment's objective; after `--` neither
         # client can read it as an option (`-c...`, `--settings=...`).
@@ -1252,7 +1269,7 @@ def run_claude(
         "models": set(),
         "helper_models": set(),
     }
-    activity = (ClaudeActivity(model, CLAUDE_TOOLS) if type(_execution) is ExecutionTicket
+    activity = (ClaudeActivity(model, CLAUDE_RUN_TOOLS) if type(_execution) is ExecutionTicket
                 and _execution.activity_enabled() else None)
 
     def publish(category: str | None) -> None:
@@ -1279,7 +1296,7 @@ def run_claude(
         if state["init"] is None:
             if kind != "system" or frame.get("subtype") != "init":
                 raise _Abort("missing_init_frame")
-            violation = _check_claude_init(frame, model)
+            violation = _check_claude_init(frame, model, CLAUDE_RUN_TOOLS, schema_held=True)
             if violation is not None:
                 raise _Abort(f"init_{violation}")
             state["init"] = frame
@@ -1338,7 +1355,7 @@ def run_claude(
                 state["models"].add(str(started["model"]))
             block = event.get("content_block") if event.get("type") == "content_block_start" else None
             # A prohibited tool stops the child as soon as its call starts streaming.
-            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") not in CLAUDE_TOOLS:
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") not in CLAUDE_RUN_TOOLS:
                 raise _Abort("claude_tool_not_allowed")
         if kind == "assistant":
             message = frame.get("message")
@@ -1350,7 +1367,7 @@ def run_claude(
             # them stops the child at once, like a prohibited Codex item.
             if isinstance(content, list) and any(
                 isinstance(block, dict) and block.get("type") == "tool_use"
-                and block.get("name") not in CLAUDE_TOOLS
+                and block.get("name") not in CLAUDE_RUN_TOOLS
                 for block in content
             ):
                 raise _Abort("claude_tool_not_allowed")
@@ -1365,7 +1382,7 @@ def run_claude(
             publish(category)
 
     # Off unless the owner asked for frame shapes; then every frame is noted before any fence.
-    shapes = event_shapes.recorder("claude", requested=model, effort=route["effort"], tools=CLAUDE_TOOLS)
+    shapes = event_shapes.recorder("claude", requested=model, effort=route["effort"], tools=CLAUDE_RUN_TOOLS)
     started = time.monotonic()
     try:
         outcome = run_child(
@@ -1424,10 +1441,19 @@ def run_claude(
         return None, {**report, "outcome": outcome["abort"]}
     if outcome["returncode"] != 0 or not isinstance(result_frame, dict):
         return None, {**report, "outcome": "missing_result"}
+    missing = {**report, "outcome": "invalid_result", "result_validation_reason_code": "structured_output_missing"}
+    if result_frame.get("subtype") == "error_max_structured_output_retries":
+        return None, missing  # O10 VF-2: the client could not get a schema-valid result
     if result_frame.get("is_error") is not False or result_frame.get("subtype") != "success":
         return None, {**report, "outcome": "child_reported_error"}
-    result = _result_object(result_frame.get("result"))
-    if result is None:
+    # O10 VF-5: the result is the client's validated object, never the text or a tool call's input,
+    # with the strict schema's optional nulls removed as for Codex; the full validator follows.
+    structured = result_frame.get("structured_output")
+    if type(structured) is not dict:
+        return None, missing
+    try:
+        result = remove_optional_nulls(structured, original_schema)
+    except RecursionError:
         return None, {**report, "outcome": "unparseable_result"}
     return result, {**report, "outcome": "result"}
 
@@ -1943,6 +1969,8 @@ def dispatch(
             raise BridgeRefused("provider client version differs from the admitted client")
         if not ledger.client_version_reviewed(provider, identity["client_version"]):
             raise BridgeRefused("provider client version is not reviewed")
+        if provider == "claude" and _client_version(identity["client_version"]) < CLAUDE_SCHEMA_MIN_VERSION:
+            raise BridgeRefused("provider client cannot hold its result to the schema")  # O10 VF-6
         # The child is launched from the client the re-check just read.
         executable, digest = resolve_client(provider, untrusted=[project_root])
         if (executable, digest) != (identity["client_path"], identity["client_sha256"]):
@@ -1974,7 +2002,7 @@ def dispatch(
                 route=route, assignment=assignment, role_prompt=role_prompt,
                 export=export, control=control, environ=environ,
                 deadline_seconds=deadline_seconds, max_turns=max_turns,
-                executable=executable, worker_result_path=worker_result_path,
+                executable=executable, schema=result_schema, worker_result_path=worker_result_path,
                 _execution=execution,
             )
             if report["rate_limit_record_failed"]:
@@ -2043,7 +2071,10 @@ def prepare_dispatch_result(assignment, result, report):
     caller, process-cleanup or account-release authority.
     """
     reviewed = True
-    result_validation_reason_code = None
+    # O10 VF-2: a run that ended with no result may already carry its fixed reason.
+    result_validation_reason_code = (report.get("result_validation_reason_code") if result is None
+                                     and report.get("result_validation_reason_code") in RESULT_VALIDATION_REASON_CODES
+                                     else None)
     if result is not None and report.get("rerouted"):
         # A reroute means the work was not done by the routed model: its verdict
         # is unknown, and the result stays unreviewed. Validate before annotating:
@@ -2237,3 +2268,10 @@ def _codex_role_prompt(bundle_root: Path, route: dict[str, Any]) -> str:
     ):
         raise BridgeRefused("installed Codex agent differs from the routed configuration")
     return prompt
+
+
+def _client_version(text: Any) -> tuple[int, ...]:
+    """A client's version as numbers, (0,) when it cannot be read (so it is refused as too old)."""
+    import re
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", text) if isinstance(text, str) else None
+    return tuple(int(part) for part in match.groups()) if match else (0,)

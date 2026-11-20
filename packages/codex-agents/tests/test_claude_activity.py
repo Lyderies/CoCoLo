@@ -289,6 +289,7 @@ class ClaudeActivityExecutionTests(unittest.TestCase):
                     assignment=bridge_fixtures.assignment(), role_prompt="Read the fixture only.",
                     export=root / "export", control=root / "control", environ={"PATH": os.defpath},
                     deadline_seconds=60, max_turns=4, executable=str(executable), _execution=ticket,
+                    schema=bridge_fixtures.RESULT_SCHEMA,  # O10 VF-1 (requirement)
                 ))
             except BaseException as error:
                 errors.append(error)

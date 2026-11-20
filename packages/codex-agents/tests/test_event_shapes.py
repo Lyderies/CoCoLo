@@ -121,7 +121,8 @@ class EventShapeTests(unittest.TestCase):
                          {key: value for key, value in lines[0].items() if key != "ms"})
         self.assertEqual(["start"] + ["frame"] * len(CLAUDE_FRAMES) + ["end"], [line["kind"] for line in lines])
         frames = lines[1:-1]
-        self.assertEqual(("system", "init", "2.1.311", 3), (
+        # Corrected for O10 VF (requirement): the init frame also lists the client's output tool.
+        self.assertEqual(("system", "init", "2.1.311", 4), (
             frames[0]["type"], frames[0]["subtype"], frames[0]["client_version"], frames[0]["tools_count"]))
         thinking = frames[3]
         self.assertEqual(("uuid", False, "thinking_delta", len(CANARY).bit_length(), False), (

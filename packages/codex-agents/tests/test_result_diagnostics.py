@@ -109,7 +109,9 @@ class ResultDiagnosticTests(unittest.TestCase):
             "evidence_details_not_text": ({**valid, "evidence": [{**evidence, "details": ["CANARY-REJECTED"]}]},
                                           assignment()),
         }
-        self.assertEqual(RESULT_VALIDATION_REASON_CODES, set(cases))
+        # Corrected for O10 VF-2 (requirement): structured_output_missing is named by the bridge when the
+        # client gave no result to validate (test_claude_structured_output), never by the validator.
+        self.assertEqual(RESULT_VALIDATION_REASON_CODES - {"structured_output_missing"}, set(cases))
         for reason, (invalid, assigned) in cases.items():
             with self.subTest(reason=reason):
                 self.assertEqual(("invalid_result", reason), bridge._unrecordable(invalid, assigned))

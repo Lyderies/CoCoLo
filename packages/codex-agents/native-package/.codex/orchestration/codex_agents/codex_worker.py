@@ -47,7 +47,7 @@ CLAUDE_OUTCOMES = frozenset({
     "claude_activity_invalid", "claude_tool_not_allowed", "missing_init_frame", "paid_usage_observed",
     "provider_rejected", "rate_limit_event_invalid",
     *("init_" + name for name in ("api_key_source", "model_mismatch", "plugin_loaded", "mcp_server_loaded",
-                                  "tool_not_allowed")),
+                                  "tool_not_allowed", "client_unsupported")),
 })
 _CLAUDE_USAGE = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 _CODEX_USAGE = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")
@@ -127,7 +127,6 @@ def _decode_input(payload):
             or permissions.get("mcps") or any(not item.endswith(":read") for item in permissions.get("filesystem", []))
             or route.get("model") not in SUPPORTED_MODELS
             or not route["model"].startswith("gpt-" if provider == "codex" else "claude-")
-            or (data["schema"] is None) != (provider == "claude")
             or type(environment) is not dict or len(environment) > 256
             or any(type(k) is not str or type(v) is not str or len(k) > 256 or len(v) > 16_384
                    for k, v in environment.items()) or bridge.api_keys_present(environment)):
@@ -136,8 +135,7 @@ def _decode_input(payload):
     for name in ("export", "control", "executable"):
         if type(data[name]) is not str or not 0 < len(data[name]) <= 8192 or not Path(data[name]).is_absolute():
             raise CodexWorkerError()
-    if ((provider == "codex" and (type(data["schema"]) is not str
-                                   or len(data["schema"].encode("utf-8")) > MAX_RESULT_BODY_BYTES))
+    if ((type(data["schema"]) is not str or len(data["schema"].encode("utf-8")) > MAX_RESULT_BODY_BYTES)  # O10 VF-1
             or type(data["role_prompt"]) is not str or len(data["role_prompt"].encode("utf-8")) > MAX_INPUT_BYTES
             or (data["worker_result_path"] is not None and type(data["worker_result_path"]) is not str)):
         raise CodexWorkerError()
@@ -211,7 +209,8 @@ def _execute(payload, ticket, project_id, run_handle=None, recorder=None, client
             if recorder is None or type(run_handle) is not str or client_sha256 is None:
                 raise CodexWorkerError()
             _, max_turns = bridge.effective_dispatch_limits(data["route"], assignment)
-            result, report = _RUN_CLAUDE(ledger=recorder, run_handle=run_handle, max_turns=max_turns, **common)
+            result, report = _RUN_CLAUDE(ledger=recorder, run_handle=run_handle, max_turns=max_turns,
+                                         schema=data["schema"].encode("utf-8"), **common)
         else:
             result, report = _RUN_CODEX(ledger=object(), schema=data["schema"].encode("utf-8"), **common)
         result, report, fenced, reviewed, terminal, reason = _PREPARE_RESULT(assignment, result, report)

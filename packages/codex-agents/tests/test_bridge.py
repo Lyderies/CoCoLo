@@ -96,14 +96,23 @@ def init_frame(**changes) -> dict:
     return {
         "type": "system", "subtype": "init", "session_id": "session-1",
         "apiKeySource": "none", "model": "claude-opus-5-5", "plugins": [],
-        "mcp_servers": [], "tools": ["Read", "Glob", "Grep"], **changes,
+        # Corrected for O10 VF (requirement): a client held to --json-schema also advertises its output tool.
+        "mcp_servers": [], "tools": ["StructuredOutput", "Read", "Glob", "Grep"], **changes,
     }
 
 
 def result_frame(text: str | None = None) -> dict:
+    text = text if text is not None else json.dumps(result())
+    try:
+        structured = json.loads(text)
+    except ValueError:
+        structured = None
+    # Corrected for O10 VF (requirement): under --json-schema the client gives the validated object as
+    # structured_output; text that is not one object gives none.
+    extra = {"structured_output": structured} if type(structured) is dict else {}
     return {
-        "type": "result", "subtype": "success", "is_error": False,
-        "result": text if text is not None else json.dumps(result()),
+        "type": "result", "subtype": "success", "is_error": False, **extra,
+        "result": text,
         "usage": {"input_tokens": 120, "output_tokens": 30,
                   "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
         "total_cost_usd": 0.42,
@@ -513,7 +522,9 @@ class ClaudeBridgeTests(BridgeTestCase):
     def test_unparseable_output_fails_closed(self) -> None:
         for frames, reason in (
             ([init_frame(), {"raw": "not json"}], "unparseable_stream"),
-            ([init_frame(), result_frame("I could not finish.")], "unparseable_result"),
+            # Corrected for O10 VF-5 (requirement): text is never the result; without a structured
+            # output the run is invalid_result (structured_output_missing), checked in VF's own tests.
+            ([init_frame(), result_frame("I could not finish.")], "invalid_result"),
             ([init_frame()], "missing_result"),
             ([init_frame(), {**result_frame(), "is_error": True}], "child_reported_error"),
         ):
@@ -537,9 +548,9 @@ class ClaudeBridgeTests(BridgeTestCase):
         self.assertEqual([], self.workspace_entries())
 
     def test_client_change_before_launch_aborts(self) -> None:
-        # Admitted on 2.1.200; an upgrade inside the range still differs.
+        # Admitted on 2.1.311; an upgrade inside the range still differs.
         for version, message in (
-            ("2.1.201 (Claude Code)", "differs from the admitted client"),
+            ("2.1.312 (Claude Code)", "differs from the admitted client"),
             ("", "differs from the admitted client"),
             ("2.2.0 (Claude Code)", "differs from the admitted client"),
         ):
@@ -2953,11 +2964,13 @@ class BridgeLifecycleTests(CliTestCase):
         self.assertFalse(committed["outcome"]["accepted"])
 
     def test_invalid_utf8_result_text_keeps_the_parse_failure_outcome(self) -> None:
+        # Corrected for O10 VF-5 (requirement): the text is no longer read, so text that cannot be
+        # parsed leaves no structured output, and the run is refused with that fixed reason.
         route, assigned, handle = self.claude_run()
         self.frames("claude", [init_frame(), RATE_LIMIT, result_frame("\ud800")])
         output = self.dispatch(route, assigned, handle)
-        self.assertEqual("unparseable_result", output["bridge_report"]["outcome"])
-        self.assertNotIn("result_validation_reason_code", output["bridge_report"])
+        self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+        self.assertEqual("structured_output_missing", output["bridge_report"]["result_validation_reason_code"])
         committed = self.commit(route, assigned, handle, output["result"], "failed")
         self.assertFalse(committed["outcome"]["accepted"])
 
