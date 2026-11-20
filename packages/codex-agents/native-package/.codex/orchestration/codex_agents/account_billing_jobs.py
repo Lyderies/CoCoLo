@@ -60,6 +60,7 @@ class _Job:
     observed_again: bool = False
     token: int = 0  # S1-H1a: counts this job once in the lane's health notes
     noted: bool = False  # S1-H1a: its failure reason has been noted
+    closed: bool = False  # O0b RS-A round 2 G9: its reservation was closed by the sweep; ends with the stored answer
 
 
 @dataclass(frozen=True, repr=False)
@@ -127,6 +128,11 @@ class AccountBillingJobs:
         self._queues = {}
         self._ingress_owner, self._closing, self._faulted = None, False, False
         claims._billing = observations._billing_owner = self
+        self._owner._billing_jobs = self  # O0b RS-A round 2 G9: the owner leaves live jobs' originals to them
+
+    def held_reservations(self):
+        """O0b RS-A round 2 G9: the originals live jobs hold (the owner never forgets these behind a job)."""
+        return frozenset(job.reservation for job in self._jobs.values() if job.reservation is not None)
 
     def _guard(self):
         self._owner._guard()
@@ -358,9 +364,24 @@ class AccountBillingJobs:
                 row = self._owner._row(job.key[0], job.reservation.key)
                 if row is not None and row['state'] == 'committed':
                     self._owner.release_committed(job.reservation)
+                    if (job.closed or not job.cancelled) and self._owner.closed_unlaunched(row):
+                        # O0b RS-A round 2 G9: the sweep closed it; the job's answer is the stored denial,
+                        # as a replay reads it, whichever step noticed first.
+                        job.result, job.reason = self._owner._reply(row, known=True), None
                 else:
                     self._owner.abort_reserved(job.reservation)
             self._ready(ticket, job, result=job.result, reason=job.reason)
+
+    def _end_closed(self, ticket, job):
+        """O0b RS-A round 2 G9: the sweep closed this job's never-admitted reservation. Its observation,
+        signature work and preparation stop as a cancel stops them (a released signature handle leaves both
+        mappings now; a running one stays mapped until its return is discarded), and once discarded the job
+        answers with the stored denial. Not a failure, so nothing is noted."""
+        if job.state in {'ready', 'unknown', 'discarding', 'offered'} or job.result is not None:
+            return
+        job.closed, job.noted = True, True
+        self.cancel(ticket, _ingress=self._ingress_owner)
+        job.reason = None
 
     def _settle_failed_step(self, job, *, unsure='probe_step_failed'):
         """A step failed. A probe that has not started frees its worker and names the step; one that
@@ -388,7 +409,17 @@ class AccountBillingJobs:
     def drive(self):
         self._guard()
         # O0b RS-A round 2 G3: each owner step, with or without a request, forgets probes a sweep has closed.
-        self._owner.forget_expired()
+        # G9: a failure is noted in this lane's health, never faults the claims lane, and the notice stays set,
+        # so the next step tries again; live jobs whose originals were closed end with the stored answer.
+        try:
+            self._owner.forget_expired()
+        except Exception as error:
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_forget_failed', error))
+        closed, self._owner._closed_live = self._owner._closed_live, set()
+        if closed:
+            for ticket, job in list(self._jobs.items()):
+                if job.reservation in closed:
+                    self._end_closed(ticket, job)
         for _ in range(min(self._limits.owner_steps, len(self._rotation))):
             project = self._rotation.popleft()
             self._rotation.append(project)
