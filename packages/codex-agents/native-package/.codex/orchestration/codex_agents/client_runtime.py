@@ -363,6 +363,9 @@ def _apply_health(report, health):
                       provider_attestations={p: {'state': 'unavailable'} for p in ('codex', 'claude')})
         report.pop('collector_health', None)
         report.pop('account_slots', None)
+        # M4b E1a-3 (review 040-m4b-e1a-code-2): the refusal counts are read without the ledger lock,
+        # and matter most now.
+        report['ledger_waits'] = health.get('ledger_waits')
         return False
     report.update(_status_collector_fields(health))
     report['account_capacity'] = _status_account_capacity(health.get('account_capacity'))
@@ -516,10 +519,11 @@ def _account_health(report, this_project=None):
             pass  # a malformed decision is ignored; the rest of the health stands
         return health
     try:
-        return _account_health_of(report, raw_lanes, raw_slots)
+        attention = _ledger_waits_attention(waits)
     except Exception:
-        return {'state': 'unknown', 'reason_code': 'account_health_invalid', 'reasons': ['account_health_invalid'],
-                'lanes': None, 'slots': None, 'attention': []}
+        attention = []
+    return {'state': 'unknown', 'reason_code': 'account_health_invalid', 'reasons': ['account_health_invalid'],
+            'lanes': None, 'slots': None, 'attention': attention}
 
 
 def _ledger_waits_attention(waits):
