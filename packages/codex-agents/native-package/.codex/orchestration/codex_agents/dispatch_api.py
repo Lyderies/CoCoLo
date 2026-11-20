@@ -205,9 +205,23 @@ class DispatchClient:
         try:
             raw = exchange_frame(self._endpoint, encode_dispatch_request(request), timeout=self._timeout if timeout is None else timeout,
                                  request_limit=MAX_DISPATCH_FRAME_BYTES, response_limit=MAX_DISPATCH_FRAME_BYTES)
-        except ServiceTransportError:
-            raise DispatchError('dispatch_unavailable') from None
+        except ServiceTransportError as transport:
+            error = DispatchError('dispatch_unavailable')
+            # O10 DR-1: a service that did not answer in time is slow, not gone; only that is retried.
+            error.timed_out = transport.reason_code == 'deadline_exceeded'
+            raise error from None
         return decode_dispatch_response(raw, request)
+
+    def _status(self, view, run_handle, attempt, inputs_digest, expected_export_commit, timeout):
+        """One status check. O10 DR-1: a check the service was too slow to answer keeps the last view, so
+        the wait goes on to its own deadline; a service that is gone, or any refusal, ends it."""
+        try:
+            return self.call('dispatch.status', run_handle, attempt, inputs_digest,
+                             expected_export_commit=expected_export_commit, timeout=timeout)
+        except DispatchError as error:
+            if getattr(error, 'timed_out', False):
+                return view
+            raise
 
     def dispatch(self, run_handle, attempt, inputs_digest, *, wait_seconds, expected_export_commit=None):
         if type(wait_seconds) not in {int, float} or not math.isfinite(wait_seconds) or not 0 < wait_seconds <= 86_460:
@@ -223,16 +237,9 @@ class DispatchClient:
             remaining = min(self._timeout, deadline-time.monotonic())
             if remaining <= 0:
                 raise DispatchError('dispatch_unavailable')
-            try:
-                view = self.call('dispatch.status', run_handle, attempt, inputs_digest,
-                                 expected_export_commit=expected_export_commit, timeout=remaining)
-            except DispatchError as error:
-                # O10 DR-1: a status check only reads, so one that fails or is slow is tried again
-                # until the wait's own deadline; the run goes on either way. Other refusals end it.
-                if error.reason_code != 'dispatch_unavailable':
-                    raise
+            view = self._status(view, run_handle, attempt, inputs_digest, expected_export_commit, remaining)
         binding = AttemptBinding(**view['binding'])
-        while True:  # O10 DR-2: reading the published result is retried the same way
+        while True:
             remaining = min(self._timeout, deadline-time.monotonic())
             if remaining <= 0:
                 raise DispatchError('dispatch_unavailable')
@@ -240,7 +247,14 @@ class DispatchClient:
                 body = ResultReadClient(self._result_endpoint, timeout=remaining).read_result(
                     binding, view['delivery']['result_digest'])
             except Exception:
+                # O10 DR-2: read again only while the service still answers that it is published.
                 time.sleep(min(.05, max(0, deadline-time.monotonic())))
+                remaining = min(self._timeout, deadline-time.monotonic())
+                if remaining <= 0:
+                    raise DispatchError('dispatch_unavailable') from None
+                view = self._status(view, run_handle, attempt, inputs_digest, expected_export_commit, remaining)
+                if view['state'] != 'published':
+                    raise DispatchError('dispatch_unavailable') from None
                 continue
             try:
                 result = parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
