@@ -267,6 +267,54 @@ class RunHoldTests(ActiveRunCapacityTests):
             (keyed_digest(ledger.state.digest_key(), launch.run_handle),)).fetchone()
         self.assertEqual(("released", "withdrawn", None), tuple(row))
 
+    def reopened(self):
+        self.ledger.close()
+        self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
+        self.addCleanup(self.case.ledger.close)
+        return self.case.ledger
+
+    def broken_register(self, change):
+        self.case.claim()
+        with self.ledger._account_transaction():
+            change(self.ledger._connection)
+
+    def test_RS_A_F2_open_refuses_a_register_row_without_its_hold(self):
+        self.broken_register(lambda c: c.execute(
+            "INSERT INTO run_holds(kind,project_id,identity,state,taken_at_ms) VALUES('binding',?,?,'held',1)",
+            (self.project, "f" * 64)))
+        with self.assertRaisesRegex(LedgerError, "run hold"):
+            self.reopened()
+
+    def test_RS_A_F2_open_refuses_a_register_state_that_contradicts_its_hold(self):
+        self.broken_register(lambda c: c.execute(
+            "UPDATE run_holds SET state='released',released_at_ms=1,release_kind='completed' WHERE kind='run_slot'"))
+        with self.assertRaisesRegex(LedgerError, "run hold"):
+            self.reopened()
+
+    def test_RS_A_F2_open_refuses_a_decision_whose_time_does_not_match_its_slot(self):
+        row = self.crashed_release()
+        with self.ledger._account_transaction():
+            self.ledger._connection.execute(
+                "UPDATE run_holds SET released_at_ms=released_at_ms+1 WHERE kind='run_slot' AND identity=?",
+                (row["handle_digest"],))
+        with self.assertRaisesRegex(LedgerError, "coverage|run hold"):
+            self.reopened()
+
+    def test_RS_A_F2_a_backup_with_a_register_row_without_its_hold_is_refused(self):
+        self.broken_register(lambda c: c.execute(
+            "INSERT INTO run_holds(kind,project_id,identity,state,taken_at_ms) VALUES('probe',?,?,'held',1)",
+            (self.project, "e" * 64)))
+        body = learning_store._snapshot_project_partition(self.ledger._connection, self.project,
+                                                         ledger_schema_version=learning_store.LEDGER_SCHEMA_VERSION)
+        with self.assertRaisesRegex(LedgerError, "coverage|run hold"):
+            learning_store._verify_project_backup_body(body)
+
+    def test_RS_A_F2_a_valid_ledger_with_every_kind_of_release_still_opens(self):
+        row = self.crashed_release()
+        project, launch = self.new_attempt()
+        self.ledger.withdraw_open(project, run_handle=launch.run_handle)
+        self.reopened()
+
     def test_RS_A_F4_a_caller_time_never_moves_deletion_past_the_caution_day(self):
         """Round 1 F4: deletion's caution uses the ledger's clock, never a caller-supplied time."""
         row = self.crashed_release()
