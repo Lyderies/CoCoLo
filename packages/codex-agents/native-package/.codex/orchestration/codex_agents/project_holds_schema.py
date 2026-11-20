@@ -233,11 +233,27 @@ _ADOPT = (
     "a.project_id=s.project_id AND a.run_handle=s.run_handle AND a.attempt=s.attempt) THEN 'completed' END,"
     ":evidence FROM result_reservations s WHERE NOT EXISTS(SELECT 1 FROM project_holds h WHERE "
     "h.project_id=s.project_id AND h.kind='reservation' AND h.identity=s.claim_id)",
+    # D1 (RS-D M1, draft 1's migration table): each reservation not yet expired (in flight, committed, prepared or
+    # retiring) gets a `legacy_no_context` context, with no file, digest or host class (its inputs lived only in an
+    # earlier service's memory, so none is invented), and its custody hold to its reservation's own deadline. An
+    # expired tombstone, and a lease that was never bound, get neither.
+    "INSERT INTO project_result_contexts(project_id,run_handle,attempt,state,context_size,claim_id,claim_digest,"
+    "lease_deadline_ms,retained_until_ms) SELECT s.project_id,s.run_handle,s.attempt,'legacy_no_context',0,"
+    "s.claim_id,s.claim_digest,s.reserved_until_ms,s.retained_until_ms FROM result_reservations s "
+    "WHERE s.state<>'expired' AND NOT EXISTS(SELECT 1 FROM project_result_contexts c WHERE c.project_id=s.project_id "
+    "AND c.run_handle=s.run_handle AND c.attempt=s.attempt)",
+    "INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,due_at_ms,evidence) "
+    "SELECT s.project_id,'result_custody',s.run_handle||':'||s.attempt,'held',s.created_at_ms,s.expires_at_ms,"
+    ":evidence FROM result_reservations s JOIN project_result_contexts c ON c.project_id=s.project_id "
+    "AND c.run_handle=s.run_handle AND c.attempt=s.attempt AND c.state='legacy_no_context' "
+    "WHERE NOT EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=s.project_id AND h.kind='result_custody' "
+    "AND h.identity=s.run_handle||':'||s.attempt)",
 )
 
 
 def adopt_project_holds(connection, now_ms: int) -> None:
-    """Give every lease and reservation without a register row its row, by class (idempotent; in the step)."""
+    """Give every lease and reservation without a register row its row, by class, and (D1) every live reservation
+    its `legacy_no_context` context and custody row (idempotent; in the step)."""
     if not connection.in_transaction:
         raise HistoryError("history_unavailable")
     for sql in _ADOPT:
@@ -279,10 +295,24 @@ _CUSTODY_INCONSISTENT = (
 
 
 def custody_consistent(connection, result_key: bytes | None) -> bool:
-    """RS-D's custody validator (SH-7), as far as SB can check it: contexts and custody rows, their states, the
-    joint check, and each publication: only for a `reserved` reservation with a prepared digest, and (when the
-    store holds its result key) its material hashing to that digest. Context bytes are checked with D1's budget."""
+    """RS-D's custody validator (SH-7): contexts and custody rows, their states, the joint check, the context bytes
+    (D1: each live context within its limit and the live ones within the budget, a `legacy_no_context` one with no
+    bytes, digest or host class), and each publication: only for a `reserved` reservation with a prepared digest,
+    and (when the store holds its result key) its material hashing to that digest."""
     if not all(connection.execute(sql).fetchone() is None for sql in _CUSTODY_INCONSISTENT):
+        return False
+    from .project_result_contexts import MAX_LIVE_CONTEXT_BYTES, MAX_RECORD_CONTEXT_BYTES
+
+    if connection.execute(
+            "SELECT 1 FROM project_result_contexts INDEXED BY project_result_contexts_live "
+            "WHERE state NOT IN ('ended','expired') AND (CASE WHEN state='legacy_no_context' "
+            "THEN context_size<>0 OR context_digest IS NOT NULL OR host_class IS NOT NULL "
+            "ELSE context_digest IS NULL OR host_class IS NULL OR context_size<1 OR context_size>? END) LIMIT 1",
+            (MAX_RECORD_CONTEXT_BYTES,)).fetchone() is not None:
+        return False
+    if connection.execute("SELECT COALESCE(SUM(context_size),0) FROM project_result_contexts INDEXED BY "
+                          "project_result_contexts_live WHERE state NOT IN ('ended','expired')").fetchone()[0] \
+            > MAX_LIVE_CONTEXT_BYTES:
         return False
     from .learning_contracts import keyed_digest
 

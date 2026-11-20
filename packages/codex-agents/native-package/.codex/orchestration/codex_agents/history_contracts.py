@@ -32,6 +32,8 @@ HISTORY_REASON_CODES = frozenset({
     # R7b: a service that would not take the connection said why (service_transport.SERVICE_REFUSALS).
     "service_refused_late", "service_refused_enrollment", "service_refused_busy", "service_refused_unavailable",
     "history_learning_capacity", "history_learning_incomplete", "history_learning_reconciliation",
+    # D1 (RS-D M1): a result kept from before format 18, whose record context only an earlier service's memory held.
+    "history_worker_context_unavailable",
 })
 
 

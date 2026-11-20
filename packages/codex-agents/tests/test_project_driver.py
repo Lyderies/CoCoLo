@@ -847,7 +847,9 @@ class LifecycleBoundaryTests(DriverHarness):
         # Once recorded the host lets the run go; recording it again adds nothing.
         self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
         code, again = self.attempt(*record)
-        self.assertEqual((2, False), (code, again['ready']))
+        # (requirement) D1 (RS-D-2, K4): the record no longer needs the service to hold the run, so recording it
+        # again after the host let it go is the same admission (one outcome, below), not a refusal.
+        self.assertEqual((0, recorded['host_outcome_digest']), (code, again['host_outcome_digest']))
         store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3')))
                                 + '?mode=ro', uri=True)
         self.addCleanup(store.close)

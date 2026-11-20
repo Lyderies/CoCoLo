@@ -147,6 +147,11 @@ def record_host_open(history, binding, request, provenance, *, assignment, task,
         return entry
 
     prior = known()
+    # D1 (RS-D draft 2 §2, O4): the stored record context is exactly what this open is recorded with; otherwise
+    # no open is recorded, so no claim is ever sent for inputs that do not verify.
+    from . import project_result_contexts
+    stored = prior is None and project_result_contexts.verify_open(history, binding.run_handle, binding.attempt,
+                                                                    inputs)
     before_commit()  # Current native authority, outside any SQL transaction.
     history._require_owner()
     if prior is not None:
@@ -189,4 +194,6 @@ def record_host_open(history, binding, request, provenance, *, assignment, task,
         history._connection.execute('INSERT INTO project_host_opens VALUES(?,?,?,?,?,?,?,?,?,?)',
             (binding.project_id, binding.run_handle, binding.attempt, binding_raw, identity, digest,
              entry.source_sequence, entry.ingested_at_ms, int(entry.late), journal_seal(entry)))
+        if stored:
+            project_result_contexts.mark_opened(history, binding.run_handle, binding.attempt)
         return entry
