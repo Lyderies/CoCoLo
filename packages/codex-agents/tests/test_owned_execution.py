@@ -982,6 +982,9 @@ class CapacityCompletionTests(unittest.TestCase):
             (decided["handle"],)).fetchone()
         self.assertEqual(("crashed", decided["at"]), (kind, at))  # the first decision stands
         self.assertEqual(1, completions)  # the late completion is kept
+        terminal = [v for k, v in _flatten(self.ledger.ingestion_snapshot(self.fixture.project_id))
+                    if k.endswith("terminal")]
+        self.assertIn(1, terminal)  # round 1 F11: the late completion counts the run as terminal
         self.reopen()  # and the ledger still opens (the coverage checks accept both)
 
     def test_RS_A_status_never_counts_a_crashed_release_as_a_finished_run(self):
