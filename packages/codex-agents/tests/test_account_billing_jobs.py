@@ -138,6 +138,96 @@ class AccountBillingJobTests(unittest.TestCase):
         self.assertEqual(({}, {}, {}), (owner._pending, owner._reserved_inputs, owner._signatures))
         self.assertNotIn(queued, self.claims._intake._jobs)
 
+    def sweep_expired(self, deadline):
+        """O0b RS-A round 2 G9: the collector's sweep, on its own thread, with the ledger clock past `deadline`."""
+        import threading
+
+        def sweep():
+            with mock.patch.object(self.ledger, '_clock_ms', return_value=deadline + 1), \
+                    mock.patch.object(self.ledger, '_capacity_clock_reference', return_value=0):
+                swept.append(self.ledger.release_due_account_holds(limit=64))
+        swept = []
+        worker = threading.Thread(target=sweep)
+        worker.start()
+        worker.join(10)
+        self.assertFalse(worker.is_alive())
+        return swept[0]
+
+    def assertEndedWithStoredAnswer(self, ticket):
+        answer = self.take(ticket)
+        self.assertEqual(('denied', 'probe_unlaunched_expired', True),
+                         (answer['probe'], answer['reason_code'], answer['known']))
+        self.until(lambda: not self.billing._jobs)
+        owner = self.billing._owner
+        self.assertEqual(({}, {}, {}, {}),
+                         (owner._pending, owner._reserved_inputs, owner._signatures, self.billing._signatures))
+        self.assertEqual({}, self.claims._intake._jobs)
+        self.assertEqual({}, self.claims._pool._returned)
+        self.assertEqual([], self.launches())
+        self.assertFalse(self.claims._faulted or self.billing._faulted)
+
+    def test_RS_A_G9_a_live_job_observing_its_identity_ends_with_the_stored_answer(self):
+        """Round 2 G9 (2): the sweep closes the reservation of a job still observing its identity; the job ends
+        with the committed denial (as a replay reads it), never probe_conflict or probe_not_authorized."""
+        ticket = self.begin()
+        job = self.billing._jobs[ticket]
+        self.assertEqual('identity', job.state)
+        self.assertEqual(1, self.sweep_expired(job.reservation.deadline))
+        self.assertEndedWithStoredAnswer(ticket)
+
+    def test_RS_A_G9_a_live_job_with_queued_signature_work_ends_with_the_stored_answer(self):
+        """Round 2 G9 (2): its signature work is queued (never offered); the job ends with the stored answer and
+        its handle mapping goes in the same step, so no stale handle stays."""
+        ticket = self.begin()
+        job = self.billing._jobs[ticket]
+        with mock.patch.object(self.claims._pool, 'offer_next', return_value=None):
+            self.until(lambda: job.state == 'signature')
+            handle = job.signature
+            self.assertIn(handle, self.claims._intake._jobs)
+            self.assertEqual(1, self.sweep_expired(job.reservation.deadline))
+            self.service.drive_claims()
+            self.assertNotIn(handle, self.billing._signatures)
+            self.assertNotIn(handle, self.claims._intake._jobs)
+            self.assertIsNone(job.signature)
+        self.assertEndedWithStoredAnswer(ticket)
+
+    def test_RS_A_G9_a_signature_return_after_the_sweep_ends_with_the_stored_answer(self):
+        """Round 2 G9 (2): the job's signature work returns after the sweep committed, and the return is handled
+        before the owner's forget step runs; the job still ends with the stored answer."""
+        ticket = self.begin()
+        job = self.billing._jobs[ticket]
+        with mock.patch.object(self.claims._pool, 'offer_next', return_value=None):
+            self.until(lambda: job.state == 'signature')
+        self.assertIs(job.signature, self.claims._pool.offer_next())
+        slots = self.claims._pool._slots
+        end = time.monotonic() + 10
+        while not any(s.current is not None and not s.outgoing.empty() for s in slots):
+            self.assertLess(time.monotonic(), end, 'signature work did not return')
+            time.sleep(.002)
+        self.assertEqual(1, self.sweep_expired(job.reservation.deadline))
+        self.assertEndedWithStoredAnswer(ticket)
+
+    def test_RS_A_G9_a_failed_forget_step_is_noted_and_retried_without_faulting_the_lane(self):
+        """Round 2 G9 (1): a failure inside the owner's forget step is noted in the billing lane's health, keeps
+        the notice so the next step retries, and never faults the claims lane or stops the drive."""
+        owner = self.billing._owner
+        original = owner.reserve(self.fixture.project_id, self.runtime, 'b'*64, 'probe-expiring',
+                                 self.contexts[self.fixture.project_id], before_commit=lambda: True)
+        queued = owner.prepare(original)
+        self.assertEqual(1, self.sweep_expired(original.deadline))
+        with mock.patch.object(self.claims._pool, 'offer_next', return_value=None):
+            with mock.patch.object(owner, '_forget_closed', side_effect=ProbeAdmissionError('probe_conflict')):
+                self.service.drive_claims()
+            self.assertFalse(self.claims._faulted or self.billing._faulted)
+            view = self.billing.health.view()
+            self.assertEqual(('probe_forget_failed', 'ProbeAdmissionError'),
+                             (view['last_failure']['cause'], view['last_failure']['type']))
+            self.assertIn(original, owner._reserved_inputs)
+            self.service.drive_claims()  # retried
+        self.assertEqual(({}, {}, {}), (owner._pending, owner._reserved_inputs, owner._signatures))
+        self.assertNotIn(queued, self.claims._intake._jobs)
+        self.take(self.begin(self.request('probe-after-failed-forget')), self.request('probe-after-failed-forget'))
+
     def test_complete_service_phases_use_one_signature_pool_and_recover_without_reprobe(self):
         with mock.patch.object(sqlite3, 'connect', side_effect=AssertionError('second SQL connection')):
             ticket = self.begin()

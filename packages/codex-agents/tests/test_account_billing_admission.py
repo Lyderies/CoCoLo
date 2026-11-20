@@ -236,6 +236,16 @@ class AccountBillingAdmissionTests(unittest.TestCase):
                          (replay['probe'], replay['reason_code'], replay['known']))
         self.assertForgotten(returned, queued)
 
+    def test_RS_A_G9_a_known_reply_for_the_expired_request_frees_owner_memory(self):
+        """Round 2 G9 (3): reading the expired request's known reply frees the memory, as reserve()'s replay does."""
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep(thread=True))
+        reply = self.owner.known_reply(self.fixture.project_id, 'a'*64, 'b'*64, 'probe-returned', self.context,
+                                       before_commit=lambda: self.allowed)
+        self.assertEqual(('denied', 'probe_unlaunched_expired', True),
+                         (reply['probe'], reply['reason_code'], reply['known']))
+        self.assertForgotten(returned, queued)
+
     def test_RS_A_G3_a_rolled_back_sweep_keeps_owner_memory(self):
         """Round 2 G3: when the sweep's transaction rolls back after closing the probes, the rows stay reserved
         and the owner keeps their memory and work, on the sweep and on the owner's next step."""
