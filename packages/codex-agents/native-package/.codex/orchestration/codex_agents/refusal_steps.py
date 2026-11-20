@@ -29,6 +29,10 @@ EXACT = {
                                          "it: ask the configuration's owner for an approved setting.",
     'claim_busy': "Every run slot is in use: wait for a running child to finish, then try again.",
     'probe_busy': "The billing probe is busy: wait a moment, then try again.",
+    'review_invalid_spec': "Fix the review spec: it needs exactly id, summary, packet (a folder inside the "
+                           "project), context, objective, verify_objective, expected_output and evidence.",
+    'review_no_verdict': "The child gave no verdict: run that review stage again (a recorded result without one "
+                         "cannot pass operational QA).",
     'service_refused_busy': "The service is busy with other connections: wait a moment, then try again.",
 }
 
@@ -58,6 +62,7 @@ FAMILY = {
     'client': "The client changed since the run was opened: open a new run from the same client.",
     'paid': "Paid usage would be used: check the provider's billing settings and attestation.",
     'result': "The result could not be recorded: run learning-status, then record it again.",
+    'review': "The review stopped at a step: fix what that step's reason says, then run the same stage again.",
     'window': "The provider's usage window is used up: wait for its reset, then try again.",
 }
 

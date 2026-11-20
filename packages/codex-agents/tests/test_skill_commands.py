@@ -20,5 +20,12 @@ class SkillCommandTests(unittest.TestCase):
                 self.assertRegex(text, r"learning-cancel-run` with the same arguments")
 
 
+class SkillReviewCommandTests(unittest.TestCase):
+    def test_H1d_5_both_skills_offer_the_review_command(self):
+        for skill in SKILLS:
+            with self.subTest(skill=skill.parent.name):
+                self.assertIn("learning-review", " ".join(skill.read_text().split()))
+
+
 if __name__ == "__main__":
     unittest.main()

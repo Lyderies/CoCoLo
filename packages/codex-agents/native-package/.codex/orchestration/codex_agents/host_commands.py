@@ -95,6 +95,7 @@ PRIMARY_HOST_COMMANDS = (
     "provider-observe",
     "learning-run-operational-checks",
     "learning-record-operational-qa",
+    "learning-review",
 )
 CLI_RELATIVE = Path(".codex") / "orchestration" / "cli.py"
 MANIFEST_RELATIVE = ".codex/orchestration/install-manifest.json"

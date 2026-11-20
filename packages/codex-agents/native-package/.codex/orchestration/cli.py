@@ -1616,6 +1616,12 @@ def build_parser() -> argparse.ArgumentParser:
     learning_orchestration_status.add_argument('--orchestration-handle', required=True)
     learning_orchestration_status.add_argument('--request-id')
 
+    review = subparsers.add_parser('learning-review',
+        help='run one review: worker, verify or finish (S1-H1d)')
+    review.add_argument('stage', choices=('worker', 'verify', 'finish'))
+    _add_learning_project(review)
+    review.add_argument('--spec', required=True, type=Path)
+    review.add_argument('--work-dir', required=True, type=Path)
     run_status = subparsers.add_parser('learning-run-status',
         help="read a running child's live status through its project host")
     run_cancel = subparsers.add_parser('learning-cancel-run',
@@ -2659,6 +2665,20 @@ def main() -> int:
                 goal_tokens_used=getattr(args, 'goal_tokens_used', None),
                 goal_time_used_seconds=getattr(args, 'goal_time_used_seconds', None), status=getattr(args, 'status', None))
             _print_command_report(args, report)
+            return 0
+        elif args.command == 'learning-review':
+            from codex_agents.review_runner import ReviewError, run as run_review
+            try:
+                spec = json.loads(args.spec.read_text())
+            except (OSError, ValueError):
+                spec = None
+            try:
+                summary = run_review(args.stage, spec, args.work_dir, args.project_root)
+            except ReviewError as stopped:
+                _print({'ready': False, 'error': 'review stopped', 'reason_code': stopped.reason_code,
+                        **({'step': stopped.detail} if stopped.detail else {})})
+                return 2
+            _print({'ready': True, 'stage': args.stage, **summary})
             return 0
         elif args.command in {'learning-run-status', 'learning-cancel-run'}:
             report = run_control_client(args.state_root, args.project_root,
