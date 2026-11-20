@@ -186,6 +186,9 @@ _INCONSISTENT = (
     "WHERE r.kind='run_slot' AND r.state='released' AND (r.release_kind NOT IN ('completed','crashed','lost') "
     "OR (r.release_kind='completed' AND (r.receipt IS NOT a.release_digest "
     "OR r.released_at_ms IS NOT a.released_at_ms))) LIMIT 1",
+    # O0b RS-A round 2 G10: a lost or crashed decision keeps its evidence for the row's life (its only proof; it
+    # must hash to the receipt, checked by _evidence_matches)
+    "SELECT 1 FROM run_holds WHERE kind='run_slot' AND release_kind IN ('crashed','lost') AND evidence IS NULL LIMIT 1",
     # O0b RS-A round 2 G1: an expired binding is released no earlier than its expiry (an unknown time stays allowed)
     "SELECT 1 FROM run_holds r JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity "
     "WHERE r.kind='binding' AND r.release_kind='expired' AND r.released_at_ms<h.expires_at_ms LIMIT 1",
