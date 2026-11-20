@@ -55,6 +55,7 @@
  "codex:tests.test_claude_structured_output": "integration",
  "codex:tests.test_cleanup_contracts": "integration",
  "codex:tests.test_cleanup_custody": "integration",
+ "codex:tests.test_cleanup_receipt_lifetime": "integration",
  "codex:tests.test_cli_billing_runtime": "integration",
  "codex:tests.test_cli_ledger_boundary": "unit",
  "codex:tests.test_cli_observation_runtime": "integration",

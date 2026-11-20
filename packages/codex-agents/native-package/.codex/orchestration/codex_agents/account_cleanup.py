@@ -38,10 +38,21 @@ def _seal(key, row):
         n: row[n] for n in ('project_id', *RELEASE_COLUMNS) if n != 'state_seal'}))
 
 
+# O0c P1: the account's own written end of a run's slot (RS-A's register: a `lost` or `crashed` release whose
+# receipt is the capacity row's release digest, the same match as LearningLedger._slot_decision_locked).
+_DECIDED = ("EXISTS(SELECT 1 FROM active_run_capacity a JOIN run_holds r ON r.kind='run_slot' "
+            "AND r.project_id=a.project_id AND r.identity=a.handle_digest WHERE a.project_id=c.project_id "
+            "AND a.handle_digest=c.handle_digest AND a.released_at_ms IS NOT NULL "
+            "AND r.release_kind IN ('lost','crashed') AND r.receipt=a.release_digest)")
+
+
 def live_cleanup_receipts(ledger, project):
-    """Cleanup receipts whose release is not recorded (0.3.4 R6); in 0.8.29 every one ever reserved counted."""
-    return ledger._connection.execute('SELECT COUNT(*) FROM account_cleanup_receipts WHERE project_id=? '
-                                      'AND released_at_ms IS NULL', (project,)).fetchone()[0]
+    """Cleanup receipts its project can still release (0.3.4 R6: a released one no longer counts; in 0.8.29
+    every one ever reserved did). O0c P1: nor does one whose slot the account ended `lost` or `crashed`: that
+    decision, written in the same transaction as the slot's release, ends the receipt too, and its kind is the
+    register row's. Derived, never written, so it covers decisions adopted at the 14 -> 15 upgrade as well."""
+    return ledger._connection.execute('SELECT COUNT(*) FROM account_cleanup_receipts c WHERE c.project_id=? '
+                                      'AND c.released_at_ms IS NULL AND NOT ' + _DECIDED, (project,)).fetchone()[0]
 
 
 def reserve_cleanup(ledger, binding, grant):
@@ -198,6 +209,11 @@ def release_capacity(ledger, project_id, *, runtime_digest, caller_scope, submis
                                           (project_id, key.handle_digest)).fetchone()
         host_snapshot = None if host is None else tuple(host)
         first = ledger._capacity_completion_locked(key)
+        if ledger._slot_decision_locked(project_id, key.handle_digest, first['release_digest']) is not None:
+            # O0c P1: the account ended this slot (`lost` or `crashed`) and with it this receipt; a late normal
+            # release would end it a second time, so it is refused plainly, the same whichever came first (the
+            # decision or a late terminal), and nothing is written.
+            raise ClaimError('claim_cleanup_conflict')
         identity = {n: first[n] for n in first.keys() if n not in {
             'released_at_ms', 'release_digest', 'completion_released_at_ms', 'receipt_digest'}}
         journal = original_journal(ledger, storage_binding, grant)
