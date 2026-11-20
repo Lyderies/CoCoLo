@@ -227,7 +227,7 @@ class LedgerLockLimitTests(unittest.TestCase):
         server = learning_store.CollectorServer(self.ledger)
         seen, stop = [], threading.Event()
 
-        def record():
+        def record(**_):  # release_due_account_holds is called with its batch limit
             seen.append(self.ledger._readers())
         patches = [mock.patch.object(self.ledger, name, side_effect=record)
                    for name in ('sweep_worker_results', 'sweep_event_retention', 'sweep_account_retention',

@@ -12159,9 +12159,12 @@ class CollectorServer:
             # Kept worker results expire on time even while the collector is the only process holding
             # the ledger; raw events past their weight's period are summarised and removed, a small batch
             # at a time; finished account rows past their retention go too (0.3.4 R6).
+            # O0b RS-A-4: due account holds are released here, with no client action, in batches of 64. Until
+            # M4b E1b's owner thread exists this runs where the other account sweeps run, under the ledger lock.
             for sweep, errors in ((self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
                                   (self.ledger.sweep_event_retention, loose),
-                                  (self.ledger.sweep_account_retention, loose)):
+                                  (self.ledger.sweep_account_retention, loose),
+                                  (lambda: self.ledger.release_due_account_holds(limit=64), loose)):
                 if self._sweeps_stop.is_set():
                     return
                 with contextlib.suppress(*errors):
