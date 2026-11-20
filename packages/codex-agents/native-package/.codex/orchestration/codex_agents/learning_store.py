@@ -768,7 +768,7 @@ def _check_backup_coverage(restored: sqlite3.Connection, schema_version: int) ->
         "WHERE (a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
         "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL)) "
         # O0b RS-A: a slot released crashed or lost has no completion, by design (its register row says so).
-        + ("AND NOT (c.project_id IS NULL AND EXISTS(SELECT 1 FROM run_holds r "
+        + ("AND NOT (EXISTS(SELECT 1 FROM run_holds r "
            "WHERE r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest "
            "AND r.release_kind IN ('crashed','lost') AND r.receipt IS a.release_digest)) " if schema_version >= 15 else "")
         + "LIMIT 1"
@@ -2955,7 +2955,7 @@ class LearningLedger:
             "WHERE (a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
             "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL)) "
             # O0b RS-A: a slot released crashed or lost has no completion, by design.
-            + ("AND NOT (c.project_id IS NULL AND EXISTS(SELECT 1 FROM run_holds r "
+            + ("AND NOT (EXISTS(SELECT 1 FROM run_holds r "
                "WHERE r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest "
                "AND r.release_kind IN ('crashed','lost') AND r.receipt IS a.release_digest)) " if current >= 15 else "")
             + "LIMIT 1"
@@ -7126,6 +7126,16 @@ class LearningLedger:
             "run_id": key.run_id, "bridge_run_id": key.bridge_run_id, "owner": self._capacity_execution_origin,
         }))
 
+    def _slot_decision_locked(self, project_id, handle_digest, release_digest):
+        """O0b RS-A: the written `lost` or `crashed` decision that released this slot, if that is how it was
+        released (its register receipt equals the capacity row's release digest), else None."""
+        if release_digest is None:
+            return None
+        row = self._connection.execute(
+            "SELECT release_kind FROM run_holds WHERE project_id=? AND kind='run_slot' AND identity=? "
+            "AND release_kind IN ('lost','crashed') AND receipt=?", (project_id, handle_digest, release_digest)).fetchone()
+        return None if row is None else row[0]
+
     def _capacity_completion_locked(self, key):
         row = self._connection.execute(
             "SELECT a.*,c.terminal_record_id,c.terminal_content_digest,c.released_at_ms AS completion_released_at_ms,"
@@ -7140,8 +7150,10 @@ class LearningLedger:
         ).fetchone()
         if row is None or row["kind"] != "claimed":
             raise LedgerError("capacity completion is unavailable")
-        if (row["released_at_ms"] != row["completion_released_at_ms"]
-                or row["release_digest"] != row["receipt_digest"]):
+        # O0b RS-A: a slot released by a written lost or crashed decision keeps its completion separately.
+        if (self._slot_decision_locked(key.project_id, key.handle_digest, row["release_digest"]) is None
+                and (row["released_at_ms"] != row["completion_released_at_ms"]
+                     or row["release_digest"] != row["receipt_digest"])):
             raise LedgerError("capacity completion is unavailable")
         return row
 
@@ -7163,8 +7175,16 @@ class LearningLedger:
         key = self._capacity_executions.key(ticket)
         with self._account_transaction():
             row = self._capacity_completion_locked(key)
-            known = row["released_at_ms"] is not None
-            if known:
+            decided = self._slot_decision_locked(key.project_id, key.handle_digest, row["release_digest"])
+            # O0b RS-A-2: after a written lost or crashed decision the slot is already free; a late release
+            # stores only the completion (or answers the one stored), and the decision stays as written.
+            known = (row["completion_released_at_ms"] if decided else row["released_at_ms"]) is not None
+            if known and decided:
+                timestamp = row["completion_released_at_ms"]
+                digest = self._capacity_completion_digest(row, timestamp)
+                if not secrets.compare_digest(digest, row["receipt_digest"]):
+                    raise LedgerError("capacity completion is unavailable")
+            elif known:
                 timestamp = row["released_at_ms"]
                 digest = self._capacity_completion_digest(row, timestamp)
                 if not secrets.compare_digest(digest, row["receipt_digest"]):
@@ -7187,10 +7207,11 @@ class LearningLedger:
                     "UPDATE capacity_completions SET released_at_ms=?,receipt_digest=? "
                     "WHERE project_id=? AND handle_digest=?", (timestamp, digest, key.project_id, key.handle_digest),
                 )
-                self._connection.execute(
-                    "UPDATE active_run_capacity SET released_at_ms=?,release_digest=? "
-                    "WHERE project_id=? AND handle_digest=?", (timestamp, digest, key.project_id, key.handle_digest),
-                )
+                if not decided:
+                    self._connection.execute(
+                        "UPDATE active_run_capacity SET released_at_ms=?,release_digest=? "
+                        "WHERE project_id=? AND handle_digest=?", (timestamp, digest, key.project_id, key.handle_digest),
+                    )
         # Commit precedes registry acknowledgement. A lost acknowledgement
         # retrieves the exact existing receipt, including after clock rollback.
         self._capacity_executions.acknowledge_release(ticket)
@@ -7215,10 +7236,18 @@ class LearningLedger:
             if cap is None or cap["released_at_ms"] is None:
                 return None
             row = self._capacity_completion_locked(OwnedExecutionKey(project_id, handle, cap["run_id"], bridge_run_id))
-            digest = self._capacity_completion_digest(row, row["released_at_ms"])
+            if self._slot_decision_locked(project_id, handle, row["release_digest"]) is not None:
+                # O0b RS-A: released by a written decision; its completion, if any, is answered as stored.
+                if row["completion_released_at_ms"] is None:
+                    return {"state": "released", "receipt_digest": row["release_digest"],
+                            "released_at_ms": row["released_at_ms"], "known": True}
+                timestamp = row["completion_released_at_ms"]
+            else:
+                timestamp = row["released_at_ms"]
+            digest = self._capacity_completion_digest(row, timestamp)
             if not secrets.compare_digest(digest, row["receipt_digest"]):
                 raise LedgerError("capacity completion is unavailable")
-            return {"state": "released", "receipt_digest": digest, "released_at_ms": row["released_at_ms"], "known": True}
+            return {"state": "released", "receipt_digest": digest, "released_at_ms": timestamp, "known": True}
 
     def _capacity_status(self, project_id, status):
         """Current bounded owner view; never releases, registers or launches.
@@ -11555,7 +11584,10 @@ class LearningLedger:
             # row; its binding here is never consumed by the ledger.
             host_row = self._connection.execute(
                 "SELECT COUNT(*) AS opened,"
-                "SUM(h.consumed_at_ms IS NOT NULL OR c.released_at_ms IS NOT NULL) AS terminal,"
+                # O0b RS-A: a run is terminal from completion evidence, never from a written lost or crashed release.
+                "SUM(h.consumed_at_ms IS NOT NULL OR (c.released_at_ms IS NOT NULL AND NOT EXISTS(SELECT 1 "
+                "FROM run_holds r WHERE r.project_id=c.project_id AND r.kind='run_slot' AND r.identity=c.handle_digest "
+                "AND r.release_kind IN ('lost','crashed') AND r.receipt IS c.release_digest))) AS terminal,"
                 "SUM(h.binding_state='pending' AND c.released_at_ms IS NULL) AS pending,"
                 "SUM(h.native_assignment_id IS NOT NULL) AS native_bound,"
                 "SUM(h.usage_complete=1) AS usage_complete,"
