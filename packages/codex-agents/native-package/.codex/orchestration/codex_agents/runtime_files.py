@@ -94,6 +94,7 @@ RUNTIME_FILES = (
     "codex_agents/execution_activity.py",
     "codex_agents/execution_grant.py",
     "codex_agents/git_plumbing.py",
+    "codex_agents/hardened_git.py",
     "codex_agents/history_api.py",
     "codex_agents/history_contracts.py",
     "codex_agents/history_service.py",
