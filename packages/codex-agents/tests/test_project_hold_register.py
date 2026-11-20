@@ -58,9 +58,9 @@ def identity(number):
     return f'{binding(number).run_handle}:{binding(number).attempt}'
 
 
-def hold_row(db, kind, key):
+def hold_row(db, kind, key, project=PROJECT_A):
     row = db.execute('SELECT state,lease_case,release_kind FROM project_holds WHERE project_id=? AND kind=? '
-                     'AND identity=?', (PROJECT_A, kind, key)).fetchone()
+                     'AND identity=?', (project, kind, key)).fetchone()
     return None if row is None else tuple(row)
 
 
@@ -390,7 +390,8 @@ class DenialRegisterTests(denial.ClaimDenialRecoveryTests):
 
     def lease_row(self):
         scope = self.fixture.scope
-        return hold_row(self.fixture.store._connection, 'lease', f'{scope.run_handle}:{scope.attempt}')
+        return hold_row(self.fixture.store._connection, 'lease', f'{scope.run_handle}:{scope.attempt}',
+                        scope.project_id)
 
     def test_X4_the_stored_denial_closure_releases_the_lease_denied_in_its_transaction(self):
         self.assertEqual(('held', 'armed', None), self.lease_row())  # the denied reply alone releases nothing

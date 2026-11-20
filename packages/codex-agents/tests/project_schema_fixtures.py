@@ -9,8 +9,15 @@ SCHEMA_18_TABLES = ('project_holds', 'project_result_contexts', 'project_result_
 
 
 def legacy_project_holds_layout(store):
-    """Remove only the empty schema18 register and custody tables (slice SB, SH-1) from an older fixture."""
-    for name in SCHEMA_18_TABLES:
+    """Remove only the schema18 register and custody tables (slice SB, SH-1) from an older fixture.
+
+    (requirement) B1: every lease and reservation take now writes its register row, so the lease and reservation
+    rows go with the table (an older format never had them; the 17 -> 18 step adopts them again). Any other row is
+    still refused."""
+    if store._connection.execute(
+            "SELECT COUNT(*) FROM project_holds WHERE kind NOT IN ('lease','reservation')").fetchone()[0]:
+        raise AssertionError('legacy fixture contains a hold, context, publication or settlement row')
+    for name in SCHEMA_18_TABLES[1:]:
         if store._connection.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0]:
             raise AssertionError('legacy fixture contains a hold, context, publication or settlement row')
     for name in SCHEMA_18_TABLES:

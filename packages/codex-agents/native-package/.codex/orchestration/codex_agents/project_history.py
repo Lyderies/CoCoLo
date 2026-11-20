@@ -45,7 +45,7 @@ from .project_learning_chunks import CHUNK_SCHEMA as LEARNING_CHUNK_SCHEMA, CHUN
 from .project_learning_source import SOURCE_SCHEMA as LEARNING_SOURCE_SCHEMA, SOURCE_COLUMNS as LEARNING_SOURCE_COLUMNS
 from .project_learning_activation import ACTIVATION_SCHEMA, ACTIVATION_COLUMNS
 from . import project_holds_schema
-from .project_holds_schema import PROJECT_HOLDS_COLUMNS, PROJECT_HOLDS_SCHEMA
+from .project_holds_schema import PROJECT_HOLDS_COLUMNS, PROJECT_HOLDS_SCHEMA, attempt_identity
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
     keyed_digest, parse_bounded_json, validate_execution_configuration, validate_learning_record,
@@ -502,10 +502,12 @@ class ProjectHistory:
                               + (LEARNING_SOURCE_SCHEMA if version < 15 else '')
                               + (ACTIVATION_SCHEMA if version < 16 else '')
                               + (REGISTERED_RUN_SCHEMA if version < 17 else '')
-                              # SH-1: the four tables, empty (each later slice adopts its own holds).
+                              # SH-1: the four tables (each slice adopts its own holds into them).
                               + PROJECT_HOLDS_SCHEMA).split(';'):
                 if statement.strip():
                     connection.execute(statement)
+            # B1: every lease and reservation gets its register row by class, idempotently, before the validators.
+            project_holds_schema.adopt_project_holds(connection, self._hold_now())
             # SH-1: both validators inside the step, before it commits; a failure rolls everything back to the
             # earlier format (and the copy made for it goes, O10 HS-18).
             self._check_project_holds()
@@ -849,6 +851,17 @@ class ProjectHistory:
         self._connection.execute("UPDATE result_identity SET last_observed_at_ms=? WHERE project_id=?", (now, self.project_id))
         return now
 
+    def _hold_now(self) -> int:
+        """The register's clock for release times: max(wall, persisted floor) (RS-B draft 3 §11), read without
+        moving the floor, so recording a release never refuses on a clock that went back."""
+        now = None
+        with contextlib.suppress(Exception):
+            now = self._result_clock()
+        row = self._connection.execute("SELECT last_observed_at_ms FROM result_identity WHERE project_id=?",
+                                       (self.project_id,)).fetchone()
+        floor = row[0] if row is not None and valid_integer(row[0]) else 0
+        return max(now, floor) if valid_integer(now) else floor
+
     def _result_binding(self, binding: AttemptBinding) -> AttemptBinding:
         if type(binding) is not AttemptBinding:
             raise HistoryError("history_invalid_input")
@@ -1099,6 +1112,10 @@ class ProjectHistory:
             self._connection.execute('UPDATE result_leases SET cleanup_reservation_digest=?,state_digest=? '
                 'WHERE project_id=? AND run_handle=? AND attempt=?',
                 (value.cleanup_reservation_digest, self._lease_seal(value), self.project_id, binding.run_handle, binding.attempt))
+            # B1 (SH-2): the unarmed lease's register row, with its lease and cleanup slot (RS-B X1).
+            project_holds_schema.take_hold(self._connection, self.project_id, "lease",
+                                           attempt_identity(binding.run_handle, binding.attempt), now_ms=now,
+                                           lease_case="unarmed", due_at_ms=until)
         return value
 
     @_operation
@@ -1187,7 +1204,7 @@ class ProjectHistory:
             value = self._lease_row(binding)
             invalid = False
             try:
-                verify_denial_closure(self._result_key, value, raw)
+                closure = verify_denial_closure(self._result_key, value, raw)
             except Exception:
                 invalid = True
             if invalid:
@@ -1200,6 +1217,13 @@ class ProjectHistory:
             if value.state == 'claim_pending':
                 value = replace(value, state='expired')
                 self._set_lease(value)
+                # B1 (SH-2): released by this verified closure only, in its transaction. A request the account
+                # closed unanswered (the fence's own `claim_not_open` receipt) is `fenced`; one it had denied is
+                # `denied`. Both are the same predicate (RS-B draft 3 §14.1); the kind says which answer it was.
+                fenced = closure['denial']['reason_code'] == 'claim_not_open'
+                project_holds_schema.release_hold(
+                    self._connection, self.project_id, 'lease', attempt_identity(binding.run_handle, binding.attempt),
+                    'fenced' if fenced else 'denied', now_ms=self._hold_now(), receipt=closure['receipt_digest'])
         return value
 
     @_operation
@@ -1229,6 +1253,9 @@ class ProjectHistory:
                 raise HistoryError('history_conflict')
             value = replace(value, state='expired')
             self._set_lease(value)
+            project_holds_schema.release_hold(  # B1 (SH-2): no host open and no reservation, checked above
+                self._connection, self.project_id, 'lease', attempt_identity(binding.run_handle, binding.attempt),
+                'withdrawn_unsent', now_ms=self._hold_now(), evidence=project_holds_schema.evidence_json(by='withdraw'))
         return value
 
     @_operation
@@ -1532,6 +1559,8 @@ class ProjectHistory:
                 raise HistoryError("history_result_expired")
             value = replace(value, state="claim_pending")
             self._set_lease(value)
+            project_holds_schema.arm_hold(self._connection, self.project_id,
+                                          attempt_identity(binding.run_handle, binding.attempt))
         return value
 
     @_operation
@@ -1570,10 +1599,17 @@ class ProjectHistory:
                                          binding.attempt, binding.claim_digest)).fetchone() is not None:
                 raise HistoryError("history_conflict")
             self._insert_result_reservation(actual)
+            # B1 (RS-B draft 3 §6): the reservation is the attempt's obligation from here on, taken in this
+            # transaction; the lease is released `bound` in it (SH-2).
+            project_holds_schema.take_hold(self._connection, self.project_id, "reservation", binding.claim_id,
+                                           now_ms=now, due_at_ms=actual.reserved_until_ms)
             value = replace(value, state="bound", claim_id=binding.claim_id, claim_digest=binding.claim_digest,
                             hard_deadline_at_ms=hard_deadline_at_ms,
                             claim_binding_digest=self._claim_lease_digest(value, binding, hard_deadline_at_ms))
             self._set_lease(value)
+            project_holds_schema.release_hold(self._connection, self.project_id, "lease",
+                                              attempt_identity(binding.run_handle, binding.attempt), "bound",
+                                              now_ms=now, receipt=value.claim_binding_digest)
         return actual
 
     @_operation
@@ -1668,6 +1704,11 @@ class ProjectHistory:
                     row = self._connection.execute("SELECT * FROM result_leases WHERE rowid=?", (position[0],)).fetchone()
                     value = self._lease(row)
                     self._set_lease(replace(value, state="expired"))
+                    # B1: never armed, so no claim was ever sent and no host open recorded (SH-2's unarmed case).
+                    project_holds_schema.release_hold(
+                        self._connection, self.project_id, "lease",
+                        attempt_identity(value.binding.run_handle, value.binding.attempt), "withdrawn_unsent",
+                        now_ms=now, evidence=project_holds_schema.evidence_json(by="expiry"))
                 retired += 1
             except HistoryError as error:
                 failure = failure or error.reason_code
@@ -1676,6 +1717,59 @@ class ProjectHistory:
         if failure is not None:
             raise HistoryError(failure)
         return retired
+
+    @_operation
+    def release_earlier_unarmed_leases(self, live, *, limit: int = 10) -> int:
+        """RS-B L1 (draft 2 §3, G4): release the unarmed leases no live run of this service holds.
+
+        Only this service writes the store (the writer lock), and only its own live runs can arm a lease, through
+        their lane jobs. So an unarmed lease outside `live` (the (run handle, attempt) of every lease the caller's
+        live jobs hold) belongs to a service that stopped: it can never be armed, and with no host open no claim of
+        it was ever sent. It is released `withdrawn_unsent` at once, not at its deadline, exactly as
+        `release_unsent_result_lease` would. Leases in `live` are untouched. At most `limit` per pass.
+        """
+        if self._result_key is None:
+            raise HistoryError("history_result_unavailable")
+        try:
+            live = frozenset(live)
+        except TypeError:
+            raise HistoryError("history_invalid_input") from None
+        if (not valid_integer(limit, minimum=1, maximum=100)
+                or any(type(key) is not tuple or len(key) != 2 or type(key[0]) is not str or type(key[1]) is not int
+                       for key in live)):
+            raise HistoryError("history_invalid_input")
+        positions = self._connection.execute(
+            "SELECT rowid,run_handle,attempt FROM result_leases WHERE project_id=? AND state='reserved' ORDER BY rowid",
+            (self.project_id,)).fetchall()
+        released, failure = 0, None
+        for position, run_handle, attempt in positions:
+            if released >= limit:
+                break
+            if (run_handle, attempt) in live:
+                continue
+            try:
+                with self._transaction():
+                    value = self._lease(self._connection.execute("SELECT * FROM result_leases WHERE rowid=?",
+                                                                 (position,)).fetchone())
+                    key = (value.binding.run_handle, value.binding.attempt)
+                    if value.state != "reserved" or key in live:
+                        continue
+                    if (self._connection.execute("SELECT 1 FROM project_host_opens WHERE project_id=? AND run_handle=? "
+                                                 "AND attempt=?", (self.project_id, *key)).fetchone() is not None
+                            or self._connection.execute("SELECT 1 FROM result_reservations WHERE project_id=? "
+                                                        "AND run_handle=? AND attempt=? LIMIT 1",
+                                                        (self.project_id, *key)).fetchone() is not None):
+                        continue  # Not an unsent lease after all: left for its own closure.
+                    self._set_lease(replace(value, state="expired"))
+                    project_holds_schema.release_hold(
+                        self._connection, self.project_id, "lease", attempt_identity(*key), "withdrawn_unsent",
+                        now_ms=self._hold_now(), evidence=project_holds_schema.evidence_json(by="start_pass"))
+                released += 1
+            except HistoryError as error:
+                failure = failure or error.reason_code  # One lease that does not verify never stops the others.
+        if failure is not None:
+            raise HistoryError(failure)
+        return released
 
     @_operation
     def reserve_result(self, binding: AttemptBinding, assignment: dict, *, hard_deadline_at_ms: int) -> ResultReservation:
@@ -1716,6 +1810,8 @@ class ProjectHistory:
                 raise HistoryError("history_conflict")
             self._check_result_capacity()
             self._insert_result_reservation(value)
+            project_holds_schema.take_hold(self._connection, self.project_id, "reservation", binding.claim_id,
+                                           now_ms=now, due_at_ms=value.reserved_until_ms)
         return value
 
     def _result_names(self, binding: AttemptBinding) -> tuple[str, str]:
@@ -2149,6 +2245,8 @@ class ProjectHistory:
                                           != (value.binding.run_handle, value.binding.attempt)
                                           or lease.state not in {"bound", "expired"} or not self._attempt_released(lease)):
                     continue  # Not this attempt's lease, still live, or not released: kept.
+                if self._obligation_held(value.binding.claim_id):
+                    continue  # B1: failed is not release; its held register row keeps its source.
             except HistoryError:
                 continue  # Kept: it does not verify, so nothing about it is trusted.
             with self._transaction():
@@ -2173,6 +2271,12 @@ class ProjectHistory:
                 self._delete_attempt_rows(lease.binding.run_handle, lease.binding.attempt, None)
             purged += 1
         return purged
+
+    def _obligation_held(self, claim_id: str) -> bool:
+        """Whether this reservation's obligation row in the register is not yet released (RS-B draft 3 §6)."""
+        row = self._connection.execute("SELECT state FROM project_holds WHERE project_id=? AND kind='reservation' "
+                                       "AND identity=?", (self.project_id, claim_id)).fetchone()
+        return row is None or row[0] != "released"
 
     def _attempt_released(self, lease) -> bool:
         """Whether an attempt may go (0.3.4 R1f): it reserved no cleanup, it was never admitted (O10 D3), or

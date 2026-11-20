@@ -4,6 +4,11 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- The project's records keep a register of every result lease and reservation, written together with it: what is
+  held, what released it (withdrawn before its claim, denied, fenced, bound to its claim, completed) and when. A
+  project opened with a lease or reservation missing from the register is refused. A new service releases at once
+  the unarmed leases a stopped service left, instead of waiting for their deadline. A reservation the account never
+  released is no longer removed with the finished rows.
 - The project's records gain format 18: four empty tables for the run supervisor's project-side holds, kept
   results' contexts, prepared publications and account settlements, with checks that run at every open and
   inside the upgrade. The service upgrades a project when it starts, keeping a copy as it was

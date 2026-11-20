@@ -272,6 +272,28 @@ lease that was never armed, which no claim can use, is released locally. Not
 closed: a run that failed before it took a lease keeps its account binding
 `pending` (no storage custody exists to fence it with).
 
+The project's hold register (`project_holds`, format 18; run supervisor slice B1) has
+one row per lease and per reservation, written in the same store transaction as the
+lease or reservation row it records (`project_holds_schema.take_hold`, `arm_hold`,
+`release_hold`). A lease is taken `unarmed` with its cleanup slot, armed, and released
+`withdrawn_unsent` (by `release_unsent_result_lease`, by the expiry of an unarmed
+lease, or by the writer pass below), `denied` or `fenced` (only by the verified
+denial closure: `fenced` when the account closed the request unanswered, its
+`claim_not_open` receipt) or `bound` (in the transaction that inserts the
+reservation). The reservation, the attempt's obligation from then on, is released
+`completed` only in the transaction that records the account's verified release, once
+a terminal exists; its commit, retirement and expiry change nothing in the register,
+and the result purge keeps a reservation whose obligation is still held. A released
+row is kept for good: a take of its identity (the same attempt's lease, or the same
+claim) is refused `history_conflict`. The 17 -> 18 step adopts existing leases and
+reservations by class before the validators; an ordinary open never adopts and
+refuses a lease or reservation without its row (`history_incompatible`). The
+writer's periodic pass (the first at service start) releases `withdrawn_unsent` every
+unarmed lease no live job of this service holds: only this service writes the store,
+so such a lease is a stopped service's, and it is released at once, not at its
+deadline. Custody rows (D1), open bindings (B3), memory holds (B2) and `lost_unbound`
+(B5) are later slices.
+
 Account calls from the driver are retried, for up to ten minutes per call, only
 when the account services are unreachable, with the same request ID; the owner
 then answers it for the first time or returns the reply it already committed. A

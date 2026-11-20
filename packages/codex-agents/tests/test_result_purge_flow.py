@@ -47,6 +47,9 @@ class StandIn:
     def _attempt_released(self, lease):
         return True
 
+    def _obligation_held(self, claim_id):
+        return False  # (requirement) B1: the purge also asks the register; these rows' obligations are released
+
     @contextlib.contextmanager
     def _transaction(self):
         yield

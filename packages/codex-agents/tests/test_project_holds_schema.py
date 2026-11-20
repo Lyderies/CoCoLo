@@ -142,7 +142,11 @@ class SchemaStepTests(unittest.TestCase):
         for name in SCHEMA_18_TABLES:
             self.assertEqual(project_holds_schema.PROJECT_HOLDS_COLUMNS[name],
                              tuple(row[1] for row in db.execute(f'PRAGMA table_info({name})')))
-            self.assertEqual(0, db.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])  # nothing adopted yet
+            if name != 'project_holds':
+                self.assertEqual(0, db.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])  # nothing adopted yet
+        # (requirement) B1: the step adopts every lease and reservation (and nothing else) into the register.
+        self.assertEqual([('lease', 2), ('reservation', 3)], [tuple(row) for row in db.execute(
+            'SELECT kind,COUNT(*) FROM project_holds GROUP BY kind ORDER BY kind')])
         indexes = {row[0]: row[1] for row in db.execute(
             "SELECT name,sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL AND tbl_name IN "
             "('project_holds','project_result_contexts')")}
@@ -291,7 +295,9 @@ class SchemaStepTests(unittest.TestCase):
     # Backups and restore carry the new tables ---------------------------------------------------------------------
 
     def hold(self, kind, identity, state='held', release_kind=None, evidence=None):
-        return ('INSERT INTO project_holds(project_id,kind,identity,state,instance,lease_case,taken_at_ms,'
+        # (requirement) B1: the store's own takes already wrote the lease and reservation rows; a row written here
+        # replaces its (kind, identity) row, as a later slice's writer would leave it.
+        return ('INSERT OR REPLACE INTO project_holds(project_id,kind,identity,state,instance,lease_case,taken_at_ms,'
                 'release_kind,evidence) VALUES(?,?,?,?,?,?,?,?,?)',
                 (PROJECT_A, kind, identity, state, 'instance-1' if kind in ('driver_entry', 'preparation') else None,
                  'unarmed' if kind == 'lease' else None, 1000, release_kind, evidence))
@@ -355,7 +361,8 @@ class SchemaStepTests(unittest.TestCase):
         kept = self.rows()
         self.assertEqual({name: kept[name] for name in SCHEMA_18_TABLES},
                          {name: rows for name, rows in self.rows(copy).items() if name in SCHEMA_18_TABLES})
-        self.assertEqual(2, len(kept['project_holds']))  # the held row and its tombstone
+        # the tombstone, with the five rows B1's takes wrote (lease 1's replaced by the held row): (requirement) B1
+        self.assertEqual(1 + 5, len(kept['project_holds']))
         os.replace(copy, self.database)  # the restore
         self.reopen()
         self.store.close()
@@ -430,8 +437,16 @@ class SchemaStepTests(unittest.TestCase):
     def test_SH7_an_ended_context_with_held_custody_is_refused(self):
         self.assert_refused(self.context(1, 'ended'), self.hold('result_custody', self.identity(1)))
 
+    def withdrawn(self, number=6):
+        """(requirement) B1: an attempt whose lease was really released `withdrawn_unsent` (no reservation): a
+        lease row can no longer be released by hand while its lease is held (R3)."""
+        self.base.reserve(number)
+        self.store.release_unsent_result_lease(leases.lease_binding(number))
+        return number
+
     def test_SH7_a_leased_context_with_no_held_obligation_is_refused(self):
-        self.assert_refused(self.context(1, 'leased'), self.hold('result_custody', self.identity(1)))
+        number = self.withdrawn()
+        self.assert_refused(self.context(number, 'leased'), self.hold('result_custody', self.identity(number)))
 
     def test_SH7_a_committed_context_with_a_reserved_reservation_is_refused(self):
         self.assert_refused(self.context(2, 'committed'), self.hold('result_custody', self.identity(2)))
@@ -449,10 +464,10 @@ class SchemaStepTests(unittest.TestCase):
                 self.write(('DELETE FROM project_result_publications', ()))
 
     def test_SH7_joint_custody_released_with_its_lease_release_is_accepted(self):
-        self.assert_accepted(self.context(1, 'retiring'),
-                             self.hold('result_custody', self.identity(1), 'released', 'lost_with_reservation',
-                                       evidence='{"cause":"lease"}'),
-                             self.hold('lease', self.identity(1), 'released', 'withdrawn_unsent'))
+        number = self.withdrawn()
+        self.assert_accepted(self.context(number, 'retiring'),
+                             self.hold('result_custody', self.identity(number), 'released', 'lost_with_reservation',
+                                       evidence='{"cause":"lease"}'))
 
     def test_SH7_joint_custody_released_lost_with_reservation_and_no_release_cause_is_refused(self):
         self.assert_refused(self.context(1, 'retiring'),
@@ -461,9 +476,9 @@ class SchemaStepTests(unittest.TestCase):
                             self.hold('lease', self.identity(1)))
 
     def test_SH7_joint_custody_released_lost_with_reservation_without_evidence_is_refused(self):
-        self.assert_refused(self.context(1, 'retiring'),
-                            self.hold('result_custody', self.identity(1), 'released', 'lost_with_reservation'),
-                            self.hold('lease', self.identity(1), 'released', 'withdrawn_unsent'))
+        number = self.withdrawn()
+        self.assert_refused(self.context(number, 'retiring'),
+                            self.hold('result_custody', self.identity(number), 'released', 'lost_with_reservation'))
 
 
 class OrchestrationHoldTests(ProjectOrchestrationTests):

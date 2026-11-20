@@ -1068,6 +1068,14 @@ class ResultPersistenceLane:
                     history._orchestration_owner().end_earlier(self._service_scope, 10)
                 with contextlib.suppress(HistoryError, sqlite3.Error):  # S1-R6-8, reporting only
                     history.settle_earlier_registrations(self._service_instance, now_ms=history._result_now())
+                # RS-B L1 (the start pass, and every pass after it): an unarmed lease no live job of this
+                # service holds is an earlier service's; it can never be armed and no claim of it was sent, so it is
+                # released `withdrawn_unsent` now, before its time. A live job's lease is untouched.
+                with self._lock:
+                    live = {(pending.lease_binding.run_handle, pending.lease_binding.attempt)
+                            for pending in self._jobs.values() if pending.lease_binding is not None}
+                with contextlib.suppress(HistoryError, sqlite3.Error):
+                    history.release_earlier_unarmed_leases(live, limit=10)
                 # An earlier service's unarmed lease past its time can never be armed; release it here,
                 # with no client action (O10 D1). Armed leases are never expired by time.
                 with contextlib.suppress(HistoryError, sqlite3.Error):
