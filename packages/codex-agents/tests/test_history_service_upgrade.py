@@ -34,6 +34,11 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
             result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000),
             result_clock_ms=lambda: self.now, orchestration_limits=self.limits)
 
+    def copies(self):
+        """HS-10: the copies made so far (a fresh one per upgrade attempt), never a temporary one."""
+        return sorted(path for path in self.directory.glob('history.sqlite3.before-17.*')
+                      if not path.name.endswith('.partial'))
+
     def version(self, path):
         connection = sqlite3.connect(path)
         try:
@@ -49,17 +54,15 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
             'SELECT * FROM project_orchestration_checkpoints').fetchall())  # nothing lost
         self.assertEqual(0, self.store._connection.execute('SELECT COUNT(*) FROM project_registered_runs').fetchone()[0])
 
-    def test_HS_2_the_store_is_kept_as_it_was_before_the_upgrade_once(self):
+    def test_HS_2_the_store_is_kept_as_it_was_before_the_upgrade(self):
         self.format_16_store()
         self.store = self.service_history()
-        backup = self.directory / 'history.sqlite3.before-17'
-        self.assertTrue(backup.is_file())
+        (backup,) = self.copies()
         self.assertEqual(16, self.version(backup))  # the store as it was
         self.assertEqual(0o600, stat.S_IMODE(os.stat(backup).st_mode))
-        made = backup.stat().st_mtime_ns
         self.store.close()
-        self.store = self.service_history()  # a later start: already upgraded, the copy is not remade
-        self.assertEqual(made, backup.stat().st_mtime_ns)
+        self.store = self.service_history()  # a later start: already upgraded, no new copy
+        self.assertEqual([backup], self.copies())
 
     def copy_rows(self, path):
         connection = sqlite3.connect(path)
@@ -73,7 +76,7 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
         self.store = ProjectHistory(self.directory, PROJECT_A, result_key=KEY, allow_schema_upgrade=True,
                                     result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000),
                                     result_clock_ms=lambda: self.now, orchestration_limits=self.limits)
-        copy = self.directory / 'history.sqlite3.before-17'
+        (copy,) = self.copies()
         self.assertEqual(16, self.version(copy))
         self.assertEqual([tuple(row) for row in before], self.copy_rows(copy))  # HS-7: the data, not just the file
 
@@ -86,7 +89,7 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # another writer holds the store
         with self.assertRaisesRegex(HistoryError, 'history_writer_busy'):
             self.service_history()
-        self.assertFalse((self.directory / 'history.sqlite3.before-17').exists())
+        self.assertEqual([], self.copies())
         self.assertEqual(16, self.version(self.directory / 'history.sqlite3'))
         fcntl.flock(lock, fcntl.LOCK_UN)
         self.store = self.service_history()
@@ -100,22 +103,58 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
                 result_capacity=ResultCapacity(8, 4 * MAX_RESULT_BODY_BYTES, 60_000, 120_000),
                 result_clock_ms=lambda: self.now, orchestration_limits=self.limits)
         self.assertEqual(16, self.version(self.directory / 'history.sqlite3'))  # nothing written
-        self.assertFalse((self.directory / 'history.sqlite3.before-17').exists())
+        self.assertEqual([], self.copies())
         self.store = self.service_history()
 
-    def test_HS_7_an_unusable_existing_copy_is_set_aside_and_a_new_one_made(self):
+    def test_HS_10_an_existing_copy_is_never_reused(self):
         before = self.format_16_store()
-        (self.directory / 'history.sqlite3.before-17').write_bytes(b'')  # not a usable copy
+        # An impostor in a copy's place: version 16 and this project's id, but not the store (round 2).
+        impostor = self.directory / 'history.sqlite3.before-17.1'
+        connection = sqlite3.connect(impostor)
+        connection.execute('CREATE TABLE history_identity(project_id TEXT)')
+        connection.execute('INSERT INTO history_identity VALUES(?)', (PROJECT_A,))
+        connection.execute('PRAGMA user_version=16')
+        connection.commit()
+        connection.close()
+        os.chmod(impostor, 0o600)
         self.store = self.service_history()
-        self.assertEqual([tuple(row) for row in before], self.copy_rows(self.directory / 'history.sqlite3.before-17'))
-        self.assertTrue(any(path.name.startswith('history.sqlite3.before-17.invalid-')
-                            for path in self.directory.iterdir()))
-        self.assertFalse(any(path.name.endswith('.partial') for path in self.directory.iterdir()))
+        made = [path for path in self.copies() if path != impostor]
+        self.assertEqual(1, len(made))  # a fresh copy, whatever was there
+        self.assertEqual([tuple(row) for row in before], self.copy_rows(made[0]))
+
+    def test_HS_10_a_copy_that_fails_leaves_nothing_and_upgrades_nothing(self):
+        from codex_agents import project_history
+        from codex_agents.history_contracts import HistoryError
+        self.format_16_store()
+        real = sqlite3.connect
+
+        def connect(path, *args, **kwargs):
+            if '.partial' in str(path):
+                raise KeyboardInterrupt  # any failure, not only an OSError
+            return real(path, *args, **kwargs)
+        with mock.patch.object(project_history.sqlite3, 'connect', connect):
+            with self.assertRaises((HistoryError, KeyboardInterrupt)):
+                self.service_history()
+        self.assertEqual(16, self.version(self.directory / 'history.sqlite3'))
+        self.assertFalse(list(self.directory.glob('*.partial')))
+        self.assertEqual([], self.copies())
+
+    def test_HS_11_an_invalid_result_identity_is_refused_before_anything_is_written(self):
+        from codex_agents.history_contracts import HistoryError
+        self.format_16_store()
+        connection = sqlite3.connect(self.directory / 'history.sqlite3')
+        connection.execute("UPDATE result_identity SET last_observed_at_ms=-1")  # right key, bad field
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            self.service_history()
+        self.assertEqual(16, self.version(self.directory / 'history.sqlite3'))
+        self.assertEqual([], self.copies())
 
     def test_HS_1_a_current_store_needs_no_copy(self):
         self.store.close()
         self.store = self.service_history()
-        self.assertFalse((self.directory / 'history.sqlite3.before-17').exists())
+        self.assertEqual([], self.copies())
 
     def test_HS_1_an_ordinary_open_still_refuses_a_format_16_store(self):
         from codex_agents.history_contracts import HistoryError
@@ -193,6 +232,52 @@ class StartMigrationFailureTests(unittest.TestCase):
         clear_start_failure(state, project)
         self.assertIsNone(start_failure(state, project))
         self.assertEqual('migration_not_drained', start_failure(state, other)['reason_code'])  # not lost
+
+    def state_and_project(self):
+        import tempfile
+        from pathlib import Path
+        from tests.support import TEMP_ROOT
+        from codex_agents.collector_paths import CollectorPaths
+        from codex_agents.learning_store import LearningState
+        temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(temporary.cleanup)
+        state = CollectorPaths(LearningState(Path(temporary.name) / 'state').root)
+        project = Path(temporary.name) / 'project'
+        project.mkdir()
+        return state, project
+
+    def test_HS_12_every_fixed_migration_reason_is_kept_and_a_malformed_one_reads_as_none(self):
+        import json
+        from codex_agents.learning_migration import _start_failure_path, record_start_failure, start_failure
+        state, project = self.state_and_project()
+        for reason in ('migration_inconsistent', 'migration_incomplete', 'migration_not_authorized'):
+            record_start_failure(state, project, reason)
+            self.assertEqual(reason, start_failure(state, project)['reason_code'])
+        path = _start_failure_path(state, project)
+        for bad in ([], {}, 3):
+            path.write_text(json.dumps({'reason_code': bad, 'at_ms': 1}))
+            os.chmod(path, 0o600)
+            self.assertIsNone(start_failure(state, project))  # never raises
+
+    def test_HS_13_clearing_never_erases_a_newer_failure(self):
+        import time
+        from codex_agents.learning_migration import clear_start_failure, record_start_failure, start_failure
+        state, project = self.state_and_project()
+        began = time.time_ns() // 1_000_000 - 1000  # this start began before the failure was kept
+        record_start_failure(state, project, 'migration_not_drained')
+        clear_start_failure(state, project, since_ms=began)
+        self.assertEqual('migration_not_drained', start_failure(state, project)['reason_code'])
+        clear_start_failure(state, project, since_ms=time.time_ns() // 1_000_000 + 1000)
+        self.assertIsNone(start_failure(state, project))
+
+    def test_HS_4_a_service_that_ends_early_hands_its_reason_to_its_starter(self):
+        from codex_agents import project_host_client
+        state, project = self.state_and_project()
+        entry = project / 'fake_host.py'
+        entry.write_text('import json\nprint(json.dumps({"ready": False, "reason_code": "history_incompatible"}))\n')
+        report = {}
+        self.assertFalse(project_host_client._start(state, entry, project, lambda: False, 10, report=report))
+        self.assertEqual('history_incompatible', report.get('reason_code'))
 
     def test_HS_9_a_special_file_in_the_way_never_hangs_a_start(self):
         import tempfile
