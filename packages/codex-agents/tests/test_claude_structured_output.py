@@ -52,9 +52,10 @@ class StructuredOutputTests(BridgeTestCase):
 
     def test_VF_5_the_result_is_the_final_structured_output_with_optional_nulls_removed(self):
         attempted = {**result(), "summary": "an attempt the client refused"}
+        also_not = {**result(), "summary": "a later tool input, still not the result"}
         valid = result()
         output = self.run_frames([init_frame(tools=STRUCTURED), RATE_LIMIT, output_call(attempted, 1),
-                                  output_call(null_filled(valid), 2), final(null_filled(valid))])
+                                  output_call(also_not, 2), final(null_filled(valid))])
         self.assertEqual("result", output["bridge_report"]["outcome"], output["bridge_report"])
         self.assertEqual(valid, output["result"])  # neither the tool input nor the text, and no optional nulls
 
@@ -76,6 +77,18 @@ class StructuredOutputTests(BridgeTestCase):
                 self.assertEqual("failed", output["result"]["execution_state"])
                 self.assertEqual("structured_output_missing", self.durable_reason())
 
+    def test_VF_2_retries_exhausted_keep_their_reason_when_the_client_exits_with_an_error(self):
+        route, assigned, handle = self.claude_run()
+        self.frames("claude", [init_frame(tools=STRUCTURED), RATE_LIMIT,
+                               final(ABSENT, subtype="error_max_structured_output_retries", is_error=True)])
+        (self.tools / "claude-exit-code").write_text("1")
+        try:
+            output = self.dispatch(route, assigned, handle)
+        finally:
+            (self.tools / "claude-exit-code").unlink()
+        self.assertEqual("invalid_result", output["bridge_report"]["outcome"])
+        self.assertEqual("structured_output_missing", output["bridge_report"]["result_validation_reason_code"])
+
     def test_VF_2_a_stronger_stop_keeps_its_own_cause(self):
         output = self.run_frames([init_frame(tools=[*STRUCTURED, "Bash"]), {"sleep": 30}, final(ABSENT)])
         self.assertEqual("init_tool_not_allowed", output["bridge_report"]["outcome"])
@@ -96,6 +109,17 @@ class StructuredOutputTests(BridgeTestCase):
             with self.assertRaisesRegex(bridge.BridgeRefused, "cannot hold its result to the schema"):
                 self.dispatch(route, assigned, handle)
         self.assertEqual(launched, len([i for i in self.invocations("claude") if "-p" in i["argv"]]))
+
+    def test_VF_6_an_init_frame_without_a_readable_version_is_refused(self):
+        for version in (ABSENT, None, "unknown"):
+            with self.subTest(version=version):
+                init = init_frame(tools=STRUCTURED)
+                if version is ABSENT:
+                    init.pop("claude_code_version", None)
+                else:
+                    init["claude_code_version"] = version
+                output = self.run_frames([init, {"sleep": 30}, final(result())])
+                self.assertEqual("init_client_unsupported", output["bridge_report"]["outcome"])
 
     def test_VF_6_a_child_whose_client_reports_an_older_version_stops_at_init(self):
         output = self.run_frames([init_frame(tools=STRUCTURED, claude_code_version="2.1.300"), {"sleep": 30},

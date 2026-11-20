@@ -97,6 +97,8 @@ def init_frame(**changes) -> dict:
         "type": "system", "subtype": "init", "session_id": "session-1",
         "apiKeySource": "none", "model": "claude-opus-5-5", "plugins": [],
         # Corrected for O10 VF (requirement): a client held to --json-schema also advertises its output tool.
+        # and reports its version (O10 VF-6: a schema-held run refuses an init with none).
+        "claude_code_version": "2.1.311",
         "mcp_servers": [], "tools": ["StructuredOutput", "Read", "Glob", "Grep"], **changes,
     }
 

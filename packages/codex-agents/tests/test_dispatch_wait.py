@@ -38,12 +38,15 @@ class FakeClock:
 
 class DispatchWaitTests(unittest.TestCase):
     def client(self, replies, reads):
+        test, self.read_count, self.status_count, self.clock = self, 0, 0, FakeClock()
         client = object.__new__(DispatchClient)
         client._endpoint = client._result_endpoint = '/nonexistent'
         client._scope, client._timeout, client.last_binding = None, 2, None
         replies = iter(replies)
 
         def call(operation, *args, **kwargs):
+            self.status_count += operation == 'dispatch.status'
+            self.clock.now += 0.01  # each call takes a little time
             reply = next(replies)
             if isinstance(reply, Exception):
                 raise reply
@@ -56,13 +59,14 @@ class DispatchWaitTests(unittest.TestCase):
                 pass
 
             def read_result(self, binding, digest):
+                test.read_count += 1
                 value = next(reads)
                 if isinstance(value, Exception):
                     raise value
                 return value
         self.enterContext(mock.patch.object(dispatch_api, 'ResultReadClient', Reader))
         self.enterContext(mock.patch.object(dispatch_api, 'AttemptBinding', lambda **fields: fields))
-        self.enterContext(mock.patch.object(dispatch_api, 'time', FakeClock()))  # unit tests never sleep
+        self.enterContext(mock.patch.object(dispatch_api, 'time', self.clock))  # unit tests never sleep
         return client
 
     def test_DR_1_a_failed_status_check_is_retried(self):
@@ -108,6 +112,26 @@ class DispatchWaitTests(unittest.TestCase):
     def test_DR_2_reading_the_published_result_is_retried_while_it_is_still_published(self):
         client = self.client([RUNNING, PUBLISHED, PUBLISHED], [OSError('slow'), json.dumps({'summary': 'done'}).encode()])
         self.assertEqual({'summary': 'done'}, client.dispatch('r', 1, 'x' * 64, wait_seconds=30)['result'])
+
+    def test_DR_2_a_timed_out_recheck_is_never_taken_as_permission_to_read(self):
+        reads = [OSError('slow'), json.dumps({'summary': 'done'}).encode()]
+        client = self.client([RUNNING, PUBLISHED, slow(), slow(), PUBLISHED], reads)
+        self.assertEqual({'summary': 'done'}, client.dispatch('r', 1, 'x' * 64, wait_seconds=30)['result'])
+        self.assertEqual(2, self.read_count)  # one read before the timeouts, one after a fresh published
+        self.assertEqual(4, self.status_count)  # the second read waited for the fresh published answer
+
+    def test_DR_2_a_retired_answer_ends_a_reread(self):
+        client = self.client([RUNNING, PUBLISHED, {'state': 'retired', 'binding': BINDING}], [OSError('slow')])
+        with self.assertRaises(DispatchError):
+            client.dispatch('r', 1, 'x' * 64, wait_seconds=30)
+        self.assertEqual(1, self.read_count)
+
+    def test_DR_1_a_service_that_stays_slow_is_retried_until_the_deadline_and_no_longer(self):
+        client = self.client([RUNNING] + [slow() for _ in range(10_000)], [])
+        with self.assertRaises(DispatchError):
+            client.dispatch('r', 1, 'x' * 64, wait_seconds=0.5)
+        self.assertGreater(self.status_count, 3)  # it did retry
+        self.assertLessEqual(self.clock.now - 1000.0, 0.5 + 0.06)  # and stopped at the deadline
 
     def test_DR_2_a_failed_read_from_a_service_that_is_gone_ends_the_wait(self):
         client = self.client([RUNNING, PUBLISHED, DispatchError('dispatch_unavailable')], [OSError('gone')])
