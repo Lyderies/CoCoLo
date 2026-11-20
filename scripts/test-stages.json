@@ -70,6 +70,7 @@
  "codex:tests.test_collector_exit": "integration",
  "codex:tests.test_collector_paths": "unit",
  "codex:tests.test_collector_read_scope": "integration",
+ "codex:tests.test_container_runtime": "integration",
  "codex:tests.test_contracts": "integration",
  "codex:tests.test_control_api": "integration",
  "codex:tests.test_control_loop": "unit",
