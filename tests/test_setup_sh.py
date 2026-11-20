@@ -1012,6 +1012,11 @@ class WizardTerminalTests(unittest.TestCase):
             'if [ -n "$FAKE_REGISTER" ]; then case "$*" in *"cli.py learning-register "*)'
             f' printf "%s\\n" "$*" >> "{self.base / "register.log"}"; echo "$FAKE_REGISTER"; exit 0;;'
             # S1-U8: the project's service, started after the collector is ready; FAKE_START replaces the reply.
+            # S4-3: provider-observe is refused unless FAKE_OBSERVE gives its reply.
+            ' *"cli.py provider-observe "*)'
+            f' printf "%s\\n" "$*" >> "{self.base / "register.log"}";'
+            ' if [ -z "${FAKE_OBSERVE:-}" ]; then echo \'{"ready": false, "reason_code": "provider_unavailable"}\';'
+            ' exit 2; fi; echo "$FAKE_OBSERVE"; exit 0;;'
             ' *"cli.py learning-start-project-service "*)'
             f' printf "%s\\n" "$*" >> "{self.base / "register.log"}";'
             ' echo "${FAKE_START:-{\\"ready\\": true, \\"serving\\": true\\}}";'
@@ -1024,6 +1029,8 @@ class WizardTerminalTests(unittest.TestCase):
             ' if [ "$n" -le "${FAKE_STATUS_STARTING:-0}" ]; then'
             ' echo "{\\"ready\\": false, \\"reason_code\\": \\"${FAKE_STATUS_REASON:-status_collector_transport_unavailable}\\"}";'
             ' exit 2; fi;'
+            # S4-3: FAKE_STATUS_REPLY replaces the ready reply (its provider_attestations).
+            ' if [ -n "${FAKE_STATUS_REPLY:-}" ]; then echo "$FAKE_STATUS_REPLY"; exit 0; fi;'
             ' echo \'{"ready": true, "collector_runtime_version": "0.0.0"}\'; exit 0;; esac; fi\n'
             'case "$*" in *"attest.py scratch setup-"*)'
             f' out=$("{TRUSTED_PY}" "$@"); rc=$?; printf "%s\\n" "$out" >> "{self.scratch_log}";'

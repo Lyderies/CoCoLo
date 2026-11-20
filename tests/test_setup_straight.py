@@ -104,6 +104,64 @@ class SetupStraightTests(SetupUpdateTests):
             self.send("\r")
         self.expect("Install now")  # asked again: Set up ended with the attempt
 
+    # S4-3: an update skips the attestation when every enabled provider's current account is attested.
+
+    ATTESTED = '{"ready": true, "collector_runtime_version": "0.0.0", "provider_attestations": ' \
+               '{"codex": {"state": "missing"}, "claude": {"state": "present"}}}'
+    MISSING = ATTESTED.replace('"claude": {"state": "present"}', '"claude": {"state": "missing"}')
+    OBSERVED = '{"ready": true, "provider": "claude"}'
+
+    def test_S4_3_update_skips_billing_when_attested_and_runs_it_otherwise(self):
+        project = self.installed()
+        cases = [("attested", {"FAKE_STATUS_REPLY": self.ATTESTED, "FAKE_OBSERVE": self.OBSERVED}, 0),
+                 ("missing", {"FAKE_STATUS_REPLY": self.MISSING, "FAKE_OBSERVE": self.OBSERVED}, 1),
+                 ("observe refused", {"FAKE_STATUS_REPLY": self.ATTESTED}, 1)]
+        for name, env, runs in cases:
+            with self.subTest(name):
+                self.attest_count = self.base / "attest.count"
+                self.attest_count.unlink(missing_ok=True)
+                code, screen = self.update(project, env)
+                self.assertEqual(0, code, screen[-1500:])
+                self.assertEqual(runs, self.attested())
+                self.assertEqual(runs == 0, "already attested" in screen)
+                self._reap()
+
+    def test_S4_3_the_menus_update_also_skips_billing_when_attested(self):
+        project = self.installed()
+        self.attest_count = self.base / "attest.count"
+        self.start(project, {**REGISTERED, "FAKE_ATTEST": str(self.attest_count),
+                             "FAKE_STATUS_REPLY": self.ATTESTED, "FAKE_OBSERVE": self.OBSERVED})
+        self.expect("Everything looks good")
+        self.send("\r")
+        self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\r")
+        self.assertEqual(0, self.finish(timeout=60))
+        self.assertEqual(0, self.attested())
+
+    def test_S4_3_configure_billing_only_always_runs_the_attestation(self):
+        project = self.installed()
+        self.attest_count = self.base / "attest.count"
+        self.start(project, {**REGISTERED, "FAKE_ATTEST": str(self.attest_count),
+                             "FAKE_STATUS_REPLY": self.ATTESTED, "FAKE_OBSERVE": self.OBSERVED})
+        self.expect("Everything looks good")
+        self.send("\r")
+        self.choose_project()
+        self.expect("Update this project (recommended)")
+        self.send("\x1b[B\r")  # Configure
+        self.expect("Re-run the billing attestation only")
+        self.send("\x1b[B\x1b[B\x1b[B\r")
+        self.expect("Start the attestation")
+        self.send("\r")
+        self.expect("attest stub run 1")
+
+    def test_S4_3_an_answers_file_always_runs_the_attestation(self):
+        project, checks = self.make_project()
+        answers = self.answers_for(project, checks)
+        code, screen = self.scripted(answers, {"FAKE_STATUS_REPLY": self.ATTESTED, "FAKE_OBSERVE": self.OBSERVED})
+        self.assertEqual(0, code, screen[-1500:])
+        self.assertEqual(1, self.attested())
+
 
 def load_tests(loader, tests, pattern):
     """Only this module's own tests: the inherited update tests run in test_setup_update."""

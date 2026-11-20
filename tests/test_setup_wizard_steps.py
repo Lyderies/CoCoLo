@@ -18,6 +18,41 @@ sys.path.insert(1, str(ORCHESTRATION))
 from setup_wizard import steps  # noqa: E402
 
 
+class BillingCurrentTests(unittest.TestCase):
+    """S4-3 (DESIGN-0.4.0-S4-straight.md revision 2): an update skips the attestation only when every
+    enabled provider was observed and the status says its current account is attested."""
+
+    ROUTING = steps.provider_routing("off", "on", "claude-sonnet-5-5", "off")
+    BOTH = steps.provider_routing("on", "on", "claude-sonnet-5-5", "off")
+
+    @staticmethod
+    def status(codex="present", claude="present", **extra):
+        return {"ready": True, "provider_attestations": {"codex": {"state": codex}, "claude": {"state": claude}},
+                **extra}
+
+    def test_S4_3_only_a_complete_current_answer_skips(self) -> None:
+        ok = {"codex": True, "claude": True}
+        cases = [
+            ("every enabled provider present", self.BOTH, ok, self.status(), True),
+            ("a disabled provider does not count", self.ROUTING, {"claude": True}, self.status(codex="missing"), True),
+            ("one missing", self.BOTH, ok, self.status(codex="missing"), False),
+            ("identity missing", self.BOTH, ok, self.status(claude="identity_missing"), False),
+            ("unavailable", self.BOTH, ok, self.status(claude="unavailable"), False),
+            ("an observe failed", self.BOTH, {"codex": True, "claude": False}, self.status(), False),
+            ("an enabled provider not observed", self.BOTH, {"claude": True}, self.status(), False),
+            ("status not ready", self.BOTH, ok, self.status(ready=False), False),
+            ("status malformed", self.BOTH, ok, {"ready": True, "provider_attestations": []}, False),
+            ("status entry malformed", self.BOTH, ok,
+             {"ready": True, "provider_attestations": {"codex": "present", "claude": {"state": "present"}}}, False),
+            ("no status", self.BOTH, ok, None, False),
+            ("routing unreadable", "{", ok, self.status(), False),
+            ("routing with nothing enabled", '{"version": 1, "providers": {}}', ok, self.status(), False),
+        ]
+        for name, routing, observed, status, expected in cases:
+            with self.subTest(name):
+                self.assertIs(expected, steps.billing_current(routing, observed, status))
+
+
 class HomeMarkerTests(unittest.TestCase):
     """W3.1: leading home markers are expanded; everything else is left alone."""
 
