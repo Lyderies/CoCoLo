@@ -69,7 +69,7 @@ class HealthContentionTests(unittest.TestCase):
         _, client = self.serve()
         reply = client.health(self.project)
         self.assertNotIn('ledger_busy', reply)
-        self.assertLessEqual(PROJECT_FIELDS, set(reply))
+        self.assertEqual(set(client.health()) | PROJECT_FIELDS, set(reply))  # G6: the same keys as before
         project_id = self.ledger.project_for_root(self.project)
         self.assertEqual(self.ledger.provider_attestation_status(project_id), reply['provider_attestations'])
         self.assertEqual(self.ledger.health_snapshot(project_id), reply['collector_health'])
@@ -194,39 +194,100 @@ class HealthContentionTests(unittest.TestCase):
             asking = threading.Thread(target=lambda: self.capture([], lambda: client.health(self.project)))
             asking.start()
             self.assertTrue(entered.wait(5))  # the request loop is inside a handler now
-            stopper = threading.Thread(target=server.stop)
+            failed = []
+            stopper = threading.Thread(target=lambda: self.capture(failed, server.stop))
             stopper.start()
-            time.sleep(1.0)  # two cycles would have come due
-            self.assertEqual([], calls)
-            release.set()
-            asking.join(10)
-            stopper.join(10)
+            try:
+                deadline = time.monotonic() + 2
+                while not server._sweeps_stop.is_set():  # the cancellation reached the sweeps
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.01)
+                time.sleep(1.0)  # two cycles would have come due
+                self.assertEqual([], calls)
+            finally:
+                release.set()
+                asking.join(10)
+                stopper.join(10)
+            self.assertFalse(stopper.is_alive())
+            self.assertEqual([], failed)  # G6: the stop itself succeeded
         self.run_with(self.patched_sweeps(calls, interval=0.4)
                       + [mock.patch.object(learning_store, 'client_health_snapshot', blocked)], body)
 
-    def test_G2_a_sweep_outliving_the_join_is_reported_by_stop_and_wait(self):
+    def test_G2_G4_a_sweep_outliving_the_join_is_reported_and_a_restart_is_refused(self):
         from codex_agents.collector_contracts import CollectorError
-        started, done = threading.Event(), threading.Event()
+        started, hold = threading.Event(), threading.Event()
 
         def stuck():
             started.set()
-            time.sleep(6.5)  # past the 5 s join, ignoring the stop
-            done.set()
+            hold.wait(30)  # past every join, ignoring the stop, until the test lets it go
             return 0
 
         def body():
             server, _ = self.serve()
             self.assertTrue(started.wait(5))
-            with self.assertRaises(CollectorError):
-                server.stop()
-            self.assertFalse(server.wait(0))  # not stopped while the sweep still uses the ledger
-            self.assertTrue(done.wait(5))
-            deadline = time.monotonic() + 2
+            try:
+                with self.assertRaises(CollectorError):
+                    server.stop()
+                deadline = time.monotonic() + 10
+                while server._thread.is_alive():  # G6: the request thread has ended ...
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.02)
+                self.assertTrue(server._sweeps.is_alive())  # ... while the sweep still runs
+                self.assertFalse(server.wait(0))  # G2: not stopped while the sweep uses the ledger
+                with self.assertRaises(CollectorError):  # G4: no restart over it ...
+                    server.start()
+                self.assertTrue(server._sweeps_stop.is_set())  # ... and it stays cancelled
+            finally:
+                hold.set()
+            deadline = time.monotonic() + 5
             while not server.wait(0):
                 self.assertLess(time.monotonic(), deadline)
                 time.sleep(0.02)
         self.run_with([mock.patch.object(learning_store, 'WORKER_RESULT_SWEEP_SECONDS', 0.05),
                        mock.patch.object(self.ledger, 'sweep_worker_results', stuck)], body)
+
+    def test_G5_a_sweep_thread_that_cannot_start_fails_the_start(self):
+        from codex_agents.collector_contracts import CollectorError
+        real = threading.Thread
+
+        def thread(*args, **options):
+            if options.get('name') == 'collector-sweeps':
+                raise RuntimeError('cannot start')
+            return real(*args, **options)
+        server = CollectorServer(self.ledger)
+        with mock.patch.object(learning_store.threading, 'Thread', thread):
+            with self.assertRaises(CollectorError):
+                server.start()
+        self.assertFalse(self.state.socket.exists())  # the listener was closed
+        self.assertFalse(server._ready.is_set() and server._startup_error is None)
+
+    def test_G6_one_cycle_calls_the_three_sweeps_in_their_order(self):
+        calls = []
+
+        def body():
+            self.serve()
+            deadline = time.monotonic() + 5
+            while len(calls) < 3:
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.02)
+            self.assertEqual(['sweep_worker_results', 'sweep_event_retention', 'sweep_account_retention'],
+                             [name for name, _ in calls[:3]])
+        self.run_with(self.patched_sweeps(calls), body)
+
+    def test_G6_a_repository_reader_holds_the_sweeps_off(self):
+        calls = []
+
+        def body():
+            project_id = self.ledger.project_for_root(self.project)
+            with self.ledger.repository(project_id):
+                self.serve()
+                time.sleep(0.5)
+                self.assertEqual([], calls)
+            deadline = time.monotonic() + 5
+            while not calls:
+                self.assertLess(time.monotonic(), deadline, 'the sweeps did not resume after the reader')
+                time.sleep(0.02)
+        self.run_with(self.patched_sweeps(calls), body)
 
     def test_H1a_6b_no_sweep_runs_while_a_reader_is_active(self):
         calls = []
