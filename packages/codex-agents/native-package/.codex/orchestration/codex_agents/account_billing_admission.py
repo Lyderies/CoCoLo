@@ -449,9 +449,13 @@ class AccountBillingAdmission:
         O0b RS-A F6: run when a new reservation arrives. Round 2 G3: also on the owner's step after a committed
         sweep (forget_expired) and on a replay of the closed request. Round 2 G9: an original a live billing job
         still holds is left to that job (noted in _closed_live), which ends it with the stored answer and drops
-        its own handle mapping in the same step; known_reply forgets as reserve()'s replay does."""
+        its own handle mapping in the same step; known_reply forgets as reserve()'s replay does.
+        Round 3: an original's pooled work goes first, and the original and its handle mapping only once that
+        has worked, so a pool failure leaves them as the retry target; work the pool cannot release yet (a
+        running job, still to confirm its stop) keeps them too. Returns whether nothing was left."""
         jobs = getattr(self, '_billing_jobs', None)
         held = jobs.held_reservations() if jobs is not None else frozenset()
+        left = False
         for (project, key), reservation in list(self._pending.items()):
             if reservation in self._permits:
                 continue
@@ -461,11 +465,17 @@ class AccountBillingAdmission:
             if reservation in held:
                 self._closed_live.add(reservation)
                 continue
+            handle = self._signatures.get(reservation)
+            if handle is not None:  # returned work is discarded; queued or running work is cancelled
+                if handle in self._pool._returned:
+                    self._pool.discard(handle)
+                elif self._pool.cancel(handle) != 'released':
+                    left = True  # its stop is confirmed later; it is discarded once returned
+                    continue
+                self._signatures.pop(reservation)
             self._pending.pop((project, key))
             self._reserved_inputs.pop(reservation, None)
-            handle = self._signatures.pop(reservation, None)
-            if handle is not None:  # returned work is discarded; queued or running work is cancelled
-                (self._pool.discard if handle in self._pool._returned else self._pool.cancel)(handle)
+        return not left
 
     def probes_closed(self):
         """O0b RS-A round 2 G3: told by the ledger after a sweep's transaction has committed expired probes
@@ -483,7 +493,8 @@ class AccountBillingAdmission:
             return
         self._closed_notice.clear()  # cleared first, so a sweep committing meanwhile is seen next step
         try:
-            self._forget_closed()
+            if not self._forget_closed():
+                self._closed_notice.set()  # round 3: work still stopping is tried again at the next step
         except BaseException:
             self._closed_notice.set()  # tried again at the next step
             raise

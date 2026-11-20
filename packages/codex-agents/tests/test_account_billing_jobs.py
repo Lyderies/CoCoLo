@@ -278,8 +278,9 @@ class AccountBillingJobTests(unittest.TestCase):
         with patch:
             self.service.drive_claims()
             self.assertNotedNotFaulted()
-            self.assertEqual(1, len(calls))
+            self.assertGreaterEqual(len(calls), 1)  # the failed attempt (a retry may follow in the same step)
             self.assertEndedWithStoredAnswer(ticket)
+        self.assertGreaterEqual(len(calls), 2)  # tried again after the failure
 
     def test_RS_A_G9_a_job_cancelled_by_its_own_deadline_before_the_sweep_ends_with_the_stored_answer(self):
         """Round 3 (3): the job's own deadline cancels it (discarding) before the sweep commits its close; the

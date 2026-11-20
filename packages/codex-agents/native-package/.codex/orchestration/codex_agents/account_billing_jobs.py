@@ -61,6 +61,7 @@ class _Job:
     token: int = 0  # S1-H1a: counts this job once in the lane's health notes
     noted: bool = False  # S1-H1a: its failure reason has been noted
     closed: bool = False  # O0b RS-A round 2 G9: its reservation was closed by the sweep; ends with the stored answer
+    timed_out: bool = False  # O0b RS-A round 3: cancelled by its own deadline, not by a caller or the close
 
 
 @dataclass(frozen=True, repr=False)
@@ -271,10 +272,13 @@ class AccountBillingJobs:
     def _step(self, ticket, job):
         if job.state in {'ready', 'unknown'}:
             return
-        if (job.reservation is not None and job.state != 'offered'
-                and (self._closing or job.cancelled or time.monotonic_ns() >= job.reservation.deadline_ns
-                     or not self._subscribed(ticket))):
-            self.cancel(ticket, _ingress=self._ingress_owner)
+        if job.reservation is not None and job.state != 'offered':
+            explicit = self._closing or job.cancelled or not self._subscribed(ticket)
+            if explicit or time.monotonic_ns() >= job.reservation.deadline_ns:
+                # O0b RS-A round 3: a cancel by its own deadline is told apart, so a close the sweep commits
+                # meanwhile still answers with its stored denial.
+                job.timed_out = job.timed_out or not explicit
+                self.cancel(ticket, _ingress=self._ingress_owner)
         if job.state == 'identity':
             reply = self._observations.take(job.observation, _ingress=self._ingress_owner)
             if reply is None:
@@ -364,9 +368,10 @@ class AccountBillingJobs:
                 row = self._owner._row(job.key[0], job.reservation.key)
                 if row is not None and row['state'] == 'committed':
                     self._owner.release_committed(job.reservation)
-                    if (job.closed or not job.cancelled) and self._owner.closed_unlaunched(row):
+                    if (job.closed or job.timed_out or not job.cancelled) and self._owner.closed_unlaunched(row):
                         # O0b RS-A round 2 G9: the sweep closed it; the job's answer is the stored denial,
-                        # as a replay reads it, whichever step noticed first.
+                        # as a replay reads it, whichever step noticed first (round 3: also when its own
+                        # deadline cancelled it first; only a caller's cancel or a close keeps its own answer).
                         job.result, job.reason = self._owner._reply(row, known=True), None
                 else:
                     self._owner.abort_reserved(job.reservation)
@@ -419,7 +424,15 @@ class AccountBillingJobs:
         if closed:
             for ticket, job in list(self._jobs.items()):
                 if job.reservation in closed:
-                    self._end_closed(ticket, job)
+                    try:
+                        self._end_closed(ticket, job)
+                    except Exception as error:
+                        # O0b RS-A round 3: ending it failed (its observation or signature work could not be
+                        # stopped): noted in this lane, never escaping into the claims lane, and kept so the
+                        # next step tries again.
+                        self._owner._closed_live.add(job.reservation)
+                        lane_health.safely(lambda error=error: self.health.note_failure(
+                            self._note, 'probe_forget_failed', error))
         for _ in range(min(self._limits.owner_steps, len(self._rotation))):
             project = self._rotation.popleft()
             self._rotation.append(project)
