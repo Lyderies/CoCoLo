@@ -11530,25 +11530,52 @@ class LearningLedger:
             now = self._clock_ms()
             monotonic = self._capacity_clock_reference()
             crashed, parameters = crashed_claim("a", now, monotonic)
-            slot = self._connection.execute(
-                "SELECT COUNT(*),COALESCE(SUM(CASE WHEN " + crashed + " THEN 1 ELSE 0 END),0),"
-                "MIN(CASE WHEN a.deadline_at_ms IS NOT NULL THEN a.deadline_at_ms+? END) "
+            held = self._connection.execute(
+                "SELECT a.kind,a.claimed_at_ms,a.deadline_at_ms,a.execution_deadline_ns,a.clock_reference_ns,"
+                "CASE WHEN " + crashed + " THEN 1 ELSE 0 END AS due "
                 "FROM active_run_capacity a JOIN run_holds r ON r.project_id=a.project_id AND r.kind='run_slot' "
                 "AND r.identity=a.handle_digest WHERE a.project_id=? AND r.state='held'",
-                (*parameters, CRASHED_CLAIM_GRACE_MS + 1, project_id)).fetchone()
+                (*parameters, project_id)).fetchall()
             binding = self._connection.execute(
                 "SELECT COUNT(*),COALESCE(SUM(CASE WHEN h.expires_at_ms<=? THEN 1 ELSE 0 END),0),"
-                "MIN(h.expires_at_ms) FROM host_run_bindings h JOIN run_holds r ON r.project_id=h.project_id "
-                "AND r.kind='binding' AND r.identity=h.handle_digest WHERE h.project_id=? AND r.state='held'",
+                "MIN(h.expires_at_ms),MIN(h.expires_at_ms) FROM host_run_bindings h JOIN run_holds r "
+                "ON r.project_id=h.project_id AND r.kind='binding' AND r.identity=h.handle_digest "
+                "WHERE h.project_id=? AND r.state='held'",
                 (now, project_id)).fetchone()
             probe = self._connection.execute(
                 "SELECT COUNT(*),COALESCE(SUM(CASE WHEN p.state='reserved' AND p.deadline_at_ms<? THEN 1 ELSE 0 END),0),"
-                "MIN(CASE WHEN p.state='reserved' THEN p.deadline_at_ms+1 END) FROM account_billing_probe_requests p "
+                "MIN(CASE WHEN p.state='reserved' THEN p.deadline_at_ms+1 END),MIN(p.deadline_at_ms),"
+                "COALESCE(SUM(p.state='admitted'),0) FROM account_billing_probe_requests p "
                 "JOIN run_holds r ON r.project_id=p.project_id AND r.kind='probe' AND r.identity=p.request_key "
                 "WHERE p.project_id=? AND r.state='held'", (now, project_id)).fetchone()
-        return {name: {"held": int(row[0]), "past_due": int(row[1]),
-                       "next_eligible": None if row[2] is None else int(row[2])}
-                for name, row in (("run_slot", slot), ("binding", binding), ("probe", probe))}
+        eligible = [t for t in (self._slot_eligible(row, now, monotonic) for row in held if not row["due"])
+                    if t is not None]
+        deadlines = [row["deadline_at_ms"] for row in held if row["deadline_at_ms"] is not None]
+        slot = (len(held), sum(row["due"] for row in held), min(eligible, default=None), min(deadlines, default=None))
+        status = {name: {"held": int(row[0]), "past_due": int(row[1]),
+                         "next_eligible": None if row[2] is None else int(row[2]),
+                         "deadline": None if row[3] is None else int(row[3])}
+                  for name, row in (("run_slot", slot), ("binding", binding), ("probe", probe))}
+        status["probe"]["release_by_evidence"] = int(probe[4])  # admitted: no timer frees it in RS-A
+        return status
+
+    @staticmethod
+    def _slot_eligible(row, now, monotonic):
+        """Round 1 F8 (design draft 4 item 4): the earliest wall time the crash rule can hold on both clocks;
+        None while the wall clock is behind the claim. An earlier version's run uses its one-day rule."""
+        from .active_run_capacity import CRASHED_CLAIM_GRACE_MS, LEGACY_RUN_MAX_MS
+
+        if now < row["claimed_at_ms"]:
+            return None
+        if row["kind"] == "legacy_unknown":
+            return row["claimed_at_ms"] + LEGACY_RUN_MAX_MS + 1
+        if row["deadline_at_ms"] is None or row["execution_deadline_ns"] is None:
+            return None
+        wall = row["deadline_at_ms"] + CRASHED_CLAIM_GRACE_MS + 1
+        if monotonic < row["clock_reference_ns"]:  # rebooted since the claim: the monotonic side holds already
+            return wall
+        remaining_ns = row["execution_deadline_ns"] + CRASHED_CLAIM_GRACE_MS * 1_000_000 - monotonic
+        return max(wall, now - (-remaining_ns // 1_000_000)) if remaining_ns > 0 else wall
 
     def withdraw_open(self, project_id: str, *, run_handle: str) -> dict[str, Any]:
         """O0b RS-A-2: withdraw a run opened but never claimed, so its binding ends now, not at its expiry.
