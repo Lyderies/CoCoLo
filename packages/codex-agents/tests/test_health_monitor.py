@@ -60,7 +60,7 @@ class PassBoundsTests(unittest.TestCase):
         order = []
         checks = [Fn(f'slow_check_{n:02d}', lambda context, n=n: order.append(n) or time.sleep(0.1) or [])
                   for n in range(40)]
-        runner = monitor(*checks, pass_budget_seconds=0.6, check_share_seconds=0.3)
+        runner = monitor(*checks, pass_budget_seconds=0.6, check_share_seconds=0.3, max_checks=64)
         started = time.monotonic()
         runner.run_pass()
         elapsed = time.monotonic() - started
@@ -414,6 +414,9 @@ class StatusTests(unittest.TestCase):
         self.harness.setUp()
         self.addCleanup(self.harness.doCleanups)
         self.monitor = self.harness.collector.health_monitor
+        clean = {name: self.harness.lane() for name in ('signature', 'claims', 'observations', 'ingress', 'billing',
+                                                        'probe_worker')}
+        self.harness.collector.account_lanes = lambda: clean  # the account's own health is ok
 
     def status(self):
         code, stdout, stderr = self.harness.command()

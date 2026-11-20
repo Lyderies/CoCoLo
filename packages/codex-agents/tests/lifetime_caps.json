@@ -508,6 +508,26 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "health_monitor.py::__post_init__": {
+   "checks": 1,
+   "ends": "a finding's text length: a field of one record that is never stored apart from the record, which the pass replaces at the next pass",
+   "test": "test_HM_0_7_a_finding_is_a_closed_record_with_no_content"
+  },
+  "health_monitor.py::_checked": {
+   "checks": 1,
+   "ends": "HM-0: one check's findings per pass: more are cut and one findings_truncated finding says so; the pass's findings are replaced by the next pass, and the fixed ones kept are the newest RECENT_FIXED (a deque that drops its oldest)",
+   "test": "test_HM_0_2_too_many_findings_from_one_check_are_cut_and_said_so"
+  },
+  "health_monitor.py::register": {
+   "checks": 1,
+   "ends": "HM-0: registered checks, set at start-up by code (none are added at run time by input); a pass runs at most max_checks of them, the rest first at the next pass",
+   "test": "test_HM_0_1_one_pass_runs_at_most_max_checks_and_every_check_gets_its_turn"
+  },
+  "health_monitor.py::run": {
+   "checks": 1,
+   "ends": "HM-0: a time gap in sweep intervals, not a count of stored things; nothing accumulates",
+   "test": "test_HM_0_5_the_built_in_self_check_is_quiet_on_a_healthy_collector_and_reports_a_late_pass"
+  },
   "history_api.py::__init__": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"

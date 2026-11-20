@@ -432,6 +432,7 @@ def _apply_health(report, health):
     report.update(_status_collector_fields(health))
     report['account_capacity'] = _status_account_capacity(health.get('account_capacity'))
     report['account_holds'] = _status_account_holds(health.get('account_capacity'))  # O0b RS-A round 1 F14
+    report['health_monitor'] = _status_health_monitor(health.get('health_monitor'))  # HM-0
     return True
 
 
@@ -455,7 +456,10 @@ def status_client(state_root, project_root):
               'unresolved_launches': None,
               # C3 (RS-C-12): this project's run containers by state, each one that could not be
               # stopped named with its reason; each of those is also an owner alert (attention).
-              'container_holds': None}
+              'container_holds': None,
+              # HM-0: the health monitor's last pass and the findings this project may see (its own and the
+              # machine's); each reported one is also an owner alert (attention). None: not reported.
+              'health_monitor': None}
     try:
         state = CollectorPaths(state_root)
         report['client_failures'] = client_health_snapshot(state, project_root)
@@ -529,6 +533,7 @@ def status_client(state_root, project_root):
     report['ready'] = collector_ready and owner_ready
     report['account_health'] = _account_health(report, this_project)
     _container_attention(report)
+    _health_attention(report)
     return report
 
 
@@ -538,6 +543,58 @@ def _container_attention(report):
     if type(holds) is not dict or type(health) is not dict or type(health.get('attention')) is not list:
         return
     lines = [line for line in holds.get('attention') or [] if type(line) is str]
+    if lines:
+        health['attention'] = [*health['attention'], *lines]
+        if health.get('state') == 'ok':
+            health['state'] = 'degraded'
+
+
+_HM_STATES = {'ok', 'findings', 'skipped', 'raised', 'timed_out', 'still_running', 'invalid'}
+_HM_FINDING_KEYS = {'check', 'scope', 'subject', 'outcome', 'reason_code', 'text'}
+_HM_NAME = re.compile(r'[a-z][a-z0-9_]{1,47}')
+_HM_SUBJECT = re.compile(r'[A-Za-z0-9_.:@+-]{1,128}')
+_HM_UNKNOWN = {'state': 'unknown', 'reason_code': 'health_monitor_invalid'}
+
+
+def _status_health_monitor(view):
+    """HM-0: the collector's health section, checked closed (names, codes and one plain sentence per
+    finding, never more than a bounded list); None when the collector sent none (an older one, or its
+    view failed); a malformed one is `unknown`, and never costs the status its ready."""
+    if view is None:
+        return None
+    try:
+        if (type(view) is not dict or view.keys() != {'last_pass_at_ms', 'pass_ms', 'summary', 'checks', 'findings', 'more'}
+                or not all(v is None or account_integer(v) for v in (view['last_pass_at_ms'], view['pass_ms']))
+                or not account_integer(view['more']) or type(view['summary']) is not str
+                or len(view['summary']) > 200 or not view['summary'].isprintable()
+                or type(view['checks']) is not list or len(view['checks']) > 64
+                or type(view['findings']) is not list or len(view['findings']) > 32):
+            raise ValueError()
+        for check in view['checks']:
+            if (type(check) is not dict or check.keys() != {'check', 'state', 'findings'}
+                    or not matches(check['check'], _HM_NAME) or check['state'] not in _HM_STATES
+                    or not account_integer(check['findings'])):
+                raise ValueError()
+        for item in view['findings']:
+            if (type(item) is not dict or item.keys() != _HM_FINDING_KEYS
+                    or not matches(item['check'], _HM_NAME) or item['scope'] not in {'machine', 'project'}
+                    or item['outcome'] not in {'fixed', 'reported'} or not matches(item['subject'], _HM_SUBJECT)
+                    or not matches(item['reason_code'], _HEALTH_CODE) or type(item['text']) is not str
+                    or not 1 <= len(item['text']) <= 240 or not item['text'].isprintable()):
+                raise ValueError()
+        return {key: view[key] for key in ('last_pass_at_ms', 'pass_ms', 'summary', 'checks', 'findings', 'more')}
+    except (ValueError, TypeError):
+        return dict(_HM_UNKNOWN)
+
+
+def _health_attention(report):
+    """HM-0: each reported finding (and each failed check or fix) is an owner alert; a fixed one is not."""
+    monitor, health = report.get('health_monitor'), report.get('account_health')
+    if (type(monitor) is not dict or 'findings' not in monitor or type(health) is not dict
+            or type(health.get('attention')) is not list):
+        return
+    lines = [f"{item['text']} (health check {item['check']}: {item['reason_code']})"
+             for item in monitor['findings'] if item['outcome'] == 'reported']
     if lines:
         health['attention'] = [*health['attention'], *lines]
         if health.get('state') == 'ok':

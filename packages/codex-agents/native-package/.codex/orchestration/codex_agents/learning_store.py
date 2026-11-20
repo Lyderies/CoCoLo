@@ -143,6 +143,7 @@ from .owner_key_contracts import (
 from .result_contracts import MAX_RESULT_BODY_BYTES
 from .sql_read_budget import SQLReadConnection, SQLReadError
 from . import ledger_waits
+from .health_monitor import HealthMonitor
 from .ledger_waits import LEDGER_LOCK_WAIT_MS, LEDGER_REQUEST_WAIT_MS  # noqa: F401 -- E1a, named here too
 from .account_claim_contracts import (
     CLAIM_DENIAL_CODES, MAX_CLAIM_INTEGER, ClaimError, LaunchClaimInput,
@@ -12331,6 +12332,8 @@ class CollectorServer:
         self.sweep_error: str | None = None  # S1-H1a-6: the type of the last unexpected sweep error
         self._sweeps: threading.Thread | None = None
         self._sweeps_stop = threading.Event()
+        # HM-0: the health monitor's checks, run once per full sweep interval after the cycle (no ledger lock).
+        self.health_monitor = HealthMonitor.with_builtin_checks(sweep_interval_seconds=WORKER_RESULT_SWEEP_SECONDS)
         self._clients = client_capabilities or load_client_capabilities(
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
         )
@@ -12423,10 +12426,11 @@ class CollectorServer:
         cycle's start); holds found due start the batches at once."""
         due = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS
         wait, full, draining = min(SWEEP_IDLE_CHECK_SECONDS, WORKER_RESULT_SWEEP_SECONDS), False, False
+        health_due = False
         while not self._sweeps_stop.wait(max(0.0, wait)):
             now = time.monotonic()
             if now >= due:
-                due, full = now + WORKER_RESULT_SWEEP_SECONDS, True
+                due, full, health_due = now + WORKER_RESULT_SWEEP_SECONDS, True, True
             if not (full or draining):  # G6: idle, so the cheap check first
                 try:
                     draining = self._holds_due_idle()
@@ -12440,11 +12444,24 @@ class CollectorServer:
             except Exception as error:
                 self.sweep_error = type(error).__name__
                 outcome = None
+            if health_due and not self._sweeps_stop.is_set():
+                # HM-0: once per full interval, after the cycle released the ledger lock, even when the ledger
+                # was busy (a held ledger is something the monitor should still be running beside).
+                health_due = False
+                self._run_health_pass()
             if outcome == "busy":  # the same cycle again, soon
                 wait = min(SWEEP_BUSY_RETRY_SECONDS, due - time.monotonic())
                 continue
             full, draining = False, outcome == "more"
             wait = SWEEP_BATCH_GAP_SECONDS if draining else min(SWEEP_IDLE_CHECK_SECONDS, due - time.monotonic())
+
+    def _run_health_pass(self) -> None:
+        """HM-0: one bounded health pass, never under the ledger lock. A failure of the runner itself is
+        recorded by type like any sweep error; a check's own failure is a finding, not an error."""
+        try:
+            self.health_monitor.run_pass(should_stop=self._sweeps_stop.is_set)
+        except Exception as error:
+            self.sweep_error = type(error).__name__
 
     def _holds_due_idle(self) -> bool:
         """O0b RS-A round 2 G6: the idle check, whether any account hold is due. The ledger lock is taken
@@ -12698,6 +12715,7 @@ class CollectorServer:
                         response["account_lanes"] = self.account_lanes()
                     except Exception:
                         response["account_lanes"] = {"available": False}
+                project_id = None
                 if "project_root" in request:
                     project_root = Path(request["project_root"])
                     # Read from the filesystem before the hold, so it covers ledger reads only.
@@ -12720,6 +12738,10 @@ class CollectorServer:
                     finally:
                         self.ledger._lock.release()
                     response.update(project)
+                try:  # HM-0: this project's findings and the machine's, never another project's
+                    response["health_monitor"] = self.health_monitor.view(project_id)
+                except Exception:
+                    pass  # a failing view leaves the section out; health itself never fails for it
                 return response
             if request.get("op") == "learning_migration" and set(request) == {
                 "protocol", "op", "project_root",
