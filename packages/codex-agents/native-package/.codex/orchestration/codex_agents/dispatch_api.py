@@ -223,15 +223,27 @@ class DispatchClient:
             remaining = min(self._timeout, deadline-time.monotonic())
             if remaining <= 0:
                 raise DispatchError('dispatch_unavailable')
-            view = self.call('dispatch.status', run_handle, attempt, inputs_digest,
-                             expected_export_commit=expected_export_commit, timeout=remaining)
+            try:
+                view = self.call('dispatch.status', run_handle, attempt, inputs_digest,
+                                 expected_export_commit=expected_export_commit, timeout=remaining)
+            except DispatchError as error:
+                # O10 DR-1: a status check only reads, so one that fails or is slow is tried again
+                # until the wait's own deadline; the run goes on either way. Other refusals end it.
+                if error.reason_code != 'dispatch_unavailable':
+                    raise
         binding = AttemptBinding(**view['binding'])
-        remaining = min(self._timeout, deadline-time.monotonic())
-        if remaining <= 0:
-            raise DispatchError('dispatch_unavailable')
-        try:
-            body = ResultReadClient(self._result_endpoint, timeout=remaining).read_result(binding, view['delivery']['result_digest'])
-            result = parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
-        except Exception:
-            raise DispatchError('dispatch_unavailable') from None
-        return {'result': result, 'bridge_report': view['report']}
+        while True:  # O10 DR-2: reading the published result is retried the same way
+            remaining = min(self._timeout, deadline-time.monotonic())
+            if remaining <= 0:
+                raise DispatchError('dispatch_unavailable')
+            try:
+                body = ResultReadClient(self._result_endpoint, timeout=remaining).read_result(
+                    binding, view['delivery']['result_digest'])
+            except Exception:
+                time.sleep(min(.05, max(0, deadline-time.monotonic())))
+                continue
+            try:
+                result = parse_bounded_json(body, max_bytes=MAX_RESULT_BODY_BYTES)
+            except Exception:
+                raise DispatchError('dispatch_unavailable') from None
+            return {'result': result, 'bridge_report': view['report']}
