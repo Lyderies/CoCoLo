@@ -56,6 +56,41 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.assertTrue(self.counted(row["account_fingerprint"], row["deadline_at_ms"] - 1,
                                      row["clock_reference_ns"] + 1))
 
+    def bindings(self):
+        return [dict(row) for row in self.ledger._connection.execute(
+            "SELECT handle_digest, binding_state, abandoned_reason, expires_at_ms FROM host_run_bindings")]
+
+    def test_RS_A_2_an_expired_binding_is_released_by_the_sweep_with_its_reason(self):
+        self.case.claim()
+        binding = next(b for b in self.bindings() if b["binding_state"] == "pending")
+        row = self.rows()[0]
+        self.assertEqual(1, self.sweep(binding["expires_at_ms"] + 1, row["clock_reference_ns"] + 1))
+        hold = dict(self.ledger._connection.execute(
+            "SELECT state, release_kind FROM run_holds WHERE kind='binding'").fetchone())
+        self.assertEqual({"state": "released", "release_kind": "expired"}, hold)
+        self.assertEqual(0, self.ledger.account_capacity(self.case.project_id)["pending_bindings"]["live"])
+
+    def test_RS_A_5_an_identical_sweep_releases_nothing_twice(self):
+        self.case.claim()
+        row = self.rows()[0]
+        now = row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS + 1
+        first = self.sweep(now, row["clock_reference_ns"] - 1)
+        self.assertGreaterEqual(first, 1)
+        self.assertEqual(0, self.sweep(now, row["clock_reference_ns"] - 1))
+        self.assertEqual(1, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM run_holds WHERE kind='run_slot' AND state='released'").fetchone()[0])
+
+    def test_RS_A_6_status_shows_each_kind_with_its_next_eligible_time(self):
+        self.case.claim()
+        row = self.rows()[0]
+        status = self.ledger.account_holds_status(self.case.project_id)
+        self.assertEqual(1, status["run_slot"]["held"])
+        self.assertEqual(0, status["run_slot"]["past_due"])
+        self.assertEqual(row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS + 1,
+                         status["run_slot"]["next_eligible"])
+        self.assertIn("binding", status)
+        self.assertEqual({"held": 0, "past_due": 0, "next_eligible": None}, status["probe"])
+
     def test_RS_A_1_each_account_hold_has_its_register_row(self):
         self.case.claim()
         holds = [dict(r) for r in self.ledger._connection.execute(
