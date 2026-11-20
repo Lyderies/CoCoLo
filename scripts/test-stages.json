@@ -133,6 +133,7 @@
  "codex:tests.test_legacy_capacity_upgrade": "integration",
  "codex:tests.test_legacy_history_compatibility": "unit",
  "codex:tests.test_lifecycle_cli_runtime": "integration",
+ "codex:tests.test_lifetime_cap_guard": "unit",
  "codex:tests.test_liveness_clock": "unit",
  "codex:tests.test_lost_run_settlement": "integration",
  "codex:tests.test_open_request_lifetime": "integration",
