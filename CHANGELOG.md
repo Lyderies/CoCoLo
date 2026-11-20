@@ -31,6 +31,10 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   project is not active (`open_project_inactive`), stored open records disagree
   (`open_state_inconsistent`), or something else failed (`open_failed`). Codex package 0.8.33.
 - `learning-status` shows how long each collector start-up phase took (`collector_startup_ms`).
+- When the account services are stuck (a part has failed, or the billing probe worker has been held for
+  over ten minutes) and nothing is running anywhere, the collector restarts them by itself, at most
+  once an hour, and its exit record says why (`account_restart`). While anything runs it never
+  restarts; `learning-status` says so and what is held.
 - Every refusal the command line prints now carries `next_step`: what to do next, in plain words, for its
   reason code (`reason_code` and `error` are unchanged).
 - `learning-status` shows the account's own health (`account_health`): `ok`, `degraded` (work kept

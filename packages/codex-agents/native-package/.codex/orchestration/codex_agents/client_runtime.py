@@ -338,6 +338,7 @@ def _status_collector_fields(health):
             # S1-H1a: passed through as read; checked only when account_health is built, so a
             # malformed new field never costs the collector its ready.
             'account_lanes': health.get('account_lanes'), 'account_slots': health.get('account_slots'),
+            'account_restart': health.get('account_restart'),  # S1-H1c: the host's latest decision
             'collector_startup_ms': phases,  # S1-U9a: milliseconds per start-up phase, or None
             'collector_schema_version': health['schema_version'],
             'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
@@ -468,11 +469,46 @@ def _account_health(report):
     """S1-H1a-4: the account's own state from the collector's reply; `ready` is not changed, and a
     malformed new field only makes this unknown (C2)."""
     raw_lanes, raw_slots = report.pop('account_lanes', None), report.pop('account_slots', None)
+    restart = report.pop('account_restart', None)
+    try:
+        health = _account_health_of(report, raw_lanes, raw_slots)
+    except Exception:
+        health = None
+    if health is not None:
+        try:
+            health['attention'] += _restart_attention(restart)
+        except Exception:
+            pass  # a malformed decision is ignored; the rest of the health stands
+        return health
     try:
         return _account_health_of(report, raw_lanes, raw_slots)
     except Exception:
         return {'state': 'unknown', 'reason_code': 'account_health_invalid', 'reasons': ['account_health_invalid'],
                 'lanes': None, 'slots': None, 'attention': []}
+
+
+def _restart_attention(decision):
+    """S1-H1c-4/6: why a stuck account is not restarting itself, in plain words (counts only)."""
+    if type(decision) is not dict or decision.get('action') not in {'wait', 'suppressed'}:
+        return []
+    cause = decision.get('cause')
+    cause = f" ({cause})" if type(cause) is str and _HEALTH_CODE.fullmatch(cause) else ''
+    if decision['action'] == 'suppressed':
+        return [f"the account is stuck{cause}; it restarted itself less than an hour ago, so it waits "
+                "(restart the collector when you are ready)"]
+    held = decision.get('held') if type(decision.get('held')) is dict else {}
+    parts = []
+    for name, text in (('run_slots', 'run slots'), ('probes', 'probes')):
+        projects = held.get(name)
+        if type(projects) is list and projects:
+            parts.append(f"{text} in {len(projects)} project(s)")
+    lanes = held.get('lanes')
+    if type(lanes) is dict and lanes:
+        parts.append(f"work in {len(lanes)} lane(s)")
+    if held.get('unknown') is True:
+        parts.append("the ledger could not say what is running")
+    what = ', '.join(parts) or 'work still running'
+    return [f"the account is stuck{cause} but is not restarting itself while something runs: {what}"]
 
 
 def _account_health_of(report, raw_lanes, raw_slots):
