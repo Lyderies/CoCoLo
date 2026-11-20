@@ -211,6 +211,15 @@ class LedgerLockLimitTests(unittest.TestCase):
         self.ledger._lock.release()
         self.assertEqual({}, self.ledger.lock_refusals())
 
+    def test_RS_A_4_the_collectors_sweep_releases_due_account_holds_by_itself(self):
+        """O0b RS-A-4: no client action: the running collector's sweep releases due account holds."""
+        from unittest import mock
+        server = learning_store.CollectorServer(self.ledger)
+        with mock.patch.object(self.ledger, 'release_due_account_holds', return_value=0) as released:
+            server._sweep_cycle()
+        released.assert_called_once()
+        self.assertEqual(64, released.call_args.kwargs.get('limit'))
+
     def test_E1a_T4_maintenance_never_runs_while_a_reader_is_inside(self):
         """Review 040-m4b-e1a-code-2: a reader enters under the ledger lock and the sweep holds that lock for
         its whole cycle after checking for readers, so sweep work never overlaps a reader, however they race."""
@@ -221,7 +230,8 @@ class LedgerLockLimitTests(unittest.TestCase):
         def record():
             seen.append(self.ledger._readers())
         patches = [mock.patch.object(self.ledger, name, side_effect=record)
-                   for name in ('sweep_worker_results', 'sweep_event_retention', 'sweep_account_retention')]
+                   for name in ('sweep_worker_results', 'sweep_event_retention', 'sweep_account_retention',
+                                'release_due_account_holds')]
         for patch in patches:
             self.enterContext(patch)
 
