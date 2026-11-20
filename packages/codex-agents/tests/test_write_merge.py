@@ -452,7 +452,16 @@ class OwnerChangeTests(Workspace):
         if not insensitive:
             self.skipTest("this temporary folder is on a case-sensitive filesystem")
         base = self.make_repository()
-        candidate = self.candidate(base, lambda clone: (clone / "readme.md").write_text("collides\n"))
+
+        def add_variant(clone):
+            # Staged directly: on this volume the working tree cannot hold both names.
+            blob = subprocess.run(
+                [REAL_GIT, "-C", str(clone), "hash-object", "-w", "--stdin"], input=b"collides\n",
+                env=FIXTURE_ENV, capture_output=True, check=True, timeout=60,
+            ).stdout.decode().strip()
+            fixture_git(clone, "update-index", "--add", "--cacheinfo", f"100644,{blob},readme.md")
+
+        candidate = self.candidate(base, add_variant)
         before = snapshot(self.project)
         self.assert_stopped(self.merge(candidate), "write_merge_path_taken", "readme.md")
         self.assert_unchanged(before)
@@ -574,8 +583,8 @@ class PreconditionTests(Workspace):
 
     def test_converted_paths_stop_the_merge(self) -> None:  # MG09
         attributes = {
-            "filter": "src/app.py filter=lfs\n", "text": "src/app.py text\n", "text-auto": "*.py text=auto\n",
-            "eol": "src/app.py eol=crlf\n", "encoding": "src/app.py working-tree-encoding=UTF-16\n",
+            "filter": "src/app.py filter=lfs\n", "text": "src/app.py text\n", "text-auto": "src/*.py text=auto\n",
+            "eol": "src/app.py eol=crlf\n", "encoding": "src/app.py working-tree-encoding=ISO-8859-1\n",
             "ident": "src/app.py ident\n",
         }
         for name, line in attributes.items():
@@ -995,8 +1004,10 @@ class UndoTests(Workspace):
         base = self.make_repository()
         candidate = self.candidate(base)
         self.assert_stopped(self.undo("0" * 32), "write_undo_not_kept")
-        (self.project / "src" / "app.py").write_text("owner\n")
+        # A merge stopped after its journal was written (the owner's git held the lock).
+        (self.project / ".git" / "index.lock").write_text("owner's git\n")
         stopped = self.merge(candidate)
+        (self.project / ".git" / "index.lock").unlink()
         self.assertFalse(stopped.ok)
         kept = wm.kept_merges(self.state, include_finished=True)
         self.assert_stopped(self.undo(kept[0].merge_id), "write_undo_not_kept")
@@ -1093,7 +1104,7 @@ class CrashRecoveryTests(Workspace):
                 else:
                     self.assertEqual("rolled_back", outcomes[0].outcome)
                     self.assert_unchanged(before)
-                    self.assertEqual([], wm.kept_merges(self.state))
+                    self.assertEqual((), wm.kept_merges(self.state))
                 # Recovery is idempotent.
                 self.assertEqual((), wm.recover(self.project, self.state))
 
