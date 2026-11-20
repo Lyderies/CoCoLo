@@ -211,6 +211,38 @@ class LedgerLockLimitTests(unittest.TestCase):
         self.ledger._lock.release()
         self.assertEqual({}, self.ledger.lock_refusals())
 
+    def test_E1a_T4_maintenance_never_runs_while_a_reader_is_inside(self):
+        """Review 040-m4b-e1a-code-2: a reader enters under the ledger lock and the sweep holds that lock for
+        its whole cycle after checking for readers, so sweep work never overlaps a reader, however they race."""
+        from unittest import mock
+        server = learning_store.CollectorServer(self.ledger)
+        seen, stop = [], threading.Event()
+
+        def record():
+            seen.append(self.ledger._readers())
+        patches = [mock.patch.object(self.ledger, name, side_effect=record)
+                   for name in ('sweep_worker_results', 'sweep_event_retention', 'sweep_account_retention')]
+        for patch in patches:
+            self.enterContext(patch)
+
+        def reading():
+            while not stop.is_set():
+                with self.ledger.repository(self.project):
+                    time.sleep(0.0005)
+        readers = [threading.Thread(target=reading, daemon=True) for _ in range(3)]
+        for thread in readers:
+            thread.start()
+        try:
+            end = time.monotonic() + 2
+            while time.monotonic() < end:
+                server._sweep_cycle()
+        finally:
+            stop.set()
+            for thread in readers:
+                thread.join(5)
+        self.assertTrue(seen, 'the sweep ran at least once')  # the race really happened
+        self.assertEqual({0}, set(seen))  # and never with a reader inside
+
     def test_E1a_3_a_busy_status_still_shows_the_refusals(self):
         """Review 040-m4b-e1a-code-2 (medium): the counts matter most while the ledger is busy, when the
         project's health reply is ledger_busy."""
