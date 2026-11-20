@@ -61,6 +61,18 @@ class HoldLifecycleTests(ResultLifetimeTests):
         self.assertEqual(before['live'] + 1, after['live'])
         self.assertEqual(4096, after['limit'])
 
+    def test_RS_A_F14_status_shows_the_account_holds_by_kind(self):
+        """O0b RS-A round 1 F14 (RS-A-6): learning-status shows this project's account holds by kind, with
+        one plain line for the owner."""
+        before = self.cli('learning-status')['account_holds']
+        self.open_run()
+        after = self.cli('learning-status')['account_holds']
+        self.assertTrue(after['reported'])
+        self.assertEqual(before['kinds']['binding']['held'] + 1, after['kinds']['binding']['held'])
+        self.assertEqual({'run_slot', 'binding', 'probe'}, set(after['kinds']))
+        self.assertTrue(after['summary'].startswith('Account holds: '), after['summary'])
+        self.assertIn('binding', after['summary'])
+
     def test_B0_6_a_completed_run_frees_every_hold(self):
         """Control: today's successful lifecycle already frees what it took (once recorded)."""
         context, route_path, orchestration, run_handle = self.open_run()
