@@ -113,7 +113,15 @@ def withdraw_project_host(state_root, project_root, directory, *, timeout=WITHDR
     return True
 
 
-def ensure_project_host(state_root, orchestration_root, project_root, *, timeout=START_TIMEOUT_SECONDS):
+# O10 HS-4: the fixed reasons a project service reports when it ends at once (project_service.serve_project).
+SERVICE_START_REASONS = frozenset({
+    'project_unregistered', 'registry_unavailable', 'runtime_unauthorized', 'history_service_unavailable',
+    'history_incompatible', 'history_writer_busy', 'history_unavailable', 'history_unsafe_path',
+    'history_not_authorized', 'history_invalid_input',
+})
+
+
+def ensure_project_host(state_root, orchestration_root, project_root, *, timeout=START_TIMEOUT_SECONDS, report=None):
     """Start this project's detached host unless a live one already serves.
 
     A published hint counts only while its host still holds the host lock, so
@@ -138,15 +146,30 @@ def ensure_project_host(state_root, orchestration_root, project_root, *, timeout
     if serving():
         return True
     try:
-        return _start(state, entry, root, serving, timeout)
+        return _start(state, entry, root, serving, timeout, report=report)
     except OSError:
         return False
 
 
-def _start(state, entry, root, serving, timeout):
+def _start(state, entry, root, serving, timeout, *, report=None):
     # A detached service outlives this client, so no Popen object is kept to be
     # collected while it runs. Python opens no other descriptor as inheritable.
-    actions = [(os.POSIX_SPAWN_OPEN, fd, os.devnull, os.O_RDWR, 0) for fd in (0, 1, 2)]
+    # O10 HS-4: its one-line report goes to a private owner-only file, read only if it ends at once.
+    import secrets
+    report_path = state.root / f'.project-start-{secrets.token_hex(8)}.json'
+    actions = [(os.POSIX_SPAWN_OPEN, 0, os.devnull, os.O_RDWR, 0),
+               (os.POSIX_SPAWN_OPEN, 1, str(report_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
+               (os.POSIX_SPAWN_OPEN, 2, os.devnull, os.O_RDWR, 0)]
+    try:
+        return _spawn_and_wait(state, entry, root, serving, timeout, actions, report_path, report)
+    finally:
+        try:
+            report_path.unlink()
+        except OSError:
+            pass
+
+
+def _spawn_and_wait(state, entry, root, serving, timeout, actions, report_path, report):
     pid = os.posix_spawn(sys.executable,
         [sys.executable, *PYTHON_ISOLATION_FLAGS, str(entry), '--state-root', str(state.root), '--project-root', str(root)],
         # No inherited environment, as for the collector.
@@ -156,6 +179,25 @@ def _start(state, entry, root, serving, timeout):
         if serving():
             return True
         if os.waitpid(pid, os.WNOHANG)[0] == pid:
-            return serving()  # It refused or lost the race to another starter.
+            if serving():
+                return True  # It lost the race to another starter.
+            if report is not None:
+                report.update(_ended_report(report_path))
+            return False
         time.sleep(0.02)
     return False
+
+
+def _ended_report(path):
+    """The fixed reason of a service that ended at once, from its private report file; {} otherwise."""
+    import json
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0))
+        try:
+            value = json.loads(os.read(descriptor, 4096) or b'{}')
+        finally:
+            os.close(descriptor)
+    except (OSError, ValueError):
+        return {}
+    reason = value.get('reason_code') if type(value) is dict else None
+    return {'reason_code': reason} if type(reason) is str and reason in SERVICE_START_REASONS else {}

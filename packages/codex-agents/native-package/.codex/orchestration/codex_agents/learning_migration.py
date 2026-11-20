@@ -133,9 +133,10 @@ _REASONS = {
 # reasons from a fixed list only, never a path or message. Not the shared client-health file: earlier
 # versions read it and refuse codes they do not know.
 START_FAILURES = "learning-migration-failures"
-START_REASONS = frozenset({
+START_REASONS = frozenset({  # O10 HS-12: every fixed reason the migration and its command give
     "migration_failed", "migration_not_drained", "migration_project_service_running", "migration_source_changed",
     "migration_reconciliation_required", "migration_too_large", "migration_incompatible", "migration_unavailable",
+    "migration_inconsistent", "migration_incomplete", "migration_not_authorized",
 })
 
 
@@ -164,7 +165,8 @@ def record_start_failure(state, project_root, reason) -> None:
         try:
             with os.fdopen(descriptor, "w") as handle:
                 os.fchmod(handle.fileno(), 0o600)
-                handle.write(json.dumps({"reason_code": reason if reason in START_REASONS else "migration_failed",
+                handle.write(json.dumps({"reason_code": reason if type(reason) is str and reason in START_REASONS
+                                         else "migration_failed",
                                          "at_ms": time.time_ns() // 1_000_000}, sort_keys=True))
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -176,13 +178,19 @@ def record_start_failure(state, project_root, reason) -> None:
         pass
 
 
-def clear_start_failure(state, project_root) -> None:
+def clear_start_failure(state, project_root, *, since_ms=None) -> None:
+    """O10 HS-13: a successful start clears only a failure kept before it began (`since_ms`), never a
+    newer one another start kept meanwhile."""
     import os
     try:
+        if since_ms is not None:
+            kept = start_failure(state, project_root)
+            if kept is not None and kept["at_ms"] >= since_ms:
+                return
         path = _start_failure_path(state, project_root)
         if not path.is_symlink():
             os.unlink(path)
-    except (OSError, Exception):
+    except Exception:
         pass
 
 
@@ -207,7 +215,7 @@ def start_failure(state, project_root):
         return None
     finally:
         os.close(descriptor)
-    if (type(entry) is not dict or set(entry) != {"reason_code", "at_ms"} or entry["reason_code"] not in START_REASONS
-            or type(entry["at_ms"]) is not int):
+    if (type(entry) is not dict or set(entry) != {"reason_code", "at_ms"} or type(entry["reason_code"]) is not str
+            or entry["reason_code"] not in START_REASONS or type(entry["at_ms"]) is not int):
         return None
     return dict(entry)

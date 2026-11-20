@@ -133,7 +133,7 @@ from codex_agents.client_runtime import (  # noqa: E402
 from codex_agents.dispatch_api import DispatchError  # noqa: E402
 from codex_agents.history_contracts import HistoryError  # noqa: E402
 from codex_agents.project_host_client import (  # noqa: E402
-    ensure_project_host, other_version_host, project_host_serving, withdraw_project_host,
+    SERVICE_START_REASONS, ensure_project_host, other_version_host, project_host_serving, withdraw_project_host,
 )
 from codex_agents.admission_metadata import api_keys_present  # noqa: E402
 from codex_agents.host_paths import PYTHON_ISOLATION_FLAGS  # noqa: E402
@@ -539,6 +539,7 @@ def _start_project_host(args):
                     # switching the copy on: run (or finish) it now. O10 HS-3: its outcome is kept for
                     # learning-status, never thrown away.
                     state = CollectorPaths(args.state_root)
+                    began_ms = time.time_ns() // 1_000_000
                     try:
                         report = _migrate_learning(argparse.Namespace(
                             state_root=args.state_root, project_root=args.project_root, status=False, rollback=False))
@@ -547,13 +548,17 @@ def _start_project_host(args):
                     if type(report) is dict and report.get("ready") is False:
                         # HS-8: in this start's reply as well as kept, so it shows even if keeping it fails.
                         reason = report.get("reason_code")
-                        args.learning_migration_failure = reason if reason in START_REASONS else "migration_failed"
+                        args.learning_migration_failure = (reason if type(reason) is str and reason in START_REASONS
+                                                           else "migration_failed")
                         record_start_failure(state, args.project_root, args.learning_migration_failure)
                     else:
-                        clear_start_failure(state, args.project_root)
+                        clear_start_failure(state, args.project_root, since_ms=began_ms)
     except Exception:
         pass
-    return ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)
+    # O10 HS-4: a service that ends at once hands back its own fixed reason.
+    args.service_start_report = {}
+    return ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root,
+                               report=args.service_start_report)
 
 
 _MOVED_LEARNING_COMMANDS = frozenset({
@@ -2331,7 +2336,8 @@ def main() -> int:
             serving = _start_project_host(args) is True
             report = _start_reply(serving, getattr(args, "learning_migration_failure", None))
             if not serving:
-                report.update(reason_code="project_service_unavailable",
+                reason = getattr(args, "service_start_report", {}).get("reason_code")
+                report.update(reason_code=reason if reason in SERVICE_START_REASONS else "project_service_unavailable",
                               error="this project's service did not start; run learning-status for the collector")
                 _print(report)
                 return 2

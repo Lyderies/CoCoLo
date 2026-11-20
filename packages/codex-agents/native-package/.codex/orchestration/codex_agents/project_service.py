@@ -103,13 +103,13 @@ def open_offline_history(state, project_id):
 
 
 def service_bundle_root(orchestration_root, project_root):
-    """The bundle children are prepared from: the project, as for the CLI.
+    """The bundle children are prepared from: always the project being served.
 
     A child's role is the project's agent file, checked against the digest its
-    route recorded. A service started from the owner's protected runtime copy
-    sits in the copy, which holds only runtime code, so it uses the project the
-    copy is bound to, exactly as the CLI does (`cli.BUNDLE_ROOT`); a copy serves
-    no other project. Elsewhere it is the install this service runs from.
+    route recorded. A service may run from the project's own install, from the
+    owner's protected runtime copy (which holds only runtime code and serves only
+    the project it is bound to), or from a clone, as setup starts it (O10 SB):
+    in every case its children's files are the project's.
     """
     try:
         bound = bound_project_root(Path(orchestration_root))
