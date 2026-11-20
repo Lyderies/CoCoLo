@@ -230,3 +230,21 @@ class HostReplacementTests(HostSlotHarness):
         self.assertIsNot(stuck, self.hosts[-1])
         code, dispatched = self.dispatch(nxt)
         self.assertEqual((0, 'result'), (code, dispatched.get('bridge_report', {}).get('outcome')), dispatched)
+
+    def test_D1_a_host_replaced_once_idle_with_a_recorded_worker_leaves_its_verifier_to_the_replacement(self):
+        """D1 with O0c M3: before D1 a host with a stuck slot stopped once idle even while it kept recorded workers'
+        originals in memory, so their verifiers could no longer be opened. Those originals are now in the project
+        store, so the replacement opens, runs and records the verifier, and QA of the pair goes through."""
+        from tests.test_project_driver import HostVerificationTests
+        orchestration = self.cli('learning-open-orchestration')['orchestration_handle']
+        worker = HostVerificationTests.recorded_worker(self, orchestration, 'task-before-replacement')
+        self.succeed()
+        self.admitted_then_failed(self.open_run())  # a slot nothing here can free
+        stuck, thread = self.hosts[-1], self.host_thread()
+        thread.join(self.IDLE_SECONDS + 30)
+        self.assertFalse(thread.is_alive(), 'the host holding a stuck slot was never replaced')
+        verifier = HostVerificationTests.bound_verifier(self, orchestration, 'verify-on-replacement', worker)
+        self.assertIsNot(stuck, self.hosts[-1])
+        checks = HostVerificationTests.checks(self, worker, verifier)
+        self.assertTrue(checks['checks_passed'])
+        self.assertTrue(HostVerificationTests.record_qa(self, worker, verifier, checks['check_receipt'])['ready'])
