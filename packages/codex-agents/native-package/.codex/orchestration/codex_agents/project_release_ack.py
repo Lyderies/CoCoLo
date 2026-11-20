@@ -67,6 +67,22 @@ def read_account_release(store, binding):
     return raw
 
 
+def _release_obligation(store, lease, ack_digest):
+    """B1 (RS-B draft 3 §6): the reservation's obligation is released `completed` in the transaction that records
+    the account's verified release, once its result is past `reserved` (a terminal exists). A row some other release
+    already ended (a later slice's settlement) is left as it is."""
+    from . import project_holds_schema
+    row = store._connection.execute(
+        "SELECT s.state,h.state AS held FROM result_reservations s JOIN project_holds h ON h.project_id=s.project_id "
+        "AND h.kind='reservation' AND h.identity=s.claim_id WHERE s.project_id=? AND s.claim_id=?",
+        (lease.binding.project_id, lease.claim_id)).fetchone()
+    if row is None:
+        raise HistoryError('history_incompatible')
+    if row['state'] != 'reserved' and row['held'] != 'released':
+        project_holds_schema.release_hold(store._connection, lease.binding.project_id, 'reservation', lease.claim_id,
+                                          'completed', now_ms=store._hold_now(), receipt=ack_digest)
+
+
 def record_account_release(store, binding, raw, *, registry, custody):
     """Persist after actual account settlement; original live custody stays held.
 
@@ -104,6 +120,7 @@ def record_account_release(store, binding, raw, *, registry, custody):
             _current_cleanup(registry, custody, evidence)
             if read_account_release(store, binding) != raw:
                 raise HistoryError('history_incompatible')
+            _release_obligation(store, lease, digest)
         _current_cleanup(registry, custody, evidence)
     _current_cleanup(registry, custody, evidence)
     return raw

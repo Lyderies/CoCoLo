@@ -6,15 +6,20 @@ Four tables, created in one transaction through the authorized upgrade path, wit
 - `project_result_publications`: RS-D's prepared publication material (RS-D draft 3 §3);
 - `project_account_settlements`: RS-B's verified account settlements (RS-B draft 2 §4).
 
-This slice writes no rows and adopts nothing: each later slice (B1, D1 ...) brings its writes, its adoption class and
-its validator rules (PLAN-0.4.0-supervisor-slices.md). The validators below (SH-7) run at open, at restore (opening a
-restored copy) and inside the step before it commits. Each is history-independent: it reads the held register rows
-through `project_holds_due`, the live contexts through `project_result_contexts_live`, and each live source row with
-one register lookup by primary key; never the tombstones.
+SB wrote no rows; each later slice brings its writes, its adoption class and its validator rules
+(PLAN-0.4.0-supervisor-slices.md). B1 (below): the lease and reservation rows, written by `take_hold`, `arm_hold` and
+`release_hold` inside the source row's own store transaction, and adopted by `adopt_project_holds` inside the 17 -> 18
+step. The validators (SH-7) run at open, at restore (opening a restored copy) and inside the step before it commits.
+Each is history-independent: it reads the held register rows through `project_holds_due`, the live contexts through
+`project_result_contexts_live`, the live leases through `lease_expiry`, and each source row with one register lookup by
+primary key; never the tombstones.
 """
 from __future__ import annotations
 
+import json
 import secrets
+
+from .history_contracts import HistoryError
 
 HOLD_KINDS = ("driver_entry", "preparation", "lease", "reservation", "orchestration", "open_binding",
               "result_custody")
@@ -113,13 +118,21 @@ def _attempt_of(alias: str) -> str:
             f"AND {alias}.run_handle||':'||{alias}.attempt=r.identity")
 
 
-# RS-B's register validator (SH-7), the rules this slice can check: every held row of a kind with a store source has
-# that source (a released row may outlive its pruned source as a tombstone), and the reservation mapping of RS-B
-# draft 3 §6. B1 adds "every held source has its held row" with the writes and adoption that make it true; B2 the
-# memory kinds' instance rule; B3 the open bindings.
+# B1: the lease cases a held row may carry for each live lease state (SH-2). `closing_denied` and `admitted_unbound`
+# are later slices' cases of an armed lease.
+_LIVE_LEASE_CASES = {"reserved": ("unarmed",), "claim_pending": ("armed", "closing_denied", "admitted_unbound")}
+_LEASE_CASE_RULE = " OR ".join(f"(l.state='{state}' AND r.lease_case NOT IN {_in(cases)})"
+                               for state, cases in _LIVE_LEASE_CASES.items())
+
+# RS-B's register validator (SH-7): every held row of a kind with a store source has that source (a released row may
+# outlive its pruned source as a tombstone), and the reservation mapping of RS-B draft 3 §6. B1: every held lease
+# (reserved or armed) has its held row with its lease case, every held lease row a held lease, and every reservation
+# its row (its obligation ends only by its own release, whatever its state). B2 adds the memory kinds' instance rule;
+# B3 the open bindings.
 _REGISTER_INCONSISTENT = (
     "SELECT 1 FROM project_holds r INDEXED BY project_holds_due WHERE r.state<>'released' AND ("
-    f"(r.kind='lease' AND NOT EXISTS(SELECT 1 FROM result_leases l WHERE {_attempt_of('l')})) "
+    f"(r.kind='lease' AND NOT EXISTS(SELECT 1 FROM result_leases l WHERE {_attempt_of('l')} "
+    "AND l.state IN ('reserved','claim_pending'))) "
     "OR (r.kind='reservation' AND NOT EXISTS(SELECT 1 FROM result_reservations s "
     "WHERE s.project_id=r.project_id AND s.claim_id=r.identity)) "
     "OR (r.kind='orchestration' AND NOT EXISTS(SELECT 1 FROM project_orchestrations o "
@@ -133,12 +146,102 @@ _REGISTER_INCONSISTENT = (
     f"OR (r.release_kind IN {_in(SETTLEMENT_KINDS)} AND NOT EXISTS(SELECT 1 FROM project_account_settlements t "
     "WHERE t.project_id=s.project_id AND t.run_handle=s.run_handle AND t.attempt=s.attempt "
     "AND t.release_kind=r.release_kind AND t.claim_id IS s.claim_id))) LIMIT 1",
+    # B1 coverage: a held lease with no held row, or one whose case disagrees (one lookup per live lease).
+    "SELECT 1 FROM result_leases l INDEXED BY lease_expiry LEFT JOIN project_holds r ON r.project_id=l.project_id "
+    "AND r.kind='lease' AND r.identity=l.run_handle||':'||l.attempt "
+    "WHERE l.project_id=(SELECT project_id FROM history_identity) "
+    f"AND l.state IN ('reserved','claim_pending') AND (r.kind IS NULL OR r.state='released' OR {_LEASE_CASE_RULE}) "
+    "LIMIT 1",
+    # B1 coverage: a reservation with no row (held, or released by its own release).
+    "SELECT 1 FROM result_reservations s LEFT JOIN project_holds r ON r.project_id=s.project_id "
+    "AND r.kind='reservation' AND r.identity=s.claim_id WHERE r.kind IS NULL LIMIT 1",
 )
 
 
 def register_consistent(connection) -> bool:
-    """RS-B's register validator (SH-7), as far as SB can check it."""
+    """RS-B's register validator (SH-7), as far as SB and B1 can check it."""
     return all(connection.execute(sql).fetchone() is None for sql in _REGISTER_INCONSISTENT)
+
+
+# B1: the writes. Each runs inside the caller's store transaction, with the source row it records, so the two change
+# together or not at all (RS-B R1). A missing or already released row is never written over: the register then
+# disagrees with its source, which only a defect can cause, and the whole transaction is refused.
+
+def evidence_json(**facts) -> str:
+    return json.dumps(facts, sort_keys=True, separators=(",", ":"))
+
+
+def take_hold(connection, project_id: str, kind: str, identity: str, *, now_ms: int, lease_case: str | None = None,
+              due_at_ms: int | None = None, evidence: str | None = None) -> None:
+    """Take one hold. An identity is taken once: its tombstone (a released row, kept for good) or a row still held
+    refuses the take (RS-B R2, S4), so a purged attempt can never be presented again."""
+    if connection.execute("SELECT 1 FROM project_holds WHERE project_id=? AND kind=? AND identity=?",
+                          (project_id, kind, identity)).fetchone() is not None:
+        raise HistoryError("history_conflict")
+    connection.execute(
+        "INSERT INTO project_holds(project_id,kind,identity,state,lease_case,taken_at_ms,due_at_ms,evidence) "
+        "VALUES(?,?,?,'held',?,?,?,?)", (project_id, kind, identity, lease_case, now_ms, due_at_ms, evidence))
+
+
+def arm_hold(connection, project_id: str, identity: str) -> None:
+    """SH-2: an unarmed lease is armed (its claim may be sent from now on)."""
+    if connection.execute(
+            "UPDATE project_holds SET lease_case='armed' WHERE project_id=? AND kind='lease' AND identity=? "
+            "AND state='held' AND lease_case='unarmed'", (project_id, identity)).rowcount != 1:
+        raise HistoryError("history_incompatible")
+
+
+def release_hold(connection, project_id: str, kind: str, identity: str, release_kind: str, *, now_ms: int,
+                 receipt: str | None = None, evidence: str | None = None) -> None:
+    """Release one hold with its kind's evidence; the row stays as its tombstone. Released exactly once."""
+    if connection.execute(
+            "UPDATE project_holds SET state='released',released_at_ms=?,release_kind=?,receipt=?,"
+            "evidence=COALESCE(?,evidence) WHERE project_id=? AND kind=? AND identity=? AND state<>'released'",
+            (now_ms, release_kind, receipt, evidence, project_id, kind, identity)).rowcount != 1:
+        raise HistoryError("history_incompatible")
+
+
+# B1 adoption (SH-1, RS-9), inside the 17 -> 18 step before both validators. Each class follows from the source row's
+# own state, never from a deadline: a reserved lease is held unarmed, an armed one held armed; a bound lease is
+# released `bound` (its reservation holds the obligation); an expired lease with no host open is released
+# `withdrawn_unsent` (no claim is ever sent without a recorded host open), one with a host open `denied` (only a
+# verified denial closure expires it then). A reservation is held, unless the account's release of its attempt is
+# acknowledged and it is past
+# `reserved` (`completed`, RS-B draft 3 §6). Each insert skips an identity already in the register: adoption is
+# idempotent, and an ordinary open never adopts (a missing row is refused there, R3).
+ADOPTED = evidence_json(adopted=18)
+_ADOPT = (
+    "INSERT INTO project_holds(project_id,kind,identity,state,lease_case,taken_at_ms,due_at_ms,released_at_ms,"
+    "release_kind,evidence) SELECT l.project_id,'lease',l.run_handle||':'||l.attempt,"
+    "CASE WHEN l.state IN ('reserved','claim_pending') THEN 'held' ELSE 'released' END,"
+    "CASE WHEN l.state='reserved' OR (l.state='expired' AND NOT EXISTS(SELECT 1 FROM project_host_opens o "
+    "WHERE o.project_id=l.project_id AND o.run_handle=l.run_handle AND o.attempt=l.attempt)) THEN 'unarmed' "
+    "ELSE 'armed' END,l.created_at_ms,l.reserved_until_ms,"
+    "CASE WHEN l.state IN ('reserved','claim_pending') THEN NULL ELSE :now END,"
+    "CASE WHEN l.state='bound' THEN 'bound' WHEN l.state<>'expired' THEN NULL WHEN EXISTS(SELECT 1 FROM "
+    "project_host_opens o WHERE o.project_id=l.project_id AND o.run_handle=l.run_handle AND o.attempt=l.attempt) "
+    "THEN 'denied' ELSE 'withdrawn_unsent' END,:evidence FROM result_leases l WHERE NOT EXISTS(SELECT 1 FROM "
+    "project_holds h WHERE h.project_id=l.project_id AND h.kind='lease' AND h.identity=l.run_handle||':'||l.attempt)",
+    "INSERT INTO project_holds(project_id,kind,identity,state,taken_at_ms,due_at_ms,released_at_ms,release_kind,"
+    "evidence) SELECT s.project_id,'reservation',s.claim_id,"
+    "CASE WHEN s.state<>'reserved' AND EXISTS(SELECT 1 FROM project_cleanup_acknowledgements a WHERE "
+    "a.project_id=s.project_id AND a.run_handle=s.run_handle AND a.attempt=s.attempt) THEN 'released' ELSE 'held' "
+    "END,s.created_at_ms,s.reserved_until_ms,"
+    "CASE WHEN s.state<>'reserved' AND EXISTS(SELECT 1 FROM project_cleanup_acknowledgements a WHERE "
+    "a.project_id=s.project_id AND a.run_handle=s.run_handle AND a.attempt=s.attempt) THEN :now END,"
+    "CASE WHEN s.state<>'reserved' AND EXISTS(SELECT 1 FROM project_cleanup_acknowledgements a WHERE "
+    "a.project_id=s.project_id AND a.run_handle=s.run_handle AND a.attempt=s.attempt) THEN 'completed' END,"
+    ":evidence FROM result_reservations s WHERE NOT EXISTS(SELECT 1 FROM project_holds h WHERE "
+    "h.project_id=s.project_id AND h.kind='reservation' AND h.identity=s.claim_id)",
+)
+
+
+def adopt_project_holds(connection, now_ms: int) -> None:
+    """Give every lease and reservation without a register row its row, by class (idempotent; in the step)."""
+    if not connection.in_transaction:
+        raise HistoryError("history_unavailable")
+    for sql in _ADOPT:
+        connection.execute(sql, {"now": now_ms, "evidence": ADOPTED})
 
 
 _HELD_LEASE = ("EXISTS(SELECT 1 FROM project_holds h WHERE h.project_id=c.project_id AND h.kind='lease' "
