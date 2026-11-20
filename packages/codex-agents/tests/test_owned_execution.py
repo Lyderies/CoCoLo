@@ -778,6 +778,14 @@ class OwnedExecutionRegistryTests(unittest.TestCase):
                 registry.key(ticket, cleaned=True)
 
 
+def _flatten(value, prefix=""):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _flatten(item, f"{prefix}{key}")
+    else:
+        yield prefix, value
+
+
 class CapacityCompletionTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.CodexBridgeTests("test_happy_path_observes_before_and_after")
@@ -938,6 +946,48 @@ class CapacityCompletionTests(unittest.TestCase):
                                            reviewed=True, terminal_state=None)
         self.assertEqual("held", self.ledger._finish_owned_execution(ticket)["state"])
         self.assertEqual(1, self.held())
+
+    def test_RS_A_2_a_late_normal_release_after_a_crashed_one_keeps_the_written_decision(self):
+        """O0b RS-A-2 (draft 2): a late terminal and cleanup for a slot already released `crashed` are stored
+        as its completion; the release decision, its time and its kind stay as written."""
+        original = learning_store.LearningLedger._release_active_capacity
+        decided = {}
+
+        def crashed_first(ledger, ticket):
+            with ledger._account_transaction():
+                row = ledger._connection.execute(
+                    "SELECT handle_digest FROM active_run_capacity WHERE released_at_ms IS NULL").fetchone()
+                decided["handle"] = row["handle_digest"]
+                ledger._release_slot_locked(self.fixture.project_id, row["handle_digest"], "crashed",
+                                            ledger._clock_ms(), ledger._capacity_clock_reference())
+                decided["at"] = ledger._connection.execute(
+                    "SELECT released_at_ms FROM active_run_capacity WHERE handle_digest=?",
+                    (row["handle_digest"],)).fetchone()[0]
+            return original(ledger, ticket)
+        with mock.patch.object(learning_store.LearningLedger, "_release_active_capacity", crashed_first):
+            handle, output = self.run_one()
+        self.assertEqual("result", output["bridge_report"]["outcome"])
+        kind, at, completions = self.ledger._connection.execute(
+            "SELECT r.release_kind,a.released_at_ms,(SELECT COUNT(*) FROM capacity_completions c "
+            "WHERE c.handle_digest=a.handle_digest) FROM active_run_capacity a JOIN run_holds r "
+            "ON r.kind='run_slot' AND r.identity=a.handle_digest WHERE a.handle_digest=?",
+            (decided["handle"],)).fetchone()
+        self.assertEqual(("crashed", decided["at"]), (kind, at))  # the first decision stands
+        self.assertEqual(1, completions)  # the late completion is kept
+        self.reopen()  # and the ledger still opens (the coverage checks accept both)
+
+    def test_RS_A_status_never_counts_a_crashed_release_as_a_finished_run(self):
+        handle, intent, ticket = self.prepare_claim()
+        before = self.ledger.ingestion_snapshot(self.fixture.project_id)
+        with self.ledger._account_transaction():
+            row = self.ledger._connection.execute(
+                "SELECT handle_digest FROM active_run_capacity WHERE released_at_ms IS NULL").fetchone()
+            self.ledger._release_slot_locked(self.fixture.project_id, row["handle_digest"], "crashed",
+                                             self.ledger._clock_ms(), self.ledger._capacity_clock_reference())
+        after = self.ledger.ingestion_snapshot(self.fixture.project_id)
+        def terminal(snapshot):  # the design: a run is terminal only from completion evidence
+            return [value for key, value in _flatten(snapshot) if key.endswith("terminal")]
+        self.assertEqual(terminal(before), terminal(after))
 
     def test_known_release_survives_restart_and_clock_rollback(self):
         handle, output = self.run_one()
