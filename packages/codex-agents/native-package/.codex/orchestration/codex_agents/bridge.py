@@ -921,7 +921,7 @@ def _track(tree: ProcessTree) -> Table | None:
     if table is not None:
         tree.update(table)
     else:
-        tree._cleanup_incomplete = True
+        tree.snapshot_failed()
     return table
 
 

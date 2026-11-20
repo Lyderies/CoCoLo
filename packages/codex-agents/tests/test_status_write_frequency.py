@@ -165,34 +165,36 @@ class ActivityPublicationFrequencyTests(unittest.TestCase):
             self.request(target)
             self.finished(execution, "cancelled")
 
-    def test_whole_claude_frames_are_published_up_to_the_fixed_run_cap_however_many_arrive(self):
-        counted, cap, total = self.counted(), claude_activity.MAX_ACTIVITY_ITEMS, claude_activity.MAX_ACTIVITY_ITEMS + 3 * BATCH
+    def test_whole_claude_frames_are_each_published_once_however_many_arrive_and_never_end_the_run(self):
+        # O0c M6: the item cap bounds work in progress, so a run that finishes more distinct frames
+        # than the cap is not aborted; each new frame is still published exactly once.
+        counted, total = self.counted(), 8 + 3 * BATCH
         rows = [{"frame": bridge_fixtures.init_frame()}]
         for number in range(total):
             if number and number % BATCH == 0:
                 rows.append({"pause": f"batch-{number // BATCH}"})
             rows.append({"frame": whole(number)})
-        with mock.patch.object(bridge, "ClaudeActivity", counted.classifier(claude_activity.ClaudeActivity)):
+        with mock.patch.object(bridge, "ClaudeActivity", counted.classifier(claude_activity.ClaudeActivity)), \
+                mock.patch.object(claude_activity, "MAX_ACTIVITY_ITEMS", 8), \
+                mock.patch.object(claude_activity, "MAX_STREAM_EVENTS", 8):
             execution = self.claude_execution(rows)
             root, target, _, _, entry, worker, _, _, _ = execution
-            for batch in range(1, total // BATCH):
+            for batch in range(1, (total - 1) // BATCH + 1):
                 self.shown(counted, batch * BATCH, worker)
-                if not worker.is_alive():
-                    break
                 self.release(root, f"batch-{batch}")
-            # The frame after the cap is a monitoring failure for this run, not more activity.
-            self.finished(execution, "monitor_unavailable")
-        self.assertEqual(cap + 1, counted.observed)
-        self.assertEqual(cap, counted.activity())
-        self.assertEqual(["startup"], [category for category in counted.published if category != "activity"])
-        self.assertLessEqual(max(counted.delivered), MAX_RECEIVED_EVENTS)
-        self.assertLessEqual(sum(counted.delivered), 1 + cap)
-        self.assertTrue(entry.activity.failed)
-        self.assertEqual("monitor_unavailable", self.monitor.status(target).stop_reason)
-        self.assertEqual({"settings.json", "role-prompt.md"}, {path.name for path in (root / "control").iterdir()})
+            self.shown(counted, total, worker)
+            self.assertTrue(worker.is_alive())
+            self.owner.run_once()
+            self.assertEqual(total, counted.activity())
+            self.assertEqual(["startup"], [category for category in counted.published if category != "activity"])
+            self.assert_bounded_polls(counted, target)
+            self.assertFalse(entry.activity.failed)
+            self.request(target)
+            self.finished(execution, "cancelled")
 
-    def test_codex_item_frames_are_published_once_per_stage_and_up_to_the_fixed_run_cap(self):
-        counted, cap, repeats = self.counted(), codex_activity.MAX_ACTIVITY_ITEMS, 3000
+    def test_codex_item_frames_are_published_once_per_stage_and_never_end_the_run_by_their_number(self):
+        # O0c M5: completed items are forgotten, so only items in progress are capped.
+        counted, repeats, total = self.counted(), 3000, 8 + 3 * BATCH
 
         def item(kind, number):
             return {"frame": {"type": kind, "item": {"id": f"item_{number}", "type": "reasoning",
@@ -200,32 +202,31 @@ class ActivityPublicationFrequencyTests(unittest.TestCase):
 
         rows = [*codex_fixtures.PREFIX, item("item.started", 0), *(item("item.updated", 0) for _ in range(repeats)),
                 item("item.completed", 0), {"pause": "items"}]
-        total = cap + 3 * BATCH
         for number in range(1, total):
             if number % BATCH == 0:
                 rows.append({"pause": f"batch-{number // BATCH}"})
             rows.append(item("item.completed", number))
-        with mock.patch.object(bridge, "CodexActivity", counted.classifier(codex_activity.CodexActivity)):
+        with mock.patch.object(bridge, "CodexActivity", counted.classifier(codex_activity.CodexActivity)), \
+                mock.patch.object(codex_activity, "MAX_ACTIVITY_ITEMS", 8):
             execution = self.codex_execution(rows)
             root, target, _, _, entry, worker, _, _, _ = execution
             # thread.started, turn.started, then one item started, updated 3000 times and completed.
             self.shown(counted, 2 + repeats + 2)
             self.assertEqual(["startup", "activity", "activity", "activity"], counted.published)
             self.release(root, "items")
-            for batch in range(1, total // BATCH):
+            for batch in range(1, (total - 1) // BATCH + 1):
                 self.shown(counted, 2 + repeats + 2 + batch * BATCH - 1, worker)
-                if not worker.is_alive():
-                    break
                 self.release(root, f"batch-{batch}")
-            self.finished(execution, "monitor_unavailable")
-        # The first item counted at each of its three stages; every other item once; none after the cap.
-        self.assertEqual(3 + cap - 1, counted.activity())
-        self.assertLessEqual(counted.activity(), 3 * cap)
-        self.assertEqual(2 + repeats + 2 + cap, counted.observed)
-        self.assertLessEqual(max(counted.delivered), MAX_RECEIVED_EVENTS)
-        self.assertLessEqual(sum(counted.delivered), 1 + 3 + cap - 1)
-        self.assertTrue(entry.activity.failed)
-        self.assertEqual("monitor_unavailable", self.monitor.status(target).stop_reason)
+            self.shown(counted, 2 + repeats + 2 + total - 1, worker)
+            self.assertTrue(worker.is_alive())
+            self.owner.run_once()
+            # The first item counted at each of its three stages; every other item once.
+            self.assertEqual(3 + total - 1, counted.activity())
+            self.assertEqual(2 + repeats + 2 + total - 1, counted.observed)
+            self.assert_bounded_polls(counted, target)
+            self.assertFalse(entry.activity.failed)
+            self.request(target)
+            self.finished(execution, "cancelled")
         self.assertEqual([], [path.name for path in (root / "tmp").iterdir()])
 
 

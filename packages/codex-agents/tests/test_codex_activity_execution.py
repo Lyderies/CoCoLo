@@ -45,8 +45,8 @@ time.sleep(30)
 '''
 
 
-def reasoning(number=1):
-    return {"frame": {"type": "item.completed", "item": {
+def reasoning(number=1, kind="item.completed"):
+    return {"frame": {"type": kind, "item": {
         "id": f"item_{number}", "type": "reasoning", "text": "PRIVATE-REASONING-CANARY",
     }}}
 
@@ -191,6 +191,13 @@ class CodexActivityExecutionTests(unittest.TestCase):
         self.assertTrue(execution[7][0][1]["rerouted"])
         self.assertIsNone(self.monitor._entry(execution[1]).clock._last_activity)
 
+    def test_a_run_with_more_completed_items_than_the_cap_is_not_aborted(self):
+        # O0c M5: the item cap bounds items in progress, never the items a long run completes.
+        with mock.patch.object(codex_activity, "MAX_ACTIVITY_ITEMS", 8):
+            execution = self.execution([*PREFIX, *(reasoning(i) for i in range(50)), {"exit": True}])
+            self.finished(execution, "missing_result")
+        self.assertFalse(execution[4].activity.failed)
+
     def test_activity_queue_overflow_fences_and_stops_monitoring_instead_of_renewing_work(self):
         other = owner_fixtures.BridgeLivenessTests.execution(self, 2)
         other[4].start()
@@ -216,7 +223,7 @@ class CodexActivityExecutionTests(unittest.TestCase):
         other[4].start()
         self.assertTrue(other[6].wait(5))
         with mock.patch.object(codex_activity, "MAX_ACTIVITY_ITEMS", 1):
-            execution = self.execution([*PREFIX, reasoning(1), reasoning(2)])
+            execution = self.execution([*PREFIX, reasoning(1, "item.started"), reasoning(2, "item.started")])
             self.finished(execution, "monitor_unavailable")
         self.assertTrue(execution[4].activity.failed)
         self.assertEqual("activity_invalid", execution[4].activity.failure_code)

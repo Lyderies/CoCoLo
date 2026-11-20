@@ -20,18 +20,23 @@ refreshes the timer.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 import hashlib
 import re
 import time
 
+# Tool calls still in progress, per run. Only more calls open at once than this is a
+# monitoring failure. What a run has already finished (completed calls, work frames,
+# streamed messages, fragment frames) is kept only in recent windows below, each at most
+# this size or MAX_STREAM_EVENTS: the oldest entry is dropped, never reported, so a long
+# healthy run is never aborted; a replay older than its window is handled as new work, as
+# any unknown frame is.
 MAX_ACTIVITY_ITEMS = 4096
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _TEXT_BLOCKS = {"text": "text", "thinking": "thinking"}
 PARTIAL_ACTIVITY_SECONDS = 1.0
 MAX_STREAM_BLOCKS = 256
-# Fragment frames remembered per run. The smallest frame that takes a place is over
-# 80 bytes, so the bridge's 8 MiB stream cap ends a run before a client can send this
-# many; reaching it anyway is reported, never taken for silence.
+# Fragment frames remembered per run: a recent window, the oldest forgotten.
 MAX_STREAM_EVENTS = 131_072
 _DELTA_TEXT = {"text_delta": "text", "thinking_delta": "thinking", "input_json_delta": "partial_json"}
 
@@ -73,17 +78,24 @@ class ClaudeActivity:
         self._clock = clock
         self._streaming = False  # Inside a streamed message from the requested model.
         self._last_partial = None
-        self._streamed = set()  # Digests of the message IDs whose stream has started.
+        self._streamed = OrderedDict()  # Digests of the message IDs whose stream started (recent window).
         self._blocks = set()  # Open content blocks of the current message.
         self._opened = set()  # Every block index started in the current message.
-        self._events = set()  # Digests of the IDs of the partial fragment frames seen in this run.
+        self._events = OrderedDict()  # Digests of the IDs of the recent partial fragment frames.
         self._started = False
         self._pending = set()
-        self._done = set()
-        self._work = set()
+        self._done = OrderedDict()  # Recently completed tool calls.
+        self._work = OrderedDict()  # Digests of recent whole text frames.
+
+    @staticmethod
+    def _remember(window, key, limit):
+        window[key] = None
+        window.move_to_end(key)
+        while len(window) > limit:
+            window.popitem(last=False)
 
     def _count(self):
-        if len(self._pending) + len(self._done) + len(self._work) + len(self._streamed) >= MAX_ACTIVITY_ITEMS:
+        if len(self._pending) >= MAX_ACTIVITY_ITEMS:
             raise ClaudeActivityError("monitor_unavailable")
 
     def startup(self):
@@ -123,8 +135,7 @@ class ClaudeActivity:
                     work = hashlib.sha256(f"{message_id}\0{block_type}\0{text}".encode()).digest()[:16]
                     if work in self._work:
                         continue  # The same text again is not new work.
-                    self._count()
-                    self._work.add(work)
+                    self._remember(self._work, work, MAX_ACTIVITY_ITEMS)
                     found = True
                 elif block_type == "tool_use":
                     identity = block.get("id")
@@ -145,7 +156,7 @@ class ClaudeActivity:
                 raise ClaudeActivityError()
             if identity in self._pending:
                 self._pending.discard(identity)
-                self._done.add(identity)  # A completed call never counts again.
+                self._remember(self._done, identity, MAX_ACTIVITY_ITEMS)  # A completed call does not count again.
                 found = True
         return "activity" if found else None
 
@@ -168,8 +179,7 @@ class ClaudeActivity:
                 # its fragments is new work.
                 self._streaming = False
                 return None
-            self._count()
-            self._streamed.add(started)
+            self._remember(self._streamed, started, MAX_ACTIVITY_ITEMS)
             self._streaming = message.get("model") == self._model
             return None
         if kind == "message_stop":
@@ -195,9 +205,7 @@ class ClaudeActivity:
         seen = hashlib.sha256(identity.encode()).digest()[:8]
         if seen in self._events:
             return None  # The same frame again, in any message or order, is not new work.
-        if len(self._events) >= MAX_STREAM_EVENTS:
-            raise ClaudeActivityError("monitor_unavailable")
-        self._events.add(seen)
+        self._remember(self._events, seen, MAX_STREAM_EVENTS)
         if not self._streaming or index not in self._blocks:
             return None  # Other models and fragments outside an open block are not work.
         delta = event.get("delta")
