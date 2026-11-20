@@ -109,15 +109,20 @@ class AccountBillingAdmissionTests(unittest.TestCase):
                     (self.fixture.project_id, key, 'p' * 64, 'r' * 64, 'c' * 64, 1, 2, state, None, None, None,
                      '[]' if state == 'committed' else None, 's' * 64))
 
-    def test_B0_5_finished_probes_do_not_count_against_the_probe_cap(self):
+    def test_B0_5_finished_probes_do_not_count_against_the_probe_cap_and_still_replay(self):
         """O0b B0-5 (narrowed): only probes in progress count, so finished ones never fill a project for
-        good; their records stay, so a replay still finds its stored answer."""
+        good; a finished probe still replays its stored answer (review 040-b0n-code: through the real flow)."""
         from codex_agents import account_billing_admission
+        original = self.reserve()
+        self.prepared(original)
+        self.owner.admit(original)  # in progress: admitted
+        second = self.reserve('second')
+        self.prepared(second)
+        denied = self.owner.admit(second)  # finished: committed with its stored answer
+        self.assertEqual(['admitted', 'committed'], [r['state'] for r in self.rows()])
         self.enterContext(mock.patch.object(account_billing_admission, 'MAX_PROBE_REQUESTS', 2))
-        self.earlier_probes(2, 'committed')
-        self.reserve()  # not probe_full
-        self.assertEqual(1, sum(row['state'] == 'reserved' for row in self.rows()))
-        self.assertEqual(2, sum(row['state'] == 'committed' for row in self.rows()))  # kept for replay
+        self.reserve('third')  # one in progress, so a second fits; the finished one does not count
+        self.assertEqual({**denied, 'known': True}, self.reserve('second'))  # the replay is unchanged
 
     def test_B0_5_probes_in_progress_still_fill_the_cap(self):
         from codex_agents import account_billing_admission
