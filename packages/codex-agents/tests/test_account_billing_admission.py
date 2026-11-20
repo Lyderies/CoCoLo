@@ -131,6 +131,23 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ProbeAdmissionError, 'probe_full'):
             self.reserve()
 
+    def test_RS_A_2_a_reserved_probe_past_its_deadline_is_closed_unlaunched_and_stops_counting(self):
+        """O0b RS-A-2: a probe never admitted could not have started a model; past its deadline the
+        supervisor closes it with a fixed denial, its origin kept, and it no longer counts."""
+        original = self.reserve()
+        self.assertEqual(['reserved'], [r['state'] for r in self.rows()])
+        self.clock = original.deadline + 1
+        with mock.patch.object(self.ledger, '_capacity_clock_reference', return_value=0):
+            self.assertEqual(1, self.ledger.release_due_account_holds(limit=64))
+        row = self.rows()[0]
+        self.assertEqual('committed', row['state'])
+        self.assertEqual(1, self.ledger._connection.execute(
+            'SELECT COUNT(*) FROM account_billing_probe_origins').fetchone()[0])  # the origin is kept
+        self.assertEqual(0, self.ledger.account_capacity(self.fixture.project_id)['billing_probes']['live'])
+        replay = self.reserve()  # the same request now replays its stored answer
+        self.assertEqual(('denied', 'probe_unlaunched_expired', True),
+                         (replay['probe'], replay['reason_code'], replay['known']))
+
     def test_second_request_cannot_take_the_account_bootstrap_or_refresh_original_deadline(self):
         original = self.reserve()
         self.prepared(original)
