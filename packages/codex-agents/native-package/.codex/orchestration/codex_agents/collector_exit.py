@@ -27,6 +27,13 @@ MAX_RECORD_BYTES = 4096
 _TYPE = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,63}')
 _WHERE = re.compile(r'(?:[A-Za-z0-9_.-]{1,64}\.py|<other>):[0-9]{1,6} (?:[A-Za-z_<>][A-Za-z0-9_<>]{0,63})')
 _FIELDS = {'schema_version', 'stopped_at_ms', 'started_at_ms', 'cause', 'error', 'where'}
+# SD1: how long each shutdown step took, whole milliseconds; optional, so older records still read.
+STOP_STEPS = frozenset({'account_close', 'account_drain', 'server_stop'})
+
+
+def _stop_ok(value):
+    return (type(value) is dict and set(value) == STOP_STEPS
+            and all(type(item) is int and 0 <= item < 86_400_000 for item in value.values()))
 # Only COCOLO's own files and Python's are named; anything else could carry an identifier.
 _OWN_ROOT = Path(__file__).resolve().parent.parent
 _STDLIB = Path(os.__file__).resolve().parent
@@ -92,7 +99,7 @@ def _locations(error):
     return found
 
 
-def write_exit(state_root, *, started_at_ms, cause, error, detail=None) -> None:
+def write_exit(state_root, *, started_at_ms, cause, error, detail=None, stop_ms=None) -> None:
     """Best effort: a record that cannot be written is skipped, and stopping carries on."""
     with contextlib.suppress(Exception):
         record = {'schema_version': 1, 'stopped_at_ms': time.time_ns() // 1_000_000,
@@ -104,6 +111,8 @@ def write_exit(state_root, *, started_at_ms, cause, error, detail=None) -> None:
                   'where': _locations(error) if cause == 'error' else []}
         if record['cause'] == 'error' and record['error'] is None:
             record['error'] = 'Exception'
+        if _stop_ok(stop_ms):  # a malformed timing is left out; the record is still kept
+            record['stop_ms'] = dict(stop_ms)
         data = json.dumps(record, sort_keys=True).encode()
         target = exit_path(state_root)
         temporary = target.with_name(f'.{target.name}.{os.getpid()}.{secrets.token_hex(8)}')
@@ -126,7 +135,8 @@ def write_exit(state_root, *, started_at_ms, cause, error, detail=None) -> None:
 def checked(record):
     """The record if it has exactly the fixed shape, else None. Never raises."""
     try:
-        if (type(record) is not dict or set(record) != _FIELDS
+        if (type(record) is not dict or set(record) - {'stop_ms'} != _FIELDS
+                or ('stop_ms' in record and not _stop_ok(record['stop_ms']))
                 or type(record['schema_version']) is not int or record['schema_version'] != 1
                 or type(record['cause']) is not str or record['cause'] not in CAUSES
                 or type(record['stopped_at_ms']) is not int

@@ -125,18 +125,26 @@ def main(argv: list[str] | None = None) -> int:
         # Each step is attempted even if an earlier one fails, so the ledger is
         # always closed; the entry below then ends the process, so a worker
         # thread that did not stop cannot keep it alive.
+        # SD1: each step is timed, so a slow shutdown shows which step it was.
+        stop_ms = {"account_close": 0, "account_drain": 0, "server_stop": 0}
+        step_start = time.monotonic()
         if account is not None:
             try:
                 account.close()
+                stop_ms["account_close"] = int((time.monotonic() - step_start) * 1000)
+                step_start = time.monotonic()
                 end = time.monotonic() + 10
                 while not account.drained() and time.monotonic() < end:
                     time.sleep(0.01)
+                stop_ms["account_drain"] = int((time.monotonic() - step_start) * 1000)
             except Exception:
                 pass
+        step_start = time.monotonic()
         try:
             server.stop()
         except Exception:
             pass
+        stop_ms["server_stop"] = int((time.monotonic() - step_start) * 1000)
         try:
             # Best effort, and never in the way of closing the ledger or the exit code. Decided
             # once the collector thread has stopped, so an error it raised late still counts;
@@ -151,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 cause = "requested" if stopping["requested"] else "thread_ended"
             if state.root.is_dir():
-                write_exit(state.root, started_at_ms=server._started_at_ms, cause=cause, error=error)
+                write_exit(state.root, started_at_ms=server._started_at_ms, cause=cause, error=error, stop_ms=stop_ms)
         except BaseException:
             pass
         finally:
