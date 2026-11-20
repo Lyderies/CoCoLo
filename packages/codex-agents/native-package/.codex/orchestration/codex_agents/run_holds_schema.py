@@ -220,16 +220,18 @@ def _evidence_matches(connection) -> bool:
     """O0b RS-A round 2 G1: retained decision evidence hashes to its receipt (evidence pruned to NULL is allowed).
     O0b RS-A round 2 G10: a lost or crashed decision keeps its evidence for the row's life (its only proof).
     G11: one pass over the register for both. Evidence whose own bytes hash to its receipt (every writer stores
-    it as its canonical bytes) passes in SQL; any other row is decoded and re-encoded as before."""
+    it as its canonical bytes) passes in SQL; any other row is decoded and re-encoded as before.
+    Round 3: retained evidence with no receipt never passes in SQL (its NULL would equal the NULL digest of
+    evidence that is not ASCII text); it goes to the decoding check, which refuses it, as before G11."""
     from .learning_contracts import content_digest
 
     connection.create_function("run_hold_raw_digest", 1, _raw_digest, deterministic=True)
     for receipt, evidence in connection.execute(
             "SELECT receipt,evidence FROM run_holds WHERE (evidence IS NOT NULL "
-            "AND receipt IS NOT run_hold_raw_digest(evidence)) "
+            "AND (receipt IS NULL OR receipt IS NOT run_hold_raw_digest(evidence))) "
             "OR (kind='run_slot' AND release_kind IN ('crashed','lost') AND evidence IS NULL)"):
-        if evidence is None or type(evidence) is not str:
-            return False  # G10: a decision without its evidence
+        if evidence is None or type(evidence) is not str or receipt is None:
+            return False  # G10: a decision without its evidence; round 3: evidence without its receipt
         try:
             if receipt != content_digest(json.loads(evidence)):
                 return False

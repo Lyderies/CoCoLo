@@ -696,6 +696,87 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.tampered_evidence("crashed", lambda raw: json.dumps(json.loads(raw), indent=1))
         self.accepted()
 
+    # O0b RS-A round 3 (review 040-rsa-code-r3-1): the G11 fast path compares the receipt with the stored
+    # bytes' own digest, which is NULL for evidence that is not ASCII text; a missing receipt must never equal
+    # that NULL. Retained evidence with no receipt was refused before G11 and is refused still.
+
+    def withdrawn_evidence(self, receipt, evidence):
+        """A withdrawal's register row (its source kept), its receipt and evidence then set as given."""
+        project, launch = self.new_attempt()
+        self.withdraw(project, launch.run_handle)
+        with self.ledger._account_transaction():
+            self.assertEqual(1, self.ledger._connection.execute(
+                "UPDATE run_holds SET receipt=?,evidence=? WHERE release_kind='withdrawn'",
+                (receipt, evidence)).rowcount)
+
+    def test_RS_A_G11_malformed_non_ascii_evidence_with_no_receipt_is_refused(self):
+        self.withdrawn_evidence(None, '{"withdrawn": "é"')
+        self.refused()
+
+    def test_RS_A_G11_evidence_stored_as_a_blob_with_no_receipt_is_refused(self):
+        self.withdrawn_evidence(None, b'{"withdrawn": true}')
+        self.refused()
+
+    def test_RS_A_G11_ascii_evidence_with_no_receipt_is_refused(self):
+        self.withdrawn_evidence(None, canonical_json({"withdrawn": True}).decode())
+        self.refused()
+
+    def test_RS_A_G11_evidence_whose_own_bytes_hash_to_its_receipt_opens(self):
+        """Round 3: the accepted G11 meaning, pinned: retained ASCII evidence whose stored bytes hash to its
+        receipt opens everywhere (the writers' canonical form)."""
+        raw = canonical_json({"withdrawn": True, "generation": 1})
+        self.withdrawn_evidence(hashlib.sha256(raw).hexdigest(), raw.decode())
+        self.accepted()
+
+    KEEP = object()
+
+    def pruned_decision(self, kind, *, receipt, evidence):
+        """A lost or crashed decision's tombstone whose slot (and its claim, binding and launch rows) record
+        retention has removed, then its receipt and evidence set as given (KEEP leaves them)."""
+        if kind == "crashed":
+            row = self.crashed_release()
+        else:
+            self.case.claim()
+            row = self.rows()[0]
+            with self.ledger._account_transaction():
+                self.ledger._connection.execute(
+                    "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='service_lost' "
+                    "WHERE handle_digest=?", (row["handle_digest"],))
+            now = row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS + 1
+            self.assertGreaterEqual(self.sweep(now, row["clock_reference_ns"] - 1), 1)
+        digest = row["handle_digest"]
+        with self.ledger._account_transaction():
+            connection = self.ledger._connection
+            for table in ("launch_receipts", "launch_observations", "launch_inputs", "host_run_bindings",
+                          "active_run_capacity", "launch_claims"):
+                connection.execute(f"DELETE FROM {table} WHERE project_id=? AND handle_digest=?",
+                                   (self.project, digest))
+            if receipt is not self.KEEP:
+                connection.execute("UPDATE run_holds SET receipt=? WHERE kind='run_slot' AND identity=?",
+                                   (receipt, digest))
+            if evidence is not self.KEEP:
+                connection.execute("UPDATE run_holds SET evidence=? WHERE kind='run_slot' AND identity=?",
+                                   (evidence, digest))
+        self.assertEqual(("released", kind), tuple(self.ledger._connection.execute(
+            "SELECT state, release_kind FROM run_holds WHERE kind='run_slot' AND identity=?", (digest,)).fetchone()))
+        self.assertIsNone(self.ledger._connection.execute(
+            "SELECT 1 FROM active_run_capacity WHERE handle_digest=?", (digest,)).fetchone())
+        return digest
+
+    def test_RS_A_G11_a_pruned_decision_tombstone_with_its_evidence_still_opens(self):
+        """Round 3 control for the two below: a decision's tombstone whose source retention removed opens."""
+        self.pruned_decision("crashed", receipt=self.KEEP, evidence=self.KEEP)
+        self.accepted()
+
+    def test_RS_A_G11_a_pruned_crashed_tombstone_with_malformed_evidence_and_no_receipt_is_refused(self):
+        self.pruned_decision("crashed", receipt=None, evidence='{"kind": "crashedé"')
+        self.refused()
+
+    def test_RS_A_G10_a_pruned_lost_tombstone_without_its_evidence_is_refused(self):
+        """Round 3 (tests missing in round 2): a lost decision's evidence is required after its source goes."""
+        self.pruned_decision("lost", receipt=self.KEEP, evidence=None)
+        self.refused()
+
     def test_RS_A_G1_pruned_evidence_unknown_times_and_pruned_sources_still_open(self):
         """Round 2 G1: what the register may legitimately lack (pruned evidence, history's unknown times, a
         tombstone whose source retention removed) is still accepted everywhere. (requirement) Round 2 G10
@@ -927,6 +1008,51 @@ class RunHoldTests(ActiveRunCapacityTests):
             self.new_attempt()  # the cap's last place, by the status's count
             with self.assertRaisesRegex(LedgerError, "pending host run capacity is exhausted"):
                 self.new_attempt()
+
+    def drained_for_harness(self):
+        """The budget harness (scripts/measure_release_batches.py), with one claimed run built and drained."""
+        import importlib.util
+        from pathlib import Path
+        path = Path(__file__).resolve().parent.parent / "scripts" / "measure_release_batches.py"
+        spec = importlib.util.spec_from_file_location("measure_release_batches_under_test", path)
+        harness = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harness)
+        harness.build(self, 1, 0)
+        harness.drain(self, *harness.due_clocks(self))
+        return harness
+
+    def test_RS_A_G8_the_benchmark_refuses_history_the_validator_would_refuse(self):
+        """Round 3 (review 040-rsa-code-r3-3): the harness checks the history it builds with the ledger's own
+        validator before it measures anything, and keeps none of an invalid copy (here: each copy's receipt
+        computed wrongly)."""
+        harness = self.drained_for_harness()
+        count = self.ledger._connection.execute("SELECT COUNT(*) FROM run_holds").fetchone()[0]
+        with mock.patch.object(harness, "content_digest", return_value="0" * 64), \
+                self.assertRaisesRegex(AssertionError, "not valid ledger history"):
+            harness.add_expired_claimed_runs(self, 2, self.case.stamp - 1)
+        self.assertFalse(self.ledger._connection.in_transaction)
+        self.assertEqual(count, self.ledger._connection.execute("SELECT COUNT(*) FROM run_holds").fetchone()[0])
+
+    def test_RS_A_G8_the_benchmark_s_history_copies_are_valid_ledger_history(self):
+        """Round 3 (review 040-rsa-code-r3-3): the budget harness's history builder, on one drained run copied
+        twice, writes decisions whose evidence hashes to their receipt and to their slot's release digest; the
+        result passes the real validator, both backup formats and a reopen (as its start-up measure needs)."""
+        import json
+        from codex_agents.learning_contracts import content_digest
+        harness = self.drained_for_harness()
+        before = {row["handle_digest"] for row in self.rows()}
+        harness.add_expired_claimed_runs(self, 2, self.case.stamp - 1)
+        copies = self.ledger._connection.execute(
+            "SELECT a.handle_digest, a.release_digest, r.receipt, r.evidence, r.release_kind FROM active_run_capacity a "
+            "JOIN run_holds r ON r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest"
+        ).fetchall()
+        copies = [row for row in copies if row["handle_digest"] not in before]
+        self.assertEqual(2, len(copies))
+        for row in copies:
+            self.assertEqual("crashed", row["release_kind"])
+            self.assertEqual(row["receipt"], content_digest(json.loads(row["evidence"])))
+            self.assertEqual(row["receipt"], row["release_digest"])
+        self.accepted()
 
 
 def load_tests(loader, tests, pattern):

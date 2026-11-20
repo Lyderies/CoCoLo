@@ -161,6 +161,11 @@ def add_expired_claimed_runs(case: RunHoldTests, count: int, expired_at: int) ->
                 connection.executemany(
                     f"{verb} INTO {table}({','.join(columns)}) VALUES({','.join('?' * len(columns))})",
                     (tuple(copied(row[c], replaced) for c in columns) for replaced in maps))
+        # O0b RS-A round 3: the history is checked by the ledger's own validator before anything is measured
+        # on it (copies whose decision evidence does not hash to its receipt would be refused at open).
+        if not check_run_holds_consistency(connection):
+            raise AssertionError("the copied history is not valid ledger history (the run hold validator "
+                                 "refuses it)")
         connection.execute("COMMIT")
     except BaseException:
         connection.execute("ROLLBACK")
