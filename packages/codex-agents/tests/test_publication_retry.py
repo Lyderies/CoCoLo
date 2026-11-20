@@ -72,6 +72,27 @@ class PublicationRetryTests(DriverHarness):
             return delivery
         self.dispatched_through(failure)
 
+    def test_D12_a_writer_fault_during_publication_ends_the_run_instead_of_waiting_for_ever(self):
+        """D12: the writer faults while it publishes, so the lane says `unknown`; the run ends, visibly."""
+        from codex_agents import project_history
+
+        class WriterFault(BaseException):
+            """Escapes the writer's per-operation handling: the lane faults and its jobs read `unknown`."""
+
+        def publish(history, *args, **kwargs):
+            raise WriterFault('the writer stopped while it published')
+        context, route_path, _, run_handle, _, _ = self.opened('faulted')
+        self.child_answers()
+        with mock.patch.object(project_history.ProjectHistory, 'publish_result', publish):
+            code, report = self.attempt('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertNotEqual(0, code, 'no result can be published: %r' % (report,))
+        self.assertEqual(1, len(self.executions()), 'the child is never launched again')
+        # Bounded: before D12 the driver's ready step waited for ever on `unknown`.
+        self.wait_for(lambda: ('ready', 'run_unavailable') in self.stopped_runs, seconds=20)
+        # Its status now reads failed with that reason (the driver's run view), not `ready` for ever.
+        self.assertIn(('driver', 'ready', 'failed'), self.stopped_runs)
+        self.assertNotIn(('driver', 'ready', 'reporting'), self.stopped_runs, 'nothing was committed to report')
+
 
 class PublicationRetryStepTests(unittest.TestCase):
     """The driver's ready step on a failed publication: a growing pause, bounded by the run's deadline."""
@@ -119,6 +140,22 @@ class PublicationRetryStepTests(unittest.TestCase):
         self.value._advance(self.run)
         self.lane.retry.assert_not_called()
         self.assertEqual(('failed', 'run_failed', 'preparation'), (self.run.state, self.run.reason, self.run.prepared))
+        self.value._preparation.discard.assert_not_called()
+
+    def test_D12_an_unknown_publication_ends_the_run_at_once_keeping_what_the_account_holds(self):
+        # The writer faulted: every later lane call is refused for good, so no retry can ever commit.
+        self.lane.snapshot.return_value = {'state': 'unknown', 'reason_code': 'history_service_unavailable'}
+        self.value._advance(self.run)
+        self.lane.retry.assert_not_called()
+        self.assertEqual(('failed', 'run_unavailable', 'preparation'), (self.run.state, self.run.reason, self.run.prepared))
+        self.value._preparation.discard.assert_not_called()
+        self.value._account_call.assert_not_called()
+
+    def test_D12_an_unknown_terminal_acknowledgement_ends_the_run_too(self):
+        self.run.state = 'acknowledging'
+        self.lane.snapshot.return_value = {'state': 'unknown', 'reason_code': 'history_service_unavailable'}
+        self.value._advance(self.run)
+        self.assertEqual(('failed', 'run_unavailable', 'preparation'), (self.run.state, self.run.reason, self.run.prepared))
         self.value._preparation.discard.assert_not_called()
 
     def test_D4_a_refusal_no_retry_can_change_stops_the_run_at_once(self):
