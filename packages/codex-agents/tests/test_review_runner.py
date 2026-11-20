@@ -96,5 +96,24 @@ class ReviewRunnerTests(unittest.TestCase):
         self.assertEqual('provider-observe', cli.calls[-1])
 
 
+class ReviewCommandTests(ReviewRunnerTests):
+    def test_H1d_1_4_the_learning_review_command_refuses_a_bad_spec_with_its_next_step(self):
+        import contextlib
+        import io
+        import sys
+        from unittest import mock
+        from tests.test_bridge import cli
+        spec = Path(self.work.parent) / 'spec.json'
+        spec.write_text(json.dumps({**self.spec, 'packet': '../outside'}))
+        out = io.StringIO()
+        argv = ['cli.py', 'learning-review', 'worker', '--project-root', str(self.root), '--spec', str(spec),
+                '--work-dir', str(self.work)]
+        with mock.patch.object(sys, 'argv', argv), contextlib.redirect_stdout(out):
+            self.assertEqual(2, cli.main())
+        reply = json.loads(out.getvalue())
+        self.assertEqual(('review_invalid_spec', False), (reply['reason_code'], reply['ready']))
+        self.assertIn('spec', reply['next_step'])
+
+
 if __name__ == '__main__':
     unittest.main()
