@@ -356,7 +356,9 @@ class LaunchIdentityTests(RuntimeCase):
         self.assertTrue(identity.name.startswith(cr.DEFAULT_NAME_PREFIX))
         self.assertEqual(identity, self.runtime.identity(run_id))
         self.assertNotEqual(identity.name, self.runtime.identity("run:" + "c" * 64).name)
-        self.assertEqual({cr.RUN_LABEL: run_id, cr.PROJECT_LABEL: self.project}, identity.labels)
+        # C2: every run's container also carries cocolo.kind=run.
+        self.assertEqual({cr.RUN_LABEL: run_id, cr.PROJECT_LABEL: self.project, cr.KIND_LABEL: "run"},
+                         identity.labels)
         self.launch(self.spec(run_id=run_id))
         self.assertEqual(identity.labels, self.podman.containers[identity.name].labels)
 

@@ -19,6 +19,27 @@ empty (`process_tree.ProcessTree.cleanup_confirmed`, the confirmation the
 normal release relies on). A watchdog that was killed or could not confirm
 writes nothing, and the run is then left to the account's timed rule.
 
+Container entries (version 2, C2 of PLAN-0.4.0-supervisor-slices.md) are written
+only when the run's child is launched in a container (`container_launch`, behind
+its switch). They are keyed by a launch token made before the claim, since the
+bridge run id comes with the account's reply, and their states are:
+
+- ``intent``: written (and flushed) before the claim is handed to the account:
+  the container's name and labels (``cocolo.project``, ``cocolo.run`` = the
+  token, ``cocolo.kind=run``) and everything a later service needs to fence the
+  claim. No intent, no claim. The account's admission is recorded on it (the
+  bridge run id and the deadline) without changing the state, so an admitted
+  claim always has an entry.
+- ``started``: the container id and cgroup once podman returned from the launch.
+  The container is created only after the admitted intent was read back
+  (`check_intent`, the container primitive's ``record``).
+- ``stopping``, then ``gone`` (the OS says so) or ``stop_failed`` (not proven
+  gone: the slot stays held; a stop may be tried again).
+- ``settled``: the account no longer counts the run.
+
+The process rule (`tree_state`) never reads a container entry as gone: only the
+container's own recovery may settle it.
+
 A normal release removes both files. Each service instance holds an exclusive
 lock on its own ``<instance>.lock`` for as long as any of its threads may
 launch or own a child; the kernel releases it when the process dies. A later
@@ -43,6 +64,9 @@ from .process_tree import (GONE, RUN_TAG, _born_before, process_gone, process_re
                            session_reused_at, tagged_process_running)
 
 STATES = frozenset({'claimed', 'spawning', 'launched', 'watched', 'settled'})
+CONTAINER_STATES = frozenset({'intent', 'started', 'stopping', 'gone', 'stop_failed', 'settled'})
+CONTAINER_KIND_LABELS = ('cocolo.project', 'cocolo.run', 'cocolo.kind')
+MAX_STOP_DETAIL = 600
 MAX_ENTRY_BYTES = 65_536
 # Entries read per listing; successive listings go round every file (O10 D6).
 MAX_ENTRIES = 256
@@ -60,6 +84,11 @@ MAX_MARKER_BYTES = 4_096
 PS_PATHS = ('/bin/ps', '/usr/bin/ps')
 PS_TIMEOUT_SECONDS = 5
 _BRIDGE = re.compile(r'brg_[0-9a-f]{32}')
+_TOKEN = re.compile(r'lnc_[0-9a-f]{32}')
+_CONTAINER_NAME = re.compile(r'[a-z][a-z0-9-]{0,30}-[0-9a-f]{32}')
+_CONTAINER_PROJECT = re.compile(r'[A-Za-z0-9][A-Za-z0-9:._-]{0,127}')
+_CONTAINER_ID = re.compile(r'[0-9a-f]{12,64}')
+_CGROUP = re.compile(r'/[A-Za-z0-9@._:/-]{1,1023}')
 _INSTANCE = re.compile(r'[0-9a-f]{32}')
 _LOCK_TEMPORARY = re.compile(r'\.[0-9a-f]{32}\.lock\.tmp')
 _HANDLE = re.compile(r'hrn_[0-9a-f]{48}')
@@ -67,6 +96,20 @@ _DIGEST = re.compile(r'[0-9a-f]{64}')
 _FIELDS = {'version', 'state', 'instance', 'bridge_run_id', 'run_handle', 'attempt', 'host_client', 'lease',
            'identity_digest', 'claim_request_id', 'storage_evidence', 'workspace', 'child', 'watchdog',
            'run_tag', 'outcome', 'settled_at_ms'}
+_CONTAINER_FIELDS = {'version', 'kind', 'state', 'instance', 'token', 'project_id', 'container_name', 'labels',
+                     'run_handle', 'attempt', 'host_client', 'lease', 'identity_digest', 'claim_request_id',
+                     'storage_evidence', 'workspace', 'bridge_run_id', 'deadline_at_ms', 'container_id',
+                     'cgroup_path', 'stop_detail', 'outcome', 'settled_at_ms'}
+
+
+def new_token():
+    """A fresh launch token: the container's run label, and so its name (RS-12)."""
+    return 'lnc_' + secrets.token_hex(16)
+
+
+def entry_key(value):
+    """The name an entry's file is kept under: its token (container) or bridge run id (process)."""
+    return value.get('token') if value.get('version') == 2 else value.get('bridge_run_id')
 
 
 class JournalError(RuntimeError):
@@ -82,8 +125,47 @@ def _identity(value):
             and value['pid'] > 1 and type(value['birth']) is str and 0 < len(value['birth']) <= 64)
 
 
+def _checked_container_entry(value):
+    if value.keys() != _CONTAINER_FIELDS or value['kind'] != 'container' or value['state'] not in CONTAINER_STATES:
+        return None
+    if (not _matches(value['instance'], _INSTANCE) or not _matches(value['token'], _TOKEN)
+            or not _matches(value['project_id'], _CONTAINER_PROJECT)
+            or not _matches(value['container_name'], _CONTAINER_NAME)
+            or value['labels'] != {'cocolo.project': value['project_id'], 'cocolo.run': value['token'],
+                                   'cocolo.kind': 'run'}
+            or not _matches(value['run_handle'], _HANDLE) or type(value['attempt']) is not int
+            or type(value['host_client']) is not str or type(value['lease']) is not dict
+            or not _matches(value['identity_digest'], _DIGEST) or type(value['claim_request_id']) is not str
+            or type(value['storage_evidence']) is not str
+            or (value['workspace'] is not None and type(value['workspace']) is not str)):
+        return None
+    admitted = value['bridge_run_id'] is not None
+    if admitted != (value['deadline_at_ms'] is not None):
+        return None
+    if admitted and (not _matches(value['bridge_run_id'], _BRIDGE) or type(value['deadline_at_ms']) is not int):
+        return None
+    if value['container_id'] is not None and (not _matches(value['container_id'], _CONTAINER_ID)
+                                              or not admitted):
+        return None
+    if value['cgroup_path'] is not None and not _matches(value['cgroup_path'], _CGROUP):
+        return None
+    if value['state'] == 'started' and value['container_id'] is None:
+        return None
+    if value['stop_detail'] is not None and (type(value['stop_detail']) is not str
+                                             or len(value['stop_detail']) > MAX_STOP_DETAIL):
+        return None
+    if value['state'] == 'settled':
+        if value['outcome'] not in {'settled', 'released'} or type(value['settled_at_ms']) is not int:
+            return None
+    elif value['outcome'] is not None or value['settled_at_ms'] is not None:
+        return None
+    return value
+
+
 def checked_entry(value):
     """The entry if every field has its fixed shape, else None."""
+    if type(value) is dict and value.get('version') == 2:
+        return _checked_container_entry(value)
     if type(value) is not dict or value.keys() != _FIELDS or value['version'] != 1 or value['state'] not in STATES:
         return None
     if (not _matches(value['instance'], _INSTANCE) or not _matches(value['bridge_run_id'], _BRIDGE)
@@ -153,10 +235,11 @@ class LaunchJournal:
     def _lock_path(self, instance):
         return self.directory / (instance + '.lock')
 
-    def _path(self, bridge_run_id):
-        if not _matches(bridge_run_id, _BRIDGE):
+    def _path(self, key):
+        """An entry's file: a process entry's bridge run id, or a container entry's launch token."""
+        if not _matches(key, _BRIDGE) and not _matches(key, _TOKEN):
             raise JournalError('bridge run id is invalid')
-        return self.directory / (bridge_run_id + '.json')
+        return self.directory / (key + '.json')
 
     def marker_path(self, bridge_run_id):
         """Where the run's watchdog confirms that the tree it tracked is empty."""
@@ -179,7 +262,7 @@ class LaunchJournal:
         """Replace the entry atomically and durably: the file, then the folder, reach the disk."""
         self._writable()
         value = {name: item for name, item in value.items() if name != 'marker_path'}
-        if checked_entry(value) is None:
+        if checked_entry(value) is None or entry_key(value) != bridge_run_id:
             raise JournalError('launch entry is invalid')
         body = json.dumps(value, sort_keys=True, separators=(',', ':')).encode('ascii')
         if len(body) > MAX_ENTRY_BYTES:
@@ -205,6 +288,8 @@ class LaunchJournal:
         value = _read_entry(path)
         if value is None:
             return None
+        if value['version'] == 2:
+            return dict(value)
         # Not stored: where `tree_state` reads the watchdog's confirmation, at the time it checks.
         return {**value, 'marker_path': str(self.marker_path(value['bridge_run_id']))}
 
@@ -213,9 +298,90 @@ class LaunchJournal:
 
     def _advance(self, bridge_run_id, before, **changes):
         value = self.entry(bridge_run_id)
-        if value is None or value['state'] != before or value['instance'] != self.instance:
+        if value is None or value['state'] != before or value['instance'] != self.instance or value['version'] != 1:
             raise JournalError('launch entry is not ' + before)
         self._write(bridge_run_id, {**value, **changes})
+
+    # -- container entries (version 2, C2)
+    def intent(self, token, *, project_id, container_name, labels, run_handle, attempt, host_client, lease,
+               identity_digest, claim_request_id, storage_evidence, workspace):
+        """Before the claim is handed to the account: the run's container, and what a fence needs.
+
+        Written once; a failure here means the claim is never sent.
+        """
+        self._writable()
+        if type(storage_evidence) is not bytes:
+            raise JournalError('storage evidence is invalid')
+        value = {'version': 2, 'kind': 'container', 'state': 'intent', 'instance': self.instance, 'token': token,
+                 'project_id': project_id, 'container_name': container_name, 'labels': labels,
+                 'run_handle': run_handle, 'attempt': attempt, 'host_client': host_client, 'lease': lease,
+                 'identity_digest': identity_digest, 'claim_request_id': claim_request_id,
+                 'storage_evidence': storage_evidence.hex(),
+                 'workspace': None if workspace is None else str(workspace), 'bridge_run_id': None,
+                 'deadline_at_ms': None, 'container_id': None, 'cgroup_path': None, 'stop_detail': None,
+                 'outcome': None, 'settled_at_ms': None}
+        if checked_entry(value) is None:
+            raise JournalError('launch entry is invalid')
+        if self._path(token).exists():
+            raise JournalError('launch entry already exists')
+        self._write(token, value)
+
+    def _container(self, token, states):
+        value = self.entry(token)
+        if (value is None or value['version'] != 2 or value['state'] not in states
+                or value['instance'] != self.instance):
+            raise JournalError('launch entry is not ' + ' or '.join(sorted(states)))
+        return value
+
+    def admitted(self, token, bridge_run_id, deadline_at_ms):
+        """The account admitted the claim: its bridge run id and deadline, on the intent."""
+        value = self._container(token, {'intent'})
+        if value['bridge_run_id'] is not None:
+            if (value['bridge_run_id'], value['deadline_at_ms']) != (bridge_run_id, deadline_at_ms):
+                raise JournalError('launch entry was admitted already')
+            return
+        self._write(token, {**value, 'bridge_run_id': bridge_run_id, 'deadline_at_ms': deadline_at_ms})
+
+    def container_entry(self, bridge_run_id):
+        """This instance's admitted container entry for that bridge run id, or None."""
+        if not _matches(bridge_run_id, _BRIDGE):
+            return None
+        for name in self._names() or []:
+            if not _matches(name[:-5], _TOKEN):
+                continue
+            value = self._read(self.directory / name)
+            if (value is not None and value['bridge_run_id'] == bridge_run_id
+                    and value['instance'] == self.instance):
+                return value
+        return None
+
+    def check_intent(self, token, container_name):
+        """The container primitive's `record`: read back before the container is created.
+
+        Only an admitted intent of this instance, for exactly this container, lets it be created.
+        """
+        value = self._container(token, {'intent'})
+        if value['bridge_run_id'] is None or value['container_name'] != container_name:
+            raise JournalError('launch entry is not the admitted intent of this container')
+
+    def started(self, token, container_id, cgroup_path):
+        """Podman returned the started (and checked) container."""
+        value = self._container(token, {'intent'})
+        if value['bridge_run_id'] is None:
+            raise JournalError('launch entry is not admitted')
+        self._write(token, {**value, 'state': 'started', 'container_id': container_id,
+                            'cgroup_path': cgroup_path or None})
+
+    def stopping(self, token):
+        """Written before a stop: from a started container, a refused launch's, or a failed stop."""
+        value = self._container(token, {'intent', 'started', 'stop_failed'})
+        self._write(token, {**value, 'state': 'stopping'})
+
+    def stopped(self, token, gone, detail):
+        """The stop's answer: `gone` only when the OS says so, else `stop_failed` (the slot stays held)."""
+        value = self._container(token, {'stopping'})
+        self._write(token, {**value, 'state': 'gone' if gone is True else 'stop_failed',
+                            'stop_detail': str(detail)[:MAX_STOP_DETAIL]})
 
     def claimed(self, bridge_run_id, *, run_handle, attempt, host_client, lease, identity_digest, claim_request_id,
                 storage_evidence, workspace):
@@ -258,16 +424,19 @@ class LaunchJournal:
             return
         self._write(bridge_run_id, {**value, 'state': 'settled', 'outcome': outcome,
                                     'settled_at_ms': int(time.time() * 1000) if now_ms is None else now_ms})
-        with contextlib.suppress(OSError):
-            self.marker_path(bridge_run_id).unlink()
+        if value['version'] == 1:
+            with contextlib.suppress(OSError):
+                self.marker_path(bridge_run_id).unlink()
 
     def remove(self, bridge_run_id):
         """A run whose capacity its own service released: nothing is left to settle."""
         self._writable()
-        with contextlib.suppress(OSError):
-            self.marker_path(bridge_run_id).unlink()
+        path = self._path(bridge_run_id)
+        if _matches(bridge_run_id, _BRIDGE):
+            with contextlib.suppress(OSError):
+                self.marker_path(bridge_run_id).unlink()
         try:
-            self._path(bridge_run_id).unlink()
+            path.unlink()
             self._sync_directory()
         except FileNotFoundError:
             pass
@@ -285,8 +454,7 @@ class LaunchJournal:
     def _names(self):
         """Every entry file's name, sorted; None when the folder cannot be listed."""
         try:
-            return sorted(name for name in os.listdir(self.directory)
-                          if name.endswith('.json') and _matches(name[:-5], _BRIDGE))
+            return sorted(name for name in os.listdir(self.directory) if _entry_name(name))
         except OSError:
             return None
 
@@ -369,7 +537,7 @@ class LaunchJournal:
         for entry in self._window('prune'):
             if entry['state'] == 'settled' and now_ms - entry['settled_at_ms'] > TOMBSTONE_MS:
                 with contextlib.suppress(JournalError):
-                    self.remove(entry['bridge_run_id'])
+                    self.remove(entry_key(entry))
         self.remove_lock_temporaries()
 
     def remove_lock_temporaries(self):
@@ -435,8 +603,7 @@ def unresolved(directory, *, now_ms=None):
         info = os.lstat(directory)
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
             return report
-        names = sorted(name for name in os.listdir(directory)
-                       if name.endswith('.json') and _matches(name[:-5], _BRIDGE))
+        names = sorted(name for name in os.listdir(directory) if _entry_name(name))
     except OSError:
         return report
     live, found = {}, []
@@ -483,9 +650,14 @@ def _read_entry(path):
         value = checked_entry(json.loads(raw))
     except (ValueError, RecursionError):
         return None
-    if value is None or path.name != value['bridge_run_id'] + '.json':
+    if value is None or path.name != entry_key(value) + '.json':
         return None
     return value
+
+
+def _entry_name(name):
+    """An entry file's name: a process entry's bridge run id or a container entry's token, then .json."""
+    return name.endswith('.json') and (_matches(name[:-5], _BRIDGE) or _matches(name[:-5], _TOKEN))
 
 
 def _lock_held(path):
@@ -648,8 +820,8 @@ def tree_state(entry):
     the watchdog each started a new session, so their group and session ids
     are their pids. Nothing is signalled.
     """
-    if entry.get('state') is None:
-        return 'unknown'
+    if entry.get('state') is None or entry.get('version') == 2:
+        return 'unknown'  # A container entry is settled only by the container's own recovery.
     value = checked_entry({name: item for name, item in entry.items() if name != 'marker_path'})
     if value is None:
         return 'unknown'

@@ -40,6 +40,11 @@ Requirements:
   "skipped" and left alone.
 - CS-6 Unavailable podman: every operation answers a plain Refusal (reason and one-line message),
   never an exception trace, when podman is missing, hangs, or its machine or service is stopped.
+- C2 (PLAN-0.4.0-supervisor-slices.md): every run's container also carries `cocolo.kind=run`; a spec
+  may set the run's absolute deadline on the container itself (`timeout_seconds`: podman's
+  `--timeout`, enforced by conmon, so it fires with the service gone), and the start check compares
+  the timeout podman reports with it (fail closed). `attach_arguments` names the local command that
+  streams the container's output and exits with its exit code.
 
 The caller's duties (not done here): include every run whose identity it recorded in the live set
 it gives the sweep (a launch between its snapshot and the listing would otherwise be swept), keep
@@ -64,6 +69,10 @@ from typing import Callable, Iterable, Mapping, Protocol, Sequence
 
 RUN_LABEL = "cocolo.run"
 PROJECT_LABEL = "cocolo.project"
+KIND_LABEL = "cocolo.kind"
+RUN_KIND = "run"
+# Longest deadline a container is given (podman's --timeout, in seconds): a week.
+MAX_TIMEOUT_SECONDS = 7 * 24 * 3600
 DEFAULT_NAME_PREFIX = "cocolo-run-"
 WORKSPACE_TARGET = "/workspace"
 CONTAINER_HOME = "/var/cocolo-home"
@@ -87,6 +96,10 @@ _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 _HOST_PATH = re.compile(r"/[A-Za-z0-9@._:/-]{1,1023}")
 _CONTAINER_ID = re.compile(r"[0-9a-f]{12,64}")
 _GATE_SCRIPT = (f'while [ ! -e {GATE_FILE} ]; do sleep 0.1; done; rm -f {GATE_FILE}; exec "$@"')
+# $1 the podman client, $2 the container, then podman's global options.
+_ATTACH_SCRIPT = ('p=$1; n=$2; shift 2; "$p" "$@" logs --follow "$n" || exit 125; '
+                  'c=$("$p" "$@" wait "$n") || exit 125; '
+                  'case $c in ""|*[!0-9]*) exit 125;; esac; [ "$c" -le 255 ] || exit 125; exit "$c"')
 _UNREACHABLE_MARKS = ("cannot connect to podman", "unable to connect to podman")
 _NO_SUCH_CONTAINER = ("no such container", "no container with name or id")
 _RUNNING_STATES = ("running", "paused", "stopping", "removing", "restarting", "unknown")
@@ -124,6 +137,8 @@ class ContainerSpec:
     network: str | None = None
     environment: Mapping[str, str] = field(default_factory=dict)
     limits: ContainerLimits = field(default_factory=ContainerLimits)
+    # C2: the run's deadline, set on the container (podman --timeout); None sets none.
+    timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -134,7 +149,7 @@ class ContainerIdentity:
 
     @property
     def labels(self) -> dict[str, str]:
-        return {RUN_LABEL: self.run_id, PROJECT_LABEL: self.project_id}
+        return {RUN_LABEL: self.run_id, PROJECT_LABEL: self.project_id, KIND_LABEL: RUN_KIND}
 
 
 @dataclass(frozen=True)
@@ -479,6 +494,9 @@ class ContainerRuntime:
                 problems.append(f"environment entry {name!r} is not a plain NAME=value")
         if "HOME" in dict(spec.environment):
             problems.append("environment entry HOME is set by the profile")
+        timeout = spec.timeout_seconds
+        if timeout is not None and (type(timeout) is not int or not 0 < timeout <= MAX_TIMEOUT_SECONDS):
+            problems.append(f"the timeout must be a whole number of seconds from 1 to {MAX_TIMEOUT_SECONDS}")
         if not isinstance(spec.limits, ContainerLimits):
             problems.append("the limits must be ContainerLimits")
         else:
@@ -505,6 +523,7 @@ class ContainerRuntime:
             f"--network={spec.network or 'none'}",
             f"--volume={spec.workspace}:{WORKSPACE_TARGET}:{'rw' if spec.workspace_writable else 'ro'}",
             "--stop-signal=SIGTERM",
+            *([f"--timeout={spec.timeout_seconds}"] if spec.timeout_seconds is not None else []),
             *(f"--env={name}={value}" for name, value in dict(spec.environment).items()),
             "--entrypoint=" + json.dumps(["/bin/sh", "-c", _GATE_SCRIPT, "cocolo-gate"]),
             spec.image, *spec.command,
@@ -600,7 +619,10 @@ class ContainerRuntime:
             problems.append(f"the container is {state.get('Status') or 'in an unknown state'}, not running")
             return checks, problems
         cgroup_path, pid = state.get("CgroupPath") or "", state.get("Pid")
-        # Configured values (from podman): read-only root, the one mount, the network.
+        # Configured values (from podman): read-only root, the one mount, the network, the deadline.
+        if spec.timeout_seconds is not None:
+            reported = (info.get("Config") or {}).get("Timeout")
+            expect("timeout", str(reported) if type(reported) is int else None, str(spec.timeout_seconds))
         if host.get("ReadonlyRootfs") is not True:
             problems.append("the root filesystem is not read-only")
         mounts = [(m.get("Source"), m.get("Destination"), m.get("RW")) for m in info.get("Mounts") or []]
@@ -732,6 +754,16 @@ class ContainerRuntime:
             self.sleep(self.poll_seconds)
             if self._inspect(ref) is not None:
                 self._remove(ref)
+
+    def attach_arguments(self, ref: str) -> list[str]:
+        """C2: a local command that streams the container's output (`podman logs --follow`, from its
+        start, so nothing written before it began is lost) and then exits with the container's exit
+        code (`podman wait`), or 125 when either cannot be read. Only for the subprocess runner."""
+        if not isinstance(self.runner, SubprocessPodman):
+            raise ValueError("attaching needs the podman client at a fixed path")
+        if not isinstance(ref, str) or not _ID.fullmatch(ref):
+            raise ValueError("the container reference is not a plain name")
+        return ["/bin/sh", "-c", _ATTACH_SCRIPT, "cocolo-attach", self.runner.path(), ref, *self.runner.global_args]
 
     def _remove(self, ref: str) -> None:
         """Kill whatever is left in the container and remove it."""
