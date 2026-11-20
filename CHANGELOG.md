@@ -31,6 +31,8 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   project is not active (`open_project_inactive`), stored open records disagree
   (`open_state_inconsistent`), or something else failed (`open_failed`). Codex package 0.8.33.
 - `learning-status` shows how long each collector start-up phase took (`collector_startup_ms`).
+- Every refusal the command line prints now carries `next_step`: what to do next, in plain words, for its
+  reason code (`reason_code` and `error` are unchanged).
 - `learning-status` shows the account's own health (`account_health`): `ok`, `degraded` (work kept
   after an error, a held probe worker, or a slot past its deadline), `faulted` (a lane that failed,
   with its fixed cause and error type), or `unknown` with the reason, and an `attention` list in
