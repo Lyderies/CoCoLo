@@ -122,6 +122,11 @@ class AccountObservationJobTests(unittest.TestCase):
                          (view['last_failure']['cause'], view['last_failure']['type'], view['kept']))
         self.keeps_custody = True
 
+    def test_C5_a_submitted_observation_is_counted_before_the_owner_drives(self):
+        self.begin()
+        view = self.jobs.health.view()
+        self.assertEqual(1, view['queued'] + view['busy'])
+
     def test_held_project_probe_cannot_block_second_project_probe_or_account_read(self):
         entered, resume, held = self.hold_first_project()
         with trusted_tools(self.backend.tools), held:
