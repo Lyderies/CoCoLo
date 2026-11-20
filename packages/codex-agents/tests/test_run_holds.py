@@ -160,6 +160,68 @@ class RunHoldTests(ActiveRunCapacityTests):
         row = self.rows()[0]
         self.assertIsNone(self.status_at(row["claimed_at_ms"] - 1, row["clock_reference_ns"] + 1)["next_eligible"])
 
+    def test_RS_A_F14_the_capacity_report_carries_the_holds_by_kind(self):
+        """Round 1 F14 (RS-A-6): the account capacity report, which reaches learning-status, carries the
+        holds by kind as account_holds_status reads them."""
+        self.case.claim()
+        row = self.rows()[0]
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=row["claimed_at_ms"] + 1), \
+                mock.patch.object(self.ledger, "_capacity_clock_reference", return_value=row["clock_reference_ns"] + 1):
+            capacity = self.ledger.account_capacity(self.project)
+            holds = self.ledger.account_holds_status(self.project)
+        self.assertEqual(holds, capacity["holds"])
+        self.assertEqual(1, capacity["holds"]["run_slot"]["held"])
+        # The counts the earlier report carried are unchanged.
+        self.assertEqual({"observations", "cleanup_receipts", "pending_bindings", "billing_probes", "holds"},
+                         set(capacity))
+
+    HOLDS = {"run_slot": {"held": 1, "past_due": 0, "next_eligible": 1_800_000_300_001, "deadline": 1_800_000_000_000},
+             "binding": {"held": 0, "past_due": 0, "next_eligible": None, "deadline": None},
+             "probe": {"held": 0, "past_due": 0, "next_eligible": None, "deadline": None, "release_by_evidence": 0}}
+    COUNTS = {"observations": {"live": 1, "limit": 4096}, "cleanup_receipts": {"live": 0, "limit": 4096},
+              "pending_bindings": {"live": 0, "limit": 4096}, "billing_probes": {"live": 0, "limit": 4096}}
+
+    def test_RS_A_F14_status_prints_the_holds_plainly(self):
+        """Round 1 F14: learning-status shows the holds by kind, and one plain line for the owner."""
+        from codex_agents.client_runtime import _status_account_capacity, _status_account_holds
+        report = {**self.COUNTS, "holds": self.HOLDS}
+        self.assertEqual(self.COUNTS, _status_account_capacity(report))  # the counts keep their shape
+        self.assertEqual({"reported": True, "kinds": self.HOLDS,
+                          "summary": "Account holds: 1 run slot held (next can be freed at 2027-01-15 08:05 UTC; "
+                                     "deadline 2027-01-15 08:00 UTC), 0 bindings, 0 probes."},
+                         _status_account_holds(report))
+        several = {"run_slot": {"held": 2, "past_due": 1, "next_eligible": 1_800_000_300_001,
+                                "deadline": 1_800_000_000_000},
+                   "binding": {"held": 1, "past_due": 0, "next_eligible": 1_800_003_600_000,
+                               "deadline": 1_800_003_600_000},
+                   "probe": {"held": 1, "past_due": 0, "next_eligible": None, "deadline": 1_800_007_200_000,
+                             "release_by_evidence": 1}}
+        self.assertEqual(
+            "Account holds: 2 run slots held (1 past due, freed at the next check; next can be freed at "
+            "2027-01-15 08:05 UTC; nearest deadline 2027-01-15 08:00 UTC), 1 binding held (next can be freed at "
+            "2027-01-15 09:00 UTC), 1 probe held (1 freed only by its result).",
+            _status_account_holds({**self.COUNTS, "holds": several})["summary"])
+
+    def test_RS_A_F14_status_accepts_an_earlier_collectors_report_without_holds(self):
+        from codex_agents.client_runtime import _status_account_capacity, _status_account_holds
+        earlier = {name: self.COUNTS[name] for name in ("observations", "cleanup_receipts")}
+        for report in (earlier, self.COUNTS):
+            with self.subTest(fields=sorted(report)):
+                self.assertEqual(report, _status_account_capacity(report))
+                self.assertEqual({"reported": False, "kinds": None,
+                                  "summary": "Account holds: not reported by this collector version."},
+                                 _status_account_holds(report))
+        self.assertIsNone(_status_account_holds(None))  # no report at all: nothing is shown
+
+    def test_RS_A_F14_malformed_holds_are_not_shown(self):
+        from codex_agents.client_runtime import _status_account_holds
+        bad_count = {**self.HOLDS, "binding": {**self.HOLDS["binding"], "held": -1}}
+        missing = {name: self.HOLDS[name] for name in ("run_slot", "binding")}
+        extra = {**self.HOLDS, "probe": {**self.HOLDS["probe"], "other": 0}}
+        for holds in (bad_count, missing, extra, None, []):
+            with self.subTest(holds=holds):
+                self.assertIsNone(_status_account_holds({**self.COUNTS, "holds": holds}))
+
     def schema_fourteen(self, *, backup):
         """The ledger as 0.8.38 leaves it (schema 14): no register, no release kinds."""
         with self.ledger._account_transaction():
@@ -516,7 +578,7 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.reopened()
 
     def test_RS_A_F2_a_valid_ledger_with_every_kind_of_release_still_opens(self):
-        row = self.crashed_release()
+        self.crashed_release()
         project, launch = self.new_attempt()
         self.withdraw(project, launch.run_handle)  # (requirement) round 1 F13: generation and digest named
         self.reopened()

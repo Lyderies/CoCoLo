@@ -273,14 +273,70 @@ def _status_ingestion_unavailable():
 def _status_account_capacity(value):
     """Each account limit with its live count (0.3.4 R9); None from a collector that does not report it."""
     # O0b B0 (narrowed): 0.8.38 also reports held run bindings and billing probes; an earlier collector does not.
-    if (type(value) is not dict or set(value) not in ({'observations', 'cleanup_receipts'},
-                                                      {'observations', 'cleanup_receipts', 'pending_bindings',
-                                                       'billing_probes'})
+    # O0b RS-A round 1 F14: a newer report also carries the holds by kind, shown apart (_status_account_holds).
+    counts = {name: item for name, item in value.items() if name != 'holds'} if type(value) is dict else None
+    if (counts is None or set(counts) not in ({'observations', 'cleanup_receipts'},
+                                              {'observations', 'cleanup_receipts', 'pending_bindings',
+                                               'billing_probes'})
+            or ('holds' in value and len(counts) != 4)
             or any(type(item) is not dict or set(item) != {'live', 'limit'}
                    or not account_integer(item['live']) or not account_integer(item['limit'])
-                   for item in value.values())):
+                   for item in counts.values())):
         return None
-    return {name: {'live': item['live'], 'limit': item['limit']} for name, item in value.items()}
+    return {name: {'live': item['live'], 'limit': item['limit']} for name, item in counts.items()}
+
+
+_HOLD_FIELDS = {'held', 'past_due', 'next_eligible', 'deadline'}
+_HOLD_NOUNS = {'run_slot': ('run slot', 'run slots'), 'binding': ('binding', 'bindings'),
+               'probe': ('probe', 'probes')}
+
+
+def _status_account_holds(value):
+    """O0b RS-A round 1 F14 (RS-A-6, design draft 4 item 4): this project's account holds by kind, with one
+    plain line for the owner. None without a capacity report or with a malformed one; an earlier collector's
+    report, without holds, is accepted and shown as not reported."""
+    if _status_account_capacity(value) is None:
+        return None
+    if 'holds' not in value:
+        return {'reported': False, 'kinds': None, 'summary': 'Account holds: not reported by this collector version.'}
+    holds = value['holds']
+    if type(holds) is not dict or holds.keys() != _HOLD_NOUNS.keys():
+        return None
+    for name, kind in holds.items():
+        fields = _HOLD_FIELDS | ({'release_by_evidence'} if name == 'probe' else set())
+        if (type(kind) is not dict or kind.keys() != fields
+                or not all(account_integer(kind[n]) for n in ('held', 'past_due'))
+                or kind['past_due'] > kind['held']
+                or any(kind[n] is not None and not account_integer(kind[n]) for n in ('next_eligible', 'deadline'))
+                or (name == 'probe' and not (account_integer(kind['release_by_evidence'])
+                                             and kind['release_by_evidence'] <= kind['held']))):
+            return None
+    kinds = {name: dict(kind) for name, kind in holds.items()}
+    return {'reported': True, 'kinds': kinds,
+            'summary': 'Account holds: ' + ', '.join(_hold_words(name, kinds[name]) for name in _HOLD_NOUNS) + '.'}
+
+
+def _hold_words(name, kind):
+    """One kind's holds in plain words, e.g. '1 run slot held (next can be freed at <time>; deadline <time>)'."""
+    from datetime import datetime, timezone
+
+    def at(ms):
+        return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+
+    held = kind['held']
+    noun = _HOLD_NOUNS[name][held != 1]
+    if not held:
+        return f"0 {noun}"
+    notes = []
+    if kind['past_due']:
+        notes.append(f"{kind['past_due']} past due, freed at the next check")
+    if name == 'probe' and kind['release_by_evidence']:
+        notes.append(f"{kind['release_by_evidence']} freed only by its result")
+    if kind['next_eligible'] is not None:
+        notes.append(f"next can be freed at {at(kind['next_eligible'])}")
+    if name == 'run_slot' and kind['deadline'] is not None:  # draft 4 item 4: the execution deadline beside it
+        notes.append(f"{'deadline' if held == 1 else 'nearest deadline'} {at(kind['deadline'])}")
+    return f"{held} {noun} held" + (f" ({'; '.join(notes)})" if notes else '')
 
 
 def _status_collector_fields(health):
@@ -362,7 +418,7 @@ def _apply_health(report, health):
         # G3: every ledger-derived field unavailable, never an earlier reading's values.
         report.update(active=True, reason_code='status_ledger_busy',
                       error="The collector is busy; this project's status could not be read in time.",
-                      ingestion=_status_ingestion_unavailable(), account_capacity=None,
+                      ingestion=_status_ingestion_unavailable(), account_capacity=None, account_holds=None,
                       provider_attestations={p: {'state': 'unavailable'} for p in ('codex', 'claude')})
         report.pop('collector_health', None)
         report.pop('account_slots', None)
@@ -372,6 +428,7 @@ def _apply_health(report, health):
         return False
     report.update(_status_collector_fields(health))
     report['account_capacity'] = _status_account_capacity(health.get('account_capacity'))
+    report['account_holds'] = _status_account_holds(health.get('account_capacity'))  # O0b RS-A round 1 F14
     return True
 
 
@@ -387,7 +444,9 @@ def status_client(state_root, project_root):
               # Runs an earlier version left that still hold a slot, and when the last stops.
               'earlier_version_runs': None,
               # How near this project is to each account limit (0.3.4 R9).
-              'account_capacity': None}
+              'account_capacity': None,
+              # O0b RS-A round 1 F14 (RS-A-6): this project's account holds by kind, with one plain line.
+              'account_holds': None}
     try:
         state = CollectorPaths(state_root)
         report['client_failures'] = client_health_snapshot(state, project_root)

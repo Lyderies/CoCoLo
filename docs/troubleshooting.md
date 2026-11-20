@@ -262,6 +262,13 @@ service cannot tell (its records of the run are missing or damaged) is the place
 that run's deadline. After an upgrade from 0.2.x, runs that version left can hold slots for a day; see
 `earlier_version_runs` under `learning_migration` stays `pending`, below.
 
+`learning-status` shows what this project holds on the account in `account_holds`: run slots, run
+bindings (runs opened but not yet started) and billing probes, each with how many are held, how many are
+past due (freed at the next check), and when the next can be freed. `account_holds.summary` says it in one
+line, for example `Account holds: 1 run slot held (next can be freed at 2027-01-15 08:05 UTC; deadline
+2027-01-15 08:00 UTC), 0 bindings, 0 probes.` An earlier collector does not report them
+(`not reported by this collector version`).
+
 ## `project_service_other_version`
 
 The project was updated while its service was still running from before the update, and the old

@@ -11470,8 +11470,9 @@ class LearningLedger:
         finally:
             self._lock.release()
 
-    def account_capacity(self, project_id: str) -> dict[str, dict[str, int]]:
-        """How near this project is to each account limit (0.3.4 R9): counts by the rule each limit enforces."""
+    def account_capacity(self, project_id: str) -> dict[str, dict[str, Any]]:
+        """How near this project is to each account limit (0.3.4 R9): counts by the rule each limit enforces,
+        and (O0b RS-A round 1 F14) the account holds by kind, as account_holds_status reads them."""
         from .account_cleanup import MAX_RELEASE_RESERVATIONS, live_cleanup_receipts
         from .account_observation import MAX_OBSERVATION_REQUESTS
 
@@ -11488,10 +11489,12 @@ class LearningLedger:
             probes = self._connection.execute(
                 "SELECT COUNT(*) FROM account_billing_probe_requests WHERE project_id=? AND state<>'committed'",
                 (project_id,)).fetchone()[0]
+            holds = self.account_holds_status(project_id)  # F14: read in the same hold (it re-enters)
         return {"observations": {"live": int(observations), "limit": MAX_OBSERVATION_REQUESTS},
                 "cleanup_receipts": {"live": int(receipts), "limit": MAX_RELEASE_RESERVATIONS},
                 "pending_bindings": {"live": int(bindings), "limit": MAX_PENDING_HOST_RUNS},
-                "billing_probes": {"live": int(probes), "limit": MAX_PROBE_REQUESTS}}
+                "billing_probes": {"live": int(probes), "limit": MAX_PROBE_REQUESTS},
+                "holds": holds}
 
     def _release_slot_locked(self, project_id, handle_digest, kind, now, monotonic) -> bool:
         """O0b RS-A: release one unreleased run slot as `lost` or `crashed`, for good, inside the caller's
