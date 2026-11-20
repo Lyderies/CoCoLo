@@ -210,9 +210,10 @@ class LearningSourceImageTests(unittest.TestCase):
         self.refuse('history_conflict')
 
     def test_schema_version_columns_and_primary_key_are_exact(self):
-        self.connection.execute('PRAGMA user_version=15').close()
+        # O0b RS-A (requirement): the image is taken at schema 15, so 16 is the newer one refused.
+        self.connection.execute('PRAGMA user_version=16').close()
         self.refuse('history_incompatible')
-        self.connection.execute('PRAGMA user_version=14').close()
+        self.connection.execute('PRAGMA user_version=15').close()
         self.connection.execute('ALTER TABLE sessions ADD COLUMN unexpected TEXT').close()
         self.refuse('history_incompatible')
 

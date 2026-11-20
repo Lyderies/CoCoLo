@@ -34,8 +34,9 @@ class SourceArchive:
     size: int
 
 # The ledger schema the image is taken at. 14 added only the admission evidence
-# index, which is not part of a project's backup, so the image's tables are 13's.
-SCHEMA_VERSION = 14
+# index and 15 only the hold register (O0b RS-A), neither part of a project's
+# backup (both are derived from what is), so the image's tables are 13's.
+SCHEMA_VERSION = 15
 # The registered backup is a streamed (format 3) SQLite file, read one batch at a
 # time; this bounds its size, not memory. It matches the ledger's own limit.
 MAX_BACKUP_BYTES = 16 * 1024 ** 3
@@ -206,7 +207,7 @@ def _schema(connection, store):
     # could hide an unrepresented project partition, so refuse this image.
     # admission_evidence holds only fields derived from the records it indexes.
     if {row[0] for row in names} != {*_KEYS, "projects", "additive_migrations",
-                                   "owner_key_history", "sqlite_sequence", "admission_evidence"}:
+                                   "owner_key_history", "sqlite_sequence", "admission_evidence", "run_holds"}:
         raise HistoryError("history_incompatible")
     for table in ("projects", *_KEYS):
         row = _one(connection, "SELECT type FROM sqlite_master WHERE name=?", (table,))

@@ -245,7 +245,7 @@ def verify(path: Path, *, project_id: str, schema_version: int | None = None,
                 raise _error("project backup manifest is invalid")
             kind, version, ledger_version, owner, raw = rows[0]
             if (kind != FORMAT or type(version) is not int or version != FORMAT_VERSION or type(ledger_version) is not int
-                    or ledger_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14} or owner != project_id
+                    or ledger_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15} or owner != project_id
                     or (schema_version is not None and ledger_version != schema_version)
                     or type(raw) is not bytes):
                 raise _error("project backup manifest is invalid")

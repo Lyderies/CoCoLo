@@ -101,6 +101,10 @@ class RunHoldTests(ActiveRunCapacityTests):
     def schema_fourteen(self, *, backup):
         """The ledger as 0.8.38 leaves it (schema 14): no register, no release kinds."""
         with self.ledger._account_transaction():
+            from codex_agents.run_holds_schema import RUN_HOLDS_OBJECTS
+            for kind, name, _ in RUN_HOLDS_OBJECTS:  # a 0.8.38 ledger has none of them
+                if kind == "trigger":
+                    self.ledger._connection.execute(f"DROP TRIGGER IF EXISTS {name}")
             self.ledger._connection.execute("DROP TABLE IF EXISTS run_holds")
             columns = {row[1] for row in self.ledger._connection.execute("PRAGMA table_info(active_run_capacity)")}
             if "release_kind" in columns:

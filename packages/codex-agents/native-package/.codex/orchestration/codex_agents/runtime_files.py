@@ -170,6 +170,7 @@ RUNTIME_FILES = (
     "codex_agents/review_runner.py",
     "codex_agents/routing.py",
     "codex_agents/run_failure_reasons.py",
+    "codex_agents/run_holds_schema.py",
     "codex_agents/run_provenance.py",
     "codex_agents/runtime_files.py",
     "codex_agents/service_enrollment.py",

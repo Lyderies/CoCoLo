@@ -266,7 +266,7 @@ def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
 
 
 def _tables(schema_version: int) -> tuple[str, ...]:
-    if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14}:
+    if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}:
         raise RuntimeError("installed ledger schema does not support this backup")
     return tuple(table for table in _TABLE_COLUMNS
                  if (schema_version >= 7 or table != "launch_claims")
@@ -647,7 +647,7 @@ def _main() -> int:
             project_id = ledger.project_for_root(target)
             connection = ledger._connection
             schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14}:
+            if schema_version not in {5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}:
                 raise RuntimeError("installed ledger schema does not support this backup")
             project_columns = {
                 str(row[1])
