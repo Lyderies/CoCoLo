@@ -151,10 +151,13 @@ class AccountObservationJobs:
                     if not slot.ready.wait(5):
                         raise ObservationError('observation_unavailable')
                 self._started = True
-            except BaseException:
+            except BaseException as error:
                 self._faulted = self._closing = True
                 for slot in self._slots:
                     slot.stop.set()
+                lane_health.safely(lambda error=error: self.health.note_failure(  # S1-H1a C4
+                    self._note, 'observation_start_failed', error))
+                self._publish_health()
                 raise
 
     def _job(self, ticket):

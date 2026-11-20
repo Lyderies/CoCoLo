@@ -277,10 +277,12 @@ class SignatureWorkerPool:
             if not all(slot.ready.is_set() and slot.thread.is_alive() for slot in self._slots):
                 raise SignatureWorkerError()
             self._bootstrapped = True
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
             for slot in self._slots:
                 slot.stop.set()
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'signature_start_failed', error))
+            self._publish_health()  # S1-H1a C4
             raise
         finally:
             self._starting = False
@@ -314,6 +316,7 @@ class SignatureWorkerPool:
             self._faulted = True
             slot.fault.set()
             lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'signature_offer_failed', error))  # S1-H1a C4
+            self._publish_health()  # the fault is shown now, not at the next poll
             if slot.current is not None:
                 slot.current.unknown = True
                 slot.current.cancelled.set()
@@ -430,6 +433,7 @@ class SignatureWorkerPool:
                 active.cancelled.set()
                 slot.fault.set()
                 lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'signature_confirmation_failed', error))  # S1-H1a C4
+                self._publish_health()  # the fault is shown now, not at the next poll
                 slot.current = active
                 self._returned.pop(active.handle, None)
                 raise

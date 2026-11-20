@@ -340,6 +340,8 @@ class AccountClaimJobs:
                                  and job.provider is not None and job.stale_preparations < MAX_STALE_PREPARATIONS)
                         job.reason = None if again else error.reason_code
                     except Exception as error:  # S1-U10b/f
+                        lane_health.safely(lambda error=error: self.health.note_failure(  # S1-H1a C7
+                            self._note, 'claim_completion_failed', error))
                         job.reason = (("open_account_busy" if getattr(error, "reason_code", None) == "sql_read_busy"
                                        else "open_failed") if job.kind == 'open' else "claim_unavailable")
                 if again:
