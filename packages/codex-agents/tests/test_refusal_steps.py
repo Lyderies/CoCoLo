@@ -29,6 +29,22 @@ class RefusalStepTests(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertIn(words, refusal_steps.next_step(code))
 
+    def test_H1b_1_3_a_printed_refusal_carries_its_next_step_and_keeps_its_fields(self):
+        import contextlib
+        import io
+        import json
+        from tests.test_bridge import cli
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli._print({'ready': False, 'error': 'dispatch unavailable', 'reason_code': 'claim_busy'})
+        printed = json.loads(out.getvalue())
+        self.assertEqual(('dispatch unavailable', 'claim_busy', refusal_steps.next_step('claim_busy')),
+                         (printed['error'], printed['reason_code'], printed['next_step']))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli._print({'ready': True, 'reason_code': None})  # not a refusal: unchanged
+        self.assertNotIn('next_step', json.loads(out.getvalue()))
+
     def test_an_unknown_code_gets_the_default(self):
         self.assertEqual(refusal_steps.DEFAULT, refusal_steps.next_step('something_new'))
         self.assertEqual(refusal_steps.DEFAULT, refusal_steps.next_step(None))
