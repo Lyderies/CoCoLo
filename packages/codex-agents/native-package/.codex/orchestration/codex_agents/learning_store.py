@@ -185,6 +185,10 @@ WORKER_RESULT_SWEEP_SECONDS = 60.0
 ACCOUNT_HOLD_RELEASE_BATCH = 64
 SWEEP_BATCH_GAP_SECONDS = 0.01
 SWEEP_BUSY_RETRY_SECONDS = 1.0
+# O0b RS-A round 2 G6: while idle, due account holds are checked this often (one indexed read, no
+# transaction), so a burst arriving at any moment starts draining within this and clears well inside 60 s;
+# the other sweeps keep WORKER_RESULT_SWEEP_SECONDS.
+SWEEP_IDLE_CHECK_SECONDS = 5.0
 # S1-H1a-6: the health route waits at most this for the ledger lock, well inside the client's
 # 1-second health timeout; what it cannot read in time it leaves out (`ledger_busy`).
 HEALTH_LEDGER_WAIT_MS = 250
@@ -11649,6 +11653,27 @@ class LearningLedger:
                 (receipt, canonical_json(evidence).decode(), project_id, handle))
         return {**answer, "run_handle": run_handle, "receipt": receipt, "known": False}
 
+    def account_holds_due(self) -> bool:
+        """O0b RS-A round 2 G6: whether any held register row's hold is due now (what the next release batch
+        would release), by one read: no transaction and no write, the rows found from the held register rows
+        by index, so its cost follows the live holds, never history. The collector's idle check calls it
+        under the ledger lock it took without waiting; re-entry is immediate."""
+        with self._held():
+            now, monotonic = self._clock_ms(), self._capacity_clock_reference()
+            crashed, parameters = crashed_claim("a", now, monotonic)
+            row = self._connection.execute(
+                "SELECT EXISTS(SELECT 1 FROM run_holds r JOIN active_run_capacity a ON a.project_id=r.project_id "
+                "AND a.handle_digest=r.identity WHERE r.state<>'released' AND r.state='held' AND r.kind='run_slot' "
+                f"AND a.released_at_ms IS NULL AND {crashed}) "
+                "OR EXISTS(SELECT 1 FROM run_holds r JOIN account_billing_probe_requests p "
+                "ON p.project_id=r.project_id AND p.request_key=r.identity WHERE r.state<>'released' "
+                "AND r.state='held' AND r.kind='probe' AND p.state='reserved' AND p.deadline_at_ms<?) "
+                "OR EXISTS(SELECT 1 FROM run_holds r JOIN host_run_bindings h ON h.project_id=r.project_id "
+                "AND h.handle_digest=r.identity WHERE r.state<>'released' AND r.state='held' AND r.kind='binding' "
+                "AND h.binding_state='pending' AND h.expires_at_ms<=?)",
+                (*parameters, now, now)).fetchone()
+        return bool(row[0])
+
     def release_due_account_holds(self, *, limit: int = 64) -> int:
         """O0b RS-A: release the account holds whose own predicate now says so, writing each decision once.
 
@@ -12327,13 +12352,23 @@ class CollectorServer:
         sweep cycle. An unexpected error is recorded by type and the next cycle runs (S1-H1a-6b).
         O0b RS-A round 1 F12: while due account holds remain, a release batch alone runs every
         SWEEP_BATCH_GAP_SECONDS, each under its own hold of the ledger lock; a busy cycle is retried
-        after SWEEP_BUSY_RETRY_SECONDS (never past the next cycle's start). A stop ends either wait."""
+        after SWEEP_BUSY_RETRY_SECONDS (never past the next cycle's start). A stop ends either wait.
+        Round 2 G6: while idle, due holds are checked every SWEEP_IDLE_CHECK_SECONDS (never past the next
+        cycle's start); holds found due start the batches at once."""
         due = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS
-        wait, full = WORKER_RESULT_SWEEP_SECONDS, True
+        wait, full, draining = min(SWEEP_IDLE_CHECK_SECONDS, WORKER_RESULT_SWEEP_SECONDS), False, False
         while not self._sweeps_stop.wait(max(0.0, wait)):
             now = time.monotonic()
             if now >= due:
                 due, full = now + WORKER_RESULT_SWEEP_SECONDS, True
+            if not (full or draining):  # G6: idle, so the cheap check first
+                try:
+                    draining = self._holds_due_idle()
+                except Exception as error:
+                    self.sweep_error = type(error).__name__
+                if not draining:
+                    wait = min(SWEEP_IDLE_CHECK_SECONDS, due - time.monotonic())
+                    continue
             try:
                 outcome = self._sweep_cycle(holds_only=not full)
             except Exception as error:
@@ -12342,8 +12377,22 @@ class CollectorServer:
             if outcome == "busy":  # the same cycle again, soon
                 wait = min(SWEEP_BUSY_RETRY_SECONDS, due - time.monotonic())
                 continue
-            full = False
-            wait = SWEEP_BATCH_GAP_SECONDS if outcome == "more" else due - time.monotonic()
+            full, draining = False, outcome == "more"
+            wait = SWEEP_BATCH_GAP_SECONDS if draining else min(SWEEP_IDLE_CHECK_SECONDS, due - time.monotonic())
+
+    def _holds_due_idle(self) -> bool:
+        """O0b RS-A round 2 G6: the idle check, whether any account hold is due. The ledger lock is taken
+        without waiting: a held ledger, or a reader or transaction inside, means not now (the next idle check
+        comes SWEEP_IDLE_CHECK_SECONDS later), and is not a lock refusal."""
+        lock = self.ledger._lock
+        if not lock.acquire(blocking=False):
+            return False
+        try:
+            if self.ledger._readers() or self.ledger._connection.in_transaction:
+                return False
+            return self.ledger.account_holds_due()
+        finally:
+            lock.release()
 
     def _sweep_cycle(self, *, holds_only: bool = False) -> str | None:
         """The three sweeps in their old order, under one hold of the ledger lock, and none while a
