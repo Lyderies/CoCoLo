@@ -139,6 +139,37 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
         self.assertFalse(list(self.directory.glob('*.partial')))
         self.assertEqual([], self.copies())
 
+    def test_HS_15_a_copy_that_fails_after_its_rename_leaves_nothing(self):
+        from codex_agents.history_contracts import HistoryError
+        self.format_16_store()
+        real_fsync = os.fsync
+        calls = []
+
+        def fsync(descriptor):
+            calls.append(descriptor)
+            if len(calls) == 2:  # the folder's sync, after the copy is published
+                raise OSError('disk full')
+            return real_fsync(descriptor)
+        with mock.patch.object(os, 'fsync', fsync):
+            with self.assertRaises(HistoryError):
+                self.service_history()
+        self.assertEqual([], self.copies())
+        self.assertFalse(list(self.directory.glob('*.partial')))
+        self.assertEqual(16, self.version(self.directory / 'history.sqlite3'))
+
+    def test_HS_16_a_copy_never_replaces_an_existing_one(self):
+        import time as time_module
+        before = self.format_16_store()
+        fixed = 1_700_000_000_000_000_000
+        existing = self.directory / f'history.sqlite3.before-17.{fixed}'
+        existing.write_bytes(b'keep me')
+        with mock.patch.object(time_module, 'time_ns', return_value=fixed):
+            self.store = self.service_history()
+        self.assertEqual(b'keep me', existing.read_bytes())  # not replaced
+        made = [path for path in self.copies() if path != existing]
+        self.assertEqual(1, len(made))
+        self.assertEqual([tuple(row) for row in before], self.copy_rows(made[0]))
+
     def test_HS_11_an_invalid_result_identity_is_refused_before_anything_is_written(self):
         from codex_agents.history_contracts import HistoryError
         self.format_16_store()
@@ -268,6 +299,26 @@ class StartMigrationFailureTests(unittest.TestCase):
         clear_start_failure(state, project, since_ms=began)
         self.assertEqual('migration_not_drained', start_failure(state, project)['reason_code'])
         clear_start_failure(state, project, since_ms=time.time_ns() // 1_000_000 + 1000)
+        self.assertIsNone(start_failure(state, project))
+
+    def test_HS_14_a_clear_that_cannot_take_the_lock_leaves_the_record(self):
+        from codex_agents.learning_migration import (_start_failure_lock, clear_start_failure,
+                                                     record_start_failure, start_failure)
+        state, project = self.state_and_project()
+        record_start_failure(state, project, 'migration_not_drained')
+        with _start_failure_lock(state, project) as held:  # another start is keeping its failure now
+            self.assertTrue(held)
+            clear_start_failure(state, project, since_ms=1 << 60)
+        self.assertEqual('migration_not_drained', start_failure(state, project)['reason_code'])
+        clear_start_failure(state, project, since_ms=1 << 60)
+        self.assertIsNone(start_failure(state, project))
+
+    def test_HS_17_a_record_with_another_link_reads_as_none(self):
+        from codex_agents.learning_migration import _start_failure_path, record_start_failure, start_failure
+        state, project = self.state_and_project()
+        record_start_failure(state, project, 'migration_not_drained')
+        path = _start_failure_path(state, project)
+        os.link(path, path.with_name('other-name.json'))
         self.assertIsNone(start_failure(state, project))
 
     def test_HS_4_a_service_that_ends_early_hands_its_reason_to_its_starter(self):
