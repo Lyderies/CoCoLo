@@ -780,7 +780,8 @@ def _check_backup_coverage(restored: sqlite3.Connection, schema_version: int) ->
         "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL)) "
         # O0b RS-A (F2): a slot released by a matching lost or crashed decision keeps its completion apart: no
         # completion yet, or a late one that still has its execution owner.
-        + (f"AND NOT ({DECISION_RELEASED} AND (c.released_at_ms IS NULL OR e.owner_digest IS NOT NULL)) "
+        # O0b RS-A round 2 G7: a completion exists once its terminal is stored, settled or not.
+        + (f"AND NOT ({DECISION_RELEASED} AND (c.terminal_record_id IS NULL OR e.owner_digest IS NOT NULL)) "
            if schema_version >= 15 else "")
         + "LIMIT 1"
     ).fetchone() is not None:
@@ -2982,8 +2983,8 @@ class LearningLedger:
             "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
             "WHERE (a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
             "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL)) "
-            # O0b RS-A (F2): as in _check_backup_coverage.
-            + (f"AND NOT ({DECISION_RELEASED} AND (c.released_at_ms IS NULL OR e.owner_digest IS NOT NULL)) "
+            # O0b RS-A (F2, round 2 G7): as in _check_backup_coverage.
+            + (f"AND NOT ({DECISION_RELEASED} AND (c.terminal_record_id IS NULL OR e.owner_digest IS NOT NULL)) "
                if current >= 15 else "")
             + "LIMIT 1"
             ).fetchone() is not None:
