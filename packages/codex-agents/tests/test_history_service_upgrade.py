@@ -7,6 +7,8 @@ fails silently. Integration stage: real history stores in temporary folders.
 import argparse
 import os
 import sqlite3
+import time
+import sys
 import stat
 import unittest
 from unittest import mock
@@ -182,6 +184,39 @@ class HistoryServiceUpgradeTests(ProjectOrchestrationTests):
         self.assertEqual(16, self.version(self.directory / 'history.sqlite3'))
         self.assertEqual([], self.copies())
 
+    def refused_with(self, change):
+        from codex_agents.history_contracts import HistoryError
+        self.format_16_store()
+        connection = sqlite3.connect(self.directory / 'history.sqlite3')
+        connection.execute(change)
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(HistoryError, 'history_incompatible'):
+            self.service_history()
+        self.assertEqual(16, self.version(self.directory / 'history.sqlite3'))
+        self.assertEqual([], self.copies())
+
+    def test_HS_11_another_project_identity_is_refused_before_anything_is_written(self):
+        self.refused_with("UPDATE result_identity SET project_id='other-project'")
+
+    def test_HS_11_a_malformed_key_check_is_refused_before_anything_is_written(self):
+        self.refused_with("UPDATE result_identity SET key_check='not-a-digest'")
+
+    def test_HS_11_two_identity_rows_are_refused_before_anything_is_written(self):
+        self.refused_with("INSERT INTO result_identity SELECT 'other-project', key_check, last_observed_at_ms "
+                          "FROM result_identity")
+
+    def test_HS_18_a_copy_made_for_an_upgrade_that_fails_is_removed(self):
+        from codex_agents import project_history
+        self.format_16_store()
+        with mock.patch.object(project_history, 'REGISTERED_RUN_SCHEMA', 'CREATE TABL broken(x)'):
+            with self.assertRaises(Exception):
+                self.service_history()
+        self.assertEqual(16, self.version(self.directory / 'history.sqlite3'))  # nothing upgraded
+        self.assertEqual([], self.copies())  # and no copy left for it
+        self.store = self.service_history()  # a later attempt upgrades, with one copy
+        self.assertEqual(1, len(self.copies()))
+
     def test_HS_1_a_current_store_needs_no_copy(self):
         self.store.close()
         self.store = self.service_history()
@@ -329,6 +364,63 @@ class StartMigrationFailureTests(unittest.TestCase):
         report = {}
         self.assertFalse(project_host_client._start(state, entry, project, lambda: False, 10, report=report))
         self.assertEqual('history_incompatible', report.get('reason_code'))
+
+    def test_HS_19_reading_a_start_report_never_raises(self):
+        from codex_agents.project_host_client import _ended_report
+        state, project = self.state_and_project()
+        path = project / 'report.json'
+        for content in (b'\xff\xfe', b'[1]', b'[' * 100_000, b'{"reason_code": ["x"]}', b'null', b''):
+            path.write_bytes(content)
+            self.assertEqual({}, _ended_report(path))
+        self.assertEqual({}, _ended_report(project / 'missing.json'))
+
+    def test_HS_12_the_allowed_reasons_cover_every_fixed_migration_reason(self):
+        import re
+        from tests.support import ORCHESTRATION_ROOT
+        from codex_agents.learning_migration import START_REASONS
+        sources = [(ORCHESTRATION_ROOT / 'codex_agents' / 'learning_migration.py').read_text(),
+                   (ORCHESTRATION_ROOT / 'cli.py').read_text()]
+        given = {reason for text in sources for reason in re.findall(r"""["'](migration_[a-z_]+)["']""", text)}
+        self.assertLessEqual(given, START_REASONS)
+
+    def test_HS_13_a_start_clears_with_its_own_start_time(self):
+        import cli
+        client = mock.Mock()
+        client.learning_migration.return_value = {'moved': False, 'has_learning': True, 'drained': True,
+                                                  'activation_pending': False}
+        args = argparse.Namespace(state_root=None, project_root='/tmp/project-hs13')
+        before = time.time_ns() // 1_000_000
+        with mock.patch.object(cli, 'other_version_host', return_value=None), \
+                mock.patch.object(cli, 'project_host_serving', return_value=False), \
+                mock.patch.object(cli, '_start_collector_quietly'), \
+                mock.patch.object(cli, '_compatible_collector', return_value=client), \
+                mock.patch.object(cli, 'CollectorPaths'), \
+                mock.patch.object(cli, '_migrate_learning', return_value={'ready': True}), \
+                mock.patch.object(cli, 'record_start_failure'), \
+                mock.patch.object(cli, 'clear_start_failure') as cleared, \
+                mock.patch.object(cli, 'ensure_project_host', return_value=True):
+            cli._start_project_host(args)
+        since = cleared.call_args.kwargs['since_ms']
+        self.assertTrue(before <= since <= time.time_ns() // 1_000_000)
+
+    def test_HS_4_the_start_command_answers_the_service_reason_from_the_fixed_list(self):
+        import contextlib
+        import io
+        import json
+        import cli
+        for given, answered in (('history_incompatible', 'history_incompatible'),
+                                ('anything/else', 'project_service_unavailable')):
+            def start(args, given=given):
+                args.service_start_report = {'reason_code': given}
+                return False
+            output = io.StringIO()
+            with mock.patch.object(sys, 'argv', ['cli.py', 'learning-start-project-service',
+                                                 '--project-root', '/tmp/project-hs4']), \
+                    mock.patch.object(cli, '_start_project_host', side_effect=start), \
+                    contextlib.redirect_stdout(output):
+                code = cli.main()
+            self.assertEqual(2, code)
+            self.assertEqual(answered, json.loads(output.getvalue())['reason_code'])
 
     def test_HS_9_a_special_file_in_the_way_never_hangs_a_start(self):
         import tempfile
