@@ -388,11 +388,10 @@ class LaunchJournalTests(unittest.TestCase):
         other.forget_instance(journal.instance)
         self.assertTrue((self.directory / (journal.instance + '.lock')).exists())
         path.unlink()
-        claimed(other, OTHER)  # Another instance's run, listed only when the listing is complete.
+        claimed(other, OTHER)
         other.settled(OTHER, 'settled')
-        with mock.patch.object(launch_journal, 'MAX_ENTRIES', 0):
-            other.forget_instance(journal.instance)  # Nothing listed, but the listing is incomplete.
-        self.assertTrue((self.directory / (journal.instance + '.lock')).exists())
+        # O10 D6 (a) replaced the listing cap here: every file is read, so the cap no longer keeps the lock
+        # (test_D6a_a_stopped_instance_is_forgotten_although_the_journal_is_past_the_cap).
         other.forget_instance(journal.instance)
         self.assertFalse((self.directory / (journal.instance + '.lock')).exists())
 

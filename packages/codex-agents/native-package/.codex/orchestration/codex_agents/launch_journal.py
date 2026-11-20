@@ -44,7 +44,13 @@ from .process_tree import (GONE, RUN_TAG, _born_before, process_gone, process_re
 
 STATES = frozenset({'claimed', 'spawning', 'launched', 'watched', 'settled'})
 MAX_ENTRY_BYTES = 65_536
+# Entries read per listing; successive listings go round every file (O10 D6).
 MAX_ENTRIES = 256
+# Unresolved entries named in status; all are counted.
+MAX_UNRESOLVED_LISTED = 16
+# Attempts at taking a fresh instance lock: a later instance may remove a temporary
+# before its creator holds it (`remove_lock_temporaries`).
+LOCK_ATTEMPTS = 3
 # A settled run's tombstone answers status and abandonment for this long.
 TOMBSTONE_MS = 86_400_000
 # The kernel checks must find nothing twice, this far apart: a process that joins a
@@ -55,6 +61,7 @@ PS_PATHS = ('/bin/ps', '/usr/bin/ps')
 PS_TIMEOUT_SECONDS = 5
 _BRIDGE = re.compile(r'brg_[0-9a-f]{32}')
 _INSTANCE = re.compile(r'[0-9a-f]{32}')
+_LOCK_TEMPORARY = re.compile(r'\.[0-9a-f]{32}\.lock\.tmp')
 _HANDLE = re.compile(r'hrn_[0-9a-f]{48}')
 _DIGEST = re.compile(r'[0-9a-f]{64}')
 _FIELDS = {'version', 'state', 'instance', 'bridge_run_id', 'run_handle', 'attempt', 'host_client', 'lease',
@@ -106,26 +113,42 @@ class LaunchJournal:
             info = os.lstat(self.directory)
             if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
                 raise JournalError('launch journal folder is not owner-only')
-            self.instance = secrets.token_hex(16)
-            # Locked under a name no other instance looks at, then linked into place:
-            # `<instance>.lock` never exists unlocked, so nothing can take it for a stopped one.
-            temporary = self.directory / ('.%s.lock.tmp' % self.instance)
-            self._lock_fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0),
-                                    0o600)
         except OSError as error:
             raise JournalError('launch journal is unavailable') from error
         self._released = False
+        # Where the next bounded listing starts, per purpose: successive passes reach every file.
+        self._cursors = {}
+        for attempt in range(LOCK_ATTEMPTS):
+            try:
+                self._take_lock()
+                return
+            except OSError as error:
+                if attempt == LOCK_ATTEMPTS - 1:
+                    raise JournalError('launch journal is unavailable') from error
+
+    def _take_lock(self):
+        """A fresh instance id whose `<instance>.lock` this process holds.
+
+        Locked under a name no other instance takes for a lock, then linked into
+        place: `<instance>.lock` never exists unlocked, so nothing can take it for
+        a stopped one. A later instance may remove the temporary between its
+        creation and its lock (`remove_lock_temporaries`); the link then fails and
+        the caller tries again under a new id.
+        """
+        self.instance = secrets.token_hex(16)
+        temporary = self.directory / ('.%s.lock.tmp' % self.instance)
+        self._lock_fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
         try:
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             os.link(temporary, self._lock_path(self.instance))
             os.unlink(temporary)
             self._sync_directory()
-        except OSError as error:
+        except OSError:
             os.close(self._lock_fd)
             self._lock_fd = None
             with contextlib.suppress(OSError):
                 temporary.unlink()
-            raise JournalError('launch journal is unavailable') from error
+            raise
 
     def _lock_path(self, instance):
         return self.directory / (instance + '.lock')
@@ -179,26 +202,8 @@ class LaunchJournal:
             raise JournalError('launch entry was not written') from error
 
     def _read(self, path):
-        try:
-            descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-        except OSError:
-            return None
-        try:
-            info = os.fstat(descriptor)
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077
-                    or info.st_nlink != 1 or info.st_size > MAX_ENTRY_BYTES):
-                return None
-            raw = os.read(descriptor, MAX_ENTRY_BYTES + 1)
-        except OSError:
-            return None
-        finally:
-            os.close(descriptor)
-        try:
-            value = json.loads(raw)
-        except (ValueError, RecursionError):
-            return None
-        value = checked_entry(value)
-        if value is None or path.name != value['bridge_run_id'] + '.json':
+        value = _read_entry(path)
+        if value is None:
             return None
         # Not stored: where `tree_state` reads the watchdog's confirmation, at the time it checks.
         return {**value, 'marker_path': str(self.marker_path(value['bridge_run_id']))}
@@ -270,28 +275,50 @@ class LaunchJournal:
             raise JournalError('launch entry was not removed') from error
 
     def entries(self):
-        """Every entry, at most MAX_ENTRIES; one that cannot be read is {'bridge_run_id', 'state': None}."""
-        return self._listing()[0]
+        """At most MAX_ENTRIES entries; one that cannot be read is {'bridge_run_id', 'state': None}.
 
-    def _listing(self):
-        """(entries, complete): complete only when every entry file was listed and could be read."""
-        found = []
+        Each call goes on where the last one stopped, so successive calls go round
+        every entry file however many there are (O10 D6).
+        """
+        return self._window('entries')
+
+    def _names(self):
+        """Every entry file's name, sorted; None when the folder cannot be listed."""
         try:
-            names = sorted(name for name in os.listdir(self.directory)
-                           if name.endswith('.json') and _matches(name[:-5], _BRIDGE))
+            return sorted(name for name in os.listdir(self.directory)
+                          if name.endswith('.json') and _matches(name[:-5], _BRIDGE))
         except OSError:
-            return found, False
-        for name in names[:MAX_ENTRIES]:
-            value = self._read(self.directory / name)
-            found.append(value if value is not None else {'bridge_run_id': name[:-5], 'state': None})
-        complete = len(names) <= MAX_ENTRIES and all(entry['state'] is not None for entry in found)
-        return found, complete
+            return None
+
+    def _entry_or_unknown(self, name):
+        value = self._read(self.directory / name)
+        return value if value is not None else {'bridge_run_id': name[:-5], 'state': None}
+
+    def _window(self, purpose):
+        """The next MAX_ENTRIES entries after this purpose's cursor, wrapping round to the first."""
+        names = self._names() or []
+        if len(names) > MAX_ENTRIES:
+            cursor = self._cursors.get(purpose)
+            start = 0 if cursor is None else next((index for index, name in enumerate(names) if name > cursor), 0)
+            names = (names[start:] + names[:start])[:MAX_ENTRIES]
+            self._cursors[purpose] = names[-1] if names else None
+        else:
+            self._cursors.pop(purpose, None)
+        return [self._entry_or_unknown(name) for name in names]
 
     def _unsettled(self, instance):
-        """Whether that instance may still have an unsettled run here (an unreadable entry may be one)."""
-        entries, complete = self._listing()
-        return not complete or any(entry['state'] != 'settled' and entry.get('instance') == instance
-                                   for entry in entries)
+        """Whether that instance may still have an unsettled run here (an unreadable entry may be one).
+
+        Every entry file is read, until one answers it.
+        """
+        names = self._names()
+        if names is None:
+            return True
+        for name in names:
+            entry = self._entry_or_unknown(name)
+            if entry['state'] is None or (entry['state'] != 'settled' and entry['instance'] == instance):
+                return True
+        return False
 
     def instance_stopped(self, instance):
         """Whether no thread of that service instance can still launch or own a child.
@@ -331,14 +358,54 @@ class LaunchJournal:
             return []
 
     def prune(self, *, now_ms=None):
-        """Drop tombstones older than TOMBSTONE_MS."""
+        """Drop tombstones older than TOMBSTONE_MS, and lock temporaries whose creator is gone.
+
+        Tombstones are looked at MAX_ENTRIES at a time, going round every file over
+        successive calls.
+        """
         now_ms = int(time.time() * 1000) if now_ms is None else now_ms
         if self._released:
             return
-        for entry in self.entries():
+        for entry in self._window('prune'):
             if entry['state'] == 'settled' and now_ms - entry['settled_at_ms'] > TOMBSTONE_MS:
                 with contextlib.suppress(JournalError):
                     self.remove(entry['bridge_run_id'])
+        self.remove_lock_temporaries()
+
+    def remove_lock_temporaries(self):
+        """Remove each `.<instance>.lock.tmp` whose creator is gone (O10 D6).
+
+        Only an owner-only regular file with one link (never linked into place as
+        `<instance>.lock`, or that lock is gone already) that no process holds
+        locked now; opened without following a link. A creator that is still
+        starting and has not locked it yet loses it, and takes a new id
+        (`_take_lock`).
+        """
+        if self._released:
+            return
+        try:
+            names = [name for name in os.listdir(self.directory) if _LOCK_TEMPORARY.fullmatch(name)]
+        except OSError:
+            return
+        for name in names:
+            path = self.directory / name
+            try:
+                descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+            except OSError:
+                continue
+            try:
+                info = os.fstat(descriptor)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077
+                        or info.st_nlink != 1):
+                    continue
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                now = os.lstat(path)
+                if (now.st_dev, now.st_ino) == (info.st_dev, info.st_ino):
+                    os.unlink(path)
+            except OSError:
+                continue
+            finally:
+                os.close(descriptor)
 
     def release(self):
         """This instance's threads have stopped: later instances may settle its runs."""
@@ -350,6 +417,92 @@ class LaunchJournal:
         self._released = True  # Nothing is written here after the lock is gone.
         os.close(self._lock_fd)
         self._lock_fd = None
+
+
+def unresolved(directory, *, now_ms=None):
+    """The project's journal entries that no running service can settle, for status (O10 D6).
+
+    An entry is unresolved when it is not settled and its service instance is
+    not running (its lock is free or missing), or when it cannot be read. Its
+    age is the time since its last state was written. Read only: nothing is
+    settled, written or removed, and no process is examined. Every entry is
+    counted; at most MAX_UNRESOLVED_LISTED, the oldest first, are named.
+    """
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    report = {'count': 0, 'oldest_age_ms': None, 'entries': []}
+    directory = Path(directory)
+    try:
+        info = os.lstat(directory)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            return report
+        names = sorted(name for name in os.listdir(directory)
+                       if name.endswith('.json') and _matches(name[:-5], _BRIDGE))
+    except OSError:
+        return report
+    live, found = {}, []
+    for name in names:
+        path = directory / name
+        value = _read_entry(path)
+        if value is not None:
+            if value['state'] == 'settled':
+                continue
+            instance = value['instance']
+            if instance not in live:
+                live[instance] = _lock_held(directory / (instance + '.lock'))
+            if live[instance]:
+                continue
+        try:
+            changed_ms = os.lstat(path).st_mtime_ns // 1_000_000
+        except OSError:
+            continue  # Removed since it was listed.
+        found.append({'bridge_run_id': name[:-5], 'state': None if value is None else value['state'],
+                      'age_ms': max(0, now_ms - changed_ms)})
+    found.sort(key=lambda item: (-item['age_ms'], item['bridge_run_id']))
+    report.update(count=len(found), oldest_age_ms=found[0]['age_ms'] if found else None,
+                  entries=found[:MAX_UNRESOLVED_LISTED])
+    return report
+
+
+def _read_entry(path):
+    """The checked entry in that file, or None (the same checks as `LaunchJournal._read`)."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    except OSError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077
+                or info.st_nlink != 1 or info.st_size > MAX_ENTRY_BYTES):
+            return None
+        raw = os.read(descriptor, MAX_ENTRY_BYTES + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+    try:
+        value = checked_entry(json.loads(raw))
+    except (ValueError, RecursionError):
+        return None
+    if value is None or path.name != value['bridge_run_id'] + '.json':
+        return None
+    return value
+
+
+def _lock_held(path):
+    """Whether a process holds that instance lock now. A lock that cannot be opened is not held."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    except OSError:
+        return False
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+    return False
 
 
 def _identity_gone(identity):

@@ -446,7 +446,10 @@ def status_client(state_root, project_root):
               # How near this project is to each account limit (0.3.4 R9).
               'account_capacity': None,
               # O0b RS-A round 1 F14 (RS-A-6): this project's account holds by kind, with one plain line.
-              'account_holds': None}
+              'account_holds': None,
+              # O10 D6: this project's launch journal entries no running service can settle
+              # (never-settling states, unreadable entries), each with its age.
+              'unresolved_launches': None}
     try:
         state = CollectorPaths(state_root)
         report['client_failures'] = client_health_snapshot(state, project_root)
@@ -489,6 +492,9 @@ def status_client(state_root, project_root):
     try:
         project_id, endpoint = _account_target(state, project_root)
         this_project = project_id  # S1-H1c E4: marks the caller's own project among those holding work
+        from .launch_journal import unresolved
+        if type(project_id) is str and re.fullmatch(r'prj_[0-9a-f]{32}', project_id):
+            report['unresolved_launches'] = unresolved(Path(state.root) / 'projects' / project_id / 'launches')
         enroll_clients(state, project_root, None, account=endpoint)
         owner = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=1).owner_key()
         report['owner_key'] = {name: owner[name] for name in ('state', 'fingerprint', 'replacements', 'last_replaced_at_ms')}
