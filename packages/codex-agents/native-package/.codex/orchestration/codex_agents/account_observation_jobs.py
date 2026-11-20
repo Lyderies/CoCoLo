@@ -64,8 +64,8 @@ def _worker(slot):
             slot.outgoing.put_nowait((ticket, reply))
         except BaseException as error:
             # No completion is manufactured after unknown worker/cleanup state.
-            slot.note.publish(faulted=True, kept=frozenset({slot.health_token}))  # S1-H1a, by this worker
-            slot.lane.note_failure(slot.note, 'observation_worker_failed', error)
+            lane_health.safely(lambda: slot.note.publish(faulted=True, kept=frozenset({slot.health_token})))  # S1-H1a, by this worker
+            lane_health.safely(lambda error=error: slot.lane.note_failure(slot.note, 'observation_worker_failed', error))
             slot.fault.set()
             return
         if slot.stop.is_set():
@@ -247,7 +247,7 @@ class AccountObservationJobs:
         """S1-H1a: an invalid reply keeps its slot; noted once, with no exception."""
         if slot not in self._mismatched:
             self._mismatched.add(slot)
-            self.health.note_failure(self._note, 'reply_mismatch', None)
+            lane_health.safely(lambda: self.health.note_failure(self._note, 'reply_mismatch', None))
 
     def _publish_health(self):
         """S1-H1a: this owner's note: active slots busy, faulted or mismatched ones kept, queued jobs.
@@ -255,9 +255,7 @@ class AccountObservationJobs:
         try:
             kept = {slot.health_token for slot in self._active
                     if slot.fault.is_set() or slot in self._mismatched}
-            self._note.publish(faulted=self._faulted, kept=frozenset(kept),
-                               busy_tokens=frozenset(slot.health_token for slot in self._active),
-                               queued=sum(len(queue_) for queue_ in self._queues.values()))
+            lane_health.safely(lambda: self._note.publish(faulted=self._faulted, kept=frozenset(kept), busy_tokens=frozenset(slot.health_token for slot in self._active), queued=sum(len(queue_) for queue_ in self._queues.values())))
         except Exception:
             pass
 
@@ -312,7 +310,7 @@ class AccountObservationJobs:
             except ObservationError as error:
                 self._finish(ticket, job, reason=error.reason_code)
             except Exception as error:
-                self.health.note_failure(self._note, 'observation_commit_failed', error)  # S1-H1a C7
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'observation_commit_failed', error))  # S1-H1a C7
                 self._finish(ticket, job, reason='observation_unavailable')
             else:
                 self._finish(ticket, job, result=result)
@@ -374,7 +372,7 @@ class AccountObservationJobs:
                 except ObservationError as error:
                     reason = error.reason_code
                 except Exception as error:
-                    self.health.note_failure(self._note, 'observation_recheck_failed', error)  # S1-H1a C7
+                    lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'observation_recheck_failed', error))  # S1-H1a C7
                     reason = 'observation_unavailable'
             reply = ObservationJobReply(job.key, job.request, job.result if reason is None else None,
                                         reason, job.before_publish)

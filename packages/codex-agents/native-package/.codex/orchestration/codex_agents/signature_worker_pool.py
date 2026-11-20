@@ -151,8 +151,8 @@ def _worker_loop(slot, wire_limits, poll_ns, cleanup_ns):
         except execution.SignatureExecutionUnconfirmed as error:
             retained = error.context
             result = None
-            slot.note.publish(kept=frozenset({slot.health_token}))  # S1-H1a, by this worker
-            slot.lane.note_failure(slot.note, 'signature_execution_unconfirmed', error)
+            lane_health.safely(lambda: slot.note.publish(kept=frozenset({slot.health_token})))  # S1-H1a, by this worker
+            lane_health.safely(lambda error=error: slot.lane.note_failure(slot.note, 'signature_execution_unconfirmed', error))
         except SignaturePayloadError:
             result = SignatureWorkerResult('signature_execution_invalid_output', (), None, 0, False)
         except AdmissionDecodeError:
@@ -160,7 +160,7 @@ def _worker_loop(slot, wire_limits, poll_ns, cleanup_ns):
             result = SignatureWorkerResult('signature_execution_invalid_output', (), None, 0, True)
         except BaseException as error:
             result = SignatureWorkerResult('signature_execution_internal_failure', (), None, 0, False)
-            slot.lane.note_failure(slot.note, 'signature_worker_failed', error)  # S1-H1a
+            lane_health.safely(lambda error=error: slot.lane.note_failure(slot.note, 'signature_worker_failed', error))  # S1-H1a
         # No complete job retains a full input/wire/payload in its mailbox or
         # this persistent worker's locals. Exception handlers have also ended.
         inputs = None
@@ -184,8 +184,8 @@ def _worker(slot, wire_limits, poll_ns, cleanup_ns):
     except BaseException as error:
         # Retain the exceptional frame/custody without printing input-bearing
         # tracebacks. The owner sees a fault and never reuses this slot.
-        slot.note.publish(faulted=True)  # S1-H1a, by this worker
-        slot.lane.note_failure(slot.note, 'signature_worker_failed', error)
+        lane_health.safely(lambda: slot.note.publish(faulted=True))  # S1-H1a, by this worker
+        lane_health.safely(lambda error=error: slot.lane.note_failure(slot.note, 'signature_worker_failed', error))
         slot.fault.set()
         threading.Event().wait()
 
@@ -313,7 +313,7 @@ class SignatureWorkerPool:
             # fault. Retain intake/static shares and refuse further offers.
             self._faulted = True
             slot.fault.set()
-            self.health.note_failure(self._note, 'signature_offer_failed', error)  # S1-H1a C4
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'signature_offer_failed', error))  # S1-H1a C4
             if slot.current is not None:
                 slot.current.unknown = True
                 slot.current.cancelled.set()
@@ -429,7 +429,7 @@ class SignatureWorkerPool:
                 active.unknown = True
                 active.cancelled.set()
                 slot.fault.set()
-                self.health.note_failure(self._note, 'signature_confirmation_failed', error)  # S1-H1a C4
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'signature_confirmation_failed', error))  # S1-H1a C4
                 slot.current = active
                 self._returned.pop(active.handle, None)
                 raise
@@ -449,7 +449,7 @@ class SignatureWorkerPool:
         """S1-H1a C4: an invalid reply or time faults its slot; noted once, with no exception."""
         if not getattr(slot, 'noted_fault', False):
             slot.noted_fault = True
-            self.health.note_failure(self._note, 'reply_mismatch', None)
+            lane_health.safely(lambda: self.health.note_failure(self._note, 'reply_mismatch', None))
 
     def _publish_health(self):
         """S1-H1a: this owner's note: active jobs busy, unconfirmed ones and selected intake without
@@ -459,8 +459,7 @@ class SignatureWorkerPool:
             kept = {slot.health_token for slot in active if slot.current.unknown}
             spare = max(0, self._intake.snapshot().selected - len(active))
             kept.update(self._intake_tokens[:spare])
-            self._note.publish(kept=frozenset(kept), busy_tokens=frozenset(slot.health_token for slot in active),
-                               faulted=self._faulted or any(slot.fault.is_set() for slot in self._slots))
+            lane_health.safely(lambda: self._note.publish(kept=frozenset(kept), busy_tokens=frozenset(slot.health_token for slot in active), faulted=self._faulted or any(slot.fault.is_set() for slot in self._slots)))
         except Exception:
             pass
 

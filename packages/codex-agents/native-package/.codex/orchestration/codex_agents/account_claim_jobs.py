@@ -119,15 +119,14 @@ class AccountClaimJobs:
 
     def _note_fault(self, error, cause='claim_owner_failed'):
         """S1-H1a: note a fault with its cause and type only, then republish. Never raises."""
-        self.health.note_failure(self._note, cause, error)
+        lane_health.safely(lambda error=error: self.health.note_failure(self._note, cause, error))
         self._publish_health()
 
     def _publish_health(self):
         """S1-H1a: this owner's note: faulted, and its jobs (kept while faulted, else busy)."""
         try:
             tokens = frozenset(id(job) for job in self._jobs.values())
-            self._note.publish(faulted=self._faulted, kept=tokens if self._faulted else frozenset(),
-                               busy=0 if self._faulted else len(tokens))
+            lane_health.safely(lambda: self._note.publish(faulted=self._faulted, kept=tokens if self._faulted else frozenset(), busy=0 if self._faulted else len(tokens)))
         except Exception:
             pass
 
@@ -357,7 +356,7 @@ class AccountClaimJobs:
                         job.reason, job.state = error.reason_code, "ready"  # Its own reason, as a first capture.
                         continue
                     except Exception as error:
-                        self.health.note_failure(self._note, 'claim_capture_failed', error)  # S1-H1a C7
+                        lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'claim_capture_failed', error))  # S1-H1a C7
                         job.reason, job.state = "claim_unavailable", "ready"
                         continue
                     self._signatures[job.signature_handle] = ticket

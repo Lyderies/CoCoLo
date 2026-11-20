@@ -130,8 +130,8 @@ class AccountIngress:
         except BaseException as error:
             with self._lock:
                 self._faulted = self._front_stopped = True
-            self._note.publish(faulted=True)  # S1-H1a
-            self.health.note_failure(self._note, 'ingress_start_failed', error)
+            lane_health.safely(lambda: self._note.publish(faulted=True))  # S1-H1a
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'ingress_start_failed', error))
             raise
 
     def attach(self, connection: socket.socket, context: object, *, health=False):
@@ -278,8 +278,8 @@ class AccountIngress:
                     if token in events:
                         self._front_step(selector, token, active[token], events[token])
         except BaseException as error:
-            self._front_note.publish(faulted=True)  # S1-H1a, by the front, before its lock
-            self.health.note_failure(self._front_note, 'ingress_front_failed', error)
+            lane_health.safely(lambda: self._front_note.publish(faulted=True))  # S1-H1a, by the front, before its lock
+            lane_health.safely(lambda error=error: self.health.note_failure(self._front_note, 'ingress_front_failed', error))
             with self._lock:
                 self._faulted = True
         finally:
@@ -294,9 +294,9 @@ class AccountIngress:
                 except Exception as error:
                     # Unknown descriptor state fails closed, never a cleanup
                     # acknowledgement. The slot remains for explicit shutdown.
-                    self._kept_descriptors.add(id(peer))  # S1-H1a, by the front
-                    self._front_note.publish(faulted=True, kept=frozenset(self._kept_descriptors))
-                    self.health.note_failure(self._front_note, 'ingress_cleanup_failed', error)
+                    lane_health.safely(lambda: self._kept_descriptors.add(id(peer)))  # S1-H1a, by the front
+                    lane_health.safely(lambda: self._front_note.publish(faulted=True, kept=frozenset(self._kept_descriptors)))
+                    lane_health.safely(lambda error=error: self.health.note_failure(self._front_note, 'ingress_cleanup_failed', error))
                     with self._lock:
                         self._faulted = True
             if selector is not None:
@@ -330,7 +330,7 @@ class AccountIngress:
         try:
             with self._lock:
                 queued = sum(p.request is not None and not p.processing for p in self._peers.values())
-            self._note.publish(busy=len(self._groups), queued=queued)
+            lane_health.safely(lambda: self._note.publish(busy=len(self._groups), queued=queued))
         except Exception:
             pass
 
@@ -408,8 +408,8 @@ class AccountIngress:
                 del self._groups[ticket]
                 self._rotation.remove(ticket)
         except BaseException as error:
-            self._note.publish(faulted=True)  # S1-H1a
-            self.health.note_failure(self._note, 'ingress_owner_failed', error)
+            lane_health.safely(lambda: self._note.publish(faulted=True))  # S1-H1a
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'ingress_owner_failed', error))
             with self._lock:
                 self._faulted = True
             raise

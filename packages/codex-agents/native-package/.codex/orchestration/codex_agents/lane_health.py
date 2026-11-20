@@ -17,6 +17,14 @@ _TYPE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 CAUSE = re.compile(r"[a-z][a-z_]{2,63}")
 
 
+def safely(record) -> None:
+    """Run one piece of health instrumentation, its arguments included; never raise (C1)."""
+    try:
+        record()
+    except BaseException:  # noqa: BLE001 - instrumentation must never change a lane's outcome
+        return
+
+
 def new_token() -> int:
     """A job's identity for counting it once, whichever slots publish it (atomic under the GIL)."""
     return next(_TOKENS)

@@ -89,16 +89,19 @@ class _Job:
 
 
 def _held(slot, job, cause, error=None, *, faulted=False):
-    """S1-H1a: this worker publishes its own unknown job (and fault) as kept and held. Reporting only."""
-    changes = {'faulted': True} if faulted else {}
-    if job is not None:
-        changes['kept'] = frozenset({job.token})
-    slot.note.publish(**changes)
-    slot.lane.note_failure(slot.note, cause, error)
-    if job is None or not job.held:
+    """S1-H1a: this worker publishes its own unknown job (and fault) as kept and held. Reporting only;
+    never raises (C1): the whole record, its arguments included, runs inside lane_health.safely."""
+    def record():
+        changes = {'faulted': True} if faulted else {}
         if job is not None:
-            job.held = True
-        slot.lane.enter_held()
+            changes['kept'] = frozenset({job.token})
+        slot.note.publish(**changes)
+        slot.lane.note_failure(slot.note, cause, error)
+        if job is None or not job.held:
+            if job is not None:
+                job.held = True
+            slot.lane.enter_held()
+    lane_health.safely(record)
 
 
 class _Slot:
@@ -290,7 +293,7 @@ def _worker(slot, registry):
                 if state == 'unknown' and not job.held:
                     _held(slot, job, 'probe_preparation_unknown', _take_caught())
                 elif state == 'failed':
-                    slot.lane.note_failure(slot.note, 'probe_preparation_failed', _take_caught())
+                    lane_health.safely(lambda: slot.lane.note_failure(slot.note, 'probe_preparation_failed', _take_caught()))
                 if not discard:
                     job = handle = item = prepared = None
                     continue
@@ -314,7 +317,7 @@ def _worker(slot, registry):
                 packet = _execute(job)
                 error = _take_caught()
                 if error is not None:  # S1-H1a C7: execution failed inside its helper (reporting only)
-                    slot.lane.note_failure(slot.note, 'probe_execution_failed', error)
+                    lane_health.safely(lambda error=error: slot.lane.note_failure(slot.note, 'probe_execution_failed', error))
                 with registry._lock:
                     job.packet, job.state = packet, 'finishing'
                     job.packet_snapshot = (packet.body, packet.inputs_digest, packet.workspace_removed, packet.reason_code)
@@ -395,7 +398,7 @@ class BillingProbeWorkers:
             self._charged += PROBE_SLOT_BYTES
             slot.incoming.put_nowait(('prepare', handle, job))
             # S1-H1a C1/C5: published after it is queued, busy by token (never while kept).
-            self._note.publish(busy_tokens=frozenset(j.token for j in self._jobs.values()))
+            lane_health.safely(lambda: self._note.publish(busy_tokens=frozenset(j.token for j in self._jobs.values())))
             return handle
 
     def prepared(self, handle):
@@ -421,11 +424,11 @@ class BillingProbeWorkers:
                 self._registry._handoff_worker(ticket, self, handle)
             except BaseException as error:
                 job.state = 'unknown'
-                self._note.publish(kept=self._note.note.kept | {job.token})  # S1-H1a, reporting only
-                self.health.note_failure(self._note, 'probe_handoff_failed', error)
+                lane_health.safely(lambda: self._note.publish(kept=self._note.note.kept | {job.token}))  # S1-H1a, reporting only
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_handoff_failed', error))
                 if not job.held:
                     job.held = True
-                    self.health.enter_held()
+                    lane_health.safely(lambda: self.health.enter_held())
                 raise
 
     def submit(self, handle):
@@ -486,7 +489,7 @@ class BillingProbeWorkers:
             self._jobs.pop(handle)
             job.slot.current = None
             self._charged -= PROBE_SLOT_BYTES
-            self._note.publish(busy_tokens=frozenset(j.token for j in self._jobs.values()))
+            lane_health.safely(lambda: self._note.publish(busy_tokens=frozenset(j.token for j in self._jobs.values())))
 
     def close(self):
         self._owner()

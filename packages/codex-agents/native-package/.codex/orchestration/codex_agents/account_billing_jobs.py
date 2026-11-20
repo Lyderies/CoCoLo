@@ -85,9 +85,8 @@ class AccountBillingJobs:
             for job in jobs:
                 if job.reason in _FAILURE_REASONS and not job.noted:
                     job.noted = True
-                    self.health.note_failure(self._note, job.reason, None)
-            self._note.publish(kept=frozenset(job.token for job in jobs if job.state == 'unknown'),
-                               busy=sum(job.state != 'unknown' for job in jobs))
+                    lane_health.safely(lambda: self.health.note_failure(self._note, job.reason, None))
+            lane_health.safely(lambda: self._note.publish(kept=frozenset(job.token for job in jobs if job.state == 'unknown'), busy=sum(job.state != 'unknown' for job in jobs)))
             # S1-H1a C6: a probe worker a kept job still holds is held in the probe lane (its own
             # slot there, written only by this owner).
             handles = {self._executions.worker_of(job.preparation) for job in jobs
@@ -98,7 +97,7 @@ class AccountBillingJobs:
             for _ in self._parent_held - tokens:
                 self._workers.health.leave_held()
             self._parent_held = tokens
-            self._parent_note.publish(kept=tokens)
+            lane_health.safely(lambda: self._parent_note.publish(kept=tokens))
         except Exception:
             pass
 
@@ -221,7 +220,7 @@ class AccountBillingJobs:
             self._executions.discard(job.preparation)
             job.cleanup_requested = True
         except Exception as error:
-            self.health.note_failure(self._note, 'probe_cleanup_failed', error)  # S1-H1a C7
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_cleanup_failed', error))  # S1-H1a C7
             self._discard_fault(job)
 
     def _discard_fault(self, job):
@@ -397,7 +396,7 @@ class AccountBillingJobs:
                 self._step(ticket, job)
             except Exception as error:
                 job.noted = True  # S1-H1a: noted here, with the exception's type
-                self.health.note_failure(self._note, 'probe_step_failed', error)
+                lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_step_failed', error))
                 self._settle_failed_step(job)
         self._publish_health()
         if self._closing and not self._jobs:
