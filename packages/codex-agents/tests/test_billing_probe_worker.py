@@ -386,6 +386,15 @@ class BillingProbeWorkerTests(unittest.TestCase):
                 self.until(lambda: self.pool.health.view()['kept'] == 1)
                 self.assertIs(int, type(self.pool.health.view()['held_since_ms']))
 
+    def test_C1_building_a_note_that_fails_never_changes_what_prepare_returns(self):
+        with mock.patch.object(workers, 'frozenset', side_effect=MemoryError(), create=True):
+            handle = self.pool.prepare(self.payload())  # still a handle to a queued job
+        self.until(lambda: self.pool.snapshot(handle)['state'] != 'preparing')
+        self.pool.discard(handle)
+        self.until(lambda: self.pool.snapshot(handle)['state'] == 'cleaned')
+        self.pool.retire(handle)
+        self.assertEqual(0, self.pool._charged)
+
     def test_unbound_preparation_holds_slot_until_actual_discard(self):
         handle, prepared = self.prepare()
         with self.assertRaisesRegex(workers.ProbeWorkerError, 'probe_worker_full'):
