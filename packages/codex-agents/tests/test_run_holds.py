@@ -18,6 +18,36 @@ from codex_agents.account_claim_contracts import ClaimError
 from codex_agents.active_run_capacity import ActiveRunLimits
 
 
+def _snapshot_verified(ledger, project, root, name):
+    learning_store._verify_project_backup_body(learning_store._snapshot_project_partition(
+        ledger._connection, project, ledger_schema_version=learning_store.LEDGER_SCHEMA_VERSION))
+
+
+def _streamed_verified(ledger, project, root, name):
+    import os
+    from codex_agents import project_backup
+    path = root / f"{name}.sqlite"
+    os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    project_backup.write(ledger._connection, path, project, learning_store.LEDGER_SCHEMA_VERSION)
+    project_backup.verify(path, project_id=project, schema_version=learning_store.LEDGER_SCHEMA_VERSION)
+
+
+def assert_refused_everywhere(test, ledger, project, root, reopen):
+    """O0b RS-A round 2 (G1, G7): both backup formats and the next open refuse the ledger as it is now."""
+    for check in (_snapshot_verified, _streamed_verified):
+        with test.subTest(check=check.__name__), test.assertRaisesRegex(LedgerError, "coverage|run hold"):
+            check(ledger, project, root, "refused")
+    with test.subTest(check="open"), test.assertRaisesRegex(LedgerError, "coverage|run hold"):
+        reopen()
+
+
+def assert_accepted_everywhere(ledger, project, root, reopen):
+    """O0b RS-A round 2: both backup formats verify, and the ledger opens again."""
+    _snapshot_verified(ledger, project, root, "accepted")
+    _streamed_verified(ledger, project, root, "accepted")
+    return reopen()
+
+
 class RunHoldTests(ActiveRunCapacityTests):
     def counted(self, account, now, monotonic):
         """Whether the machine's one slot is taken, as admission sees it."""
@@ -600,6 +630,122 @@ class RunHoldTests(ActiveRunCapacityTests):
             self.ledger.delete_project(self.project, now_ms=after)
         self.assertEqual(0, self.ledger._connection.execute(
             "SELECT COUNT(*) FROM run_holds WHERE project_id=?", (self.project,)).fetchone()[0])
+
+    # O0b RS-A round 2 G1, G2 (DESIGN-0.4.0-RS-A.md, "Code review round 2"): written before the code.
+
+    def refused(self):
+        assert_refused_everywhere(self, self.ledger, self.project, self.fixture.state.root, self.reopened)
+
+    def accepted(self):
+        return assert_accepted_everywhere(self.ledger, self.project, self.fixture.state.root, self.reopened)
+
+    def expired_binding(self):
+        """An unclaimed binding the sweep released `expired`, at its expiry plus one."""
+        from codex_agents.learning_contracts import keyed_digest
+        project, launch = self.new_attempt()
+        digest = keyed_digest(self.ledger.state.digest_key(), launch.run_handle)
+        expires = self.ledger._connection.execute(
+            "SELECT expires_at_ms FROM host_run_bindings WHERE handle_digest=?", (digest,)).fetchone()[0]
+        self.assertGreaterEqual(self.sweep(expires + 1, 1), 1)  # the fixture's own binding may expire too
+        self.assertEqual(("released", "expired", expires + 1), tuple(self.ledger._connection.execute(
+            "SELECT state, release_kind, released_at_ms FROM run_holds WHERE kind='binding' AND identity=?",
+            (digest,)).fetchone()))
+        return digest, expires
+
+    def test_RS_A_G1_an_expired_tombstone_released_before_its_binding_s_expiry_is_refused(self):
+        digest, expires = self.expired_binding()
+        with self.ledger._account_transaction():
+            self.ledger._connection.execute(
+                "UPDATE run_holds SET released_at_ms=? WHERE kind='binding' AND identity=?", (expires - 1, digest))
+        self.refused()
+
+    def tampered_evidence(self, kind, change):
+        with self.ledger._account_transaction():
+            evidence = self.ledger._connection.execute(
+                "SELECT evidence FROM run_holds WHERE release_kind=?", (kind,)).fetchone()[0]
+            self.assertIsNotNone(evidence)
+            self.ledger._connection.execute(
+                "UPDATE run_holds SET evidence=? WHERE release_kind=?", (change(evidence), kind))
+
+    def test_RS_A_G1_a_crashed_decision_whose_evidence_does_not_hash_to_its_receipt_is_refused(self):
+        import json
+        self.crashed_release()
+        self.tampered_evidence("crashed", lambda raw: canonical_json(
+            {**json.loads(raw), "observed_wall_ms": 1}).decode())
+        self.refused()
+
+    def test_RS_A_G1_a_withdrawal_whose_evidence_does_not_hash_to_its_receipt_is_refused(self):
+        import json
+        project, launch = self.new_attempt()
+        self.withdraw(project, launch.run_handle)
+        self.tampered_evidence("withdrawn", lambda raw: canonical_json(
+            {**json.loads(raw), "generation": 2}).decode())
+        self.refused()
+
+    def test_RS_A_G1_malformed_decision_evidence_is_refused(self):
+        self.crashed_release()
+        self.tampered_evidence("crashed", lambda raw: raw[:-1])
+        self.refused()
+
+    def test_RS_A_G1_pruned_evidence_unknown_times_and_pruned_sources_still_open(self):
+        """Round 2 G1: what the register may legitimately lack (pruned evidence, history's unknown times, a
+        tombstone whose source retention removed) is still accepted everywhere."""
+        self.crashed_release()
+        project, launch = self.new_attempt()
+        self.withdraw(project, launch.run_handle)
+        digest, _ = self.expired_binding()
+        with self.ledger._account_transaction():
+            self.ledger._connection.execute("UPDATE run_holds SET evidence=NULL")
+            self.ledger._connection.execute(
+                "UPDATE run_holds SET released_at_ms=NULL WHERE kind='binding' AND release_kind='withdrawn'")
+            self.ledger._connection.execute("DELETE FROM host_run_bindings WHERE handle_digest=?", (digest,))
+        self.assertEqual(("released", "expired"), tuple(self.ledger._connection.execute(
+            "SELECT state, release_kind FROM run_holds WHERE kind='binding' AND identity=?", (digest,)).fetchone()))
+        self.accepted()
+
+    def test_RS_A_G1_every_legitimate_release_kind_with_its_evidence_still_opens(self):
+        self.crashed_release()
+        project, launch = self.new_attempt()
+        self.withdraw(project, launch.run_handle)
+        self.expired_binding()
+        self.accepted()
+
+    def recovery_unavailable_then_fallback(self, consumed_at):
+        """A binding abandoned recovery_unavailable, whose fallback later wrote consumed_at_ms (as
+        authorize_fallback does): the abandonment's own time is not that."""
+        from codex_agents.learning_contracts import keyed_digest
+        project, launch = self.new_attempt()
+        digest = keyed_digest(self.ledger.state.digest_key(), launch.run_handle)
+        with self.ledger._account_transaction():
+            self.ledger._connection.execute(
+                "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='recovery_unavailable' "
+                "WHERE handle_digest=?", (digest,))
+            self.ledger._connection.execute(
+                "UPDATE host_run_bindings SET consumed_at_ms=? WHERE handle_digest=?", (consumed_at, digest))
+        return digest
+
+    def test_RS_A_G2_an_abandoned_binding_later_consumed_by_fallback_is_adopted_with_an_unknown_time(self):
+        digest = self.recovery_unavailable_then_fallback(self.case.stamp + 50)
+        self.schema_fourteen(backup=True)
+        ledger = self.upgraded()
+        self.assertEqual(("released", "recovery_unavailable", None), tuple(ledger._connection.execute(
+            "SELECT state, release_kind, released_at_ms FROM run_holds WHERE kind='binding' AND identity=?",
+            (digest,)).fetchone()))
+
+    def test_RS_A_G2_an_abandoned_binding_inserted_with_a_consumed_time_keeps_its_release_time_unknown(self):
+        """The take trigger records a final row in adoption's terms (a restore, a migration step)."""
+        digest = self.recovery_unavailable_then_fallback(self.case.stamp + 50)
+        with self.ledger._account_transaction():
+            row = dict(self.ledger._connection.execute(
+                "SELECT * FROM host_run_bindings WHERE handle_digest=?", (digest,)).fetchone())
+            self.ledger._connection.execute("DELETE FROM host_run_bindings WHERE handle_digest=?", (digest,))
+            self.ledger._connection.execute("DELETE FROM run_holds WHERE kind='binding' AND identity=?", (digest,))
+            self.ledger._connection.execute(
+                f"INSERT INTO host_run_bindings({','.join(row)}) VALUES({','.join('?' * len(row))})",
+                tuple(row.values()))
+        self.assertEqual(("released", "recovery_unavailable", None), tuple(self.ledger._connection.execute(
+            "SELECT state, release_kind, released_at_ms FROM run_holds WHERE kind='binding' AND identity=?",
+            (digest,)).fetchone()))
 
     def test_RS_A_1_each_account_hold_has_its_register_row(self):
         self.case.claim()
