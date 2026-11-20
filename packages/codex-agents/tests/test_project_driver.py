@@ -847,7 +847,9 @@ class LifecycleBoundaryTests(DriverHarness):
         # Once recorded the host lets the run go; recording it again adds nothing.
         self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
         code, again = self.attempt(*record)
-        self.assertEqual((2, False), (code, again['ready']))
+        # (requirement) D1 (RS-D-2, K4): the record no longer needs the service to hold the run, so recording it
+        # again after the host let it go is the same admission (one outcome, below), not a refusal.
+        self.assertEqual((0, recorded['host_outcome_digest']), (code, again['host_outcome_digest']))
         store = sqlite3.connect('file:' + str(next(self.state.root.glob('projects/*/history.sqlite3')))
                                 + '?mode=ro', uri=True)
         self.addCleanup(store.close)
@@ -1829,6 +1831,113 @@ class SilenceCutoffTests(DriverHarness):
 ManyRunsTests.worker_once = HostVerificationTests.worker
 ManyRunsTests.verifier = HostVerificationTests.verifier
 ManyRunsTests.verified = HostVerificationTests.verified
+
+
+class StoredContextRestartTests(DriverHarness):
+    """Slice D1 (RS-D D5, RS-D-2): a run's record context is in the project store, so a successor service of the
+    same runtime finishes what the stopped one began: its record, its verifier, QA and routing evidence."""
+
+    def setUp(self):
+        self._host_stop = threading.Event()
+        original = DriverHarness.start_project_host
+
+        def first(harness, project, stop=None):
+            return original(harness, project, stop or self._host_stop)
+
+        with mock.patch.object(DriverHarness, 'start_project_host', first):
+            super().setUp()
+
+    def stop_host(self):
+        host = [t for t in self.threads if t.name.startswith('test-project-host-')][0]
+        self._host_stop.set()
+        host.join(20)
+        self.assertFalse(host.is_alive())
+        self.threads.remove(host)
+        self._host_stop = threading.Event()
+
+    def restart_host(self):
+        """Stop the running project host and start a fresh one for the same project: nothing in memory is kept."""
+        self.stop_host()
+        self.start_project_host(self.project, self._host_stop)
+
+    def stored_context(self, run_handle):
+        """The run's stored context row, read from the project store without the service."""
+        for path in self.state.root.rglob('history.sqlite3'):
+            connection = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
+            try:
+                row = connection.execute('SELECT state,host_class FROM project_result_contexts WHERE run_handle=?',
+                                         (run_handle,)).fetchone()
+                if row is not None:
+                    return tuple(row)
+            except sqlite3.Error:
+                pass
+            finally:
+                connection.close()
+        return None
+
+    def test_D1_a_result_on_disk_before_its_record_is_recorded_by_the_next_service_from_the_stored_context(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        dispatched = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
+        self.assertEqual('result', dispatched['bridge_report']['outcome'])
+        # The child's result body is on disk and committed; nothing has recorded it. The service stops here.
+        self.assertEqual(('committed', self.primary + '-host-v1'), self.stored_context(run_handle))
+        self.restart_host()
+        observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
+            {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
+        recorded = self.cli('learning-record-host-result', *context, '--route', route_path,
+                            '--result', self.write('result.json', dispatched['result']), '--observation', observation)
+        self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
+        self.assertEqual(('recorded', self.primary + '-host-v1'), self.stored_context(run_handle))
+        # Recording again after one more restart is the same admission, never a second one.
+        self.restart_host()
+        again = self.cli('learning-record-host-result', *context, '--route', route_path,
+                         '--result', self.write('result.json', dispatched['result']), '--observation', observation)
+        self.assertEqual(recorded['host_outcome_digest'], again['host_outcome_digest'])
+        self.assertEqual(1, len(self.executions()))
+
+    def test_A1_after_restarts_a_verifier_qa_and_routing_evidence_still_find_the_recorded_originals(self):
+        orchestration = self.cli('learning-open-orchestration')['orchestration_handle']
+        base = self.task()
+        with mock.patch.object(self, 'task', return_value={**base, 'context_breadth': 'unknown'}):
+            worker = self.recorded_worker(orchestration, base['id'])  # reconnaissance of the task below
+        self.restart_host()
+        verifier = self.bound_verifier(orchestration, 'verify-after-restart', worker)
+        self.restart_host()
+        checks = self.checks(worker, verifier)
+        self.assertTrue(checks['checks_passed'])
+        self.restart_host()
+        self.assertTrue(self.record_qa(worker, verifier, checks['check_receipt'])['ready'])
+        self.restart_host()
+        hard = {**base, 'operation': 'end_to_end', 'complexity': 'extreme', 'ambiguity': 'high',
+                'context_breadth': 'cross_system', 'routing_evidence_refs': ['outcome:' + worker['digest']]}
+        routed = self.cli('learning-route', '--task', self.write('hard-task.json', hard))
+        self.assertIn('hard_end_to_end_evidence', json.dumps(routed))
+        self.assertEqual(2, len(self.executions()))
+
+    def test_D1_a_host_holding_recorded_workers_stops_at_the_ordinary_idle_time(self):
+        """The 12-hour retaining idle rule is gone: nothing a recorded worker needs is in the service's memory."""
+        from codex_agents import project_service
+        from codex_agents.client_runtime import runtime_hint_path
+        self.stop_host()
+        reports = []
+        stopped = self._host_stop.is_set
+        thread = threading.Thread(daemon=True, name='test-project-host-idle', target=lambda: reports.append(
+            project_service.serve_project(self.state.root, self.project, stopped=lambda: self.stop.is_set() or stopped(),
+                                          bundle_root=self.bundle, idle_stop_ns=8 * SECOND)))
+        self.threads.append(thread)
+        thread.start()
+        self.wait_for(lambda: runtime_hint_path(self.paths, self.project).exists())
+        orchestration = self.cli('learning-open-orchestration')['orchestration_handle']
+        self.recorded_worker(orchestration, 'task-idle')
+        thread.join(90)
+        self.assertFalse(thread.is_alive(), 'a host holding a recorded worker did not stop when idle')
+        self.assertEqual([{'ready': True, 'stopped': True}], reports)
+
+
+for _name in ('recorded_worker', 'bound_verifier', 'checks', 'record_qa'):
+    setattr(StoredContextRestartTests, _name, getattr(HostVerificationTests, _name))
 
 
 class SharedPoolTests(DriverHarness):

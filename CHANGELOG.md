@@ -4,6 +4,13 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- A result can be recorded after its service stopped. What a record, a verifier and QA need of a run (its assignment,
+  task, route, client capability and host class) is now kept in the project's records with the run, from before
+  its claim, instead of only in the service's memory, so a restarted service records a result left on disk, opens
+  its verifier and runs QA on it. The record no longer has to come within an hour of the run's release, a service
+  no longer forgets workers after 64, and a service holding recorded workers stops after the ordinary 15 idle
+  minutes instead of 12 hours. A result kept from before this version is still kept to its deadline, but cannot be
+  recorded, verified or run through QA (`history_worker_context_unavailable`), as after a restart before.
 - Claims, opens and probes no longer stop machine-wide after two account executions end unconfirmed. An
   unconfirmed signature execution, a billing job left unknown or a probe worker held unknown now faults its
   account lane, so the account restarts itself at its next check; unknown work held in one lane no longer stops

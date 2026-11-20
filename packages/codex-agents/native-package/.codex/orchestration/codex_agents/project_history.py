@@ -44,7 +44,7 @@ from .project_learning_qa import QA_SCHEMA as LEARNING_QA_SCHEMA, QA_COLUMNS as 
 from .project_learning_chunks import CHUNK_SCHEMA as LEARNING_CHUNK_SCHEMA, CHUNK_COLUMNS as LEARNING_CHUNK_COLUMNS
 from .project_learning_source import SOURCE_SCHEMA as LEARNING_SOURCE_SCHEMA, SOURCE_COLUMNS as LEARNING_SOURCE_COLUMNS
 from .project_learning_activation import ACTIVATION_SCHEMA, ACTIVATION_COLUMNS
-from . import project_holds_schema
+from . import project_holds_schema, project_result_contexts
 from .project_holds_schema import PROJECT_HOLDS_COLUMNS, PROJECT_HOLDS_SCHEMA, attempt_identity
 from .learning_contracts import (
     DISPATCH_RESULT_SCHEMA_VERSION, MAX_RECORD_BYTES, SOURCES, canonical_json, content_digest,
@@ -337,6 +337,8 @@ class ProjectHistory:
             self._initialize()
             if self._result_key is not None:
                 self._initialize_results()
+                # D1 (RS-D draft 3 §6): orphan and partial context files go before anything is served.
+                project_result_contexts.reconcile(self)
             if self._connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":
                 raise HistoryError("history_unavailable")
         except HistoryError as exc:
@@ -1076,26 +1078,50 @@ class ProjectHistory:
         )
 
     @_operation
-    def reserve_result_lease(self, binding: ResultLeaseBinding, assignment: dict) -> ResultLease:
+    def reserve_result_lease(self, binding: ResultLeaseBinding, assignment: dict, *,
+                             record_context=None) -> ResultLease:
         """Charge durable body capacity BEFORE consuming any account claim.
 
         This is storage metadata, not authentication/admission. The future fixed
         account adapter must check the actual protected lease and full request.
         No placeholder bridge/claim ID or result is created here.
+
+        D1 (RS-D-1): with `record_context` (the driver's path), the run's record
+        context is stored with the lease: its file before this transaction, its
+        row and `result_custody` hold in it, so it is durable before the arm.
         """
         binding = self._lease_binding(binding)
         encoded = assignment_bytes(assignment, binding)
+        if self._result_key is None:
+            raise HistoryError("history_result_unavailable")
+        context = None if record_context is None else project_result_contexts.prepare(self, encoded, record_context)
         self._reclaim_if_full()
         now = self._result_now()
         digest = keyed_digest(self._result_key, encoded)
+        previous = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
+                                            (self.project_id, binding.run_handle, binding.attempt)).fetchone()
+        if previous is not None:
+            value = self._lease(previous)
+            if value.binding != binding or value.assignment_digest != digest:
+                raise HistoryError("history_conflict")
+            project_result_contexts.known(self, binding.run_handle, binding.attempt,
+                                          None if context is None else context[1])
+            return value  # Never refresh, reuse or revive a known lease, nor give it another context.
+        if context is not None:
+            project_result_contexts.store(self, binding.run_handle, binding.attempt, context[0])
+        try:
+            return self._reserve_result_lease_locked(binding, digest, now, context, record_context)
+        except BaseException:
+            if context is not None:
+                project_result_contexts.discard(self, binding.run_handle, binding.attempt)
+            raise
+
+    def _reserve_result_lease_locked(self, binding, digest, now, context, record_context):
         with self._transaction():
             previous = self._connection.execute("SELECT * FROM result_leases WHERE project_id=? AND run_handle=? AND attempt=?",
                                                 (self.project_id, binding.run_handle, binding.attempt)).fetchone()
             if previous is not None:
-                value = self._lease(previous)
-                if value.binding != binding or value.assignment_digest != digest:
-                    raise HistoryError("history_conflict")
-                return value  # Never refresh, reuse or revive a known lease.
+                raise HistoryError("history_conflict")  # Only this writer takes leases: never here.
             self._orchestration_owner().active_for(binding)
             if (self._connection.execute("SELECT 1 FROM result_reservations WHERE project_id=? AND run_handle=? AND attempt=?",
                                          (self.project_id, binding.run_handle, binding.attempt)).fetchone() is not None
@@ -1117,6 +1143,10 @@ class ProjectHistory:
             project_holds_schema.take_hold(self._connection, self.project_id, "lease",
                                            attempt_identity(binding.run_handle, binding.attempt), now_ms=now,
                                            lease_case="unarmed", due_at_ms=until)
+            if context is not None:
+                # D1 (SH-3 "taken"): the context row and its custody hold, in the lease's own transaction.
+                project_result_contexts.insert(self, binding.run_handle, binding.attempt, context[1], len(context[0]),
+                                               record_context.host_class, lease_deadline_ms=until, now_ms=now)
         return value
 
     @_operation
@@ -1225,6 +1255,13 @@ class ProjectHistory:
                 project_holds_schema.release_hold(
                     self._connection, self.project_id, 'lease', attempt_identity(binding.run_handle, binding.attempt),
                     'fenced' if fenced else 'denied', now_ms=self._hold_now(), receipt=closure['receipt_digest'])
+                # D1 (SH-3): the attempt ended unfinished, so its custody goes with the lease (O3).
+                ending = project_result_contexts.release_unfinished(
+                    self, binding.run_handle, binding.attempt, 'fenced' if fenced else 'denied', self._hold_now())
+            else:
+                ending = False
+        if ending:
+            project_result_contexts.finish_quietly(self, binding.run_handle, binding.attempt)
         return value
 
     @_operation
@@ -1257,6 +1294,10 @@ class ProjectHistory:
             project_holds_schema.release_hold(  # B1 (SH-2): no host open and no reservation, checked above
                 self._connection, self.project_id, 'lease', attempt_identity(binding.run_handle, binding.attempt),
                 'withdrawn_unsent', now_ms=self._hold_now(), evidence=project_holds_schema.evidence_json(by='withdraw'))
+            ending = project_result_contexts.release_unfinished(  # D1 (SH-3)
+                self, binding.run_handle, binding.attempt, 'withdrawn_unsent', self._hold_now())
+        if ending:
+            project_result_contexts.finish_quietly(self, binding.run_handle, binding.attempt)
         return value
 
     @_operation
@@ -1600,6 +1641,7 @@ class ProjectHistory:
                                          binding.attempt, binding.claim_digest)).fetchone() is not None:
                 raise HistoryError("history_conflict")
             self._insert_result_reservation(actual)
+            project_result_contexts.bind(self, binding)  # D1: the context's claim association
             # B1 (RS-B draft 3 §6): the reservation is the attempt's obligation from here on, taken in this
             # transaction; the lease is released `bound` in it (SH-2).
             project_holds_schema.take_hold(self._connection, self.project_id, "reservation", binding.claim_id,
@@ -1710,6 +1752,10 @@ class ProjectHistory:
                         self._connection, self.project_id, "lease",
                         attempt_identity(value.binding.run_handle, value.binding.attempt), "withdrawn_unsent",
                         now_ms=now, evidence=project_holds_schema.evidence_json(by="expiry"))
+                    ending = project_result_contexts.release_unfinished(  # D1 (SH-3)
+                        self, value.binding.run_handle, value.binding.attempt, "withdrawn_unsent", now)
+                if ending:
+                    project_result_contexts.finish_quietly(self, value.binding.run_handle, value.binding.attempt)
                 retired += 1
             except HistoryError as error:
                 failure = failure or error.reason_code
@@ -1765,6 +1811,10 @@ class ProjectHistory:
                     project_holds_schema.release_hold(
                         self._connection, self.project_id, "lease", attempt_identity(*key), "withdrawn_unsent",
                         now_ms=self._hold_now(), evidence=project_holds_schema.evidence_json(by="start_pass"))
+                    ending = project_result_contexts.release_unfinished(  # D1 (SH-3, O2)
+                        self, *key, "withdrawn_unsent", self._hold_now())
+                if ending:
+                    project_result_contexts.finish_quietly(self, *key)
                 released += 1
             except HistoryError as error:
                 failure = failure or error.reason_code  # One lease that does not verify never stops the others.
@@ -2018,6 +2068,7 @@ class ProjectHistory:
                 (now, value.retained_until_ms, len(body), digest, delivery.record_id,
                  self.project_id, binding.claim_id),
             )
+            project_result_contexts.commit(self, binding, value.retained_until_ms)  # D1
         return delivery
 
     def _client_usage_id(self, binding):
@@ -2101,9 +2152,15 @@ class ProjectHistory:
         _, value = self._result_row(binding)
         if value.state == "expired":
             return
+        # D1 (SH-3): the body and its context retire together; custody is released first, by why it ends.
+        try:
+            kind = "orchestration_closed" if self._orchestration_owner().closed_for(binding) else "retention"
+        except HistoryError:
+            kind = "retention"
         with self._transaction():
             self._connection.execute("UPDATE result_reservations SET state='retiring' WHERE project_id=? AND claim_id=?",
                                      (self.project_id, binding.claim_id))
+            project_result_contexts.begin_retirement(self, binding, kind)
         self._recover_result_link(binding)
         for name in self._result_names(binding):
             try:
@@ -2112,10 +2169,12 @@ class ProjectHistory:
                 continue
             self._result_file_info(info)
             os.unlink(name, dir_fd=self._directory_fd)
+        project_result_contexts.unlink_for_retirement(self, binding)
         os.fsync(self._directory_fd)
         with self._transaction():
             self._connection.execute("UPDATE result_reservations SET state='expired' WHERE project_id=? AND claim_id=?",
                                      (self.project_id, binding.claim_id))
+            project_result_contexts.end_retirement(self, binding)
 
     @_operation
     def retire_result(self, binding: AttemptBinding) -> None:
@@ -2251,6 +2310,8 @@ class ProjectHistory:
                     continue  # Not this attempt's lease, still live, or not released: kept.
                 if self._obligation_held(value.binding.claim_id):
                     continue  # B1: failed is not release; its held register row keeps its source.
+                if not self._context_finished(value.binding.run_handle, value.binding.attempt):
+                    continue  # D1: its context is not finished yet.
             except HistoryError:
                 continue  # Kept: it does not verify, so nothing about it is trusted.
             with self._transaction():
@@ -2267,7 +2328,8 @@ class ProjectHistory:
                                                (self.project_id, position)).fetchone()
                 lease = self._lease(row)
                 if (lease.state != "expired" or not lease.reserved_until_ms < cutoff or not owner.closed_for(lease.binding)
-                        or not self._attempt_released(lease)):
+                        or not self._attempt_released(lease)
+                        or not self._context_finished(lease.binding.run_handle, lease.binding.attempt)):
                     continue
             except HistoryError:
                 continue
@@ -2275,6 +2337,10 @@ class ProjectHistory:
                 self._delete_attempt_rows(lease.binding.run_handle, lease.binding.attempt, None)
             purged += 1
         return purged
+
+    def _context_finished(self, run_handle: str, attempt: int) -> bool:
+        """D1: an attempt's rows are purged only once its record context is `ended` or `expired` (or it has none)."""
+        return project_result_contexts.purgeable(self, run_handle, attempt)
 
     def _obligation_held(self, claim_id: str) -> bool:
         """Whether this reservation's obligation row in the register is not yet released (RS-B draft 3 §6)."""
@@ -2309,7 +2375,8 @@ class ProjectHistory:
         """One finished attempt's rows, children first (foreign keys are on)."""
         attempt_key = (self.project_id, run_handle, attempt)
         for table in ("project_cleanup_acknowledgements", "project_cleanup_receipts", "project_cleanup_reservations",
-                      "project_host_opens", "project_registered_runs"):  # with its registration (R6-13)
+                      "project_host_opens", "project_registered_runs",  # with its registration (R6-13)
+                      "project_result_contexts"):  # D1: only a finished one (`purgeable`); its custody stays
             self._connection.execute(f"DELETE FROM {table} WHERE project_id=? AND run_handle=? AND attempt=?",
                                      attempt_key)
         if claim_id is not None:
@@ -2424,6 +2491,9 @@ class ProjectHistory:
                 raise HistoryError("history_conflict")
             result = self._host_result_receipt(entry)
             before_commit()
+            with self._transaction():
+                # D1 (RS-D draft 2 §4): a repeat writes the outcome association if it is missing, idempotently.
+                project_result_contexts.record_outcome(self, binding, receipt["host_outcome_digest"])
             return result
         body = self.read_result(binding)
         checked_result_body(body, assignment, terminal)
@@ -2455,7 +2525,47 @@ class ProjectHistory:
         with self._transaction():
             for value, content in zip(checked, encoded):
                 entry = self._append_locked(value, content, "host", now)
+            # D1 (RS-D draft 2 §4): the outcome association, in the admission's own transaction.
+            project_result_contexts.record_outcome(self, binding, receipt["host_outcome_digest"])
         return self._host_result_receipt(entry)
+
+    # D1 (RS-D-2, RS-D-10): every reader of a run's record context reads it here, from the store.
+    @_operation
+    def stored_result_context(self, binding: AttemptBinding, *, host_class: str, recorded: bool = False):
+        """This claimed attempt's stored inputs, for its own host class, checked against the consumed grant."""
+        if self._result_key is None:
+            raise HistoryError("history_result_unavailable")
+        return project_result_contexts.stored_result_context(self, binding, host_class=host_class, recorded=recorded)
+
+    @_operation
+    def stored_worker_context(self, outcome_digest: str, *, host_class: str, orchestration_handle: str | None = None):
+        """A recorded run's stored inputs, by its outcome digest, for its own host class."""
+        if self._result_key is None:
+            raise HistoryError("history_result_unavailable")
+        return project_result_contexts.stored_worker_context(self, outcome_digest, host_class=host_class,
+                                                             orchestration_handle=orchestration_handle)
+
+    @_operation
+    def stored_attempt_context(self, run_handle: str, attempt: int, *, host_class: str, inputs_digest: str):
+        """A published attempt's stored inputs, by run handle, attempt and open inputs digest."""
+        if self._result_key is None:
+            raise HistoryError("history_result_unavailable")
+        if not matches(run_handle, _RUN) or not valid_integer(attempt, minimum=1):
+            raise HistoryError("history_invalid_input")
+        return project_result_contexts.stored_attempt_context(self, run_handle, attempt, host_class=host_class,
+                                                              inputs_digest=inputs_digest)
+
+    @_operation
+    def committed_result_reference(self, binding: AttemptBinding) -> dict:
+        """The published terminal of this committed attempt: its binding, record and result digests."""
+        if self._result_key is None:
+            raise HistoryError("history_result_unavailable")
+        return project_result_contexts.committed_reference(self, self._result_binding(binding))
+
+    def stored_result_reference(self, run_handle: str, attempt: int, *, host_class: str, inputs_digest: str) -> dict:
+        """What the record command needs once the service that ran the attempt has gone (D1)."""
+        context = self.stored_attempt_context(run_handle, attempt, host_class=host_class, inputs_digest=inputs_digest)
+        return self.committed_result_reference(context.binding)
 
     def _host_result_receipt(self, entry: HistoryEntry) -> dict:
         receipt = parse_bounded_json(entry.content)

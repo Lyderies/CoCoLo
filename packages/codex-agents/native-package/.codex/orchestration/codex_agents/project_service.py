@@ -41,11 +41,9 @@ MAX_ROUTE_TIMEOUT_SECONDS = 21_600  # config/routing-policy.json; a test keeps t
 RESULT_RESERVATION_MS = (MAX_ROUTE_TIMEOUT_SECONDS + 1_800) * 1000
 # A host is started on demand, so one with no run and no client for this long
 # stops; the next command starts another. Its journals and scope are durable.
+# D1: a recorded run's originals are in the project store, so a host keeps nothing a later verifier or QA needs and
+# stops on this one rule (the 12-hour rule for a host holding recorded workers is gone).
 IDLE_STOP_NS = 900 * SECOND
-# Recorded runs' originals for verification and QA are kept in this process only,
-# so a host that holds any waits much longer before it stops: a primary may take
-# its time between recording a worker and verifying it.
-RETAINING_IDLE_STOP_NS = 12 * 3600 * SECOND
 ORCHESTRATIONS = OrchestrationLimits(256, 4_096)
 
 
@@ -135,7 +133,7 @@ def service_history(directory, project_id, **options):
 
 
 def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None,
-                  liveness=LIVENESS, retaining_idle_stop_ns=RETAINING_IDLE_STOP_NS):
+                  liveness=LIVENESS):
     """Run the host until a signal, idleness, withdrawal or a writer fault; return a closed report."""
 
     state = CollectorPaths(state_root)
@@ -186,14 +184,13 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         if time.monotonic() - checked[0] >= 1:
             checked[0] = time.monotonic()
             # Stop when idle, or when the state under this host has been removed.
-            limit = max(idle_stop_ns, retaining_idle_stop_ns) if host.retaining() else idle_stop_ns
             if host.withdrawn():
                 # Asked to stop (its hint was withdrawn): never from under a run it
                 # holds. It finishes that run first; no new client can find it meanwhile.
                 return not host.holding()
             # O0c M3: a host holding slots it will never free is replaced once idle (no run under way
             # and no client for the idle period), whatever those holds; at once if none is left.
-            return (host.exhausted() or host.idle_ns() >= limit
+            return (host.exhausted() or host.idle_ns() >= idle_stop_ns
                     or (host.replacing() and host.client_idle_ns() >= idle_stop_ns))
         return False
 

@@ -1115,6 +1115,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "project_holds_schema.py::custody_consistent": {
+   "checks": 1,
+   "ends": "D1: the custody validator checks each live context's size and the live total against their limits, over live rows only (partial index); the rows it checks end as the budget's do",
+   "test": "test_O5_the_live_context_budget_admits_exactly_what_fits_and_a_refusal_leaves_nothing"
+  },
   "project_ingress.py::__post_init__": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -1275,6 +1280,16 @@
   "project_request_queue.py::prepare": {
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_result_contexts.py::_check_budget": {
+   "checks": 1,
+   "ends": "D1 (RS-D-8, SH-6): live context bytes are summed from the rows not `ended` or `expired`; a context ends with its lease when the attempt ends unfinished (custody `lost_with_reservation`) or retires with its result (`retention`, `orchestration_closed`), so only live custody is ever charged",
+   "test": "test_O5_the_live_context_budget_admits_exactly_what_fits_and_a_refusal_leaves_nothing"
+  },
+  "project_result_contexts.py::prepare": {
+   "checks": 1,
+   "ends": "D1 (RS-D-8): a size check of one context's bytes, not a count; nothing accumulates",
+   "test": "test_O5_a_context_at_its_size_limit_is_kept_and_one_byte_over_is_refused_before_the_arm"
   },
   "project_runtime.py::__post_init__": {
    "checks": 1,

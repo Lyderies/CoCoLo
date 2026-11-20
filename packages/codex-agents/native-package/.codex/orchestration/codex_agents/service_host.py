@@ -55,6 +55,9 @@ OWNER_HISTORY_OPERATIONS = frozenset({'history.learning_cycle', 'history.learnin
                                       'history.learning_feedback', 'history.learning_review_case',
                                       'history.orchestration_report', 'history.capacity_report'})
 DRIVER_ENDPOINT = 'run.sock'  # Beside the control socket; client_runtime uses the same name.
+# D1: refusals of the stored record context a caller is told as they are; any other failure is "not authorized".
+_PLAIN_CONTEXT_REFUSALS = frozenset({'history_worker_context_unavailable', 'history_result_expired',
+                                     'history_result_not_ready'})
 
 
 @dataclass(frozen=True)
@@ -473,13 +476,28 @@ class ProjectServiceHost:
         return OrchestrationAuthorization(self._scope, orchestration_request_digest(request),
                                           entry.enrolled.host_client, ORCHESTRATION_OPERATIONS)
 
+    def _stored(self, read, *, plain=False):
+        """D1 (RS-D-2): a run's record context, read from the project store on the writer thread (where every
+        authorizer of this host's project services runs), never from the driver's memory. None when it is not this
+        host class's or does not verify; with `plain`, a refusal worth naming is raised as it is."""
+        if self._driver is None or self._runtime is None:
+            return None
+        try:
+            return read(self._runtime.persistence)
+        except HistoryError as error:
+            if plain and error.reason_code in _PLAIN_CONTEXT_REFUSALS:
+                raise
+            return None
+        except Exception:
+            return None
+
     def _authorize_result(self, request, token):
-        """A run's own result, read by the host class that dispatched it."""
+        """A run's own result, read by the host class that dispatched it (its stored context names that class)."""
         entry = self._frontend.context(token) if self._frontend is not None else None
-        if (entry is None or entry.kind != 'project' or entry.enrolled.role != 'host' or self._driver is None
+        if (entry is None or entry.kind != 'project' or entry.enrolled.role != 'host'
                 or entry.enrolled.host_client == OWNER_CLIENT
-                or not (self._driver.owns_binding(request.binding, entry.enrolled.host_client)
-                        or self._driver.retains_worker(request.binding, entry.enrolled.host_client))):
+                or self._stored(lambda lane: lane.stored_result_context(request.binding,
+                                                                        entry.enrolled.host_client)) is None):
             return None
         return ResultReadAuthorization(request.binding, request.result_digest, result_read_request_digest(request))
 
@@ -496,9 +514,10 @@ class ProjectServiceHost:
         if request.operation == 'history.admit_host_result':
             try:
                 binding = decode_host_result_reference(request.payload).binding
-                original = None if self._driver is None else self._driver.result_context(binding, entry.enrolled.host_client)
             except Exception:
                 return None
+            original = self._stored(lambda lane: lane.stored_result_context(binding, entry.enrolled.host_client),
+                                    plain=True)
             if original is None:
                 return None
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
@@ -527,23 +546,34 @@ class ProjectServiceHost:
                 return None
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
                                         frozenset({request.operation}))
+        if request.operation == 'history.result_reference':
+            # D1: a published attempt of this host class, named by its run handle, attempt and open inputs.
+            payload = request.payload
+            original = self._stored(lambda lane: lane.stored_attempt_context(
+                payload['run_handle'], payload['attempt'], entry.enrolled.host_client, payload['inputs_digest']),
+                plain=True)
+            if original is None:
+                return None
+            return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
+                                        frozenset({request.operation}), host_result_context=original)
         if request.operation in {'history.worker_input', 'history.routing_evidence'}:
-            # About a run this host class recorded: its originals are the ones kept here.
-            worker = None if self._driver is None else self._driver.worker_context(
-                None, request.payload.get('host_outcome_digest'), entry.enrolled.host_client)
+            # About a run this host class recorded: its originals are the ones the store keeps for it.
+            worker = self._stored(lambda lane: lane.stored_worker_context(
+                request.payload.get('host_outcome_digest'), entry.enrolled.host_client))
             if worker is None:
                 return None
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
                                         frozenset({request.operation}), host_result_context=worker)
         if request.operation in {'history.qa_scope', 'history.issue_qa_checks', 'history.commit_qa', 'history.qa_details'}:
             # QA of a worker and its verifier, both recorded by this host class: the
-            # originals are the ones this host kept, never request JSON.
+            # originals are the ones the store keeps for them, never request JSON.
             try:
-                pair = [self._driver.retained_context(AttemptBinding(**request.payload[name + '_binding']),
-                                                      entry.enrolled.host_client) for name in ('worker', 'verifier')]
+                bindings = [AttemptBinding(**request.payload[name + '_binding']) for name in ('worker', 'verifier')]
             except Exception:
                 return None
-            if self._driver is None or None in pair:
+            pair = [self._stored(lambda lane, binding=binding: lane.stored_result_context(
+                binding, entry.enrolled.host_client, recorded=True)) for binding in bindings]
+            if None in pair:
                 return None
             qa = OperationalQAContext(*pair)
             check = None
@@ -571,8 +601,8 @@ class ProjectServiceHost:
             digest = original['task'].get('verification_for_outcome') if type(original['task']) is dict else None
             worker = None
             if digest is not None:
-                worker = None if self._driver is None else self._driver.worker_context(
-                    original['orchestration_handle'], digest, entry.enrolled.host_client)
+                worker = self._stored(lambda lane: lane.stored_worker_context(
+                    digest, entry.enrolled.host_client, orchestration_handle=original['orchestration_handle']))
                 if worker is None:
                     return None
             prospective = OpenScopeContext(self._scope, original['orchestration_handle'], original['assignment'],
@@ -625,10 +655,6 @@ class ProjectServiceHost:
         """O0c M1, M3: (slots held that nothing here will free, the run slots there are), for status."""
         from .project_driver import PREPARATION_SLOTS
         return (0 if self._driver is None else self._driver.stuck_slots(), PREPARATION_SLOTS)
-
-    def retaining(self):
-        self._owner()
-        return self._driver is not None and self._driver.retaining()
 
     def holding(self):
         """Whether any run or unfinished work for one is held here."""

@@ -109,6 +109,7 @@ class _Pending:
     cleanup_raw: bytes | None = None
     release_acknowledgement: bytes | None = None
     release_confirmed: bytes | None = None
+    record_inputs: dict | None = None  # D1: the host class and client capability stored with the lease
 
 
 class ResultPersistenceLane:
@@ -242,8 +243,13 @@ class ResultPersistenceLane:
             raise HistoryError("history_invalid_input")
         return self._prepare_entry(binding, worker_handle, hard_deadline_at_ms)
 
-    def prepare_lease(self, binding, worker_handle):
-        """Reserve before the account creates its claim ID; launch nothing."""
+    def prepare_lease(self, binding, worker_handle, *, record_context=None):
+        """Reserve before the account creates its claim ID; launch nothing.
+
+        D1 (RS-D-1): with `record_context` ({'host_class', 'client_capability'}, the driver's own facts of the run),
+        the writer stores the run's record context with the lease, its assignment, task and route taken from the
+        prepared worker's own input, so it is durable before the lease can be armed.
+        """
         self._check_owner()
         if type(binding) is not ResultLeaseBinding:
             raise HistoryError("history_invalid_input")
@@ -251,9 +257,15 @@ class ResultPersistenceLane:
         scope = self._owner._monitor.scope()
         if any(getattr(scope, name) != getattr(binding, name) for name in vars(scope)):
             raise HistoryError("history_not_authorized")
-        return self._prepare_entry(binding, worker_handle, None)
+        if record_context is not None and (type(record_context) is not dict
+                                           or record_context.keys() != {'host_class', 'client_capability'}
+                                           or type(record_context['host_class']) is not str
+                                           or type(record_context['client_capability']) is not dict):
+            raise HistoryError("history_invalid_input")
+        return self._prepare_entry(binding, worker_handle, None,
+                                   None if record_context is None else dict(record_context))
 
-    def _prepare_entry(self, binding, worker_handle, deadline):
+    def _prepare_entry(self, binding, worker_handle, deadline, record_inputs=None):
         if type(worker_handle) is not CodexWorkerHandle:
             raise HistoryError("history_invalid_input")
         with self._lock:
@@ -276,6 +288,7 @@ class ResultPersistenceLane:
         handle = ResultPersistenceHandle()
         with self._lock:
             pending = _Pending(binding, worker_handle, original, payload, deadline)
+            pending.record_inputs = record_inputs
             if type(binding) is ResultLeaseBinding:
                 pending.lease_binding = binding
             self._jobs[handle] = pending
@@ -834,6 +847,24 @@ class ResultPersistenceLane:
         with self._lock:
             return self._fault
 
+    # D1 (RS-D-2): the service's authorizers read a run's record context from the store, never from the driver's
+    # memory. They run on this writer thread, inside its own services' requests, so they use its store directly.
+    def _writer_store(self):
+        if threading.current_thread() is not self._writer:
+            raise HistoryError("history_wrong_owner")
+        return self._history()
+
+    def stored_result_context(self, binding, host_class, *, recorded=False):
+        return self._writer_store().stored_result_context(binding, host_class=host_class, recorded=recorded)
+
+    def stored_worker_context(self, outcome_digest, host_class, *, orchestration_handle=None):
+        return self._writer_store().stored_worker_context(outcome_digest, host_class=host_class,
+                                                          orchestration_handle=orchestration_handle)
+
+    def stored_attempt_context(self, run_handle, attempt, host_class, inputs_digest):
+        return self._writer_store().stored_attempt_context(run_handle, attempt, host_class=host_class,
+                                                           inputs_digest=inputs_digest)
+
     def _history(self):
         if self._store is None:
             store = self._open()
@@ -856,7 +887,13 @@ class ResultPersistenceLane:
         from .open_scope_contracts import open_inputs_digest
         inputs_digest = open_inputs_digest(assignment, original['task'], original['route'], original['parent_grant'])
         if pending.lease_binding is not None:
-            lease = self._history().reserve_result_lease(pending.lease_binding, assignment)
+            context = None
+            if pending.record_inputs is not None:
+                from .host_result_contracts import RecordContext
+                context = RecordContext(original['task'], original['route'],
+                                        pending.record_inputs['client_capability'], pending.record_inputs['host_class'],
+                                        inputs_digest)
+            lease = self._history().reserve_result_lease(pending.lease_binding, assignment, record_context=context)
         else:
             self._history().reserve_result(pending.binding, assignment, hard_deadline_at_ms=pending.deadline_ms)
             lease = None

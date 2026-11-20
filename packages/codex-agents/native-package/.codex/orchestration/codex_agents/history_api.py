@@ -16,7 +16,7 @@ from pathlib import Path
 from .contracts import ContractError, TASK_FAMILIES
 from .history_contracts import (
     HISTORY_REASON_CODES, MAX_SEQUENCE, AttemptBinding, HistoryError, TerminalDelivery,
-    _DIGEST, _ID, _PROJECT, matches, valid_integer,
+    _DIGEST, _ID, _PROJECT, _RUN, matches, valid_integer,
 )
 from .host_result_contracts import HostResultReference, decode_host_result_reference
 from .host_open_contracts import OpenProvenanceInput, decode_host_open_submission
@@ -41,6 +41,8 @@ HISTORY_OPERATIONS = frozenset({
     "history.learning_cycle", "history.learning_report", "history.routing_evidence",
     "history.learning_feedback", "history.learning_review_case", "history.orchestration_report",
     "history.capacity_report",
+    # D1: a published attempt's terminal reference, found in the store from its run handle, attempt and inputs.
+    "history.result_reference",
 })
 # Replies that may carry more than the ordinary metadata reply.
 LARGE_REPLY_OPERATIONS = frozenset({"history.read_record", "history.qa_details", "history.worker_input",
@@ -194,6 +196,11 @@ def _validate_request(request: HistoryRequest) -> None:
             or request.request_id != payload["claim_id"] or not matches(payload["claim_id"], _ID)
             or not all(matches(payload[key], _DIGEST) for key in ("record_content_digest", "receipt_digest"))
         ):
+            raise HistoryError("history_invalid_request")
+    elif operation == "history.result_reference":
+        if (not _closed(payload, {"run_handle", "attempt", "inputs_digest"}) or not matches(payload["run_handle"], _RUN)
+                or not valid_integer(payload["attempt"], minimum=1) or not matches(payload["inputs_digest"], _DIGEST)
+                or request.request_id != payload["run_handle"]):
             raise HistoryError("history_invalid_request")
     elif operation == "history.pending_terminals":
         if (
@@ -399,6 +406,17 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
         for name, key in (('worker', 'host_outcome_digest'), ('verifier', 'verifier_host_outcome_digest')):
             _validate_host_reference(result[name], request.payload[name + '_binding'], request.payload[key],
                                      verification=name == 'verifier')
+    elif operation == 'history.result_reference':
+        if (not _closed(result, {'binding', 'delivery'}) or type(result['binding']) is not dict
+                or not _closed(result['delivery'], {'record_id', 'record_content_digest', 'result_digest'})
+                or not matches(result['delivery']['record_id'], _ID)
+                or not all(matches(result['delivery'][n], _DIGEST) for n in ('record_content_digest', 'result_digest'))):
+            raise HistoryError('history_invalid_response')
+        binding = AttemptBinding(**result['binding'])
+        if (binding.project_id != request.project_id or binding.runtime_digest != request.runtime_digest
+                or binding.run_handle != request.payload['run_handle'] or binding.attempt != request.payload['attempt']
+                or binding.as_data() != result['binding']):
+            raise HistoryError('history_invalid_response')
     elif operation == 'history.worker_reference':
         _validate_host_reference(result, request.payload['binding'], request.payload['host_outcome_digest'], verification=False)
         if result['provider'] not in {'codex', 'claude'}:
@@ -616,6 +634,12 @@ class HistoryClient:
         """Whether this recorded outcome is accepted reconnaissance for the named task."""
         return self._call('history.routing_evidence', host_outcome_digest, {
             'host_outcome_digest': host_outcome_digest, 'task_id': task_id, 'family': family})['trusted']
+
+    def result_reference(self, run_handle: str, attempt: int, inputs_digest: str) -> dict:
+        """D1: a published attempt this host class ran, from the project store: its binding and terminal reference,
+        whether or not the service that ran it still holds it."""
+        return self._call('history.result_reference', run_handle,
+                          {'run_handle': run_handle, 'attempt': attempt, 'inputs_digest': inputs_digest})
 
     def worker_input(self, host_outcome_digest: str) -> dict:
         """A run this host recorded: its exact originals and where its terminal and result are."""

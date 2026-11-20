@@ -1093,18 +1093,17 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
         state = CollectorPaths(state_root)
         scope, endpoint, result_endpoint = read_runtime_hint(state, project_root)
         enroll_clients(state, project_root, scope, (endpoint, result_endpoint), host_client=host_client)
-        view = DispatchClient(endpoint, result_endpoint, scope, timeout=10).call('dispatch.status',
-            observation.get('run_handle'), assignment.get('attempt'), inputs)
-        if view['state'] != 'published':
-            raise HistoryError('history_result_not_ready')
-        binding = AttemptBinding(**view['binding'])
+        history = HistoryClient(result_endpoint, scope.project_id, scope.runtime_digest, timeout=10)
+        # D1: the published attempt is found in the project store from its run handle, attempt and inputs, so it
+        # is recorded whether or not the service that ran it still holds it (a successor records it the same way).
+        found = history.result_reference(observation.get('run_handle'), assignment.get('attempt'), inputs)
+        binding = AttemptBinding(**found['binding'])
         current = OrchestrationClient(result_endpoint, OrchestrationScope(**vars(scope)), timeout=10).call(
             'orchestration.status', {'orchestration_handle': binding.orchestration_handle})
         if current['current']['snapshot']['client_version'] != host_client:
             raise HostClientMismatch('host_client_mismatch')
-        delivery = view['delivery']
+        delivery = found['delivery']
         reference = HostResultReference(binding, delivery['record_id'], delivery['record_content_digest'], delivery['result_digest'])
-        history = HistoryClient(result_endpoint, scope.project_id, scope.runtime_digest, timeout=10)
         terminal = history.read_record(reference.terminal_record_id)
         record, metadata = terminal['record'], terminal['metadata']
         if (metadata['source'] != 'host' or metadata['content_digest'] != reference.terminal_content_digest
@@ -1135,7 +1134,7 @@ def record_codex_result_client(state_root, project_root, task, route, assignment
                             {'purpose': 'recorded',
                              'host_outcome_digest': admitted['admission']['host_outcome_digest']}, timeout=5)
         except Exception:
-            pass  # The host keeps custody for its grace period instead.
+            pass  # A hint only: the run's dispatch view then stays its short while (D1).
         # The validator's safe reason and the client's diagnostics, from the durable terminal record.
         diagnostics = {name: record[name] for name in ('result_validation_reason_code', 'client_diagnostics')
                        if record.get(name) is not None}

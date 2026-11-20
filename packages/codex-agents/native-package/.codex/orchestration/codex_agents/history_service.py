@@ -420,6 +420,16 @@ class HistoryService:
                 result = {'trusted': trusted_reconnaissance(
                     self._store, authorization.host_result_context, request.payload['host_outcome_digest'],
                     task_id=request.payload['task_id'], family=request.payload['family'])}
+            elif request.operation == 'history.result_reference':
+                # D1: the attempt's stored context (its host class and open inputs) authorized this; the reference
+                # is read from the store, so the record works after the service that ran it has gone.
+                if authorization.host_result_context is None:
+                    raise HistoryError('history_not_authorized')
+                binding = authorization.host_result_context.binding
+                if (binding.run_handle, binding.attempt) != (request.payload['run_handle'], request.payload['attempt']):
+                    raise HistoryError('history_not_authorized')
+                self._history()
+                result = self._store.committed_result_reference(binding)
             elif request.operation == 'history.worker_input':
                 # A recorded worker's exact originals, for the account open of its
                 # verifier: checked against the worker's consumed grant first.

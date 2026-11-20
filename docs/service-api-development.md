@@ -401,21 +401,22 @@ reconnaissance (`routing_evidence_refs: ["outcome:<host_outcome_digest>"]`) is r
 as hard end-to-end work only if every citation is trusted. For a run the project's
 service recorded, the CLI asks that service (`history.routing_evidence`, role `host`,
 one cited digest per request; `client_runtime.routing_evidence_client`):
-`project_routing_evidence.trusted_reconnaissance` answers true only when the service
-still keeps that run's originals for this host class, they match the run's consumed
+`project_routing_evidence.trusted_reconnaissance` answers true only when the project
+store holds that run's record context for this host class (D1), it matches the run's consumed
 grant and returned result, the run's task has the same `id` and `family` as the task
 being routed and was reconnaissance (ambiguity or context breadth unknown), the
 project's own operational QA row for the outcome is intact and accepted, the verified
 outcome is positive and completed, and the owner has not rejected the run (live or
 imported feedback). A citation the service holds but that fails any of these refuses
-the route; it is never ignored. A citation the service does not hold (another host
-class, a run from before a service restart, or a run an earlier version recorded) is
+the route; it is never ignored. A citation the store holds no context for (another host
+class, or a run recorded before format 18, whose originals only that service's memory held) is
 left to the ledger's own check only while the project's learning still lives in the
 ledger; once it has moved, the citation is refused, because the owner may have rejected
-that run in the project store since and the ledger's frozen copy would not know. Kept
-originals live in memory (at most 64), so after a service restart earlier
-reconnaissance can no longer be cited. Test:
-`HostVerificationTests.test_accepted_reconnaissance_of_the_same_task_is_trusted_routing_evidence`.
+that run in the project store since and the ledger's frozen copy would not know. The
+originals are stored with the run, so earlier reconnaissance is still cited after a
+service restart. Tests:
+`HostVerificationTests.test_accepted_reconnaissance_of_the_same_task_is_trusted_routing_evidence`,
+`StoredContextRestartTests.test_A1_after_restarts_a_verifier_qa_and_routing_evidence_still_find_the_recorded_originals`.
 
 Host crash recovery (owner decision 2026-11-13: automatic; finding 18). If a project
 host stops or crashes while a run holds an admitted claim, the new host does not know
@@ -652,12 +653,19 @@ sandboxed helper-process stack that an earlier design planned for this calculati
 (`learning_cycle_execution`, `_worker`, `_process`, `_input`) was removed by owner
 decision on 2026-11-13; nothing called it.
 
-Verification and operational QA on the host path. When the CLI reports a recorded
-result (`run.recorded`) it names the result's `host_outcome_digest`; the driver then
-keeps that run's originals (`HostResultContext`: binding, assignment, task, route,
-client capability) in memory, keyed by the digest, for the host class that ran it
-(at most 64, newest kept; lost on a host restart, after which a verifier or QA of an
-earlier run is refused). A task with `verification_for_outcome`:
+Verification and operational QA on the host path. A run's originals (its record
+context: assignment, task, route, the client capability it was prepared with and the
+host class that opened it) are stored by the project writer with the run's lease, in a
+private file beside its result (`project_result_contexts`, slice D1, RS-D draft 2-3):
+verified at host open, bound to the claim at bind, committed with the result and
+associated with the outcome's `host_outcome_digest` in the admission's own transaction.
+Every reader builds the `HostResultContext` (binding, assignment, task, route, client
+capability) from the store, for the host class that ran it, checked against the lease,
+the claim association and the consumed grant (`stored_result_context`,
+`stored_worker_context`), so a successor service of the same runtime serves them after
+a restart; `run.recorded` is only a hint. A run recorded before format 18 is adopted as
+`legacy_no_context` and refused plainly (`history_worker_context_unavailable`). A task
+with `verification_for_outcome`:
 
 - routes even though the legacy ledger does not know the outcome (the open binds it);
 - opens with the kept worker: the project host's `history.open_scope` authorizer adds
@@ -665,16 +673,17 @@ earlier run is refused). A task with `verification_for_outcome`:
   consumed grant (`current_input_reference`), and the CLI fetches the same snapshot
   through `history.worker_input` (host role, kept runs only, 80 KiB reply) for the
   account open, whose worker digest must match the project's proof;
-- registers with the kept worker, and the driver reads the worker's terminal and result
-  through its own project API on its helper thread (as the run's host class), checks
+- registers, and the driver reads the stored worker (`history.worker_input`), its
+  terminal and result through its own project API on its helper thread (as the run's
+  host class), checks
   the body against the terminal and hands it to preparation, which places it at
   `.orchestration-input/worker-result.json`; open provenance names the worker digest.
 
 `learning-run-operational-checks` and `learning-record-operational-qa` use the project
 API when the host recorded both runs: `history.qa_scope`, `history.issue_qa_checks`
 (the fixed check report travels as the request's protected context) and
-`history.commit_qa`, authorized from the two kept originals. The record command checks
-the evaluator and verifier assignment and result files against the kept originals and
+`history.commit_qa`, authorized from the two stored originals. The record command checks
+the evaluator and verifier assignment and result files against the stored originals and
 the stored results. Outcomes the host did not record keep the legacy ledger path.
 Tests: `HostVerificationTests` (Codex verifier) and `HostClaudeVerificationTests`
 (Claude verifier for a Claude primary): worker, verifier with its exact worker result,
@@ -709,9 +718,9 @@ registration (the account run then stays open until reconciled). Neither is
 reachable by a session that can only read the state root.
 
 A project host stops on a signal, after
-fifteen idle minutes with no run held (twelve hours while it keeps recorded runs for
-their verifiers), or when its hint or lock file is removed, in which case it first
-finishes any run it holds;
+fifteen idle minutes with no run held (since D1 it keeps nothing a recorded run's
+verifier or QA needs: those originals are in the project store), or when its hint or
+lock file is removed, in which case it first finishes any run it holds;
 there is no drain command or status command for it yet, and a host that fails
 leaves no diagnostic because its output is discarded.
 
@@ -1050,8 +1059,9 @@ project store". The ledger keeps its schema; the only ledger addition is one
 recorded. Account data does not move.
 
 Left for a later release: the candidate pipeline on the project store (0.4.0),
-deleting expired records from project stores (retention is applied at read), keeping a
-recorded run's originals across a service restart, and measurements under real load.
+deleting expired records from project stores (retention is applied at read), and
+measurements under real load. (A recorded run's originals are kept across a service
+restart since slice D1.)
 
 ## Historical learning corpus staging (uninstalled source)
 
@@ -1418,8 +1428,10 @@ real admitted-child concurrency, native enrollment or installed release readines
 
 For a trusted Codex run, `learning-record-host-result` now requires `--route`
 with the same original route used by open and dispatch. It reads one
-`dispatch.status` using the original assignment/task/route/parent digest; it
-never submits or launches an execution. Missing runtime, route or published
+`history.result_reference` (D1: the attempt's binding and published terminal, from
+the project store, authorized by the stored context's host class and the original
+assignment/task/route/parent digest), so it works after the service that ran the
+child has stopped; it never submits or launches an execution. Missing runtime, route or published
 terminal refuses without a ledger or collector fallback. Claude and legacy
 telemetry recording still require migration.
 
@@ -2435,8 +2447,10 @@ for its own host class answers `control_attempt_not_found`; the driver remembers
 last 256 retired runs for that. So a long-lived service is no longer limited to four
 children in its lifetime: four is the number of attempts it tracks at once (found in
 the third real trial; `test_a_project_keeps_more_than_four_recorded_results`,
-`ManyRunsTests`). A run that failed after its claim was admitted, or one released
-but not yet recorded (up to the hour's record grace), still holds its slot.
+`ManyRunsTests`). A run that failed after its claim was admitted still holds its slot;
+one released keeps only its dispatch view, for the dispatching command, until it is
+recorded or for `PUBLISHED_VIEW_SECONDS` (two minutes; D1 removed the hour's record
+grace, since the record reads the store).
 
 Trusted startup/activity/status/cancel calls use the complete immutable binding.
 Wrong scope/process/thread refuses before clock sampling. Tick and pending-stop
