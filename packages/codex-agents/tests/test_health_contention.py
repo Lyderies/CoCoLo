@@ -74,6 +74,10 @@ class HealthContentionTests(unittest.TestCase):
         self.assertEqual(self.ledger.provider_attestation_status(project_id), reply['provider_attestations'])
         self.assertEqual(self.ledger.health_snapshot(project_id), reply['collector_health'])
         self.assertEqual(self.ledger.account_capacity(project_id), reply['account_capacity'])
+        self.assertEqual(self.ledger.account_slot_health(project_id), reply['account_slots'])
+        from codex_agents.learning_store import client_health_snapshot
+        self.assertEqual(self.ledger.ingestion_snapshot(
+            project_id, client_failures=client_health_snapshot(self.ledger.state, self.project)), reply['ingestion'])
 
     def test_H1a_6a_a_lock_released_within_the_wait_gives_the_full_reply(self):
         _, client = self.serve()
@@ -151,6 +155,79 @@ class HealthContentionTests(unittest.TestCase):
             self.addCleanup(patch.stop)
         return body()
 
+    @staticmethod
+    def capture(failed, call):
+        try:
+            call()
+        except Exception as error:
+            failed.append(error)
+
+    def test_H1a_6b_no_sweep_runs_while_a_transaction_is_active(self):
+        calls = []
+
+        def body():
+            with self.ledger._lock:
+                self.ledger._connection.execute("BEGIN")
+            try:
+                self.serve()
+                time.sleep(0.5)
+                self.assertEqual([], calls)
+            finally:
+                with self.ledger._lock:
+                    self.ledger._connection.rollback()
+            deadline = time.monotonic() + 5
+            while not calls:
+                self.assertLess(time.monotonic(), deadline, 'the sweeps did not resume after the rollback')
+                time.sleep(0.02)
+        self.run_with(self.patched_sweeps(calls), body)
+
+    def test_G1_a_stop_cancels_the_sweeps_even_while_a_request_is_being_handled(self):
+        calls, entered, release = [], threading.Event(), threading.Event()
+
+        def blocked(*_):
+            entered.set()
+            release.wait(10)
+            return {}
+
+        def body():
+            server, client = self.serve()
+            asking = threading.Thread(target=lambda: self.capture([], lambda: client.health(self.project)))
+            asking.start()
+            self.assertTrue(entered.wait(5))  # the request loop is inside a handler now
+            stopper = threading.Thread(target=server.stop)
+            stopper.start()
+            time.sleep(1.0)  # two cycles would have come due
+            self.assertEqual([], calls)
+            release.set()
+            asking.join(10)
+            stopper.join(10)
+        self.run_with(self.patched_sweeps(calls, interval=0.4)
+                      + [mock.patch.object(learning_store, 'client_health_snapshot', blocked)], body)
+
+    def test_G2_a_sweep_outliving_the_join_is_reported_by_stop_and_wait(self):
+        from codex_agents.collector_contracts import CollectorError
+        started, done = threading.Event(), threading.Event()
+
+        def stuck():
+            started.set()
+            time.sleep(6.5)  # past the 5 s join, ignoring the stop
+            done.set()
+            return 0
+
+        def body():
+            server, _ = self.serve()
+            self.assertTrue(started.wait(5))
+            with self.assertRaises(CollectorError):
+                server.stop()
+            self.assertFalse(server.wait(0))  # not stopped while the sweep still uses the ledger
+            self.assertTrue(done.wait(5))
+            deadline = time.monotonic() + 2
+            while not server.wait(0):
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.02)
+        self.run_with([mock.patch.object(learning_store, 'WORKER_RESULT_SWEEP_SECONDS', 0.05),
+                       mock.patch.object(self.ledger, 'sweep_worker_results', stuck)], body)
+
     def test_H1a_6b_no_sweep_runs_while_a_reader_is_active(self):
         calls = []
 
@@ -178,14 +255,19 @@ class HealthContentionTests(unittest.TestCase):
             time.sleep(0.3)  # the cycle is waiting for the lock now
             # stop() itself ends by taking the lock to release the collector's claim (as always), so it
             # runs on a thread; what H1a-6b needs is the waiting cycle ending at once, without sweeping.
-            stopper = threading.Thread(target=server.stop)
+            failed = []
+            stopper = threading.Thread(target=lambda: self.capture(failed, server.stop))
             stopper.start()
-            deadline = time.monotonic() + 2
-            while server._sweeps.is_alive():
-                self.assertLess(time.monotonic(), deadline, 'the sweep cycle kept waiting for the lock')
-                time.sleep(0.02)
-            release.set()
-            stopper.join(10)
+            try:
+                deadline = time.monotonic() + 2
+                while server._sweeps.is_alive():
+                    self.assertLess(time.monotonic(), deadline, 'the sweep cycle kept waiting for the lock')
+                    time.sleep(0.02)
+            finally:
+                release.set()
+                stopper.join(10)
+            self.assertFalse(stopper.is_alive())
+            self.assertEqual([], failed)  # the stop itself succeeded
             self.assertEqual([], calls)
         self.run_with(self.patched_sweeps(calls), body)
 
@@ -203,6 +285,7 @@ class HealthContentionTests(unittest.TestCase):
             # Each cycle takes 0.45 s (three sweeps of 0.15 s); counted from its start the gap is about
             # 0.6 s, counted from its end it would be about 1.05 s.
             self.assertLess(sum(gaps) / len(gaps), 0.85, gaps)
+            self.assertGreater(sum(gaps) / len(gaps), 0.5, gaps)  # and never more often than the interval
         self.run_with(self.patched_sweeps(calls, interval=0.6, slow=0.15), body)
 
     def test_H1a_6b_an_unexpected_error_is_recorded_and_the_next_cycle_runs(self):
@@ -247,7 +330,8 @@ class StatusLedgerBusyTests(unittest.TestCase):
         first = CollectorClient(state.socket, timeout=1).health(project)
         server.stop()
         ledger.close()
-        readings = iter([first, {**first, 'ledger_busy': True}])
+        busy = {key: value for key, value in first.items() if key not in PROJECT_FIELDS} | {'ledger_busy': True}
+        readings = iter([first, busy])
         patches = self.owner_ready() + [
             mock.patch.object(client_runtime.CollectorClient, 'health', side_effect=lambda *a: next(readings)),
             mock.patch.object(client_runtime.CollectorClient, 'learning_migration',
@@ -258,6 +342,19 @@ class StatusLedgerBusyTests(unittest.TestCase):
         report = client_runtime.status_client(state.root, project)
         self.assertEqual((True, False, 'status_ledger_busy'),
                          (report['active'], report['ready'], report['reason_code']))
+        self.assert_project_fields_unavailable(report)  # G3: never the first reading's values
+
+    def assert_project_fields_unavailable(self, report):
+        from codex_agents import client_runtime
+        # registered_project_state comes from the account's answer, not the ledger, so it may say active.
+        ingestion = {k: v for k, v in report['ingestion'].items() if k != 'registered_project_state'}
+        unread = {k: v for k, v in client_runtime._status_ingestion_unavailable().items()
+                  if k != 'registered_project_state'}
+        self.assertEqual(unread, ingestion)
+        self.assertEqual({p: {'state': 'unavailable'} for p in ('codex', 'claude')}, report['provider_attestations'])
+        self.assertIsNone(report['account_capacity'])
+        self.assertIsNone(report.get('collector_health'))
+        self.assertIsNone(report.get('account_slots'))
 
     def test_H1a_6c_status_says_active_and_busy_never_unreachable(self):
         from codex_agents import client_runtime, refusal_steps
@@ -287,9 +384,7 @@ class StatusLedgerBusyTests(unittest.TestCase):
                         patch.stop()
                 self.assertEqual((True, False, 'status_ledger_busy'),
                                  (report['active'], report['ready'], report['reason_code']))
-        self.assertEqual((True, False, 'status_ledger_busy'),
-                         (report['active'], report['ready'], report['reason_code']))
-        self.assertEqual({'state': 'unavailable'}, report['provider_attestations']['claude'])
+                self.assert_project_fields_unavailable(report)
         self.assertIn('again in a moment', refusal_steps.next_step('status_ledger_busy'))
 
 
