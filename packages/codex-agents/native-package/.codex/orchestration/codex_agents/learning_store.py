@@ -68,7 +68,7 @@ from .account_observation_schema import (OBSERVATION_COLUMNS, OBSERVATION_SCHEMA
                                          check_observation_coverage, install_observation_schema)
 from .phase_report import report_phase
 from .run_holds_schema import (  # O0b RS-A
-    assert_run_holds_schema, check_run_holds_coverage, install_run_holds_schema,
+    RUN_HOLDS_OBJECTS, assert_run_holds_schema, check_run_holds_coverage, install_run_holds_schema,
 )
 from .admission_evidence_schema import (
     assert_admission_evidence_schema, check_admission_evidence_coverage, install_admission_evidence_schema,
@@ -366,6 +366,8 @@ _BACKUP_TABLE_COLUMNS = {
     "account_observation_requests": OBSERVATION_COLUMNS,
     "account_billing_probe_origins": BILLING_PROBE_ORIGIN_COLUMNS,
     "account_billing_probe_requests": BILLING_PROBE_COLUMNS,
+    # O0b RS-A: from schema 15; a crashed or lost release cannot be derived again, so it is backed up.
+    "run_holds": ("kind", "identity", "state", "generation", "taken_at_ms", "released_at_ms", "release_kind", "receipt", "next_check_ms"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -430,6 +432,7 @@ _BACKUP_ORDER_COLUMNS = {
     "account_observation_requests": ("request_key",),
     "account_billing_probe_origins": ("request_key",),
     "account_billing_probe_requests": ("request_key",),
+    "run_holds": ("kind", "identity"),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -465,6 +468,8 @@ def _backup_decode_value(value: Any) -> Any:
 
 
 def _backup_expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 15 and table == "run_holds":
+        return ()
     if schema_version < 13 and table in {"account_billing_probe_origins", "account_billing_probe_requests"}:
         return ()
     if schema_version < 12 and table in {"account_observation_origins", "account_observation_requests"}:
@@ -497,7 +502,8 @@ def _backup_tables(schema_version: int) -> tuple[str, ...]:
                  and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'})
                  and (schema_version >= 11 or table != 'account_cleanup_receipts')
                  and (schema_version >= 12 or table not in {'account_observation_origins', 'account_observation_requests'})
-                 and (schema_version >= 13 or table not in {'account_billing_probe_origins', 'account_billing_probe_requests'}))
+                 and (schema_version >= 13 or table not in {'account_billing_probe_origins', 'account_billing_probe_requests'})
+                 and (schema_version >= 15 or table != 'run_holds'))
 
 
 def _snapshot_project_partition(
@@ -742,6 +748,8 @@ _BACKUP_RESTORE_SCHEMA += ('\n' + RELEASE_SCHEMA + ';\nALTER TABLE capacity_exec
 
 _BACKUP_RESTORE_SCHEMA += '\n' + OBSERVATION_ORIGIN_SCHEMA + ';\n' + OBSERVATION_SCHEMA + ';\n'
 _BACKUP_RESTORE_SCHEMA += '\n' + ';\n'.join(sql for _, _, sql in BILLING_PROBE_OBJECTS) + ';\n'
+# O0b RS-A: the hold register's table and index, not its triggers (a backup's rows are copied as they are).
+_BACKUP_RESTORE_SCHEMA += '\n' + ';\n'.join(sql for kind, _, sql in RUN_HOLDS_OBJECTS if kind != 'trigger') + ';\n'
 
 def _check_backup_coverage(restored: sqlite3.Connection, schema_version: int) -> None:
     """The cross-table coverage a restored partition of this ledger version must keep."""
@@ -757,8 +765,13 @@ def _check_backup_coverage(restored: sqlite3.Connection, schema_version: int) ->
         "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
         "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
         "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
-        "WHERE a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
-        "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
+        "WHERE (a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
+        "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL)) "
+        # O0b RS-A: a slot released crashed or lost has no completion, by design (its register row says so).
+        + ("AND NOT (c.project_id IS NULL AND EXISTS(SELECT 1 FROM run_holds r "
+           "WHERE r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest "
+           "AND r.release_kind IN ('crashed','lost') AND r.receipt IS a.release_digest)) " if schema_version >= 15 else "")
+        + "LIMIT 1"
     ).fetchone() is not None:
         raise LedgerError("project backup completion coverage is incomplete")
     if schema_version >= 11 and not check_cleanup_coverage(restored):
@@ -2939,8 +2952,13 @@ class LearningLedger:
                 "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
                 "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
             "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
-            "WHERE a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
-            "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL) LIMIT 1"
+            "WHERE (a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
+            "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL)) "
+            # O0b RS-A: a slot released crashed or lost has no completion, by design.
+            + ("AND NOT (c.project_id IS NULL AND EXISTS(SELECT 1 FROM run_holds r "
+               "WHERE r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest "
+               "AND r.release_kind IN ('crashed','lost') AND r.receipt IS a.release_digest)) " if current >= 15 else "")
+            + "LIMIT 1"
             ).fetchone() is not None:
                 raise LedgerError("capacity completion coverage is unavailable")
             if current == 9:
@@ -11324,9 +11342,13 @@ class LearningLedger:
             # D1 (review 040-s1-h1c-2): or still counted by the two-clock rule, whatever its age.
             mono = time.monotonic_ns()
             runs = self._connection.execute(
-                "SELECT DISTINCT project_id FROM active_run_capacity WHERE released_at_ms IS NULL "
+                # O0b RS-A: a slot released lost or crashed still counts here exactly as before its release
+                # (C1 and D1 unchanged), since its child may still be alive; only the other readers honour it.
+                "SELECT DISTINCT a.project_id FROM active_run_capacity a WHERE (a.released_at_ms IS NULL "
+                "OR EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=a.project_id AND r.kind='run_slot' "
+                "AND r.identity=a.handle_digest AND r.release_kind IN ('lost','crashed'))) "
                 "AND (claimed_at_ms>=:legacy OR (deadline_at_ms IS NOT NULL AND NOT (deadline_at_ms+:grace<:now "
-                "AND (execution_deadline_ns+:grace_ns<=:mono OR clock_reference_ns>:mono)))) ORDER BY project_id",
+                "AND (execution_deadline_ns+:grace_ns<=:mono OR clock_reference_ns>:mono)))) ORDER BY a.project_id",
                 {"legacy": now_ms - LEGACY_RUN_MAX_MS, "now": now_ms, "mono": mono, "grace": CRASHED_CLAIM_GRACE_MS,
                  "grace_ns": CRASHED_CLAIM_GRACE_MS * 1_000_000}).fetchall()
             probes = self._connection.execute(
@@ -11403,6 +11425,101 @@ class LearningLedger:
                 "cleanup_receipts": {"live": int(receipts), "limit": MAX_RELEASE_RESERVATIONS},
                 "pending_bindings": {"live": int(bindings), "limit": MAX_PENDING_HOST_RUNS},
                 "billing_probes": {"live": int(probes), "limit": MAX_PROBE_REQUESTS}}
+
+    def _release_slot_locked(self, project_id, handle_digest, kind, now, monotonic) -> bool:
+        """O0b RS-A: release one unreleased run slot as `lost` or `crashed`, for good, inside the caller's
+        account transaction. The decision, with the clocks it was made on, is the release's own evidence: its
+        digest is both the capacity row's release digest and the register row's receipt, so the coverage
+        checks can match them. Its time is max(now, the claim's), so a wall clock set back never blocks it."""
+        if kind not in {"lost", "crashed"} or not self._connection.in_transaction:
+            raise LedgerError("invalid slot release")
+        row = self._connection.execute(
+            "SELECT claimed_at_ms FROM active_run_capacity WHERE project_id=? AND handle_digest=? "
+            "AND released_at_ms IS NULL", (project_id, handle_digest)).fetchone()
+        if row is None:
+            return False
+        at = max(now, int(row["claimed_at_ms"]))
+        decision = content_digest({"decision": "run-slot-release-v1", "kind": kind, "project_id": project_id,
+                                   "handle_digest": handle_digest, "released_at_ms": at, "observed_wall_ms": now,
+                                   "observed_monotonic_ns": monotonic})
+        self._connection.execute(
+            "UPDATE run_holds SET release_kind=?,receipt=? WHERE kind='run_slot' AND project_id=? AND identity=? "
+            "AND state='held'", (kind, decision, project_id, handle_digest))
+        self._connection.execute(
+            "UPDATE active_run_capacity SET released_at_ms=?,release_digest=? WHERE project_id=? AND handle_digest=? "
+            "AND released_at_ms IS NULL", (at, decision, project_id, handle_digest))
+        return True
+
+    def account_holds_status(self, project_id: str) -> dict[str, dict[str, Any]]:
+        """O0b RS-A-6: this project's account holds by kind: how many are held, how many are past due (their
+        own predicate says release, the sweep has not run yet), and when the next can be released by time
+        (`next_eligible`, wall ms; None when none is held or only evidence can release it)."""
+        from .active_run_capacity import crashed_claim
+
+        with self._held():
+            now = self._clock_ms()
+            monotonic = self._capacity_clock_reference()
+            crashed, parameters = crashed_claim("a", now, monotonic)
+            slot = self._connection.execute(
+                "SELECT COUNT(*),COALESCE(SUM(CASE WHEN " + crashed + " THEN 1 ELSE 0 END),0),"
+                "MIN(CASE WHEN a.deadline_at_ms IS NOT NULL THEN a.deadline_at_ms+? END) "
+                "FROM active_run_capacity a JOIN run_holds r ON r.project_id=a.project_id AND r.kind='run_slot' "
+                "AND r.identity=a.handle_digest WHERE a.project_id=? AND r.state='held'",
+                (*parameters, CRASHED_CLAIM_GRACE_MS + 1, project_id)).fetchone()
+            binding = self._connection.execute(
+                "SELECT COUNT(*),COALESCE(SUM(CASE WHEN h.expires_at_ms<=? THEN 1 ELSE 0 END),0),"
+                "MIN(h.expires_at_ms) FROM host_run_bindings h JOIN run_holds r ON r.project_id=h.project_id "
+                "AND r.kind='binding' AND r.identity=h.handle_digest WHERE h.project_id=? AND r.state='held'",
+                (now, project_id)).fetchone()
+            probe = self._connection.execute(
+                "SELECT COUNT(*),COALESCE(SUM(CASE WHEN p.state='reserved' AND p.deadline_at_ms<? THEN 1 ELSE 0 END),0),"
+                "MIN(CASE WHEN p.state='reserved' THEN p.deadline_at_ms+1 END) FROM account_billing_probe_requests p "
+                "JOIN run_holds r ON r.project_id=p.project_id AND r.kind='probe' AND r.identity=p.request_key "
+                "WHERE p.project_id=? AND r.state='held'", (now, project_id)).fetchone()
+        return {name: {"held": int(row[0]), "past_due": int(row[1]),
+                       "next_eligible": None if row[2] is None else int(row[2])}
+                for name, row in (("run_slot", slot), ("binding", binding), ("probe", probe))}
+
+    def release_due_account_holds(self, *, limit: int = 64) -> int:
+        """O0b RS-A: release the account holds whose own predicate now says so, writing each decision once.
+
+        A run slot the crash rule says cannot still be running is released for good, `lost` when its
+        service settled it so, else `crashed`, at max(now, its claim time), so no later clock or uptime can
+        make it count again (CR-1). A pending binding past its expiry is released `expired`. Each is one
+        register transition (the triggers keep the kind written here). Returns how many were released.
+        """
+        from .active_run_capacity import LOST_RUN_REASON, crashed_claim
+
+        if type(limit) is not int or not 1 <= limit <= 1024:
+            raise LedgerError("invalid release batch")
+        released = 0
+        with self._account_transaction():
+            now = self._clock_ms()
+            monotonic = self._capacity_clock_reference()
+            crashed, parameters = crashed_claim("a", now, monotonic)
+            slots = self._connection.execute(
+                "SELECT a.project_id,a.handle_digest,a.claimed_at_ms,EXISTS(SELECT 1 FROM host_run_bindings h "
+                "WHERE h.project_id=a.project_id AND h.handle_digest=a.handle_digest "
+                f"AND h.binding_state='abandoned' AND h.abandoned_reason='{LOST_RUN_REASON}') AS lost "
+                f"FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND {crashed} LIMIT ?",
+                (*parameters, limit)).fetchall()
+            for slot in slots:
+                self._release_slot_locked(slot["project_id"], slot["handle_digest"],
+                                          "lost" if slot["lost"] else "crashed", now, monotonic)
+                released += 1
+            if released < limit:
+                # O0b RS-A-2: reserved probes past their deadline, closed as unlaunched denials.
+                from .account_billing_admission import close_expired_reserved
+                released += close_expired_reserved(self, now, limit - released)
+            if released < limit:
+                cursor = self._connection.execute(
+                    "UPDATE run_holds SET state='released',generation=generation+1,released_at_ms=?,"
+                    "release_kind='expired' WHERE rowid IN (SELECT r.rowid FROM run_holds r JOIN host_run_bindings h "
+                    "ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.kind='binding' "
+                    "AND r.state='held' AND h.binding_state='pending' AND h.expires_at_ms<=? LIMIT ?)",
+                    (now, now, limit - released))
+                released += cursor.rowcount
+        return released
 
     def health_snapshot(self, project_id: str) -> dict[str, dict[str, int]]:
         with self._held():

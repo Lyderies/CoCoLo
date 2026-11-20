@@ -21,7 +21,7 @@ generation INTEGER NOT NULL DEFAULT 1 CHECK(generation>=1),
 taken_at_ms INTEGER NOT NULL,released_at_ms INTEGER,release_kind TEXT,receipt TEXT,
 next_check_ms INTEGER NOT NULL DEFAULT 0,
 CHECK((state='released')=(released_at_ms IS NOT NULL AND release_kind IS NOT NULL)),
-PRIMARY KEY(kind,project_id,identity),
+PRIMARY KEY(project_id,kind,identity),
 FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE)'''
 
 _RELEASE = ("UPDATE run_holds SET state='released',generation=generation+1,"

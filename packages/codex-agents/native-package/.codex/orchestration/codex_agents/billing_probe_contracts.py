@@ -12,7 +12,8 @@ BILLING_PROBE_REASONS = frozenset({'probe_invalid_request', 'probe_invalid_respo
     # No probe worker can free without a restart (0.3.3, C9c).
     'probe_worker_unavailable'})
 PROBE_STEP_REASONS = frozenset({'probe_preparation_failed', 'probe_preparation_unknown', 'probe_worker_failed',
-    'probe_step_failed', 'probe_worker_unavailable'})
+    'probe_step_failed', 'probe_worker_unavailable',
+    'probe_unlaunched_expired'})  # O0b RS-A-2: a reserved probe past its deadline, closed by the supervisor
 PROBE_COMPLETION_REASONS = frozenset({'probe_incomplete', 'probe_invalid_events', 'probe_no_events'})
 
 

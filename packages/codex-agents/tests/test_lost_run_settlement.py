@@ -62,7 +62,10 @@ class LostRunHarness(DriverHarness):
             parameters).fetchone()[0]
 
     def claimed_bindings(self):
-        """(binding state, abandoned reason, released) of every claimed run, oldest first."""
+        """(binding state, abandoned reason, released) of every claimed run, oldest first.
+
+        Corrected for O0b RS-A-2 (requirement): a lost settlement now releases the slot itself, as `lost`,
+        written once, so a settled lost run reads (abandoned, service_lost, 1); before, it stayed unreleased."""
         return [tuple(row) for row in self.ledger._connection.execute(
             'SELECT h.binding_state,h.abandoned_reason,a.released_at_ms IS NOT NULL FROM active_run_capacity a '
             'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest '
@@ -161,7 +164,7 @@ class LostRunAfterCrashTests(LostRunHarness):
                       seconds=30)
         self.assertLess(time.monotonic() - started, 25)
         self.assert_process_gone(child)
-        self.assertEqual([('abandoned', 'service_lost', 0)], self.claimed_bindings())
+        self.assertEqual([('abandoned', 'service_lost', 1)], self.claimed_bindings())
         self.assert_lost_status(orchestration, run_handle, 'released')
         # The slot is free: the next child claims it, and the lost one never started again.
         self.assertEqual('result', self.next_run(orchestration, 'next1')['bridge_report']['outcome'])
@@ -180,7 +183,7 @@ class LostRunAfterCrashTests(LostRunHarness):
         self.assert_lost_status(orchestration, run_handle, 'held')
         os.killpg(child['pgid'], signal.SIGKILL)
         self.wait_for(lambda: self.counted() == 0, seconds=30)
-        self.assertEqual([('abandoned', 'service_lost', 0)], self.claimed_bindings())
+        self.assertEqual([('abandoned', 'service_lost', 1)], self.claimed_bindings())
         self.assertEqual('result', self.next_run(orchestration, 'next2')['bridge_report']['outcome'])
 
     def test_missing_or_unreadable_launch_evidence_falls_back_to_the_timed_rule(self):
@@ -272,7 +275,7 @@ class LostRunAfterStopTests(LostRunHarness):
         dispatch.communicate(timeout=30)
         self.wait_for(lambda: self.counted() == 0, seconds=30)
         if settled:
-            self.assertIn(self.claimed_bindings()[0][::2], {('abandoned', 0), ('pending', 1)})
+            self.assertIn(self.claimed_bindings()[0][::2], {('abandoned', 1), ('pending', 1)})
         self.assertEqual('result', self.next_run(orchestration, 'after')['bridge_report']['outcome'])
         return orchestration, run_handle
 
@@ -545,7 +548,7 @@ class LostRunAfterStopTests(LostRunHarness):
         orchestration, run_handle = self.stopped_in('consuming', [
             {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         self.assertEqual(1, len(self.launches()))  # Only the next run's child; the claimed one never started.
-        self.assertEqual(('abandoned', 'service_lost', 0), self.claimed_bindings()[0])
+        self.assertEqual(('abandoned', 'service_lost', 1), self.claimed_bindings()[0])
         self.assert_lost_status(orchestration, run_handle, 'released')
 
     def test_a_running_child_when_its_host_stops_is_settled(self):
@@ -554,7 +557,7 @@ class LostRunAfterStopTests(LostRunHarness):
             {'type': 'turn.completed', 'usage': {'input_tokens': 1}}], reached=self.launches)
         self.assertEqual(2, len(self.launches()))
         self.assert_process_gone(self.launches()[0])
-        self.assertEqual(('abandoned', 'service_lost', 0), self.claimed_bindings()[0])
+        self.assertEqual(('abandoned', 'service_lost', 1), self.claimed_bindings()[0])
 
     def test_a_finished_child_not_yet_reported_when_its_host_stops_is_settled(self):
         self.stopped_in('reporting', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
@@ -567,7 +570,7 @@ class LostRunAfterStopTests(LostRunHarness):
         self.stopped_in('releasing', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         # Released by its own host or settled by the next: either way it no longer counts, once.
         first = self.claimed_bindings()[0]
-        self.assertIn(first, {('pending', None, 1), ('abandoned', 'service_lost', 0)})
+        self.assertIn(first, {('pending', None, 1), ('abandoned', 'service_lost', 1)})
 
     def test_a_lost_reply_and_repeated_restarts_settle_the_run_exactly_once(self):
         replies, original = [], AccountClient.settle_lost_run
@@ -595,7 +598,7 @@ class LostRunAfterStopTests(LostRunHarness):
         self.assertEqual(1, len({reply['receipt_digest'] for reply in replies}))
         self.assertEqual(2, len(replies))  # Settled runs are never sent again.
         self.assertEqual(0, self.counted())
-        self.assertEqual([('abandoned', 'service_lost', 0)], self.claimed_bindings())
+        self.assertEqual([('abandoned', 'service_lost', 1)], self.claimed_bindings())
         self.assert_lost_status(orchestration, run_handle, 'released')
         self.assertEqual('result', self.next_run(orchestration, 'again')['bridge_report']['outcome'])
         self.assertEqual(2, len(self.launches()))
@@ -681,7 +684,7 @@ class LostRunAuthorityTests(LostRunHarness):
         reply = self.settle_as(entry, role='project', host_client=entry['host_client'], root=self.project,
                                project_id=self.project_id)
         self.assertEqual(('settled', False), (reply['state'], reply['known']))
-        self.assertEqual([('abandoned', 'service_lost', 0)], self.claimed_bindings())
+        self.assertEqual([('abandoned', 'service_lost', 1)], self.claimed_bindings())
         self.cli('learning-cancel-run', '--orchestration-handle', orchestration, '--run-handle', run_handle)
         dispatch.communicate(timeout=30)
 

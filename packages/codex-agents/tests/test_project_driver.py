@@ -900,10 +900,15 @@ class HostRestartTests(DriverHarness):
                          (after['reason_code'], after['terminal_state'], after['outcome']))
         # The stopped host settled it on its way out, once its child and watchdog were gone:
         # no release receipt is invented, but the binding is abandoned and the slot no longer counts.
+        # Corrected for O0b RS-A-2 (requirement): the slot is now released as `lost`, for good, its release
+        # digest the written decision's (the register's receipt), never a completion receipt.
         unsettled = [tuple(row) for row in self.ledger._connection.execute(
-            'SELECT a.released_at_ms,a.release_digest,h.binding_state,h.abandoned_reason FROM active_run_capacity a '
-            'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest')]
-        self.assertEqual([(None, None, 'abandoned', 'service_lost')], unsettled)
+            'SELECT a.released_at_ms IS NOT NULL,a.release_digest IS r.receipt,r.release_kind,h.binding_state,'
+            'h.abandoned_reason,EXISTS(SELECT 1 FROM capacity_completions c WHERE c.project_id=a.project_id '
+            'AND c.handle_digest=a.handle_digest) FROM active_run_capacity a '
+            'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest '
+            "JOIN run_holds r ON r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest")]
+        self.assertEqual([(1, 1, 'lost', 'abandoned', 'service_lost', 0)], unsettled)
         self.assertTrue(self.ledger.drained())
         # The primary carries on: a new run in the same orchestration routes, opens and runs.
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
@@ -917,11 +922,14 @@ class HostRestartTests(DriverHarness):
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled({**result(), 'assignment_id': 'next'})))
         dispatched = self.cli('dispatch', *nxt, '--route', nxt_route, '--run-handle', opened['run_handle'])
         self.assertEqual('result', dispatched['bridge_report']['outcome'])
-        # The earlier run's claim keeps no release receipt, and neither child was started twice.
-        claims = [row[0] for row in self.ledger._connection.execute(
-            'SELECT released_at_ms FROM active_run_capacity ORDER BY claimed_at_ms')]
+        # The earlier run's claim keeps no completion receipt, and neither child was started twice.
+        # Corrected for O0b RS-A-2 (requirement): it is released as `lost` (its decision written), not completed.
+        claims = [tuple(row) for row in self.ledger._connection.execute(
+            "SELECT a.released_at_ms IS NOT NULL,r.release_kind FROM active_run_capacity a JOIN run_holds r "
+            "ON r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest "
+            "ORDER BY a.claimed_at_ms")]
         self.assertEqual(2, len(claims))
-        self.assertIsNone(claims[0])
+        self.assertEqual((1, 'lost'), claims[0])
         self.assertEqual(2, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
 
     def restart_host(self):

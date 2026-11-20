@@ -75,7 +75,7 @@ class LearningSourceImageTests(unittest.TestCase):
         before = self.settings()
         changes = self.connection.total_changes
         result = self.capture()
-        self.assertEqual(30, len(result['counts']))
+        self.assertEqual(31, len(result['counts']))  # O0b RS-A (requirement): the hold register is backed up
         self.assertTrue(all(n == 0 for _, n in result['counts']))
         self.assertEqual(changes, self.connection.total_changes)
         self.assertEqual(before, self.settings())

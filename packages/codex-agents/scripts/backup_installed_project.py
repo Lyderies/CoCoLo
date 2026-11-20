@@ -171,6 +171,8 @@ _TABLE_COLUMNS = {
     "account_billing_probe_requests": ('request_key', 'parameters_digest', 'runtime_digest', 'caller_scope',
         'created_at_ms', 'deadline_at_ms', 'state', 'account_fingerprint', 'admission_record_id',
         'admission_digest', 'references_json', 'state_seal'),
+    "run_holds": ("kind", "identity", "state", "generation", "taken_at_ms", "released_at_ms", "release_kind",
+                  "receipt", "next_check_ms"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -227,6 +229,7 @@ _TABLE_ORDER = {
     "account_observation_requests": ("request_key",),
     "account_billing_probe_origins": ("request_key",),
     "account_billing_probe_requests": ("request_key",),
+    "run_holds": ("kind", "identity"),
     "hook_ingestion": ("event_code",),
     "orchestrations": ("started_at_ms", "orchestration_id"),
     "orchestration_checkpoints": ("orchestration_id", "sequence"),
@@ -239,6 +242,8 @@ _TABLE_ORDER = {
 
 
 def _expected_columns(schema_version: int, table: str) -> tuple[str, ...]:
+    if schema_version < 15 and table == "run_holds":
+        return ()
     if schema_version < 13 and table in {'account_billing_probe_origins', 'account_billing_probe_requests'}:
         return ()
     if schema_version < 12 and table in {'account_observation_origins', 'account_observation_requests'}:
@@ -276,7 +281,8 @@ def _tables(schema_version: int) -> tuple[str, ...]:
                  and (schema_version >= 10 or table not in {'account_open_receipts', 'account_open_requests'})
                  and (schema_version >= 11 or table != 'account_cleanup_receipts')
                  and (schema_version >= 12 or table not in {'account_observation_origins', 'account_observation_requests'})
-                 and (schema_version >= 13 or table not in {'account_billing_probe_origins', 'account_billing_probe_requests'}))
+                 and (schema_version >= 13 or table not in {'account_billing_probe_origins', 'account_billing_probe_requests'})
+                 and (schema_version >= 15 or table != 'run_holds'))
 
 
 _STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)

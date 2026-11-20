@@ -48,7 +48,7 @@ class LearningSourceTransferTests(unittest.TestCase):
         result = self.transfer()
         self.assertEqual(original, self.archive_body())
         self.assertEqual(hashlib.sha256(original).hexdigest(), result['source']['manifest_digest'])
-        self.assertEqual(30, len(result['counts']))
+        self.assertEqual(31, len(result['counts']))  # O0b RS-A (requirement): the hold register is backed up
         self.assertEqual((23, 2, 1), tuple(dict(result['counts'])[name] for name in
                                          ('records', 'owner_attestations', 'operational_qa')))
         self.assertTrue(all(result[part]['state'] == 'staged' for part in ('source', 'records', 'qa')))

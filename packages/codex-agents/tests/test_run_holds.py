@@ -75,7 +75,8 @@ class RunHoldTests(ActiveRunCapacityTests):
         hold = dict(self.ledger._connection.execute(
             "SELECT state, release_kind FROM run_holds WHERE kind='binding'").fetchone())
         self.assertEqual({"state": "released", "release_kind": "expired"}, hold)
-        self.assertEqual(0, self.ledger.account_capacity(self.case.project_id)["pending_bindings"]["live"])
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=binding["expires_at_ms"] + 1):
+            self.assertEqual(0, self.ledger.account_capacity(self.project)["pending_bindings"]["live"])
 
     def test_RS_A_5_an_identical_sweep_releases_nothing_twice(self):
         self.case.claim()
@@ -90,7 +91,7 @@ class RunHoldTests(ActiveRunCapacityTests):
     def test_RS_A_6_status_shows_each_kind_with_its_next_eligible_time(self):
         self.case.claim()
         row = self.rows()[0]
-        status = self.ledger.account_holds_status(self.case.project_id)
+        status = self.ledger.account_holds_status(self.project)
         self.assertEqual(1, status["run_slot"]["held"])
         self.assertEqual(0, status["run_slot"]["past_due"])
         self.assertEqual(row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS + 1,

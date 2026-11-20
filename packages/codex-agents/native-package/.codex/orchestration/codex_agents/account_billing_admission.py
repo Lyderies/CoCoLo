@@ -546,3 +546,29 @@ class AccountBillingAdmission:
 def keyed(key, domain, value):
     from .learning_contracts import keyed_digest
     return keyed_digest(key, domain+canonical_json(value))
+
+
+def close_expired_reserved(ledger, now_ms, limit):
+    """O0b RS-A-2: close every `reserved` probe request past its deadline as a committed denial
+    (`probe_unlaunched_expired`), inside the caller's account transaction. A reserved request was never
+    admitted, so no model could have started for it. Its origin stays; its new state is sealed exactly as
+    the probe owner seals it; its register row is released `unlaunched`. Returns how many were closed."""
+    if not ledger._connection.in_transaction:
+        raise ProbeAdmissionError('probe_conflict')
+    key = ledger.state.digest_key()
+    rows = [dict(row) for row in ledger._connection.execute(
+        "SELECT * FROM account_billing_probe_requests WHERE state='reserved' AND deadline_at_ms<? LIMIT ?",
+        (now_ms, limit)).fetchall()]
+    names = [n for n in _FIELDS if n not in {'project_id', 'request_key'}]
+    for row in rows:
+        final = {**{n: row[n] for n in _FIELDS}, 'state': 'committed', 'references_json': canonical_json(
+            {'probe': 'denied', 'reason_code': 'probe_unlaunched_expired', 'records': []}).decode()}
+        final['state_seal'] = keyed(key, b'billing-probe-state-v1\0', {n: final[n] for n in _FIELDS})
+        ledger._connection.execute(
+            "UPDATE run_holds SET release_kind='unlaunched' WHERE kind='probe' AND project_id=? AND identity=? "
+            "AND state='held'", (row['project_id'], row['request_key']))
+        ledger._connection.execute(
+            'UPDATE account_billing_probe_requests SET ' + ','.join(n + '=?' for n in (*names, 'state_seal'))
+            + " WHERE project_id=? AND request_key=? AND state='reserved'",
+            (*(final[n] for n in (*names, 'state_seal')), row['project_id'], row['request_key']))
+    return len(rows)

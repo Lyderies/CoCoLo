@@ -2665,7 +2665,8 @@ class LearningStoreTests(unittest.TestCase):
         )
         body = backup_body(path, self.project_a_id)
 
-        self.assertEqual(set(body["tables"]), {
+        # O0b RS-A (requirement): from schema 15 the hold register is backed up too.
+        self.assertEqual(set(body["tables"]), {"run_holds",
             "sessions", "run_provenance", "records", "record_links",
             "stored_files", "collector_health", "consumed_grants",
             "owner_attestations", "repair_receipts", "host_run_bindings", "launch_claims",

@@ -53,10 +53,12 @@ def settle_lost_run(ledger, project_id, *, runtime_digest, caller_scope, settle,
         if (row is None or row['kind'] != 'claimed' or row['run_id'] != expected.run_id
                 or row['binding_run_id'] != expected.run_id or row['bridge_run_id'] != settle.bridge_run_id):
             raise ClaimError('claim_cleanup_unavailable')
-        if row['released_at_ms'] is not None:
-            state, first = 'released', False  # Its own service released it; nothing is left to settle.
-        elif row['binding_state'] == 'abandoned' and row['abandoned_reason'] == LOST_RUN_REASON:
+        if row['binding_state'] == 'abandoned' and row['abandoned_reason'] == LOST_RUN_REASON:
+            # Checked first: since O0b RS-A a lost settlement also releases the slot (as `lost`), and its
+            # replay must still answer `settled`.
             state, first = 'settled', False
+        elif row['released_at_ms'] is not None:
+            state, first = 'released', False  # Its own service released it; nothing is left to settle.
         elif row['binding_state'] == 'pending':
             changed = ledger._connection.execute(
                 "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason=? "
@@ -64,6 +66,9 @@ def settle_lost_run(ledger, project_id, *, runtime_digest, caller_scope, settle,
                 (LOST_RUN_REASON, project_id, context.handle)).rowcount
             if changed != 1:
                 raise ClaimError('claim_cleanup_unavailable')
+            # O0b RS-A: the slot is released as lost here, for good, in the same transaction.
+            ledger._release_slot_locked(project_id, context.handle, 'lost', ledger._clock_ms(),
+                                        ledger._capacity_clock_reference())
             state, first = 'settled', True
         else:
             raise ClaimError('claim_cleanup_unavailable')
