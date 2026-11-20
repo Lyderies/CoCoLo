@@ -59,14 +59,38 @@ class AccountHostTests(unittest.TestCase):
 
     def late_stop(self):
         """O10 SD: after a missed stop deadline, give the collector up to 30 s more, then report its
-        exit record's step timings (stop_ms) so the slow step is named. Diagnostic only."""
+        exit record's step timings (stop_ms) so the slow step is named. Diagnostic only.
+        O10 SD3-4: only a record this collector wrote is reported. The state root keeps the record
+        of the collector before it (a test that stops one collector on purpose, then starts another),
+        and SD1/SD2 were misled by that one. A record is this collector's when it started no earlier
+        than the oldest collector process still running here."""
         from codex_agents import collector_exit
+        started = [self.started_ms(pid) for pid in self.processes('collector_host.py')]
+        oldest = None if not started or None in started else min(started)
         end = time.monotonic() + 30
         while self.processes('collector_host.py') and time.monotonic() < end:
             time.sleep(.1)
         record = collector_exit.read_exit(self.state.root)
-        return {'stopped_after_s': round(30 - max(0.0, end - time.monotonic()), 1),
-                'cause': record and record.get('cause'), 'stop_ms': record and record.get('stop_ms')}
+        report = {'stopped_after_s': round(30 - max(0.0, end - time.monotonic()), 1)}
+        if record is not None and (oldest is None or type(record.get('started_at_ms')) is not int
+                                   or record['started_at_ms'] < oldest):
+            return {**report, 'cause': 'no exit record from this collector',
+                    'other_collector_record': record.get('cause')}
+        return {**report, 'cause': record and record.get('cause'), 'stop_ms': record and record.get('stop_ms'),
+                'stalled_in': record and record.get('stalled_in')}
+
+    @staticmethod
+    def started_ms(pid):
+        """When process `pid` started, rounded down to the second (wall ms), from ps's elapsed time."""
+        text = subprocess.run(['ps', '-o', 'etime=', '-p', str(pid)], stdout=subprocess.PIPE, text=True,
+                              check=False).stdout.strip()
+        try:
+            days, _, clock = text.rpartition('-')
+            parts = [int(part) for part in clock.split(':')]
+            seconds = int(days or 0) * 86400 + sum(value * 60 ** index for index, value in enumerate(reversed(parts)))
+        except ValueError:
+            return None
+        return time.time_ns() // 1_000_000 - (seconds + 1) * 1000
 
     def stop_services(self):
         for pid in self.processes('project_host.py'):

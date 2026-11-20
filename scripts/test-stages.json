@@ -197,6 +197,7 @@
  "codex:tests.test_signature_payloads": "integration",
  "codex:tests.test_signature_process": "integration",
  "codex:tests.test_signature_worker_pool": "integration",
+ "codex:tests.test_sigterm_stress": "integration",
  "codex:tests.test_skill_commands": "unit",
  "codex:tests.test_sql_read_budget": "unit",
  "codex:tests.test_state_location": "integration",

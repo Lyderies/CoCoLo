@@ -305,6 +305,78 @@ runpy.run_path(sys.argv[0], run_name="__main__")
 '''
 
 
+# O10 SD3 (ANALYSIS-0.4.0-SD3-shutdown.md): a SIGTERM whose SystemExit is swallowed was lost; the
+# collector served on and never wrote an exit record. Each wrapper sends the collector its own
+# SIGTERM at a set point once it is serving, and keeps the interpreter running Python code there
+# so the handler runs exactly at that point.
+_SELF_SIGTERM = '''
+import os, signal, sys, threading, time
+sys.path.insert(0, sys.argv[1])
+STATE = sys.argv[2]
+def sigterm_here():
+    open(os.path.join(STATE, 'sd3-sigterm-sent'), 'w').close()  # the test checks it was sent
+    os.kill(os.getpid(), signal.SIGTERM)
+    end = time.monotonic() + 2
+    while time.monotonic() < end:  # the handler runs (and raises) in here
+        pass
+'''
+
+# SD3-1: the signal lands while a health note is being published (as in all six reproductions).
+PUBLISH_SIGTERM_WRAPPER = _SELF_SIGTERM + '''
+from codex_agents import lane_health
+real, calls = lane_health.replace, []
+def replace(*args, **changes):
+    if threading.current_thread() is threading.main_thread():
+        calls.append(1)
+        if len(calls) == 300:
+            sigterm_here()
+    return real(*args, **changes)
+lane_health.replace = replace
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
+# SD3-2: any code on the main thread that swallows the handler's exception.
+SWALLOW_WRAPPER = _SELF_SIGTERM + '''
+from codex_agents import account_host
+real, calls = account_host.AccountServiceHost.serve_once, []
+def serve_once(self):
+    calls.append(1)
+    if len(calls) == 300:
+        try:
+            sigterm_here()
+        except BaseException:
+            pass
+    return real(self)
+account_host.AccountServiceHost.serve_once = serve_once
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
+# SD3-3: the exception is swallowed and the owner step then never returns, so the loop never sees
+# the stop: only the watchdog armed by the signal can end it (bounds shortened to 1 s and 5 s).
+STUCK_WRAPPER = _SELF_SIGTERM + '''
+from codex_agents import account_host, shutdown_watchdog
+shutdown_watchdog.ShutdownWatchdog.__init__.__kwdefaults__.update(bound_seconds=1, hard_stop_seconds=5)
+real, calls = account_host.AccountServiceHost.serve_once, []
+def serve_once(self):
+    calls.append(1)
+    if len(calls) == 300:
+        try:
+            sigterm_here()
+        except BaseException:
+            pass
+        time.sleep(3600)
+    return real(self)
+account_host.AccountServiceHost.serve_once = serve_once
+sys.argv = [sys.argv[1] + "/collector_host.py", "--state-root", sys.argv[2]]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+'''
+
+
 class CollectorExitProcessTests(host_tests.AccountHostTests):
     """The real collector process: each way it stops is recorded, and the next one reports it."""
 
@@ -434,6 +506,30 @@ class CollectorExitProcessTests(host_tests.AccountHostTests):
         record, _ = self.previous_exit()
         self.assertEqual('state_removed', record['cause'])
 
+    def stopped_by_itself(self, process, seconds=20):
+        try:
+            return process.wait(timeout=seconds)
+        except subprocess.TimeoutExpired:
+            sent = (self.state.root / 'sd3-sigterm-sent').exists()
+            self.fail(f'the collector still runs {seconds} s after its own SIGTERM: the stop was lost'
+                      if sent else f'the wrapper never sent its SIGTERM in {seconds} s (test setup)')
+
+    def test_SD3_1_a_signal_while_a_health_note_is_published_still_stops_the_collector(self):
+        process = self.run_wrapper(PUBLISH_SIGTERM_WRAPPER)
+        self.assertEqual(0, self.stopped_by_itself(process))
+        self.assertEqual('signal', collector_exit.read_exit(self.state.root)['cause'])
+
+    def test_SD3_2_a_signal_whose_exception_is_swallowed_still_stops_the_collector(self):
+        process = self.run_wrapper(SWALLOW_WRAPPER)
+        self.assertEqual(0, self.stopped_by_itself(process))
+        self.assertEqual('signal', collector_exit.read_exit(self.state.root)['cause'])
+
+    def test_SD3_3_a_lost_signal_in_a_step_that_never_returns_is_ended_within_the_bound(self):
+        process = self.run_wrapper(STUCK_WRAPPER)
+        self.assertEqual(3, self.stopped_by_itself(process))  # FORCED_EXIT_CODE, by the timer
+        record = collector_exit.read_exit(self.state.root)
+        self.assertEqual(('stop_forced', 'signal_received'), (record['cause'], record.get('stalled_in')))
+
     # The inherited AccountHostTests tests run once in their own module.
     for name in [n for n in dir(host_tests.AccountHostTests) if n.startswith('test_')]:
         locals()[name] = None
@@ -501,6 +597,9 @@ class CollectorMainTests(unittest.TestCase):
         self.enterContext(unittest.mock.patch('os.chdir'))
         self.enterContext(unittest.mock.patch('signal.signal', side_effect=lambda n, h: self.handlers.__setitem__(n, h)))
         self.enterContext(unittest.mock.patch('builtins.print'))
+        # The real main arms the shutdown watchdog's kernel alarm (SD2, and SD3 at the signal):
+        # without this the test process itself is ended by SIGALRM 18 s later (seen: exit 142).
+        self.enterContext(unittest.mock.patch('signal.alarm'))
 
     def test_C10d_a_requested_stop_and_a_thread_that_ended_by_itself_are_told_apart(self):
         self.assertEqual(0, self.host.main(['--state-root', str(self.root)]))

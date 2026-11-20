@@ -70,6 +70,43 @@ class ShutdownWatchdogTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 10)
         self.assertEqual(-14, process.returncode)  # SIGALRM, the kernel's default action
 
+    # O10 SD3-3: the bound starts when the stop signal arrives (step `signal_received`), from inside
+    # the signal handler, so arming it there must start no thread: the thread is started beforehand.
+
+    def test_SD3_3_a_stop_stuck_before_any_shutdown_step_is_named_signal_received(self):
+        self.assertIn('signal_received', SHUTDOWN_STEPS)
+        watchdog = ShutdownWatchdog(self.root, started_at_ms=5, bound_seconds=0.2, hard_stop_seconds=None, exit=self.exit)
+        watchdog.prepare()
+        watchdog.step('signal_received')  # and the shutdown never begins
+        self.assertTrue(self.ended.wait(5))
+        record = collector_exit.read_exit(self.root)
+        self.assertEqual(('stop_forced', 'signal_received'), (record['cause'], record['stalled_in']))
+
+    def test_SD3_3_a_prepared_watchdog_starts_no_thread_when_a_step_arms_it(self):
+        watchdog = ShutdownWatchdog(self.root, started_at_ms=5, bound_seconds=0.2, hard_stop_seconds=None, exit=self.exit)
+        watchdog.prepare()
+        from unittest import mock
+        with mock.patch.object(threading.Thread, 'start', side_effect=AssertionError('a thread started in step')):
+            watchdog.step('signal_received')
+        self.assertTrue(self.ended.wait(5))
+        self.assertEqual([ShutdownWatchdog.FORCED_EXIT_CODE], self.codes)
+
+    def test_SD3_3_the_bound_counts_from_the_first_step_not_from_each_step(self):
+        watchdog = ShutdownWatchdog(self.root, started_at_ms=5, bound_seconds=0.4, hard_stop_seconds=None, exit=self.exit)
+        started = time.monotonic()
+        watchdog.step('signal_received')
+        time.sleep(0.3)
+        watchdog.step('account_close')
+        self.assertTrue(self.ended.wait(5))
+        self.assertLess(time.monotonic() - started, 0.65)
+
+    def test_SD3_3_finishing_before_the_first_step_leaves_the_prepared_watchdog_idle(self):
+        watchdog = ShutdownWatchdog(self.root, started_at_ms=5, bound_seconds=0.2, hard_stop_seconds=None, exit=self.exit)
+        watchdog.prepare()
+        watchdog.done()  # a start-up that failed before any stop: nothing may fire later
+        watchdog.step('signal_received')
+        self.assertFalse(self.ended.wait(0.5))
+
     def test_SD2_2_only_a_known_step_is_recorded(self):
         collector_exit.write_exit(self.root, started_at_ms=5, cause='stop_forced', error=None, stalled_in='elsewhere/x')
         self.assertNotIn('stalled_in', collector_exit.read_exit(self.root) or {})

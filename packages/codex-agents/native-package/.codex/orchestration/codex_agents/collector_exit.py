@@ -21,8 +21,10 @@ from pathlib import Path
 
 CAUSES = frozenset({'signal', 'requested', 'state_removed', 'thread_ended', 'error', 'account_restart',
                     'stop_forced'})  # O10 SD2: the shutdown watchdog ended a stop that passed its bound
-# O10 SD2: the shutdown steps, in order; `stalled_in` names one of them.
-SHUTDOWN_STEPS = ('account_close', 'account_drain', 'server_stop', 'exit_record', 'ledger_close')
+# O10 SD2: the shutdown steps, in order; `stalled_in` names one of them. O10 SD3-3: the bound starts
+# when the stop signal arrives (`signal_received`), so a stop stuck before the first step is named too.
+SHUTDOWN_STEPS = ('signal_received', 'account_close', 'account_drain', 'server_stop', 'exit_record',
+                  'ledger_close')
 # S1-H1c: a self-restart records only the fixed cause that made the account stuck, in `error`.
 _RESTART_CAUSE = re.compile(r'[a-z][a-z_]{2,63}')
 MAX_LOCATIONS = 8
