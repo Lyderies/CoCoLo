@@ -494,6 +494,9 @@ class K03DenyClasses(TableMixin, unittest.TestCase):
             # package installs
             ("pip install listed", bash("pip install requests"), REFUSE, "command_package_install"),
             ("pip3 install", bash("pip3 install requests"), REFUSE, "command_package_install"),
+            ("pip global option with a value", bash("pip --cache-dir d install x"), REFUSE,
+             "command_package_install"),
+            ("npm option with a value", bash("npm --prefix src install"), REFUSE, "command_package_install"),
             ("versioned pip", bash("pip3.12 install x"), REFUSE, "command_package_install"),
             ("python -m pip install", bash("python3 -m pip install x"), REFUSE, "command_package_install"),
             ("uv pip install", bash("uv pip install x"), REFUSE, "command_package_install"),
