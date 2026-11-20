@@ -65,6 +65,12 @@ def downgrade_ledger_to_six(ledger):
         for name in ("launch_inputs", "launch_observations", "launch_receipts"):
             ledger._connection.execute("DROP TABLE " + name)
         ledger._connection.execute("DROP TABLE IF EXISTS launch_claims")
+        # Schema 6 has no hold register (O0b RS-A): the fixture leaves none, as a real 0.2.x ledger would.
+        from codex_agents.run_holds_schema import RUN_HOLDS_OBJECTS
+        for kind, name, _ in RUN_HOLDS_OBJECTS:
+            if kind == "trigger":
+                ledger._connection.execute(f"DROP TRIGGER IF EXISTS {name}")
+        ledger._connection.execute("DROP TABLE IF EXISTS run_holds")
         ledger._connection.execute("PRAGMA user_version=6")
 
 

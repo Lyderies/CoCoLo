@@ -172,7 +172,7 @@ _TABLE_COLUMNS = {
         'created_at_ms', 'deadline_at_ms', 'state', 'account_fingerprint', 'admission_record_id',
         'admission_digest', 'references_json', 'state_seal'),
     "run_holds": ("kind", "identity", "state", "generation", "taken_at_ms", "released_at_ms", "release_kind",
-                  "receipt", "next_check_ms"),
+                  "receipt", "evidence", "next_check_ms"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",

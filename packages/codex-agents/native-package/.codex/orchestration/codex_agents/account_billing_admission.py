@@ -182,6 +182,7 @@ class AccountBillingAdmission:
                 "WHERE project_id=? AND state<>'committed' LIMIT ?)", (project, MAX_PROBE_REQUESTS+1))[0]
             if count >= MAX_PROBE_REQUESTS:
                 raise ProbeAdmissionError('probe_full')
+            self._forget_closed()
             if (len(self._pending) >= MAX_PENDING_PROBES
                     or sum(p == project for p, _ in self._pending) >= MAX_PENDING_PROJECT_PROBES):
                 raise ProbeAdmissionError('probe_full')
@@ -432,6 +433,22 @@ class AccountBillingAdmission:
         self._pending.pop((reservation.project, reservation.key))
         self._reserved_inputs.pop(reservation, None)
         self._signatures.pop(reservation, None)
+
+    def _forget_closed(self):
+        """O0b RS-A (F6): forget the originals the supervisor closed (their rows already committed, by the
+        sweep's expiry), with their pooled signature work, so they never fill this owner's memory. Memory goes
+        only after the durable commit, so a rolled-back close keeps it. At most MAX_PENDING_PROBES rows read."""
+        for (project, key), reservation in list(self._pending.items()):
+            if reservation in self._permits:
+                continue
+            row = self._row(project, key)
+            if row is None or row['state'] != 'committed':
+                continue
+            self._pending.pop((project, key))
+            self._reserved_inputs.pop(reservation, None)
+            handle = self._signatures.pop(reservation, None)
+            if handle is not None:  # returned work is discarded; queued or running work is cancelled
+                (self._pool.discard if handle in self._pool._returned else self._pool.cancel)(handle)
 
     def known_reply(self, project, runtime, caller, identity, context, *, before_commit):
         """Read a committed original even after a local post-commit fault.

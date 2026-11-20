@@ -2,7 +2,9 @@
 
 One row per account hold: an account run slot (active_run_capacity), a pending binding (host_run_bindings) or a
 billing-probe request (account_billing_probe_requests). Triggers on those tables write the row in the same
-transaction as every take and every ordinary release, on every code path; the supervisor's own releases
+transaction as every take and every ordinary release, on every code path, at the ledger's own time (the ledger
+registers `ledger_now_ms()` on its connection; a connection without it cannot release a hold, and only the ledger
+writes holds); the supervisor's own releases
 (crashed, lost, expired, unlaunched) set the row's release kind first, and the triggers keep it. A released row
 stays as a tombstone. The register is derived from that evidence, so install (and a restore) rebuild it by
 adoption.
@@ -18,14 +20,18 @@ kind TEXT NOT NULL CHECK(kind IN ('run_slot','binding','probe')),
 project_id TEXT NOT NULL,identity TEXT NOT NULL,
 state TEXT NOT NULL CHECK(state IN ('held','releasing','released')),
 generation INTEGER NOT NULL DEFAULT 1 CHECK(generation>=1),
-taken_at_ms INTEGER NOT NULL,released_at_ms INTEGER,release_kind TEXT,receipt TEXT,
+taken_at_ms INTEGER NOT NULL,released_at_ms INTEGER,release_kind TEXT,receipt TEXT,evidence TEXT,
 next_check_ms INTEGER NOT NULL DEFAULT 0,
-CHECK((state='released')=(released_at_ms IS NOT NULL AND release_kind IS NOT NULL)),
+CHECK(state='released' OR released_at_ms IS NULL),
+CHECK(state<>'released' OR release_kind IS NOT NULL),
 PRIMARY KEY(project_id,kind,identity),
 FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE)'''
 
+# A release time is the time of the decision: the slot's own release time, a binding's consumed time, else the
+# ledger's clock at the release. A slot's receipt is its release digest unless a written decision set it first.
 _RELEASE = ("UPDATE run_holds SET state='released',generation=generation+1,"
-            "released_at_ms=COALESCE(released_at_ms,{at}),release_kind=COALESCE(release_kind,{kind}) "
+            "released_at_ms=COALESCE(released_at_ms,{at}),release_kind=COALESCE(release_kind,{kind}),"
+            "receipt=COALESCE(receipt,{receipt}) "
             "WHERE kind='{hold}' AND project_id=NEW.project_id AND identity={identity} AND state<>'released';")
 
 RUN_HOLDS_OBJECTS = (
@@ -39,7 +45,8 @@ RUN_HOLDS_OBJECTS = (
     ("trigger", "run_holds_slot_released",
      "CREATE TRIGGER run_holds_slot_released AFTER UPDATE OF released_at_ms ON active_run_capacity "
      "WHEN OLD.released_at_ms IS NULL AND NEW.released_at_ms IS NOT NULL BEGIN "
-     + _RELEASE.format(at="NEW.released_at_ms", kind="'completed'", hold="run_slot", identity="NEW.handle_digest")
+     + _RELEASE.format(at="NEW.released_at_ms", kind="'completed'", hold="run_slot", identity="NEW.handle_digest",
+                       receipt="NEW.release_digest")
      + " END"),
     ("trigger", "run_holds_binding_taken",
      "CREATE TRIGGER run_holds_binding_taken AFTER INSERT ON host_run_bindings BEGIN "
@@ -48,10 +55,10 @@ RUN_HOLDS_OBJECTS = (
     ("trigger", "run_holds_binding_released",
      "CREATE TRIGGER run_holds_binding_released AFTER UPDATE OF binding_state ON host_run_bindings "
      "WHEN OLD.binding_state IS 'pending' AND NEW.binding_state IS NOT 'pending' BEGIN "
-     + _RELEASE.format(at="COALESCE(NEW.consumed_at_ms,NEW.created_at_ms)",
+     + _RELEASE.format(at="COALESCE(NEW.consumed_at_ms,ledger_now_ms())",
                        kind="CASE WHEN NEW.binding_state='terminal' THEN 'consumed' "
                             "ELSE COALESCE(NEW.abandoned_reason,'abandoned') END",
-                       hold="binding", identity="NEW.handle_digest")
+                       hold="binding", identity="NEW.handle_digest", receipt="NULL")
      + " END"),
     ("trigger", "run_holds_probe_taken",
      "CREATE TRIGGER run_holds_probe_taken AFTER INSERT ON account_billing_probe_requests BEGIN "
@@ -60,26 +67,28 @@ RUN_HOLDS_OBJECTS = (
     ("trigger", "run_holds_probe_released",
      "CREATE TRIGGER run_holds_probe_released AFTER UPDATE OF state ON account_billing_probe_requests "
      "WHEN OLD.state<>'committed' AND NEW.state='committed' BEGIN "
-     + _RELEASE.format(at="NEW.created_at_ms", kind="'completed'", hold="probe", identity="NEW.request_key")
+     + _RELEASE.format(at="ledger_now_ms()", kind="'completed'", hold="probe", identity="NEW.request_key",
+                       receipt="NULL")
      + " END"),
 )
 
-# Adoption: each existing hold gets its row from the evidence it has; nothing is invented.
+# Adoption: each existing hold gets its row from the evidence it has; nothing is invented. A release time history
+# does not record (an abandoned binding's, a committed probe's) stays unknown (NULL), never the creation time.
 _ADOPT = (
-    "INSERT OR IGNORE INTO run_holds(kind,project_id,identity,state,taken_at_ms,released_at_ms,release_kind) "
+    "INSERT OR IGNORE INTO run_holds(kind,project_id,identity,state,taken_at_ms,released_at_ms,release_kind,receipt) "
     "SELECT 'run_slot',a.project_id,a.handle_digest,"
     "CASE WHEN a.released_at_ms IS NOT NULL THEN 'released' ELSE 'held' END,a.claimed_at_ms,a.released_at_ms,"
-    "CASE WHEN a.released_at_ms IS NOT NULL THEN 'completed' END FROM active_run_capacity a",
+    "CASE WHEN a.released_at_ms IS NOT NULL THEN 'completed' END,a.release_digest FROM active_run_capacity a",
     "INSERT OR IGNORE INTO run_holds(kind,project_id,identity,state,taken_at_ms,released_at_ms,release_kind) "
     "SELECT 'binding',h.project_id,h.handle_digest,"
     "CASE WHEN h.binding_state IS 'pending' THEN 'held' ELSE 'released' END,h.created_at_ms,"
-    "CASE WHEN h.binding_state IS 'pending' THEN NULL ELSE COALESCE(h.consumed_at_ms,h.created_at_ms) END,"
+    "CASE WHEN h.binding_state IS 'pending' THEN NULL ELSE h.consumed_at_ms END,"
     "CASE WHEN h.binding_state IS 'pending' THEN NULL WHEN h.binding_state='terminal' THEN 'consumed' "
     "ELSE COALESCE(h.abandoned_reason,'abandoned') END FROM host_run_bindings h",
     "INSERT OR IGNORE INTO run_holds(kind,project_id,identity,state,taken_at_ms,released_at_ms,release_kind) "
     "SELECT 'probe',p.project_id,p.request_key,"
     "CASE WHEN p.state='committed' THEN 'released' ELSE 'held' END,p.created_at_ms,"
-    "CASE WHEN p.state='committed' THEN p.created_at_ms END,"
+    "NULL,"
     "CASE WHEN p.state='committed' THEN 'completed' END FROM account_billing_probe_requests p",
 )
 
@@ -104,7 +113,7 @@ def install_run_holds_schema(connection) -> None:
         connection.execute(sql.replace(f"CREATE {kind.upper()} ", f"CREATE {kind.upper()} IF NOT EXISTS ", 1))
     adopt_run_holds(connection)
     assert_run_holds_schema(connection)
-    if not check_run_holds_coverage(connection):
+    if not check_run_holds_consistency(connection):
         raise ValueError("run hold adoption is incomplete")
 
 
@@ -112,6 +121,46 @@ def adopt_run_holds(connection) -> None:
     """Give every account hold without a register row its row from its evidence (idempotent)."""
     for sql in _ADOPT:
         connection.execute(sql)
+
+
+# A slot released by a written lost or crashed decision: its register row is released, at the slot's own release
+# time, with the slot's release digest as its receipt. Used by every completion coverage check (alias a).
+DECISION_RELEASED = (
+    "EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=a.project_id AND r.kind='run_slot' "
+    "AND r.identity=a.handle_digest AND r.state='released' AND r.release_kind IN ('crashed','lost') "
+    "AND a.release_digest IS NOT NULL AND r.receipt=a.release_digest AND r.released_at_ms=a.released_at_ms)")
+
+# Round 1 F2: each check finds a row that breaks the register's agreement with its holds.
+_INCONSISTENT = (
+    # every row has its hold
+    "SELECT 1 FROM run_holds r WHERE (r.kind='run_slot' AND NOT EXISTS(SELECT 1 FROM active_run_capacity a "
+    "WHERE a.project_id=r.project_id AND a.handle_digest=r.identity)) OR (r.kind='binding' AND NOT EXISTS("
+    "SELECT 1 FROM host_run_bindings h WHERE h.project_id=r.project_id AND h.handle_digest=r.identity)) "
+    "OR (r.kind='probe' AND NOT EXISTS(SELECT 1 FROM account_billing_probe_requests p "
+    "WHERE p.project_id=r.project_id AND p.request_key=r.identity)) LIMIT 1",
+    # states agree: a slot is released exactly when its capacity row is
+    "SELECT 1 FROM run_holds r JOIN active_run_capacity a ON a.project_id=r.project_id AND a.handle_digest=r.identity "
+    "WHERE r.kind='run_slot' AND (r.state='released') <> (a.released_at_ms IS NOT NULL) LIMIT 1",
+    # a binding no longer pending is released; a pending one is held unless it expired (a claimed binding stays
+    # pending for its settlement)
+    "SELECT 1 FROM run_holds r JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity "
+    "WHERE r.kind='binding' AND ((h.binding_state IS NOT 'pending' AND r.state<>'released') "
+    "OR (h.binding_state IS 'pending' AND r.state='released' AND r.release_kind IS NOT 'expired')) LIMIT 1",
+    # a probe is released exactly when its request is committed
+    "SELECT 1 FROM run_holds r JOIN account_billing_probe_requests p ON p.project_id=r.project_id "
+    "AND p.request_key=r.identity WHERE r.kind='probe' AND (r.state='released') <> (p.state='committed') LIMIT 1",
+    # a lost or crashed decision matches its slot exactly
+    "SELECT 1 FROM run_holds r JOIN active_run_capacity a ON a.project_id=r.project_id AND a.handle_digest=r.identity "
+    "WHERE r.kind='run_slot' AND r.release_kind IN ('crashed','lost') AND (r.state<>'released' "
+    "OR r.receipt IS NULL OR r.receipt IS NOT a.release_digest OR r.released_at_ms IS NOT a.released_at_ms) LIMIT 1",
+)
+
+
+def check_run_holds_consistency(connection) -> bool:
+    """Round 1 F2: every hold has its row, every row its hold, and their states agree (used at open, at restore
+    and by every backup check)."""
+    return check_run_holds_coverage(connection) and all(
+        connection.execute(sql).fetchone() is None for sql in _INCONSISTENT)
 
 
 def check_run_holds_coverage(connection) -> bool:

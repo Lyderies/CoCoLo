@@ -68,7 +68,7 @@ from .account_observation_schema import (OBSERVATION_COLUMNS, OBSERVATION_SCHEMA
                                          check_observation_coverage, install_observation_schema)
 from .phase_report import report_phase
 from .run_holds_schema import (  # O0b RS-A
-    RUN_HOLDS_OBJECTS, assert_run_holds_schema, check_run_holds_coverage, install_run_holds_schema,
+    DECISION_RELEASED, RUN_HOLDS_OBJECTS, assert_run_holds_schema, check_run_holds_consistency, install_run_holds_schema,
 )
 from .admission_evidence_schema import (
     assert_admission_evidence_schema, check_admission_evidence_coverage, install_admission_evidence_schema,
@@ -370,7 +370,7 @@ _BACKUP_TABLE_COLUMNS = {
     "account_billing_probe_origins": BILLING_PROBE_ORIGIN_COLUMNS,
     "account_billing_probe_requests": BILLING_PROBE_COLUMNS,
     # O0b RS-A: from schema 15; a crashed or lost release cannot be derived again, so it is backed up.
-    "run_holds": ("kind", "identity", "state", "generation", "taken_at_ms", "released_at_ms", "release_kind", "receipt", "next_check_ms"),
+    "run_holds": ("kind", "identity", "state", "generation", "taken_at_ms", "released_at_ms", "release_kind", "receipt", "evidence", "next_check_ms"),
     "host_run_bindings": (
         "handle_digest", "run_id", "assignment_digest", "task_digest",
         "task_id_digest", "route_digest", "configuration_digest", "client_version",
@@ -770,10 +770,10 @@ def _check_backup_coverage(restored: sqlite3.Connection, schema_version: int) ->
         "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
         "WHERE (a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
         "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL)) "
-        # O0b RS-A: a slot released crashed or lost has no completion, by design (its register row says so).
-        + ("AND NOT (EXISTS(SELECT 1 FROM run_holds r "
-           "WHERE r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest "
-           "AND r.release_kind IN ('crashed','lost') AND r.receipt IS a.release_digest)) " if schema_version >= 15 else "")
+        # O0b RS-A (F2): a slot released by a matching lost or crashed decision keeps its completion apart: no
+        # completion yet, or a late one that still has its execution owner.
+        + (f"AND NOT ({DECISION_RELEASED} AND (c.released_at_ms IS NULL OR e.owner_digest IS NOT NULL)) "
+           if schema_version >= 15 else "")
         + "LIMIT 1"
     ).fetchone() is not None:
         raise LedgerError("project backup completion coverage is incomplete")
@@ -783,6 +783,8 @@ def _check_backup_coverage(restored: sqlite3.Connection, schema_version: int) ->
         raise LedgerError('account observation coverage is unavailable')
     if schema_version >= 13 and not check_billing_probe_coverage(restored):
         raise LedgerError('project backup billing probe coverage is incomplete')
+    if schema_version >= 15 and not check_run_holds_consistency(restored):
+        raise LedgerError('project backup run hold coverage is incomplete')
 
 
 def _verify_project_backup_body(
@@ -2121,6 +2123,8 @@ class LearningLedger:
         )
         try:
             connection.row_factory = sqlite3.Row
+            # O0b RS-A (F5): the register's triggers record releases at the ledger's own clock.
+            connection.create_function("ledger_now_ms", 0, lambda: self._clock_ms())
             version = connection.execute('PRAGMA user_version').fetchone()[0]
             if version > LEDGER_SCHEMA_VERSION:
                 raise LedgerError('ledger schema is newer than this package')
@@ -2957,10 +2961,9 @@ class LearningLedger:
             "AND e.run_id=a.run_id AND e.bridge_run_id=a.bridge_run_id "
             "WHERE (a.released_at_ms IS NOT c.released_at_ms OR a.release_digest IS NOT c.receipt_digest "
             "OR (a.released_at_ms IS NOT NULL AND e.owner_digest IS NULL)) "
-            # O0b RS-A: a slot released crashed or lost has no completion, by design.
-            + ("AND NOT (EXISTS(SELECT 1 FROM run_holds r "
-               "WHERE r.project_id=a.project_id AND r.kind='run_slot' AND r.identity=a.handle_digest "
-               "AND r.release_kind IN ('crashed','lost') AND r.receipt IS a.release_digest)) " if current >= 15 else "")
+            # O0b RS-A (F2): as in _check_backup_coverage.
+            + (f"AND NOT ({DECISION_RELEASED} AND (c.released_at_ms IS NULL OR e.owner_digest IS NOT NULL)) "
+               if current >= 15 else "")
             + "LIMIT 1"
             ).fetchone() is not None:
                 raise LedgerError("capacity completion coverage is unavailable")
@@ -3019,7 +3022,7 @@ class LearningLedger:
                     self._connection.execute(f"PRAGMA user_version = {LEDGER_SCHEMA_VERSION}")
                 return
             # O0b RS-A: schema 15 adds the hold register, through the same authorized path.
-            if current >= 15 and not check_run_holds_coverage(self._connection):
+            if current >= 15 and not check_run_holds_consistency(self._connection):
                 raise LedgerError('run hold coverage is unavailable')
             if current == 14:
                 self._require_project_migration_backups(14, LEDGER_SCHEMA_VERSION)
@@ -11471,12 +11474,15 @@ class LearningLedger:
         if row is None:
             return False
         at = max(now, int(row["claimed_at_ms"]))
-        decision = content_digest({"decision": "run-slot-release-v1", "kind": kind, "project_id": project_id,
-                                   "handle_digest": handle_digest, "released_at_ms": at, "observed_wall_ms": now,
-                                   "observed_monotonic_ns": monotonic})
+        evidence = {"decision": "run-slot-release-v1", "kind": kind, "project_id": project_id,
+                    "handle_digest": handle_digest, "released_at_ms": at, "observed_wall_ms": now,
+                    "observed_monotonic_ns": monotonic}
+        decision = content_digest(evidence)
+        # F5: the evidence is kept next to its digest, so the decision can be checked again later.
         self._connection.execute(
-            "UPDATE run_holds SET release_kind=?,receipt=? WHERE kind='run_slot' AND project_id=? AND identity=? "
-            "AND state='held'", (kind, decision, project_id, handle_digest))
+            "UPDATE run_holds SET release_kind=?,receipt=?,evidence=? WHERE kind='run_slot' AND project_id=? "
+            "AND identity=? AND state='held'",
+            (kind, decision, canonical_json(evidence).decode(), project_id, handle_digest))
         self._connection.execute(
             "UPDATE active_run_capacity SET released_at_ms=?,release_digest=? WHERE project_id=? AND handle_digest=? "
             "AND released_at_ms IS NULL", (at, decision, project_id, handle_digest))
