@@ -183,6 +183,57 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.assertEqual(len(holds), len(set(
             (row["kind"], row["identity"]) for row in ledger._connection.execute("SELECT kind, identity FROM run_holds"))))
 
+    def upgraded_at(self, now, monotonic):
+        with mock.patch.object(LearningLedger, "_clock_ms", return_value=now), \
+                mock.patch.object(LearningLedger, "_capacity_clock_reference", return_value=monotonic):
+            return self.upgraded()
+
+    def slot_hold(self, ledger, handle_digest):
+        return tuple(ledger._connection.execute(
+            "SELECT r.state, r.release_kind, a.released_at_ms IS NOT NULL FROM run_holds r JOIN active_run_capacity a "
+            "ON a.project_id=r.project_id AND a.handle_digest=r.identity WHERE r.kind='run_slot' AND r.identity=?",
+            (handle_digest,)).fetchone())
+
+    def test_RS_A_F1_the_upgrade_releases_a_slot_already_settled_lost(self):
+        """Round 1 F1 (draft 3 item 5): its binding says service_lost, so it is adopted released `lost`."""
+        self.case.claim()
+        row = self.rows()[0]
+        with self.ledger._account_transaction():  # as 0.8.37's lost settlement left it: binding settled, slot held
+            self.ledger._connection.execute(
+                "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='service_lost' "
+                "WHERE handle_digest=?", (row["handle_digest"],))
+        self.schema_fourteen(backup=True)
+        ledger = self.upgraded_at(row["claimed_at_ms"] + 1, row["clock_reference_ns"] + 1)
+        self.assertEqual(("released", "lost", 1), self.slot_hold(ledger, row["handle_digest"]))
+
+    def test_RS_A_F1_the_upgrade_releases_a_slot_the_crash_rule_already_frees(self):
+        """Round 1 F1 (draft 3b item 2): released `crashed` before activation, so it never counts again."""
+        self.case.claim()
+        row = self.rows()[0]
+        self.schema_fourteen(backup=True)
+        now = row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS + 1
+        ledger = self.upgraded_at(now, row["clock_reference_ns"] - 1)  # after a reboot
+        self.assertEqual(("released", "crashed", 1), self.slot_hold(ledger, row["handle_digest"]))
+
+    def test_RS_A_F1_the_upgrade_keeps_a_live_slot_held(self):
+        self.case.claim()
+        row = self.rows()[0]
+        self.schema_fourteen(backup=True)
+        ledger = self.upgraded_at(row["claimed_at_ms"] + 1, row["clock_reference_ns"] + 1)
+        self.assertEqual(("held", None, 0), self.slot_hold(ledger, row["handle_digest"]))
+
+    def test_RS_A_F1_the_upgrade_releases_an_expired_unclaimed_binding(self):
+        """Round 1 F1 (draft 4 item 2)."""
+        project, launch = self.new_attempt()
+        from codex_agents.learning_contracts import keyed_digest
+        digest = keyed_digest(self.ledger.state.digest_key(), launch.run_handle)
+        expires = self.ledger._connection.execute(
+            "SELECT expires_at_ms FROM host_run_bindings WHERE handle_digest=?", (digest,)).fetchone()[0]
+        self.schema_fourteen(backup=True)
+        ledger = self.upgraded_at(expires + 1, 1)
+        self.assertEqual(("released", "expired"), tuple(ledger._connection.execute(
+            "SELECT state, release_kind FROM run_holds WHERE kind='binding' AND identity=?", (digest,)).fetchone()))
+
     def binding_hold(self, handle):
         from codex_agents.learning_contracts import keyed_digest
         digest = keyed_digest(self.ledger.state.digest_key(), handle)
