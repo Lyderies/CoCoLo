@@ -17,13 +17,15 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 
 from tests.support import TEMP_ROOT
 from codex_agents.client_runtime import runtime_hint_path
 from codex_agents.collector_client import COLLECTOR_RUNTIME_DIGEST
-from codex_agents.collector_paths import CollectorPaths
+from codex_agents.collector_paths import CollectorPaths, StateError
 from codex_agents.learning_contracts import canonical_json
 from codex_agents.orchestration_api import OrchestrationRequest, OrchestrationScope, encode_orchestration_request
 from codex_agents.history_contracts import HistoryError
@@ -31,6 +33,8 @@ from codex_agents.service_enrollment import (
     EnrollmentError, EnrollmentVerifier, _mac, capability_path, enrollment_preamble, prepare_proof_directory,
     proof_directory, read_capability, withdraw_proof,
 )
+from codex_agents import service_host
+from codex_agents.project_service import _owned_directory
 from codex_agents.service_host import EnrolledFrontend, ServiceHostLimits
 
 
@@ -461,6 +465,76 @@ class EnrollmentProofTests(unittest.TestCase):
         with self.assertRaises(EnrollmentError) as replayed:
             verifier.verify(valid)
         self.assertEqual('enrollment_replayed', replayed.exception.reason_code)
+
+
+class OwnerDirectoryWhileListeningTests(unittest.TestCase):
+    """O10 UP-1: a state directory COCOLO makes is owner-only even while another thread of the same
+    process opens a listener (CI run 44705995602: the collector's account listener and a project host
+    shared the harness process, and the project host refused `history_service_unavailable`); a path
+    that really is unsafe is still refused."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        proofs = self.root/'proofs'
+        prepare_proof_directory(proofs)
+        self.frontend = EnrolledFrontend(EnrollmentVerifier(b'k'*32, 'host', 1, proofs),
+            ServiceHostLimits(2, 1_000_000_000, 2, 60_000_000_000, 30_000, 64), lambda *_: None, proofs)
+        self.addCleanup(self.frontend.close)
+
+    def test_UP1_a_directory_made_while_another_thread_binds_a_listener_is_owner_only(self):
+        binding, release, real_socket = threading.Event(), threading.Event(), socket.socket
+
+        class HeldBind(real_socket):
+            def bind(self, address):
+                binding.set()
+                release.wait(10)
+                return super().bind(address)
+
+        failures = []
+
+        def listen():
+            try:
+                self.frontend.listen(self.root/'p.sock', 'project')
+            except BaseException as error:
+                failures.append(error)
+
+        made = self.root/'projects'
+        with mock.patch.object(service_host.socket, 'socket', HeldBind):
+            thread = threading.Thread(target=listen, daemon=True)
+            thread.start()
+            try:
+                self.assertTrue(binding.wait(10), 'listener never reached bind')
+                _owned_directory(made)  # The project host's own step, during the other thread's bind.
+            finally:
+                release.set()
+                thread.join(10)
+        self.assertEqual([], failures)
+        self.assertEqual(0o700, stat.S_IMODE(made.lstat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE((self.root/'p.sock').lstat().st_mode))
+
+    def test_UP1_a_listener_is_refused_in_a_directory_others_can_enter(self):
+        shared = self.root/'shared'
+        shared.mkdir(mode=0o700)
+        shared.chmod(0o755)
+        with self.assertRaises(StateError):
+            self.frontend.listen(shared/'p.sock', 'project')
+        self.assertFalse((shared/'p.sock').exists())
+
+    def test_UP1_a_really_unsafe_state_directory_is_still_refused(self):
+        for mode in (0o755, 0o770, 0o707):
+            with self.subTest(mode=oct(mode)):
+                path = self.root/('d%o' % mode)
+                path.mkdir(mode=0o700)
+                path.chmod(mode)
+                with self.assertRaisesRegex(StateError, 'unsafe permissions'):
+                    _owned_directory(path)
+        target = self.root/'target'
+        target.mkdir(mode=0o700)
+        (self.root/'link').symlink_to(target)
+        with self.assertRaises(StateError):
+            _owned_directory(self.root/'link')
 
 
 if __name__ == '__main__':
