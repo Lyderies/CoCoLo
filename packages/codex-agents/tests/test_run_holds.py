@@ -779,6 +779,97 @@ class RunHoldTests(ActiveRunCapacityTests):
             "SELECT kind, state FROM run_holds ORDER BY kind")]
         self.assertIn({"kind": "run_slot", "state": "held"}, holds)
 
+    def test_RS_A_G4_the_legacy_open_cap_admits_by_the_count_the_status_reports(self):
+        """Round 2 G4: open_host_run's binding cap skips a register-released claimed binding (still pending for
+        its settlement), as the status and the signature open's cap do, also after a clock rollback."""
+        self.case.claim()
+        binding = next(b for b in self.bindings() if b["binding_state"] == "pending")
+        row = self.rows()[0]
+        self.assertEqual(1, self.sweep(binding["expires_at_ms"] + 1, row["clock_reference_ns"] + 1))
+        # The fixture's clock is the claim's time again: rolled back, the binding is not past its expiry on it.
+        self.assertLess(self.ledger._clock_ms(), binding["expires_at_ms"])
+        live = self.ledger.account_capacity(self.project)["pending_bindings"]["live"]
+        with mock.patch.object(learning_store, "MAX_PENDING_HOST_RUNS", live + 1):
+            self.new_attempt()  # the cap's last place, by the status's count
+            with self.assertRaisesRegex(LedgerError, "pending host run capacity is exhausted"):
+                self.new_attempt()  # control: a live binding still counts
+        self.assertEqual(live + 1, self.ledger.account_capacity(self.project)["pending_bindings"]["live"])
+
+    def add_released_claimed_history(self, count, expired_at):
+        """`count` historical claimed bindings past their expiry, register-released `expired` and still pending
+        for their settlement, each with its claim (cloned from the fixture's claimed binding)."""
+        connection = self.ledger._connection
+        source = dict(connection.execute(
+            "SELECT h.* FROM host_run_bindings h JOIN launch_claims c ON c.project_id=h.project_id "
+            "AND c.handle_digest=h.handle_digest LIMIT 1").fetchone())
+        claim = dict(connection.execute("SELECT * FROM launch_claims WHERE project_id=? AND handle_digest=?",
+                                        (source["project_id"], source["handle_digest"])).fetchone())
+        bindings, claims = [], []
+        for index in range(count):
+            digest = hashlib.sha256(b"history-%d" % index).hexdigest()
+            bindings.append({**source, "handle_digest": digest, "run_id": "history-%d" % index,
+                             "expires_at_ms": expired_at, "binding_state": "pending"})
+            claims.append({**claim, "handle_digest": digest, "run_id": "history-%d" % index,
+                           "bridge_run_id": "brg_" + digest[:32]})
+        connection.execute("BEGIN IMMEDIATE")
+        for table, rows in (("host_run_bindings", bindings), ("launch_claims", claims)):
+            columns = list(rows[0])
+            connection.executemany(
+                f"INSERT INTO {table}({','.join(columns)}) VALUES({','.join('?' * len(columns))})",
+                [tuple(row[c] for c in columns) for row in rows])
+        connection.execute(
+            "UPDATE run_holds SET state='released',generation=generation+1,released_at_ms=?,release_kind='expired' "
+            "WHERE kind='binding' AND state='held' AND identity IN "
+            "(SELECT handle_digest FROM host_run_bindings WHERE run_id LIKE 'history-%')", (expired_at + 1,))
+        connection.execute("COMMIT")
+
+    def release_steps(self, now, monotonic):
+        """SQLite VM steps of one release batch (a progress handler counting every step) and what it released."""
+        steps = [0]
+
+        def count():
+            steps[0] += 1
+            return 0
+        self.ledger._connection.set_progress_handler(count, 1)
+        try:
+            released = self.sweep(now, monotonic)
+        finally:
+            self.ledger._connection.set_progress_handler(None, 0)
+        return steps[0], released
+
+    def test_RS_A_G5_an_empty_batch_s_work_does_not_grow_with_released_claimed_history(self):
+        """Round 2 G5: expiry candidates come from held register rows, so released claimed bindings (pending for
+        their settlement) are never re-examined: an empty batch does the same work with 2,000 of them."""
+        self.case.claim()
+        binding = next(b for b in self.bindings() if b["binding_state"] == "pending")
+        row = self.rows()[0]
+        now, monotonic = binding["expires_at_ms"] + 1, row["clock_reference_ns"] + 1
+        self.assertEqual(1, self.sweep(now, monotonic))
+        before, released = self.release_steps(now, monotonic)
+        self.assertEqual(0, released)
+        self.add_released_claimed_history(2000, binding["expires_at_ms"])
+        after, released = self.release_steps(now, monotonic)
+        self.assertEqual(0, released)
+        self.assertLessEqual(after, before + 200, (before, after))  # a constant, never a step per history row
+
+    def test_RS_A_G5_both_binding_expiry_queries_read_the_register_index(self):
+        """Round 2 G5: by query plan, the unclaimed and the claimed binding expiry select their candidates
+        through run_holds_due (held register rows), never by a scan of pending source bindings."""
+        self.case.claim()
+        statements = []
+        self.ledger._connection.set_trace_callback(statements.append)
+        try:
+            self.sweep(1, 1)
+        finally:
+            self.ledger._connection.set_trace_callback(None)
+        expiry = [s for s in statements if s.lstrip().startswith("UPDATE")
+                  and "expires_at_ms<=" in s and ("abandoned_reason='expired'" in s or "release_kind='expired'" in s)]
+        self.assertEqual(2, len(expiry), statements)
+        for statement in expiry:
+            plan = " | ".join(r[3] for r in self.ledger._connection.execute("EXPLAIN QUERY PLAN " + statement))
+            self.assertIn("run_holds_due", plan, statement)
+            self.assertNotIn("host_run_bindings_live", plan, statement)
+
 
 def load_tests(loader, tests, pattern):
     """Only this module's own tests: the inherited capacity tests run in test_active_run_capacity."""
