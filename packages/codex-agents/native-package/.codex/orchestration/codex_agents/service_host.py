@@ -174,20 +174,22 @@ class EnrolledFrontend:
     def listen(self, path, kind):
         if len(os.fsencode(path)) > MAX_SOCKET_PATH_BYTES:
             raise HistoryError('history_invalid_input')
+        # O10 UP-1: no umask change here; the umask is process-wide, so another thread's mkdir(0o700)
+        # during this bind came out 0o600 and its owner-only check refused it. Nobody else can reach
+        # the socket before the chmod below: its directory must be the owner's alone.
+        _assert_no_symlink_components(path.parent)
+        _check_owner_mode(path.parent, directory=True)
         try:
             if stat.S_ISSOCK(path.lstat().st_mode):
                 path.unlink()  # Left by an earlier start; the caller holds the owner lock now.
         except FileNotFoundError:
             pass
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        previous = os.umask(0o177)
         try:
             listener.bind(str(path))
         except BaseException:
             listener.close()
             raise
-        finally:
-            os.umask(previous)
         self._listeners.append((listener, kind, path))
         path.chmod(0o600)
         listener.listen(min(64, self._limits.pending_connections))
