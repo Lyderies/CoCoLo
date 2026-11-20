@@ -11893,7 +11893,7 @@ class LearningLedger:
                 "SELECT 1 FROM active_run_capacity a WHERE a.project_id=? AND (a.released_at_ms IS NULL OR "
                 "(a.claimed_at_ms>=? AND EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=a.project_id "
                 "AND r.kind='run_slot' AND r.identity=a.handle_digest AND r.release_kind IN ('lost','crashed')))) LIMIT 1",
-                (project_id, (now_ms if now_ms is not None else self._clock_ms()) - LEGACY_RUN_MAX_MS),
+                (project_id, self._clock_ms() - LEGACY_RUN_MAX_MS),  # F4: the ledger's clock, never the caller's
             ).fetchone() is not None:
                 raise LedgerError("project_has_active_launch_capacity")
             # Account restrictions are read from every project, so deleting the
@@ -11921,6 +11921,8 @@ class LearningLedger:
                 self._connection.execute("DELETE FROM launch_inputs WHERE project_id=?", (project_id,))
                 self._connection.execute("DELETE FROM active_run_capacity WHERE project_id=? AND released_at_ms IS NOT NULL", (project_id,))
                 self._connection.execute("DELETE FROM launch_claims WHERE project_id=?", (project_id,))
+                # O0b RS-A (F4): the register rows and tombstones go with the holds they record.
+                self._connection.execute("DELETE FROM run_holds WHERE project_id=?", (project_id,))
                 updated = self._connection.execute(
                     "UPDATE projects SET canonical_root=NULL,root_digest=NULL,status='deleted',deleted_at_ms=? "
                     "WHERE project_id=? AND status='active'",
