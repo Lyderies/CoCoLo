@@ -479,8 +479,11 @@ def finish_open_from_signature_job(ledger, request, pool, handle, *, before_comm
             passed = decision['decision'] == 'pass'
             if passed:
                 pending = ledger._connection.transaction_read_call(work_limits, lambda: ledger._connection.execute(
-                    "SELECT handle_digest FROM host_run_bindings WHERE project_id=? AND binding_state='pending' LIMIT ?",
-                    (request.project_id, MAX_PENDING_HOST_RUNS)).fetchall())
+                    # O0b B0-1 (narrowed): only live bindings count, pending and not past their expiry, so
+                    # expired ones never fill a project for good.
+                    "SELECT handle_digest FROM host_run_bindings WHERE project_id=? AND binding_state='pending' "
+                    "AND expires_at_ms>? LIMIT ?",
+                    (request.project_id, now, MAX_PENDING_HOST_RUNS)).fetchall())
                 if len(pending) >= MAX_PENDING_HOST_RUNS:
                     raise OpenError('open_busy')
                 expires = request.opened_at_ms+HOST_RUN_TTL_MS
