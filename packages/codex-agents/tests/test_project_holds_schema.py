@@ -142,11 +142,15 @@ class SchemaStepTests(unittest.TestCase):
         for name in SCHEMA_18_TABLES:
             self.assertEqual(project_holds_schema.PROJECT_HOLDS_COLUMNS[name],
                              tuple(row[1] for row in db.execute(f'PRAGMA table_info({name})')))
-            if name != 'project_holds':
+            if name not in {'project_holds', 'project_result_contexts'}:
                 self.assertEqual(0, db.execute('SELECT COUNT(*) FROM ' + name).fetchone()[0])  # nothing adopted yet
         # (requirement) B1: the step adopts every lease and reservation (and nothing else) into the register.
-        self.assertEqual([('lease', 2), ('reservation', 3)], [tuple(row) for row in db.execute(
+        # (requirement) D1 (RS-D M1): and each reservation not yet expired (2, 3, 4) as a `legacy_no_context` context
+        # with its held custody row; no context was ever stored for them, so none is invented.
+        self.assertEqual([('lease', 2), ('reservation', 3), ('result_custody', 3)], [tuple(row) for row in db.execute(
             'SELECT kind,COUNT(*) FROM project_holds GROUP BY kind ORDER BY kind')])
+        self.assertEqual([('legacy_no_context', 3)], [tuple(row) for row in db.execute(
+            'SELECT state,COUNT(*) FROM project_result_contexts GROUP BY state')])
         indexes = {row[0]: row[1] for row in db.execute(
             "SELECT name,sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL AND tbl_name IN "
             "('project_holds','project_result_contexts')")}

@@ -363,7 +363,11 @@ class RegisterAdoptionTests(unittest.TestCase):
         self.assertEqual('withdrawn_unsent', hold_row(db, 'lease', identity(4))[2])  # no host open, no reservation
         self.assertEqual(('held', None, None), hold_row(db, 'reservation', binding(3).claim_id))
         self.assertEqual(('held', None, None), hold_row(db, 'reservation', binding(5).claim_id))  # failed is not release
-        self.assertEqual(6, db.execute('SELECT COUNT(*) FROM project_holds').fetchone()[0])
+        self.assertEqual(6, db.execute("SELECT COUNT(*) FROM project_holds WHERE kind IN ('lease','reservation')")
+                         .fetchone()[0])
+        # (requirement) D1 (RS-D M1): each reservation not yet expired (3, 5) also gets its `result_custody` row,
+        # held, with its `legacy_no_context` context; nothing else is adopted.
+        self.assertEqual(2, db.execute('SELECT COUNT(*) FROM project_holds').fetchone()[0] - 6)
         evidence = {json.loads(row[0])['adopted'] for row in db.execute('SELECT evidence FROM project_holds')}
         self.assertEqual({18}, evidence)  # each adopted row says so
 
