@@ -395,6 +395,24 @@ class BillingProbeWorkerTests(unittest.TestCase):
         self.pool.retire(handle)
         self.assertEqual(0, self.pool._charged)
 
+    def test_C6_a_probe_cancelled_during_an_unknown_preparation_and_then_cleaned_is_no_longer_held(self):
+        started, go = threading.Event(), threading.Event()
+
+        def unknown(payload):
+            started.set()
+            go.wait(5)
+            return None, None, True
+        with mock.patch.object(workers, '_prepare', side_effect=unknown):
+            handle = self.pool.prepare(self.payload())
+            self.assertTrue(started.wait(5))
+            self.pool.discard(handle)  # cancelled while it prepares
+            go.set()
+            self.until(lambda: self.pool.snapshot(handle)['state'] == 'cleaned')
+        self.pool.retire(handle)
+        view = self.pool.health.view()
+        self.assertEqual((0, None), (view['kept'], view['held_since_ms']))
+        self.assertIsNotNone(view['last_failure'])  # what happened is still noted
+
     def test_unbound_preparation_holds_slot_until_actual_discard(self):
         handle, prepared = self.prepare()
         with self.assertRaisesRegex(workers.ProbeWorkerError, 'probe_worker_full'):
