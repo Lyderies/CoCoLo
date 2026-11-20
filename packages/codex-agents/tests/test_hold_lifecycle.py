@@ -49,9 +49,9 @@ class HoldLifecycleTests(ResultLifetimeTests):
     def test_B0_6_baseline_is_empty(self):
         self.assertEqual({'live_results': 0, 'account_slots': 0, 'pending_bindings': 0}, self.held())
 
-    @unittest.skip("gates the run supervisor: the owner narrowed B0 on 2026-11-20 (never-armed withdrawal)")
     def test_B0_1_a_run_refused_before_launch_frees_its_account_binding_by_itself(self):
-        """B0-1 (fails on 0.8.37): the binding stays pending for 24 h, held against the cap and every drain."""
+        """B0-1 (fails on 0.8.37): the binding stays pending for 24 h, held against the cap and every drain.
+        Un-skipped by slice B3 (RS-B W5, the B0-6 "never-armed binding" exit): the project withdraws the open."""
         context, route_path, orchestration, run_handle = self.open_run()
         self.assertEqual(1, self.held()['pending_bindings'])  # the hold was taken
         with mock.patch.object(codex_preparation.bridge, 'codex_managed_configuration_present', return_value=True):
