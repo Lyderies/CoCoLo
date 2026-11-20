@@ -340,6 +340,7 @@ def _status_collector_fields(health):
             'account_lanes': health.get('account_lanes'), 'account_slots': health.get('account_slots'),
             'account_restart': health.get('account_restart'),  # S1-H1c: the host's latest decision
             'account_restart_last': health.get('account_restart_last'),  # D5: its last self-restart
+            'ledger_waits': health.get('ledger_waits'),  # M4b E1a-3: refused ledger-lock waits by caller
             'collector_startup_ms': phases,  # S1-U9a: milliseconds per start-up phase, or None
             'collector_schema_version': health['schema_version'],
             'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
@@ -497,13 +498,15 @@ def _account_health(report, this_project=None):
     raw_lanes, raw_slots = report.pop('account_lanes', None), report.pop('account_slots', None)
     restart = report.pop('account_restart', None)
     last = report.pop('account_restart_last', None)
+    waits = report.get('ledger_waits')
     try:
         health = _account_health_of(report, raw_lanes, raw_slots)
     except Exception:
         health = None
     if health is not None:
         try:
-            health['attention'] += _restart_attention(restart, this_project) + _last_restart_attention(last)
+            health['attention'] += (_restart_attention(restart, this_project) + _last_restart_attention(last)
+                                    + _ledger_waits_attention(waits))
             if type(restart) is dict and restart.get('action') == 'suppressed':
                 health['reasons'] = [*health['reasons'], 'account_restart_suppressed']  # C6
         except Exception:
@@ -514,6 +517,17 @@ def _account_health(report, this_project=None):
     except Exception:
         return {'state': 'unknown', 'reason_code': 'account_health_invalid', 'reasons': ['account_health_invalid'],
                 'lanes': None, 'slots': None, 'attention': []}
+
+
+def _ledger_waits_attention(waits):
+    """M4b E1a-3: refused ledger-lock waits since the collector started, as one plain line."""
+    if (type(waits) is not dict or not all(type(k) is str and account_integer(v) for k, v in waits.items())):
+        return []
+    total = sum(waits.values())
+    if not total:
+        return []
+    return [f"The account's records were busy {total} time{'s' if total != 1 else ''}; requests were refused "
+            "and can be retried."]
 
 
 def _last_restart_attention(last):

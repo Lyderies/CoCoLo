@@ -924,6 +924,7 @@ class AccountService:
 
     def _handle_request(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
         labels = {"request_id": None, "project_id": None, "runtime_digest": None, "request_digest": None}
+        operation = None  # known once decoded; chooses the busy answer
         try:
             request = decode_account_request(raw)
             digest = account_request_digest(request)
@@ -1270,7 +1271,7 @@ class AccountService:
         except AdmissionCaptureError as exc:
             reason = public_capture_reason(exc)
         except SQLReadError as exc:  # M4b E1a-2: a busy ledger is answered as busy
-            reason = "account_busy" if exc.reason_code == "sql_read_busy" else "account_unavailable"
+            reason = busy_reason(operation) if exc.reason_code == "sql_read_busy" else "account_unavailable"
         except Exception:
             reason = "account_unavailable"
         return self._reply(labels, reason=reason)
@@ -1287,3 +1288,9 @@ class AccountService:
             raise AccountError("account_wrong_owner")
         with self._front_lock:
             self._closed = True
+
+
+def busy_reason(operation) -> str:
+    """M4b E1a-2: the public answer to a busy ledger; an open's own busy reason on open paths
+    (review 040-m4b-e1a-code)."""
+    return "open_account_busy" if operation == "account.open_host_run" else "account_busy"

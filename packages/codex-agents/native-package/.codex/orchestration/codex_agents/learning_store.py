@@ -2233,7 +2233,7 @@ class LearningLedger:
         from .account_observation import purge_old_observations
 
         with self._held():
-            if self._active_readers or self._connection.in_transaction:
+            if self._readers() or self._connection.in_transaction:
                 return 0
             now = self._clock_ms() if now_ms is None else now_ms
             return purge_old_observations(self, now, batch)
@@ -2250,7 +2250,7 @@ class LearningLedger:
         the others still go. Backups keep their own lifetime.
         """
         with self._held():
-            if self._active_readers or self._connection.in_transaction:
+            if self._readers() or self._connection.in_transaction:
                 return 0
             now = self._clock_ms() if now_ms is None else now_ms
             readable, scanned, after = [], 0, ("", 0)
@@ -4977,17 +4977,25 @@ class LearningLedger:
         }
 
     @contextlib.contextmanager
-    def _held(self, label: str | None = None) -> Iterator[None]:
+    def _held(self, label: str | None = None, *, on_refused=None) -> Iterator[None]:
         """M4b E1a-1: the ledger lock, waited for at most ledger_waits.wait_seconds(); re-entry by the
         holder is immediate. A wait that runs out is counted by the caller's name and refused with
-        today's busy refusal before anything runs (E1a-2)."""
+        today's busy refusal before anything runs (E1a-2); `on_refused` first undoes what the caller
+        made outside the ledger before asking (review 040-m4b-e1a-code)."""
         if not self._lock.acquire(timeout=ledger_waits.wait_seconds()):
             self._lock_waits.refused(label or sys._getframe(2).f_code.co_name)
+            if on_refused is not None:
+                on_refused()
             raise SQLReadError("sql_read_busy")
         try:
             yield
         finally:
             self._lock.release()
+
+    def _readers(self) -> int:
+        """The readers registered now, read under their own lock (E1a revision 3)."""
+        with self._readers_lock:
+            return self._active_readers
 
     def lock_refusals(self) -> dict[str, int]:
         """E1a-3: refused waits by caller, read without the ledger lock."""
@@ -7546,7 +7554,7 @@ class LearningLedger:
         handle_digest = keyed_digest(self.state.digest_key(), run_handle)
         bridge_run_id = f"brg_{secrets.token_hex(16)}"
         # Preflight reads do not acquire SQLite's write reservation.
-        with self._account_transaction() if claim else self._lock:
+        with self._account_transaction() if claim else self._held():
             binding = self._connection.execute(
                 "SELECT run_id,binding_state,consumed_at_ms,assignment_digest,"
                 "task_digest,route_digest,expires_at_ms FROM host_run_bindings "
@@ -8110,7 +8118,13 @@ class LearningLedger:
             if execution_configuration["verification_required"] is True
             else None
         )
-        with self._held():
+
+        def discard_new_result():
+            # Refused before the transaction: only the file this attempt made goes, so a retry succeeds.
+            if stored_result is not None and stored_result["created"]:
+                with contextlib.suppress(OSError):
+                    (self.state.root / stored_result["relative_path"]).unlink()
+        with self._held(on_refused=discard_new_result):
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 project = self._connection.execute(
@@ -11458,7 +11472,7 @@ class LearningLedger:
 
     def expire(self, project_id: str, *, now_ms: int) -> int:
         with self._held():
-            if self._active_readers:
+            if self._readers():
                 raise LedgerError("expiry requires closed scoped readers")
             links = self._connection.execute(
                 "SELECT from_record_id,to_record_id FROM record_links WHERE project_id=?",
@@ -11623,7 +11637,7 @@ class LearningLedger:
         timestamp = now_ms if now_ms is not None else time.time_ns() // 1_000_000
         deletion_id = f"del_{secrets.token_hex(16)}"
         with self._held():
-            if self._active_readers:
+            if self._readers():
                 raise LedgerError("project deletion requires closed scoped readers")
             if self._connection.execute(
                 "SELECT 1 FROM account_billing_probe_requests "
@@ -11949,14 +11963,17 @@ class CollectorServer:
         lock is never waited on past a stop."""
         lock = self.ledger._lock
         deadline = time.monotonic() + LEDGER_LOCK_WAIT_MS / 1000  # E1a-2: a busy ledger skips the cycle
-        while not lock.acquire(timeout=0.1):
-            if self._sweeps_stop.is_set():
-                return
-            if time.monotonic() >= deadline:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:  # checked before each attempt, and no attempt runs past it
                 self.ledger._lock_waits.refused("sweeps")
                 return
+            if lock.acquire(timeout=min(0.1, remaining)):
+                break
+            if self._sweeps_stop.is_set():
+                return
         try:
-            if self.ledger._active_readers or self.ledger._connection.in_transaction:
+            if self.ledger._readers() or self.ledger._connection.in_transaction:
                 return
             loose = (LedgerError, OSError, sqlite3.Error, ValueError, KeyError)
             # Kept worker results expire on time even while the collector is the only process holding
@@ -12159,6 +12176,8 @@ class CollectorServer:
                     "account_services": self.account_services,
                     "account_restart": self.account_restart,
                     "account_restart_last": self.account_restart_last,
+                    # M4b E1a-3: refused ledger-lock waits by caller, read without the ledger lock.
+                    "ledger_waits": self.ledger.lock_refusals(),
                 }
                 if self.account_lanes is not None:
                     try:

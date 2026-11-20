@@ -157,8 +157,10 @@ class LedgerLockLimitTests(unittest.TestCase):
         checks the wiring, and the cleanup itself is the same as the commit's existing failure path)."""
         source = ast.parse((Path(ORCHESTRATION_ROOT) / 'codex_agents' / 'learning_store.py').read_text())
         commit = next(f for f in ast.walk(source) if isinstance(f, ast.FunctionDef) and f.name == 'commit_host_result')
-        holds = [node for node in ast.walk(commit) if isinstance(node, ast.Call)
-                 and isinstance(node.func, ast.Attribute) and node.func.attr == '_held']
+        calls = [node for node in ast.walk(commit) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)]
+        written = min(node.lineno for node in calls if node.func.attr == '_write_worker_result')
+        # Only the holds after the file is written have something to undo (the earlier ones read).
+        holds = [node for node in calls if node.func.attr == '_held' and node.lineno > written]
         self.assertTrue(holds and all(any(k.arg == 'on_refused' for k in hold.keywords) for hold in holds))
 
     def test_E1a_1_a_sweep_cycle_gives_up_at_its_deadline_and_counts_once(self):
@@ -202,7 +204,7 @@ class LedgerLockLimitTests(unittest.TestCase):
             allowed = set()
             for function in ast.walk(tree):
                 if isinstance(function, ast.FunctionDef) and function.name in {'_readers', 'repository'}:
-                    allowed |= {n.lineno for n in ast.walk(function)}
+                    allowed |= {getattr(n, 'lineno', None) for n in ast.walk(function)}
             self.assertEqual([], [line for line in direct if line not in allowed], name)
 
     def test_E1a_1_every_acquisition_is_bounded_or_listed_as_kept(self):

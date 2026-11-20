@@ -108,7 +108,7 @@ def _owner(ledger):
     connection._read_owner()
     if ledger._allow_schema_upgrade is not True:
         raise HistoryError("history_not_authorized")
-    if (ledger._collector_active is not False or ledger._active_readers != 0
+    if (ledger._collector_active is not False or ledger._readers() != 0
             or connection.in_transaction or connection._sql_scope is not None
             or connection._sql_foreign_progress):
         raise HistoryError("history_unavailable")
