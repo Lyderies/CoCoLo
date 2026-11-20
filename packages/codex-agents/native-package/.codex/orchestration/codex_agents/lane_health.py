@@ -104,6 +104,17 @@ class Lane:
         except BaseException:  # noqa: BLE001 - instrumentation must never change a lane's outcome
             return
 
+    def note_failure_named(self, slot: Slot, cause: str, type_name: str | None) -> None:
+        """As note_failure, from a type name a helper kept (never an exception object). Never raises."""
+        try:
+            if type(cause) is not str or not CAUSE.fullmatch(cause):
+                return
+            kind = ('invariant' if type_name is None
+                    else type_name if type(type_name) is str and _TYPE_NAME.fullmatch(type_name) else 'other')
+            slot.note = replace(slot.note, failure=_Failure(cause, kind, _wall_ms(), new_token()))
+        except BaseException:  # noqa: BLE001
+            return
+
     def enter_held(self) -> None:
         try:
             with self._health_lock:

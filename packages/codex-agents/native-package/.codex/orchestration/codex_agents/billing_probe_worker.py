@@ -88,7 +88,7 @@ class _Job:
     held: bool = False  # S1-H1a: this job has entered the lane's held episode
 
 
-def _held(slot, job, cause, error=None, *, faulted=False):
+def _held(slot, job, cause, type_name=None, *, faulted=False):
     """S1-H1a: this worker publishes its own unknown job (and fault) as kept and held. Reporting only;
     never raises (C1): the whole record, its arguments included, runs inside lane_health.safely."""
     def record():
@@ -96,7 +96,7 @@ def _held(slot, job, cause, error=None, *, faulted=False):
         if job is not None:
             changes['kept'] = frozenset({job.token})
         slot.note.publish(**changes)
-        slot.lane.note_failure(slot.note, cause, error)
+        slot.lane.note_failure_named(slot.note, cause, type_name)
         if job is None or not job.held:
             if job is not None:
                 job.held = True
@@ -133,14 +133,28 @@ def probe_payload(project, request_key, root, identity, *, deadline_ns, created_
 _CAUGHT = _ThreadLocal()  # per worker thread
 
 
-def _caught(error):
-    """S1-H1a C7: keep, for this thread's next failure note, the exception a helper caught."""
-    _CAUGHT.error = error
+def _caught(error, step):
+    """S1-H1a C7: keep, for this thread's note of that step's failure, only the type name of the
+    exception a helper caught (no exception object, so no frames are kept). Never raises."""
+    try:
+        kept = getattr(_CAUGHT, 'types', None)
+        if kept is None:
+            kept = _CAUGHT.types = {}
+        kept[step] = type(error).__name__
+    except BaseException:  # noqa: BLE001
+        pass
 
 
-def _take_caught():
-    error, _CAUGHT.error = getattr(_CAUGHT, 'error', None), None
-    return error
+def _take_caught(step=None):
+    """The type name kept for this step (all of them are cleared when step is None). Never raises."""
+    try:
+        kept = getattr(_CAUGHT, 'types', None) or {}
+        if step is None:
+            kept.clear()
+            return None
+        return kept.pop(step, None)
+    except BaseException:  # noqa: BLE001
+        return None
 
 
 def _remove(workspace):
@@ -152,7 +166,7 @@ def _remove(workspace):
     except FileNotFoundError:
         return True
     except BaseException as error:
-        _caught(error)  # S1-H1a C7
+        _caught(error, 'cleanup')  # S1-H1a C7
     return False
 
 
@@ -206,7 +220,7 @@ def _prepare(payload):
             hashlib.sha256(payload).hexdigest())
         return prepared, workspace, False
     except BaseException as error:
-        _caught(error)  # S1-H1a C7: its type, for the worker that notes this failure
+        _caught(error, 'prepare')  # S1-H1a C7: its type, for the worker that notes this failure
         if workspace is not None:
             clean = _remove(workspace)
             return None, None if clean else workspace, not clean
@@ -262,7 +276,7 @@ def _execute(job):
         body, reason = _normalized(infos, failure,
             parse_bounded_json_value(prepared.identity, max_bytes=MAX_PROBE_INPUT_BYTES), observed)
     except BaseException as error:
-        _caught(error)  # S1-H1a C7: its type, for the worker that notes this failure
+        _caught(error, 'execute')  # S1-H1a C7: its type, for the worker that notes this failure
         body = canonical_json({'records': [], 'observed_at_ms': None, 'reason_code': 'probe_incomplete'})
     removed = _remove(prepared.workspace)
     return BillingProbePacket(body, prepared.inputs_digest, removed, reason)
@@ -291,7 +305,7 @@ def _worker(slot, registry):
                 prepared, workspace, unknown = _prepare(job.payload)
                 if prepared is None and unknown:
                     # S1-H1a C6: published before waiting for the registry lock a blocked owner may hold.
-                    _held(slot, job, 'probe_preparation_unknown', _take_caught())
+                    _held(slot, job, 'probe_preparation_unknown', _take_caught('prepare') or _take_caught('cleanup'))
                 with registry._lock:
                     job.prepared, job.workspace = prepared, workspace
                     discard = job.cancelled or slot.stop.is_set()
@@ -301,9 +315,9 @@ def _worker(slot, registry):
                     state = job.state
                 # S1-H1a notes are published outside the registry lock (a blocked owner may hold it).
                 if state == 'unknown' and not job.held:
-                    _held(slot, job, 'probe_preparation_unknown', _take_caught())
+                    _held(slot, job, 'probe_preparation_unknown', _take_caught('prepare') or _take_caught('cleanup'))
                 elif state == 'failed':
-                    lane_health.safely(lambda: slot.lane.note_failure(slot.note, 'probe_preparation_failed', _take_caught()))
+                    lane_health.safely(lambda: slot.lane.note_failure_named(slot.note, 'probe_preparation_failed', _take_caught('prepare')))
                 if not discard:
                     job = handle = item = prepared = None
                     continue
@@ -311,14 +325,14 @@ def _worker(slot, registry):
             if operation == 'discard':
                 removed = _remove(job.workspace)
                 if not removed:
-                    _held(slot, job, 'cleanup_incomplete', _take_caught())  # S1-H1a C6: before the lock
+                    _held(slot, job, 'cleanup_incomplete', _take_caught('cleanup'))  # S1-H1a C6: before the lock
                 with registry._lock:
                     job.workspace = None if removed else job.workspace
                     job.prepared = None
                     job.state = 'cleaned' if removed and job.ticket is None else 'unknown'
                     state = job.state
                 if state == 'unknown' and not job.held:
-                    _held(slot, job, 'cleanup_incomplete', _take_caught())
+                    _held(slot, job, 'cleanup_incomplete', _take_caught('cleanup'))
                 elif state == 'cleaned' and job.held:
                     _released(slot, job)  # S1-H1a C6: confirmed clean, so no longer held
                 if slot.stop.is_set():
@@ -327,9 +341,9 @@ def _worker(slot, registry):
                 with registry._lock:
                     job.state = 'active'
                 packet = _execute(job)
-                error = _take_caught()
-                if error is not None:  # S1-H1a C7: execution failed inside its helper (reporting only)
-                    lane_health.safely(lambda error=error: slot.lane.note_failure(slot.note, 'probe_execution_failed', error))
+                failed = _take_caught('execute')
+                if failed is not None:  # S1-H1a C7: execution failed inside its helper (reporting only)
+                    lane_health.safely(lambda: slot.lane.note_failure_named(slot.note, 'probe_execution_failed', failed))
                 with registry._lock:
                     job.packet, job.state = packet, 'finishing'
                     job.packet_snapshot = (packet.body, packet.inputs_digest, packet.workspace_removed, packet.reason_code)
@@ -341,7 +355,7 @@ def _worker(slot, registry):
             job = handle = item = None
     except BaseException as error:
         # S1-H1a: published first, without the registry lock, so a blocked owner cannot delay it.
-        _held(slot, job, 'probe_worker_failed', error, faulted=True)
+        _held(slot, job, 'probe_worker_failed', type(error).__name__, faulted=True)
         with registry._lock:
             slot.fault = True
             if job is not None:

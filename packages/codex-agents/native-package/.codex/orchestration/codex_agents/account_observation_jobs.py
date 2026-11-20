@@ -250,9 +250,11 @@ class AccountObservationJobs:
 
     def _reply_mismatch(self, slot):
         """S1-H1a: an invalid reply keeps its slot; noted once, with no exception."""
-        if slot not in self._mismatched:
-            self._mismatched.add(slot)
-            lane_health.safely(lambda: self.health.note_failure(self._note, 'reply_mismatch', None))
+        def record():
+            if slot not in self._mismatched:
+                self._mismatched.add(slot)
+                self.health.note_failure(self._note, 'reply_mismatch', None)
+        lane_health.safely(record)  # C1: the whole update, set included
 
     def _publish_health(self):
         """S1-H1a: this owner's note: active slots busy, faulted or mismatched ones kept, queued jobs.

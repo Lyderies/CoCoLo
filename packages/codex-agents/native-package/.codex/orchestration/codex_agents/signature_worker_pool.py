@@ -243,12 +243,15 @@ class SignatureWorkerPool:
     def _now(self):
         try:
             value = time.monotonic_ns()
-        except BaseException:
+        except BaseException as error:
             self._faulted = True
             self._clock_failed = True
             for slot in self._slots:
                 if slot.current is not None:
                     slot.current.cancelled.set()
+            lane_health.safely(lambda error=error: self.health.note_failure(  # S1-H1a C4
+                self._note, 'signature_clock_failed', error))
+            self._publish_health()
             raise
         if type(value) is not int or not 0 <= value <= _MAX_NS or (self._last_ns is not None and value < self._last_ns):
             self._faulted = True
@@ -256,6 +259,9 @@ class SignatureWorkerPool:
             for slot in self._slots:
                 if slot.current is not None:
                     slot.current.cancelled.set()
+            lane_health.safely(lambda: self.health.note_failure(  # S1-H1a C4
+                self._note, 'signature_clock_failed', None))
+            self._publish_health()
             raise SignatureWorkerError()
         self._last_ns = value
         return value
@@ -315,11 +321,12 @@ class SignatureWorkerPool:
             # fault. Retain intake/static shares and refuse further offers.
             self._faulted = True
             slot.fault.set()
-            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'signature_offer_failed', error))  # S1-H1a C4
-            self._publish_health()  # the fault is shown now, not at the next poll
             if slot.current is not None:
                 slot.current.unknown = True
                 slot.current.cancelled.set()
+            # S1-H1a C4: noted and shown now (after its job is marked unknown), not at the next poll.
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'signature_offer_failed', error))
+            self._publish_health()
             raise
 
     def cancel(self, handle):

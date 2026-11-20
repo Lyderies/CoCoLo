@@ -370,8 +370,9 @@ class AccountIngress:
                          if p.request is not None and not p.processing and not p.disconnected][:steps]
                 for _, peer, _ in batch:
                     peer.processing, peer.request = True, None
-            # S1-H1a C5: published before the owner hands the batch on (where it may block).
-            lane_health.safely(lambda: self._note.publish(busy=len(self._groups) + len(batch)))
+                waiting = sum(p.request is not None and not p.processing for p in self._peers.values())
+            # S1-H1a C5: busy and queued published before the owner hands the batch on (where it may block).
+            lane_health.safely(lambda: self._note.publish(busy=len(self._groups) + len(batch), queued=waiting))
             for token, peer, raw in batch:
                 reply = self._service.begin(raw, peer.context, _ingress=self)
                 if type(reply) is bytes:

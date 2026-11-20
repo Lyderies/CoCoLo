@@ -220,7 +220,8 @@ class AccountBillingJobs:
             self._executions.discard(job.preparation)
             job.cleanup_requested = True
         except Exception as error:
-            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_cleanup_failed', error))  # S1-H1a C7
+            job.noted = True  # S1-H1a C7: this failure is the one shown, not a later synthetic one
+            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_cleanup_failed', error))
             self._discard_fault(job)
 
     def _discard_fault(self, job):
