@@ -113,6 +113,7 @@
  "codex:tests.test_learning_source_image_legacy": "integration",
  "codex:tests.test_learning_source_transfer": "integration",
  "codex:tests.test_learning_store": "integration",
+ "codex:tests.test_ledger_lock_limits": "integration",
  "codex:tests.test_ledger_startup": "unit",
  "codex:tests.test_legacy_capacity_upgrade": "integration",
  "codex:tests.test_legacy_history_compatibility": "unit",
