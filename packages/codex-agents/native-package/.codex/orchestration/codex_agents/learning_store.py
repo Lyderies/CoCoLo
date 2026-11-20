@@ -11827,6 +11827,7 @@ class CollectorServer:
         if self._thread and self._thread.is_alive():
             raise CollectorError("collector is already running")
         self._stop.clear()
+        self._sweeps_stop.clear()  # before the thread starts, so a stop right after start is kept (G1)
         self._ready.clear()
         self._startup_error = None
         with self.ledger._lock:
@@ -11861,7 +11862,6 @@ class CollectorServer:
         self._started_at_ms = time.time_ns() // 1_000_000
         self._ready.set()
         # S1-H1a-6b: the sweeps run on their own thread, so no request waits behind one.
-        self._sweeps_stop.clear()
         self._sweeps = threading.Thread(target=self._sweep_loop, name="collector-sweeps", daemon=True)
         self._sweeps.start()
         try:
@@ -12173,6 +12173,7 @@ class CollectorServer:
 
     def stop(self) -> None:
         self._stop.set()
+        self._sweeps_stop.set()  # G1: no sweep cycle starts after a stop, even mid-request
         if self._thread:
             self._thread.join(5)
             if self._thread.is_alive() or (self._sweeps is not None and self._sweeps.is_alive()):
@@ -12184,12 +12185,18 @@ class CollectorServer:
             self.ledger._collector_active = False
 
     def wait(self, timeout: float | None = None) -> bool:
-        """Wait for the collector thread; return true when it has stopped."""
+        """Wait for the collector thread; return true when it has stopped, its sweeps too (G2: not
+        stopped while a sweep still uses the ledger)."""
 
         if self._thread is None:
             return True
         self._thread.join(timeout)
-        return not self._thread.is_alive()
+        if self._thread.is_alive():
+            return False
+        if self._sweeps is not None:
+            self._sweeps.join(0 if timeout is not None else None)
+            return not self._sweeps.is_alive()
+        return True
 
 
 

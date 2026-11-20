@@ -355,8 +355,13 @@ def _apply_health(report, health):
     """S1-H1a-6c: one health reading into the report; False when the collector answered that its
     ledger was busy, which leaves the project fields unavailable and the status not ready."""
     if health.get('ledger_busy') is True:
+        # G3: every ledger-derived field unavailable, never an earlier reading's values.
         report.update(active=True, reason_code='status_ledger_busy',
-                      error="The collector is busy; this project's status could not be read in time.")
+                      error="The collector is busy; this project's status could not be read in time.",
+                      ingestion=_status_ingestion_unavailable(), account_capacity=None,
+                      provider_attestations={p: {'state': 'unavailable'} for p in ('codex', 'claude')})
+        report.pop('collector_health', None)
+        report.pop('account_slots', None)
         return False
     report.update(_status_collector_fields(health))
     report['account_capacity'] = _status_account_capacity(health.get('account_capacity'))
