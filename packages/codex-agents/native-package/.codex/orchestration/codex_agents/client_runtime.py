@@ -385,6 +385,9 @@ def status_client(state_root, project_root):
     try:
         state = CollectorPaths(state_root)
         report['client_failures'] = client_health_snapshot(state, project_root)
+        from .learning_migration import start_failure
+        # O10 HS-3: a learning migration that failed when the project's service last started.
+        report['learning_migration_failure'] = start_failure(state, project_root)
     except (StateError, OSError, ValueError):
         return report | {'reason_code': 'status_runtime_unavailable', 'error': 'Status services are unavailable.',
                          'account_health': {'state': 'unknown', 'reason_code': 'account_health_unavailable',

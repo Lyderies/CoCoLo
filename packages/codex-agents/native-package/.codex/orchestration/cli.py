@@ -500,6 +500,9 @@ def _replace_other_version_host(args):
     return replaced
 
 
+from codex_agents.learning_migration import clear_start_failure, record_start_failure  # noqa: E402 -- O10 HS-3
+
+
 def _start_project_host(args):
     """Start this project's service unless one serves; first settle where its learning lives.
 
@@ -525,9 +528,19 @@ def _start_project_host(args):
                     client.learning_moved_if_empty(args.project_root)
                 elif (not snapshot["moved"] or snapshot["activation_pending"]) and snapshot["drained"]:
                     # Not yet moved, or retired by a migration that stopped before
-                    # switching the copy on: run (or finish) it now.
-                    _migrate_learning(argparse.Namespace(
-                        state_root=args.state_root, project_root=args.project_root, status=False, rollback=False))
+                    # switching the copy on: run (or finish) it now. O10 HS-3: its outcome is kept for
+                    # learning-status, never thrown away.
+                    state = CollectorPaths(args.state_root)
+                    try:
+                        report = _migrate_learning(argparse.Namespace(
+                            state_root=args.state_root, project_root=args.project_root, status=False, rollback=False))
+                    except Exception:
+                        record_start_failure(state, args.project_root, "migration_failed")
+                    else:
+                        if type(report) is dict and report.get("ready") is False:
+                            record_start_failure(state, args.project_root, report.get("reason_code"))
+                        else:
+                            clear_start_failure(state, args.project_root)
     except Exception:
         pass
     return ensure_project_host(args.state_root, ORCHESTRATION_ROOT, args.project_root)

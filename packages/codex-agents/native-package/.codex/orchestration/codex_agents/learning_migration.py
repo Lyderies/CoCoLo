@@ -127,3 +127,89 @@ _REASONS = {
     "history_not_authorized": "migration_not_authorized",
     "history_incompatible": "migration_incompatible",
 }
+
+
+# O10 HS-3: a learning migration that fails during a service start is kept, by project, for
+# learning-status, in its own owner-only file (the shared client-health file is read by earlier versions,
+# which refuse codes they do not know). Fixed reason codes only, never a path or message.
+START_FAILURES = "learning-migration-failures.json"
+_START_REASON = __import__("re").compile(r"[a-z][a-z_]{2,63}")
+
+
+def _start_failure_key(state, project_root):
+    from .collector_paths import _canonical_project_root
+    from .learning_contracts import keyed_digest
+    return keyed_digest(state.digest_key(), str(_canonical_project_root(project_root)))
+
+
+def _start_failures(state):
+    import json
+    import os
+    import stat
+    path = state.root / START_FAILURES
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return {}
+    with os.fdopen(descriptor, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > 1 << 20:
+            return {}
+        try:
+            value = json.loads(handle.read())
+        except ValueError:
+            return {}
+    return value if type(value) is dict else {}
+
+
+def _write_start_failures(state, data):
+    import json
+    import os
+    import secrets
+    target = state.root / START_FAILURES
+    temporary = state.root / f".{START_FAILURES}.{secrets.token_hex(8)}"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(json.dumps(data, sort_keys=True))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def record_start_failure(state, project_root, reason) -> None:
+    """Best effort: never stops the start it describes."""
+    import time
+    try:
+        data = _start_failures(state)
+        data[_start_failure_key(state, project_root)] = {
+            "reason_code": reason if type(reason) is str and _START_REASON.fullmatch(reason) else "migration_failed",
+            "at_ms": time.time_ns() // 1_000_000}
+        _write_start_failures(state, data)
+    except Exception:
+        pass
+
+
+def clear_start_failure(state, project_root) -> None:
+    try:
+        data = _start_failures(state)
+        if data.pop(_start_failure_key(state, project_root), None) is not None:
+            _write_start_failures(state, data)
+    except Exception:
+        pass
+
+
+def start_failure(state, project_root):
+    """This project's last start-time migration failure, or None."""
+    try:
+        entry = _start_failures(state).get(_start_failure_key(state, project_root))
+    except Exception:
+        return None
+    if (type(entry) is not dict or set(entry) != {"reason_code", "at_ms"} or type(entry["reason_code"]) is not str
+            or not _START_REASON.fullmatch(entry["reason_code"]) or type(entry["at_ms"]) is not int):
+        return None
+    return dict(entry)

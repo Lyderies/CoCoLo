@@ -6,6 +6,7 @@ process, never values from a request. The registry lookup goes through the
 collector; this process opens only its own project's history.
 """
 from pathlib import Path
+import os
 import signal
 import time
 
@@ -122,10 +123,38 @@ def service_bundle_root(orchestration_root, project_root):
     return bound
 
 
+def service_history(directory, project_id, **options):
+    """O10 HS-1/HS-2: the project's own service opens its store and upgrades an earlier format, under the
+    store's exclusive writer lock (which is what makes the offline path safe, and the service holds it
+    too), whether or not the project's learning has moved. Before the first upgrade it keeps the store as
+    it was, once per format: history.sqlite3.before-<version>, owner-only."""
+    import sqlite3
+    from .project_history import _SCHEMA_VERSION, ProjectHistory
+
+    database = Path(directory) / "history.sqlite3"
+    if database.is_file() and not database.is_symlink():
+        reader = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)
+        try:
+            version = reader.execute("PRAGMA user_version").fetchone()[0]
+            copy = Path(directory) / f"history.sqlite3.before-{_SCHEMA_VERSION}"
+            if 0 < version < _SCHEMA_VERSION and not copy.exists():
+                temporary = copy.with_name(copy.name + ".partial")
+                temporary.unlink(missing_ok=True)
+                target = sqlite3.connect(temporary)
+                try:
+                    reader.backup(target)  # one consistent snapshot of the store as it is now
+                finally:
+                    target.close()
+                os.chmod(temporary, 0o600)
+                os.replace(temporary, copy)
+        finally:
+            reader.close()
+    return ProjectHistory(directory, project_id, allow_schema_upgrade=True, **options)
+
+
 def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None,
                   liveness=LIVENESS, retaining_idle_stop_ns=RETAINING_IDLE_STOP_NS):
     """Run the host until a signal, idleness or withdrawal; return a closed report."""
-    from .project_history import ProjectHistory
 
     state = CollectorPaths(state_root)
     root = _canonical_project_root(Path(project_root))
@@ -143,8 +172,8 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         return {'ready': False, 'reason_code': 'history_service_unavailable'}
 
     def open_history():
-        return ProjectHistory(directory, project_id, result_key=key, orchestration_limits=ORCHESTRATIONS,
-                              result_capacity=_result_capacity())
+        return service_history(directory, project_id, result_key=key, orchestration_limits=ORCHESTRATIONS,
+                               result_capacity=_result_capacity())
 
     try:
         # Children are prepared from the project's installed package (see service_bundle_root).

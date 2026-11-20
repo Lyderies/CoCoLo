@@ -88,7 +88,8 @@ class StartMigrationFailureTests(unittest.TestCase):
                 mock.patch.object(cli, '_compatible_collector', return_value=client), \
                 mock.patch.object(cli, 'CollectorPaths'), \
                 mock.patch.object(cli, '_migrate_learning', side_effect=migration), \
-                mock.patch.object(cli, 'client_health_increment') as recorded, \
+                mock.patch.object(cli, 'record_start_failure') as recorded, \
+                mock.patch.object(cli, 'clear_start_failure'), \
                 mock.patch.object(cli, 'ensure_project_host', return_value=True) as started:
             cli._start_project_host(args)
         return recorded, started
@@ -96,13 +97,33 @@ class StartMigrationFailureTests(unittest.TestCase):
     def test_HS_3_a_failing_migration_is_recorded_and_the_service_still_starts(self):
         recorded, started = self.start(RuntimeError('boom'))
         started.assert_called_once()
-        self.assertEqual('learning_migration_failed', recorded.call_args.args[2])
-        self.assertEqual('migration_failed', recorded.call_args.kwargs['reason_code'])
+        self.assertEqual('migration_failed', recorded.call_args.args[2])
 
     def test_HS_3_a_refused_migration_is_recorded_with_its_reason(self):
         recorded, started = self.start(lambda args: {'ready': False, 'reason_code': 'migration_not_drained'})
         started.assert_called_once()
-        self.assertEqual('migration_not_drained', recorded.call_args.kwargs['reason_code'])
+        self.assertEqual('migration_not_drained', recorded.call_args.args[2])
+
+    def test_HS_3_the_failure_is_kept_owner_only_shown_and_cleared(self):
+        import tempfile
+        from pathlib import Path
+        from tests.support import TEMP_ROOT
+        from codex_agents.collector_paths import CollectorPaths
+        from codex_agents.learning_migration import clear_start_failure, record_start_failure, start_failure
+        temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(temporary.cleanup)
+        from codex_agents.learning_store import LearningState
+        state = CollectorPaths(LearningState(Path(temporary.name) / 'state').root)  # a real state root and key
+        project = Path(temporary.name) / 'project'
+        project.mkdir()
+        self.assertIsNone(start_failure(state, project))
+        record_start_failure(state, project, 'migration_not_drained')
+        self.assertEqual('migration_not_drained', start_failure(state, project)['reason_code'])
+        record_start_failure(state, project, 'not a fixed reason /x')  # never a path or message
+        self.assertEqual('migration_failed', start_failure(state, project)['reason_code'])
+        self.assertEqual(0o600, stat.S_IMODE(os.stat(state.root / 'learning-migration-failures.json').st_mode))
+        clear_start_failure(state, project)
+        self.assertIsNone(start_failure(state, project))
 
 
 def load_tests(loader, tests, pattern):
