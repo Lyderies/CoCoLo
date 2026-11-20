@@ -168,6 +168,22 @@ class ResultLeaseTests(unittest.TestCase):
         # takes an entry, so the third fits. 0.8.29 refused it (a lifetime cap).
         self.reserve(3)
 
+    def test_RC_1_space_held_by_running_results_is_busy_not_full(self):
+        """O10 RC-1: results in flight hold the body space, so the refusal is busy (wait), not full."""
+        self.reserve()
+        self.reserve(2)
+        with self.assertRaises(HistoryError) as refused:
+            self.reserve(3)
+        self.assertEqual('history_result_capacity_busy', refused.exception.reason_code)
+
+    def test_RC_1_live_entries_at_their_limit_are_full(self):
+        self.fixture.capacity = replace(self.fixture.capacity, max_entries=1)
+        self.reopen()
+        self.reserve()
+        with self.assertRaises(HistoryError) as refused:
+            self.reserve(2)
+        self.assertEqual('history_result_capacity', refused.exception.reason_code)
+
     def test_mixed_live_body_capacity_cannot_be_bypassed_by_legacy_or_leased_reserve(self):
         self.fixture.reserve()
         self.reserve(2)

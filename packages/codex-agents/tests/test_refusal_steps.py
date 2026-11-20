@@ -24,6 +24,7 @@ class RefusalStepTests(unittest.TestCase):
 
     def test_H1b_1_specific_codes_name_their_specific_step(self):
         for code, words in (('result_capacity_full', 'learning-close-orchestration'),
+                            ('result_capacity_busy', 'running'),  # O10 RC-1
                             ('open_service_other_version', 'learning-start-project-service'),
                             ('billing_attestation_missing', 'attest.py')):
             with self.subTest(code=code):
