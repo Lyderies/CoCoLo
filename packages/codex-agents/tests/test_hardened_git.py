@@ -221,6 +221,56 @@ class HardenedRunnerTests(Workspace):
             popen.assert_not_called()
             run.assert_not_called()
 
+    def test_object_writing_calls_never_see_the_owners_objects(self) -> None:
+        """Git freshens (touches) an existing object it is asked to write, in an alternate too.
+
+        So a call that can write an object runs only with the private store reachable; reads,
+        `read-tree` (the private index only) and the reporting forms of apply may see the owner's
+        objects.
+        """
+
+        owner = (self.base / "owner-objects",)
+        with_owner = hg.PrivateRepository(self.store, self.store / "index-x", owner)
+        alone = hg.PrivateRepository(self.store, self.store / "index-x", ())
+        writing = (
+            ("apply", "--cached", "/tmp/p"),
+            ("apply", "--cached", "--whitespace=nowarn", "/tmp/p"),
+            ("hash-object", "-w", "--no-filters", "--", "/tmp/f"),
+            ("write-tree", "--missing-ok"),
+        )
+        reporting = (
+            ("read-tree", "0" * 40),
+            ("apply", "--cached", "--check", "/tmp/p"),
+            ("apply", "--cached", "--numstat", "-z", "/tmp/p"),
+            ("cat-file", "blob", "0" * 40),
+            ("ls-tree", "-r", "0" * 40),
+        )
+        environments = []
+
+        def fake_output(argv, **options):
+            environments.append(options["env"])
+            return subprocess.CompletedProcess(argv, 0, "")
+
+        with mock.patch.object(hg, "_bounded_git_output", fake_output):
+            for arguments in writing:
+                with self.subTest(arguments=arguments), self.assertRaises(hg.GitCallRefused):
+                    hg.run_hardened_git("/usr/bin/true", self.base, *arguments, private=with_owner)
+            self.assertEqual([], environments)
+            for arguments in writing:
+                hg.run_hardened_git("/usr/bin/true", self.base, *arguments, private=alone)
+            for arguments in reporting:
+                hg.run_hardened_git("/usr/bin/true", self.base, *arguments, private=with_owner)
+        for environment in environments[:len(writing)]:
+            self.assertNotIn("GIT_ALTERNATE_OBJECT_DIRECTORIES", environment)
+            self.assertEqual(str(self.store), environment["GIT_DIR"])
+        for environment in environments[len(writing):]:
+            self.assertIn("GIT_ALTERNATE_OBJECT_DIRECTORIES", environment)
+        # Other shapes of the writing plumbing stay refused.
+        for arguments in (("hash-object", "-w", "--", "/tmp/f"), ("hash-object", "-w", "--no-filters", "--", "f"),
+                          ("hash-object", "--stdin"), ("write-tree",), ("apply", "--cached", "--numstat", "p")):
+            with self.subTest(arguments=arguments), self.assertRaises(hg.GitCallRefused):
+                hg.run_hardened_git("/usr/bin/true", self.base, *arguments, private=alone)
+
     def test_the_callers_environment_is_never_inherited(self) -> None:
         hostile = {
             "GIT_DIR": "/nonexistent/hostile", "GIT_INDEX_FILE": "/nonexistent/index",
@@ -410,6 +460,30 @@ class CandidateTreeTests(Workspace):
                 self.assert_store_has_no_leftovers()
 
     @needs_real_git
+    def test_objects_the_owner_already_has_are_not_touched(self) -> None:
+        """A revert and a pure mode change produce objects the owner's repository already holds.
+
+        Writing them with the owner's objects reachable would set their modification times (git's
+        freshening); the before/after map shows nothing in the owner's .git changed.
+        """
+
+        first = self.make_repository(self.project)
+        first_tree = fixture_git(self.project, "rev-parse", f"{first}^{{tree}}").stdout.decode().strip()
+        (self.project / "src" / "app.py").write_text("def main():\n    return 3\n")
+        (self.project / "tool.sh").chmod(0o644)
+        fixture_git(self.project, "commit", "-qam", "second")
+        second = fixture_git(self.project, "rev-parse", "HEAD").stdout.decode().strip()
+        revert = fixture_git(
+            self.project, "diff", "--binary", "--no-ext-diff", "--no-textconv", second, first,
+        ).stdout
+        before = folder_map(self.project)
+        result = self.build(second, revert)
+        self.assertTrue(result.ok, getattr(result, "message", ""))
+        self.assertEqual(first_tree, result.tree)
+        self.assertEqual(before, folder_map(self.project))
+        self.assert_store_has_no_leftovers()
+
+    @needs_real_git
     def test_the_store_may_not_be_inside_the_owners_repository(self) -> None:
         base = self.make_repository(self.project)
         patch = self.make_patch(self.project, base)
@@ -519,6 +593,10 @@ class TripwireTests(Workspace):
         )
         tripwire.chmod(0o755)
         self.tripwire = str(tripwire)
+        # A long-running filter process would wait for git's handshake; this one records and exits.
+        process_tripwire = self.base / "process-tripwire.sh"
+        process_tripwire.write_text(f'#!/bin/sh\necho "process $0" >> "{self.marker}"\nexit 1\n')
+        process_tripwire.chmod(0o755)
         self.base_commit = self.make_repository(self.project)
         (self.project / ".gitattributes").write_text(
             "* filter=trip diff=trip merge=trip\n*.py filter=trip diff=trip\n"
@@ -550,7 +628,7 @@ class TripwireTests(Workspace):
             "core.alternateRefsCommand": self.tripwire,
             "filter.trip.clean": self.tripwire,
             "filter.trip.smudge": self.tripwire,
-            "filter.trip.process": self.tripwire,
+            "filter.trip.process": str(process_tripwire),
             "filter.trip.required": "true",
             "diff.trip.textconv": self.tripwire,
             "diff.trip.command": self.tripwire,
