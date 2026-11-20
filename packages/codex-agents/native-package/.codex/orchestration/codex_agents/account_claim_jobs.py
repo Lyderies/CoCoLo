@@ -340,10 +340,10 @@ class AccountClaimJobs:
                                  and job.provider is not None and job.stale_preparations < MAX_STALE_PREPARATIONS)
                         job.reason = None if again else error.reason_code
                     except Exception as error:  # S1-U10b/f
-                        lane_health.safely(lambda error=error: self.health.note_failure(  # S1-H1a C7
-                            self._note, 'claim_completion_failed', error))
-                        job.reason = (("open_account_busy" if getattr(error, "reason_code", None) == "sql_read_busy"
-                                       else "open_failed") if job.kind == 'open' else "claim_unavailable")
+                        if completion_fault(error):
+                            lane_health.safely(lambda error=error: self.health.note_failure(  # S1-H1a C7
+                                self._note, 'claim_completion_failed', error))
+                        job.reason = completion_reason(error, job.kind)
                 if again:
                     # Captured and prepared again from the run's open, verified in full as the first was
                     # (0.4.0 FR1); the job keeps its place, quota and identity.
@@ -358,8 +358,9 @@ class AccountClaimJobs:
                         job.reason, job.state = error.reason_code, "ready"  # Its own reason, as a first capture.
                         continue
                     except Exception as error:
-                        lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'claim_capture_failed', error))  # S1-H1a C7
-                        job.reason, job.state = "claim_unavailable", "ready"
+                        if completion_fault(error):
+                            lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'claim_capture_failed', error))  # S1-H1a C7
+                        job.reason, job.state = completion_reason(error, 'claim'), "ready"
                         continue
                     self._signatures[job.signature_handle] = ticket
                     continue
@@ -472,3 +473,20 @@ class AccountClaimJobs:
                 "ready": sum(job.state == "ready" for job in self._jobs.values()),
                 "closing": self._closing, "faulted": self._faulted,
                 "workers_closed": self._pool.snapshot()["closed"]}
+
+
+def _busy(error) -> bool:
+    return getattr(error, "reason_code", None) == "sql_read_busy"
+
+
+def completion_reason(error, kind) -> str:
+    """The reply for an unexpected error completing (or recapturing) a job: a busy ledger is answered
+    as busy (M4b E1a-2), anything else as before."""
+    if kind == 'open':
+        return "open_account_busy" if _busy(error) else "open_failed"
+    return "account_busy" if _busy(error) else "claim_unavailable"
+
+
+def completion_fault(error) -> bool:
+    """A busy ledger is expected contention, not a lane fault (M4b E1a-2)."""
+    return not _busy(error)

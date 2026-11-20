@@ -36,7 +36,7 @@ from .service_enrollment import (
 from .service_host import EnrolledFrontend, ServiceHostLimits
 from .signature_job_intake import SignatureIntakeLimits
 from .signature_worker_pool import SignatureWorkerLimits
-from .sql_read_budget import SQLReadLimits
+from .sql_read_budget import SQLReadError, SQLReadLimits
 
 SECOND = 1_000_000_000
 # What an enrolled primary may ask the account owner. Owner-only operations are
@@ -158,6 +158,10 @@ class AccountServiceHost:
         try:
             if self._views._ledger.project_for_root(Path(root)) != request.project_id:
                 return None
+        except SQLReadError as error:
+            if error.reason_code == 'sql_read_busy':
+                raise  # M4b E1a-2: a busy ledger is answered as busy, never as "not authorized"
+            return None
         except Exception:
             return None
         # One context object per connection: the owner compares its identity

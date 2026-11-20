@@ -230,7 +230,8 @@ class HostOpenPublishLockTests(unittest.TestCase):
             for _ in range(8):
                 if frame is None:
                     break
-                publishing = publishing or (frame.f_code.co_name == "take_claim_reply"
+                # M4b E1a: take_claim_reply now sets the request deadline and runs _take_claim_reply.
+                publishing = publishing or (frame.f_code.co_name in {"take_claim_reply", "_take_claim_reply"}
                                             and "current_open_request" in frame.f_locals)
                 frame = frame.f_back
             if publishing and not holders:

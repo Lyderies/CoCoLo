@@ -11998,6 +11998,12 @@ class CollectorServer:
             return {"ok": False, "code": "request_invalid"}
         if not isinstance(request, dict) or request.get("protocol") != COLLECTOR_PROTOCOL_VERSION:
             return {"ok": False, "code": "protocol_mismatch"}
+        # M4b E1a (revision 3c): the request's ledger waits share one deadline, which starts once the
+        # whole frame is here (receiving uses its own deadline above) and is restored on return.
+        with ledger_waits.request():
+            return self._dispatch(request)
+
+    def _dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
         try:
             if request.get("op") == "bind" and set(request) == {
                 "protocol",

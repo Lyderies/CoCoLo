@@ -31,6 +31,7 @@ from .learning_store import (
     _owner_key_identity, _signer_fingerprint,
 )
 from .owner_key_contracts import owner_public_key_from_line
+from . import ledger_waits
 from .sql_read_budget import SQLReadError, SQLReadLimits
 from .signature_inputs import (
     SignatureCaptureError, SignatureCaptureLimits, SignatureInputSnapshot, signature_input_size,
@@ -350,6 +351,8 @@ class AccountOwnerViews:
             if getattr(self._ledger._connection, "_sql_unusable", False) is not True:
                 raise
         except SQLReadError as error:
+            if error.reason_code == "sql_read_busy":
+                raise  # M4b E1a-2: busy, not admission_capture_unavailable
             if error.reason_code == "sql_read_invalid_limits":
                 reason = "admission_capture_invalid_request"
             elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit"}:
@@ -531,9 +534,11 @@ class AccountOwnerViews:
             if getattr(self._ledger._connection, "_sql_unusable", False) is not True:
                 raise
         except SQLReadError as error:
+            if error.reason_code == "sql_read_busy":
+                raise  # M4b E1a-2: busy, not a work limit
             if error.reason_code == "sql_read_invalid_limits":
                 reason = "signature_capture_invalid_request"
-            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit", "sql_read_busy"}:
+            elif error.reason_code in {"sql_read_work_limit", "sql_read_deadline", "sql_read_value_limit"}:
                 reason = "signature_capture_work_limit"
         except (StateError, OSError, UnicodeError):
             pass
@@ -803,10 +808,18 @@ class AccountService:
                 return raw
         except ProbeAdmissionError as error:
             return self._reply(labels, reason=error.reason_code)
+        except SQLReadError as error:  # M4b E1a-2
+            return self._reply(labels, reason='account_busy' if error.reason_code == 'sql_read_busy'
+                               else 'probe_unavailable')
         except Exception:
             return self._reply(labels, reason='probe_unavailable')
 
     def take_claim_reply(self, ticket, *, _ingress=None):
+        """Deferred publication has its own request deadline (M4b E1a revision 3)."""
+        with ledger_waits.request():
+            return self._take_claim_reply(ticket, _ingress=_ingress)
+
+    def _take_claim_reply(self, ticket, *, _ingress=None):
         if self._billing_jobs is not None and type(ticket) is object and ticket in self._billing_jobs._jobs:
             reply = self._billing_jobs.take(ticket, _ingress=_ingress)
             if reply is None:
@@ -818,7 +831,7 @@ class AccountService:
             if reply.reason is not None:
                 return self._reply(labels, reason=reply.reason if reply.reason in {
                     'probe_invalid_request', 'probe_not_authorized', 'probe_unavailable', 'probe_conflict',
-                    'probe_full', 'probe_busy', 'probe_not_ready', *ADMISSION_CAPTURE_PUBLIC_REASONS,
+                    'probe_full', 'probe_busy', 'probe_not_ready', 'account_busy', *ADMISSION_CAPTURE_PUBLIC_REASONS,
                     *PROBE_STEP_REASONS, *OBSERVATION_REASONS}
                     else 'probe_unavailable')
             return self._billing_reply(reply.key, reply.result, reply.context, reply.before_publish)
@@ -848,6 +861,9 @@ class AccountService:
                     return raw
             except ObservationError as error:
                 return self._reply(labels, reason=error.reason_code)
+            except SQLReadError as error:  # M4b E1a-2
+                return self._reply(labels, reason='account_busy' if error.reason_code == 'sql_read_busy'
+                                   else 'observation_unavailable')
             except Exception:
                 return self._reply(labels, reason='observation_unavailable')
         if self._claim_jobs is None:
@@ -901,6 +917,12 @@ class AccountService:
         return raw
 
     def _handle(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
+        """M4b E1a (revision 3): every ledger wait in one request shares one deadline, set here, where
+        both handle() and begin() arrive, and restored on return."""
+        with ledger_waits.request():
+            return self._handle_request(raw, transport_context, deferred=deferred, ingress=ingress)
+
+    def _handle_request(self, raw: bytes, transport_context: object, *, deferred: bool, ingress=None):
         labels = {"request_id": None, "project_id": None, "runtime_digest": None, "request_digest": None}
         try:
             request = decode_account_request(raw)
@@ -1019,6 +1041,10 @@ class AccountService:
                         self._provenance_live()
                         self._views._guard()
                         return True
+                    except SQLReadError as error:
+                        if error.reason_code == 'sql_read_busy':
+                            raise  # M4b E1a-2: busy, answered at the reply, never "not authorized"
+                        raise ObservationError('observation_not_authorized') from None
                     except Exception:
                         raise ObservationError('observation_not_authorized') from None
 
@@ -1063,6 +1089,10 @@ class AccountService:
                             raise ValueError()
                         self._provenance_live()
                         self._views._guard()
+                    except SQLReadError as error:
+                        if error.reason_code == 'sql_read_busy':
+                            raise  # M4b E1a-2
+                        raise OpenError('open_not_authorized') from None
                     except Exception:
                         raise OpenError('open_not_authorized') from None
 
@@ -1239,6 +1269,8 @@ class AccountService:
             reason = exc.reason_code
         except AdmissionCaptureError as exc:
             reason = public_capture_reason(exc)
+        except SQLReadError as exc:  # M4b E1a-2: a busy ledger is answered as busy
+            reason = "account_busy" if exc.reason_code == "sql_read_busy" else "account_unavailable"
         except Exception:
             reason = "account_unavailable"
         return self._reply(labels, reason=reason)

@@ -8,6 +8,8 @@ from __future__ import annotations
 DEFAULT = "Run learning-status to see what is held, then try again."
 
 EXACT = {
+    'account_busy': "The account's records were busy: try again in a moment.",  # M4b E1a-2
+    'open_account_busy': "The account's records were busy: try again in a moment.",  # M4b E1a-2
     'status_ledger_busy': "The collector's records were busy: run learning-status again in a moment.",  # S1-H1a-6c
     'result_capacity_full': "Close finished orchestrations (learning-close-orchestration), or wait for their "
                             "results to pass their retention.",

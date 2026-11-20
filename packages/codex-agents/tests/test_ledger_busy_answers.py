@@ -49,7 +49,8 @@ class LedgerBusyAnswerTests(AccountApiTests):
     def test_E1a_2_a_held_ledger_answers_account_busy_within_the_request_deadline(self):
         self.hold_lock()
         started = time.monotonic()
-        reason = self.reason(self.request("account.capacity_status"))
+        # The owner-key read takes the ledger lock (health does not: it reads published notes).
+        reason = self.reason(self.request("account.owner_key"), self.owner_service())
         waited = time.monotonic() - started
         self.assertEqual("account_busy", reason)
         self.assertLess(waited, ledger_waits.LEDGER_REQUEST_WAIT_MS / 1000 + 0.3)
@@ -102,7 +103,7 @@ class LedgerBusyAnswerTests(AccountApiTests):
         release = self.hold_lock()
         threading.Timer(0.2, release.set).start()
         try:
-            self.call(self.request("account.capacity_status"))
+            self.call(self.request("account.owner_key"), service=self.owner_service())
         except AccountError as refused:  # this fixture's run is unknown: refused for its own reason, not busy
             self.assertNotEqual("account_busy", refused.reason_code)
         self.assertEqual({}, self.ledger.lock_refusals())
