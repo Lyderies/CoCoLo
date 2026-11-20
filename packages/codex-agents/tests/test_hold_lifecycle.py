@@ -97,10 +97,26 @@ class LostServiceHoldTests(LostRunAfterStopTests):
         self.wait_for(lambda: self.reservation_terminal(run_handle)[1], seconds=30)
 
 
+class LostSlotReleaseTests(LostRunAfterStopTests):
+    """O0b RS-A-2: a lost settlement releases the run's slot itself, written once with its kind."""
+
+    def test_RS_A_2_a_lost_run_s_slot_is_released_as_lost_by_its_settlement(self):
+        orchestration, run_handle = self.stopped_in('ready', [
+            {'type': 'thread.started', 'thread_id': 'orphan'}, {'sleep': 30},
+            {'type': 'turn.completed', 'usage': {'input_tokens': 1}}], reached=self.launches)
+        rows = [dict(row) for row in self.collector_ledger._connection.execute(
+            "SELECT a.released_at_ms, a.release_kind FROM active_run_capacity a JOIN host_run_bindings h "
+            "ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest "
+            "WHERE h.binding_state='abandoned' AND h.abandoned_reason='service_lost'")]
+        self.assertEqual(1, len(rows), rows)
+        self.assertIsNotNone(rows[0]['released_at_ms'])  # written, not re-derived from the binding
+        self.assertEqual('lost', rows[0]['release_kind'])
+
+
 def load_tests(loader, tests, pattern):
     """Only this module's own tests: the inherited ones run in their own modules."""
     suite = unittest.TestSuite()
-    for case in (HoldLifecycleTests, LostServiceHoldTests):
+    for case in (HoldLifecycleTests, LostServiceHoldTests, LostSlotReleaseTests):
         for name in loader.getTestCaseNames(case):
             if name in case.__dict__:
                 suite.addTest(case(name))
