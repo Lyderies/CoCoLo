@@ -62,10 +62,15 @@ class LegacyRunsFixture:
 class LegacyCapacityUpgradeTests(LegacyRunsFixture, unittest.TestCase):
     def test_old_runs_from_an_earlier_version_neither_hold_capacity_nor_block_the_move(self):
         ledger = self.upgrade_with_runs(30 * 24 * HOUR, 3 * 24 * HOUR, 2 * learning_store.LEGACY_RUN_MAX_MS)
+        # O0b RS-A round 1 F1 (requirement, design draft 3b item 2): a slot today's rule already frees is
+        # released `crashed` by the upgrade, a written decision; no completion is invented for it.
         rows = ledger._connection.execute(
-            "SELECT COUNT(*) FROM active_run_capacity WHERE kind='legacy_unknown' AND released_at_ms IS NULL"
-        ).fetchone()[0]
-        self.assertEqual(3, rows)  # Kept, unreleased: no cleanup is invented.
+            "SELECT COUNT(*) FROM active_run_capacity a JOIN run_holds r ON r.kind='run_slot' "
+            "AND r.identity=a.handle_digest WHERE a.kind='legacy_unknown' AND r.release_kind='crashed' "
+            "AND a.release_digest=r.receipt").fetchone()[0]
+        self.assertEqual(3, rows)
+        self.assertEqual(0, ledger._connection.execute(
+            "SELECT COUNT(*) FROM capacity_completions WHERE released_at_ms IS NOT NULL").fetchone()[0])
         self.assertEqual(0, self.counted(ledger))
         self.assertTrue(ledger.drained())
 

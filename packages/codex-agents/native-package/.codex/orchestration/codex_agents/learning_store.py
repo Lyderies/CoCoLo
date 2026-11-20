@@ -2770,11 +2770,24 @@ class LearningLedger:
             raise LedgerError('admission evidence migration is unavailable or incompatible') from None
 
     def _initialize_run_holds_locked(self):
-        """O0b RS-A: the hold register, adopting every existing account hold from its evidence."""
+        """O0b RS-A: the hold register, adopting every existing account hold from its evidence, then (round 1
+        F1, before the version is set) releasing the holds today's predicates already treat as ended: a slot
+        whose binding was settled service_lost is released `lost` whatever the clocks say; then the sweep's
+        own releases (crashed slots, reserved probes past their deadline, expired bindings) until none is due."""
+        from .active_run_capacity import LOST_RUN_REASON
+
         try:
             install_run_holds_schema(self._connection)
         except ValueError:
             raise LedgerError('run hold migration is unavailable or incompatible') from None
+        now, monotonic = self._clock_ms(), self._capacity_clock_reference()
+        for row in self._connection.execute(
+                "SELECT a.project_id,a.handle_digest FROM active_run_capacity a JOIN host_run_bindings h "
+                "ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest WHERE a.released_at_ms IS NULL "
+                "AND h.binding_state='abandoned' AND h.abandoned_reason=?", (LOST_RUN_REASON,)).fetchall():
+            self._release_slot_locked(row["project_id"], row["handle_digest"], "lost", now, monotonic)
+        while self._release_due_locked(now, monotonic, 1024) == 1024:
+            pass
 
     def _migrate_six_or_seven_to_current(self, version: int) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
@@ -11556,49 +11569,52 @@ class LearningLedger:
         make it count again (CR-1). A pending binding past its expiry is released `expired`. Each is one
         register transition (the triggers keep the kind written here). Returns how many were released.
         """
-        from .active_run_capacity import LOST_RUN_REASON, crashed_claim
-
         if type(limit) is not int or not 1 <= limit <= 1024:
             raise LedgerError("invalid release batch")
-        released = 0
         with self._account_transaction():
-            now = self._clock_ms()
-            monotonic = self._capacity_clock_reference()
-            crashed, parameters = crashed_claim("a", now, monotonic)
-            slots = self._connection.execute(
-                "SELECT a.project_id,a.handle_digest,a.claimed_at_ms,EXISTS(SELECT 1 FROM host_run_bindings h "
-                "WHERE h.project_id=a.project_id AND h.handle_digest=a.handle_digest "
-                f"AND h.binding_state='abandoned' AND h.abandoned_reason='{LOST_RUN_REASON}') AS lost "
-                f"FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND {crashed} LIMIT ?",
-                (*parameters, limit)).fetchall()
-            for slot in slots:
-                self._release_slot_locked(slot["project_id"], slot["handle_digest"],
-                                          "lost" if slot["lost"] else "crashed", now, monotonic)
-                released += 1
-            if released < limit:
-                # O0b RS-A-2: reserved probes past their deadline, closed as unlaunched denials.
-                from .account_billing_admission import close_expired_reserved
-                released += close_expired_reserved(self, now, limit - released)
-            if released < limit:
-                # F7: an unclaimed binding is ended in its own row too (the trigger then releases its register
-                # row `expired`), so a claim checking the binding refuses it whatever the wall clock later says.
-                cursor = self._connection.execute(
-                    "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='expired' WHERE rowid IN "
-                    "(SELECT h.rowid FROM host_run_bindings h WHERE h.binding_state='pending' AND h.expires_at_ms<=? "
-                    "AND NOT EXISTS(SELECT 1 FROM launch_claims c WHERE c.project_id=h.project_id "
-                    "AND c.handle_digest=h.handle_digest) AND NOT EXISTS(SELECT 1 FROM active_run_capacity a "
-                    "WHERE a.project_id=h.project_id AND a.handle_digest=h.handle_digest) LIMIT ?)",
-                    (now, limit - released))
-                released += cursor.rowcount
-            if released < limit:
-                # A claimed binding stays pending for its settlement; only its register row is released.
-                cursor = self._connection.execute(
-                    "UPDATE run_holds SET state='released',generation=generation+1,released_at_ms=?,"
-                    "release_kind='expired' WHERE rowid IN (SELECT r.rowid FROM run_holds r JOIN host_run_bindings h "
-                    "ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.kind='binding' "
-                    "AND r.state='held' AND h.binding_state='pending' AND h.expires_at_ms<=? LIMIT ?)",
-                    (now, now, limit - released))
-                released += cursor.rowcount
+            return self._release_due_locked(self._clock_ms(), self._capacity_clock_reference(), limit)
+
+    def _release_due_locked(self, now: int, monotonic: int, limit: int) -> int:
+        """The sweep's releases inside the caller's account transaction (the sweep's batches and the 14 -> 15
+        upgrade, before activation): at most `limit`."""
+        from .active_run_capacity import LOST_RUN_REASON, crashed_claim
+
+        released = 0
+        crashed, parameters = crashed_claim("a", now, monotonic)
+        slots = self._connection.execute(
+            "SELECT a.project_id,a.handle_digest,a.claimed_at_ms,EXISTS(SELECT 1 FROM host_run_bindings h "
+            "WHERE h.project_id=a.project_id AND h.handle_digest=a.handle_digest "
+            f"AND h.binding_state='abandoned' AND h.abandoned_reason='{LOST_RUN_REASON}') AS lost "
+            f"FROM active_run_capacity a WHERE a.released_at_ms IS NULL AND {crashed} LIMIT ?",
+            (*parameters, limit)).fetchall()
+        for slot in slots:
+            self._release_slot_locked(slot["project_id"], slot["handle_digest"],
+                                      "lost" if slot["lost"] else "crashed", now, monotonic)
+            released += 1
+        if released < limit:
+            # O0b RS-A-2: reserved probes past their deadline, closed as unlaunched denials.
+            from .account_billing_admission import close_expired_reserved
+            released += close_expired_reserved(self, now, limit - released)
+        if released < limit:
+            # F7: an unclaimed binding is ended in its own row too (the trigger then releases its register
+            # row `expired`), so a claim checking the binding refuses it whatever the wall clock later says.
+            cursor = self._connection.execute(
+                "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='expired' WHERE rowid IN "
+                "(SELECT h.rowid FROM host_run_bindings h WHERE h.binding_state='pending' AND h.expires_at_ms<=? "
+                "AND NOT EXISTS(SELECT 1 FROM launch_claims c WHERE c.project_id=h.project_id "
+                "AND c.handle_digest=h.handle_digest) AND NOT EXISTS(SELECT 1 FROM active_run_capacity a "
+                "WHERE a.project_id=h.project_id AND a.handle_digest=h.handle_digest) LIMIT ?)",
+                (now, limit - released))
+            released += cursor.rowcount
+        if released < limit:
+            # A claimed binding stays pending for its settlement; only its register row is released.
+            cursor = self._connection.execute(
+                "UPDATE run_holds SET state='released',generation=generation+1,released_at_ms=?,"
+                "release_kind='expired' WHERE rowid IN (SELECT r.rowid FROM run_holds r JOIN host_run_bindings h "
+                "ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.kind='binding' "
+                "AND r.state='held' AND h.binding_state='pending' AND h.expires_at_ms<=? LIMIT ?)",
+                (now, now, limit - released))
+            released += cursor.rowcount
         return released
 
     def health_snapshot(self, project_id: str) -> dict[str, dict[str, int]]:
