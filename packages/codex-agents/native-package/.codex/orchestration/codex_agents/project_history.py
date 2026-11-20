@@ -2158,10 +2158,19 @@ class ProjectHistory:
         return purged
 
     def _attempt_released(self, lease) -> bool:
-        """Whether an attempt may go (0.3.4 R1f): it reserved no cleanup, or the account's release of it
-        is verified here. Otherwise the account could still hold the run while its project record went."""
+        """Whether an attempt may go (0.3.4 R1f): it reserved no cleanup, it was never admitted (O10 D3), or
+        the account's release of it is verified here. Otherwise the account could still hold the run while its project record went."""
         if lease.cleanup_reservation_digest is None:
             return True
+        if lease.state == "expired" and self._connection.execute(
+                "SELECT 1 FROM result_reservations WHERE project_id=? AND run_handle=? AND attempt=? LIMIT 1",
+                (self.project_id, lease.binding.run_handle, lease.binding.attempt)).fetchone() is None:
+            # Never admitted (O10 D3): an expired lease with no reservation was never bound. It was
+            # withdrawn before its claim was sent, expired unarmed, or closed by a verified account
+            # denial, so no account release can ever come and no cleanup is owed. Its cleanup row
+            # must still verify, with no cleanup issued, or it is kept.
+            from .project_cleanup import check_cleanup_reservation
+            return check_cleanup_reservation(self, lease)["cleanup_digest"] is None
         from .project_release_ack import read_account_release
         try:
             read_account_release(self, lease.binding)

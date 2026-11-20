@@ -568,6 +568,51 @@ class ResultPersistenceTests(unittest.TestCase):
             resume.set()
             self.committed(handle)
 
+    def answered(self, request):
+        self.wait(lambda: request.state != "queued")
+        self.assertEqual("done", request.state, request.reason)
+        return request.result
+
+    def test_O10_D1_the_writer_pass_releases_an_earlier_services_unarmed_lease_past_its_time(self):
+        """O10 D1: `expire_result_leases` had no production caller, so the unarmed lease of a service that
+        stopped was never released. The service's own periodic writer pass now releases it."""
+        from tests.learning_support import assignment
+        from tests.test_project_history import binding
+        from codex_agents.result_contracts import LEASE_SCOPE_FIELDS, ResultLeaseBinding
+        target = binding(1, project=self.project)
+        lease = ResultLeaseBinding(**{name: getattr(target, name) for name in LEASE_SCOPE_FIELDS},
+                                   claim_request_id="claim-request-1", claim_request_digest="1" * 64)
+        earlier = self.open_history()  # the earlier service, which stopped before arming its lease
+        try:
+            until = earlier.reserve_result_lease(lease, assignment()).reserved_until_ms
+        finally:
+            earlier.close()
+        self._wall_origin_ns += (until + 1) * 1_000_000 - self.fixture_time_ns()  # past its time
+        self.answered(self.lane.expire_results())
+        self.stop_lane(self.lane)
+        store = self.open_history()
+        try:
+            self.assertEqual("expired", store.result_lease(lease).state)
+        finally:
+            store.close()
+
+    def test_O10_D2_a_restarted_service_settles_the_registrations_its_previous_run_left(self):
+        """O10 D2: the instance compared was the project's durable supervisor id, the same after a restart,
+        so rows a stopped service left were never marked. A restarted service (same project, same
+        durable scope) now marks them `service_stopped`, and leaves its own alone."""
+        self.answered(self.lane.report_registered_run("orc_" + "a" * 48, "hrn_" + "1" * 48, "run-1", 1))
+        self.stop_lane(self.lane)
+        successor = self.new_lane()
+        self.answered(successor.report_registered_run("orc_" + "a" * 48, "hrn_" + "2" * 48, "run-2", 1))
+        self.answered(successor.expire_results())
+        self.stop_lane(successor)
+        store = self.open_history()
+        try:
+            rows = dict(store._connection.execute("SELECT run_id,failed_reason FROM project_registered_runs"))
+        finally:
+            store.close()
+        self.assertEqual({"run-1": "service_stopped", "run-2": None}, rows)
+
 
 if __name__ == "__main__":
     unittest.main()
