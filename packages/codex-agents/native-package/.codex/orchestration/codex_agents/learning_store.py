@@ -2056,6 +2056,11 @@ class LearningLedger:
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS records_observed_at ON records(project_id, observed_at_ms)"
             )
+            # O10 AP5 (with U9): a lookup of one record type, per project or (the start-up
+            # admission-evidence check) across the ledger, reads only that type's records.
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS records_type_project ON records(record_type, project_id)"
+            )
             self._record_first_owner_key()
             self.state.mark_initialized()
             self._reconcile_managed_files()
@@ -10230,7 +10235,9 @@ class LearningLedger:
         ):
             raise LedgerError("owner grant predates its prerequisite evidence")
         rows = self._connection.execute(
-            "SELECT record_type,content,content_digest FROM records WHERE project_id=?",
+            # O10 AP5-2: only the five kinds read below, not every record of the project.
+            "SELECT record_type,content,content_digest FROM records WHERE project_id=? AND record_type IN "
+            "('candidate','promotion','evaluation_case','comparison','canary_report')",
             (project_id,),
         ).fetchall()
         records = [
