@@ -266,6 +266,50 @@ class AccountBillingJobTests(unittest.TestCase):
         self.assertEqual(({}, {}, {}), (owner._pending, owner._reserved_inputs, owner._signatures))
         self.assertNotIn(queued, self.claims._intake._jobs)
 
+    def test_RS_A_M2_a_failed_forget_never_fails_a_new_reservation_and_is_retried(self):
+        """RS-A code round 3 verifier M2: forgetting closed originals inside reserve() fails (the pool's cancel
+        raises): the new reservation is still made, the closed original and its handle stay as the retry
+        target with the notice set, and the owner's next step frees them."""
+        owner = self.billing._owner
+        context = self.contexts[self.fixture.project_id]
+        original = owner.reserve(self.fixture.project_id, self.runtime, 'b'*64, 'probe-expiring', context,
+                                 before_commit=lambda: True)
+        queued = owner.prepare(original)
+        self.assertEqual(1, self.sweep_expired(original.deadline))
+        patch, calls = self.failing_once(self.claims._pool, 'cancel')
+        with mock.patch.object(self.claims._pool, 'offer_next', return_value=None), patch:
+            fresh = owner.reserve(self.fixture.project_id, self.runtime, 'b'*64, 'probe-new', context,
+                                  before_commit=lambda: True)
+            self.assertIsNot(fresh, original)
+            self.assertIs(queued, owner._signatures.get(original))  # kept for the retry
+            self.assertTrue(owner._closed_notice.is_set())
+            self.service.drive_claims()  # retried by the owner's step
+        self.assertEqual([(queued,), (queued,)], calls)
+        self.assertNotIn(original, owner._reserved_inputs)
+        self.assertNotIn(original, owner._signatures)
+        self.assertIn(fresh, owner._reserved_inputs)
+        self.assertFalse(self.claims._faulted or self.billing._faulted)
+
+    def test_RS_A_M2_a_failed_forget_never_fails_a_replay_of_the_closed_request(self):
+        """M2: a replay of the request the sweep closed gets its stored answer even when forgetting fails."""
+        owner = self.billing._owner
+        context = self.contexts[self.fixture.project_id]
+        original = owner.reserve(self.fixture.project_id, self.runtime, 'b'*64, 'probe-expiring', context,
+                                 before_commit=lambda: True)
+        queued = owner.prepare(original)
+        self.assertEqual(1, self.sweep_expired(original.deadline))
+        patch, calls = self.failing_once(self.claims._pool, 'cancel')
+        with mock.patch.object(self.claims._pool, 'offer_next', return_value=None), patch:
+            reply = owner.reserve(self.fixture.project_id, self.runtime, 'b'*64, 'probe-expiring', context,
+                                  before_commit=lambda: True)
+            self.assertNotIsInstance(reply, type(original))
+            self.assertIs(queued, owner._signatures.get(original))
+            self.assertTrue(owner._closed_notice.is_set())
+            self.service.drive_claims()
+        self.assertEqual([(queued,), (queued,)], calls)
+        self.assertEqual(({}, {}, {}), (owner._pending, owner._reserved_inputs, owner._signatures))
+        self.assertFalse(self.claims._faulted or self.billing._faulted)
+
     def test_RS_A_G9_a_failed_cancel_of_a_closed_live_job_is_noted_and_it_still_ends_with_the_stored_answer(self):
         """Round 3 (1): ending a closed live job fails (its observation's cancel raises): the failure is noted
         in this lane, never escapes the drive into the claims lane, and the job still ends with the stored
