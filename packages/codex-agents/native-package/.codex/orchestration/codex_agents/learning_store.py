@@ -11806,6 +11806,7 @@ class CollectorServer:
         self.account_services: str | None = None
         # S1-H1a, set by collector_host: the account lanes' published notes (a no-lock view).
         self.account_lanes = None
+        self.account_restart = None  # S1-H1c, set by collector_host: its latest restart decision
         self.thread_error: BaseException | None = None
         self._clients = client_capabilities or load_client_capabilities(
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
@@ -12063,6 +12064,7 @@ class CollectorServer:
                     "previous_exit": self.previous_exit,
                     "startup_phases": self.startup_phases,
                     "account_services": self.account_services,
+                    "account_restart": self.account_restart,
                 }
                 if self.account_lanes is not None:
                     try:

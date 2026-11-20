@@ -9,6 +9,7 @@ from __future__ import annotations
 LANES = ('signature', 'claims', 'observations', 'ingress', 'billing', 'probe_worker')
 _LANE_KEYS = {'faulted', 'kept', 'busy', 'queued', 'last_failure', 'held_since_ms'}
 PROBE_HELD_MS = 10 * 60_000
+CHECK_EVERY_SECONDS = 60  # H1c-6: at most once a minute
 RESTART_EVERY_MS = 60 * 60_000
 
 
@@ -55,3 +56,20 @@ def decide(notes, idle, previous, *, now_ms):
             and type(previous.get('stopped_at_ms')) is int and now_ms - previous['stopped_at_ms'] < RESTART_EVERY_MS):
         return {'action': 'suppressed', 'lane': lane, 'cause': cause, 'held': held}
     return {'action': 'restart', 'lane': lane, 'cause': cause, 'held': held}
+
+
+def check(read_notes, read_idle, previous, *, now_ms):
+    """The decision from callables that may fail: notes that cannot be read never restart; a ledger
+    that cannot say means wait (H1c-6). Never raises."""
+    try:
+        notes = read_notes()
+    except Exception:
+        return {'action': 'ok', 'lane': None, 'cause': None, 'held': None}
+    try:
+        idle = read_idle()
+    except Exception:
+        idle = None
+    try:
+        return decide(notes, idle, previous, now_ms=now_ms)
+    except Exception:
+        return {'action': 'ok', 'lane': None, 'cause': None, 'held': None}

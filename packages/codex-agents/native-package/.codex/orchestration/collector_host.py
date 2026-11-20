@@ -21,6 +21,7 @@ from pathlib import Path
 ORCHESTRATION_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ORCHESTRATION_ROOT))
 
+from codex_agents import account_restart  # noqa: E402
 from codex_agents.account_host import AccountServiceHost  # noqa: E402
 from codex_agents.collector_exit import read_exit, write_exit  # noqa: E402
 from codex_agents.collector_paths import CollectorPaths  # noqa: E402
@@ -38,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     require_authorized_collector_runtime(state)
     # Why this collector stops, recorded for the next one to report (0.3.3, C10). Recorded from
     # the moment it owns the ledger; before that, the command that started it reports a failure.
-    stopping = {"signal": False, "error": None, "removed": False, "requested": False}
+    stopping = {"signal": False, "error": None, "removed": False, "requested": False, "restart": None}
 
     def terminate(*_):
         # Raise, so a wait in startup or in an owner step cannot outlive the signal.
@@ -80,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
             server.account_services = "unavailable"
         phases["account"] = int((time.monotonic() - phase_start) * 1000)
         server.startup_phases = phases
-        checked = time.monotonic()
+        checked = restart_checked = time.monotonic()
         while not server.wait(0.002 if account is not None else 0.5):
             if account is not None:
                 account.serve_once()
@@ -89,6 +90,15 @@ def main(argv: list[str] | None = None) -> int:
                 # A removed state root or endpoint means nobody can reach or own this collector.
                 if not state.root.is_dir() or not state.socket.exists():
                     stopping["removed"] = True
+                    break
+            if account is not None and time.monotonic() - restart_checked >= account_restart.CHECK_EVERY_SECONDS:
+                restart_checked = time.monotonic()
+                # S1-H1c (owner: restart automatically): only when stuck and nothing is running.
+                decision = account_restart.check(account.health_notes, ledger.machine_idle, server.previous_exit,
+                                                 now_ms=time.time_ns() // 1_000_000)
+                server.account_restart = decision
+                if decision["action"] == "restart":
+                    stopping["restart"] = decision["cause"]
                     break
         # Read before teardown: server.stop() sets the same flag (C10d).
         stopping["requested"] = server._stop.is_set()
@@ -127,10 +137,13 @@ def main(argv: list[str] | None = None) -> int:
                 cause = "signal"
             elif stopping["removed"]:
                 cause = "state_removed"
+            elif stopping["restart"] is not None:
+                cause = "account_restart"
             else:
                 cause = "requested" if stopping["requested"] else "thread_ended"
             if state.root.is_dir():
-                write_exit(state.root, started_at_ms=server._started_at_ms, cause=cause, error=error)
+                write_exit(state.root, started_at_ms=server._started_at_ms, cause=cause, error=error,
+                           detail=stopping["restart"])
         except BaseException:
             pass
         finally:
