@@ -57,6 +57,8 @@ START_REASONS = frozenset({
     'run_settling',
     # The project's result store has no free place (0.3.4 R3).
     'result_capacity_full', 'result_capacity_busy',
+    # O0c M1: the run's child's cleanup could not be confirmed; its slot is held until its service is replaced.
+    'run_cleanup_unconfirmed',
 }) | ACCOUNT_REASON_CODES | CLAIM_DENIAL_CODES | PREPARATION_STAGE_REASONS
 # A run whose project service stopped or crashed: ended abandoned with an unknown outcome.
 # Its capacity is released once the next service saw nothing of it still running.

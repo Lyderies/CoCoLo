@@ -191,7 +191,10 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
                 # Asked to stop (its hint was withdrawn): never from under a run it
                 # holds. It finishes that run first; no new client can find it meanwhile.
                 return not host.holding()
-            return host.exhausted() or host.idle_ns() >= limit
+            # O0c M3: a host holding slots it will never free is replaced once idle (no run under way
+            # and no client for the idle period), whatever those holds; at once if none is left.
+            return (host.exhausted() or host.idle_ns() >= limit
+                    or (host.replacing() and host.client_idle_ns() >= idle_stop_ns))
         return False
 
     try:

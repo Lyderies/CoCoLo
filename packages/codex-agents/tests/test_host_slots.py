@@ -11,7 +11,6 @@ import functools
 import json
 import subprocess
 import time
-from pathlib import Path
 from unittest import mock
 
 from tests import service_harness

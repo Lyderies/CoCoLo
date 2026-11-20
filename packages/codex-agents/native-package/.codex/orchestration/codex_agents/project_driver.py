@@ -46,6 +46,16 @@ itself once the OS says its container is gone (`_settle_own_ended`): the account
 settles it as lost, its entry is `settled` and its preparation given back, with
 no wait for the service to stop. At its own stop the service stops its containers
 not yet gone once more (`service_close`) and settles those gone.
+
+O0c M1, M3, M4, M7: every way a run ends gives back every host slot it took. An
+execution that provably never launched is clean once its worker returns, so the
+normal release frees it; a preparation whose removal did not finish at retirement
+is given back and its removal retried. What nothing here can free (a run failed
+after its claim was admitted, a child whose cleanup is unconfirmed, a removal or a
+monitor slot given up) keeps its slot, since a process may live, and is counted
+(`stuck_slots`, shown in learning-status): the host is then replaced once idle, at
+once if no slot is left, and the stopping service settles those runs on the
+kernel's evidence, or the next one does.
 """
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -138,7 +148,7 @@ FENCE_OUTAGES = frozenset({'account_unavailable', 'account_closed_without_reply'
 # A given-back preparation whose cleanup did not finish, and a retired run whose
 # monitor slot was refused, are tried again after this long, doubling up to the cap.
 # A refused forget is tried at most MAX_FORGET_ATTEMPTS times: a live attempt is
-# never forgotten, so its slot then stays taken for this host's lifetime.
+# never forgotten, so its slot then stays taken, and the host is replaced once idle (O0c M7).
 CLEANUP_RETRY_SECONDS = 1.0
 CLEANUP_RETRY_MAX_SECONDS = 60.0
 # After this many refused removals a given-back preparation is no longer asked: it
@@ -172,6 +182,8 @@ REASON_CODES = frozenset({
     'run_lost', 'run_lost_held',
     # The project's result store has no free place (0.3.4 R3): close finished orchestrations.
     'result_capacity_full', 'result_capacity_busy',
+    # O0c M1: its child's cleanup could not be confirmed; its slot stays held until its service is replaced.
+    'run_cleanup_unconfirmed',
 }) | PREPARATION_STAGE_REASONS
 _REGISTER_FIELDS = {'purpose', 'orchestration_handle', 'run_id', 'host_client', 'assignment', 'task', 'route',
                     'parent_grant'}
@@ -183,7 +195,12 @@ _CLOSING = frozenset({'closing', 'settling', 'withdrawing', 'fencing'})
 # O10 RC-1: the store's capacity refusals, as the run's failure reasons.
 _CAPACITY_REASONS = {'history_result_capacity': 'result_capacity_full',
                      'history_result_capacity_busy': 'result_capacity_busy'}
-_AFTER = frozenset({'ready', 'reporting', 'terminal', 'acknowledging', 'cleanup', 'releasing', 'retiring', 'released'})
+_AFTER = frozenset({'ready', 'reporting', 'terminal', 'acknowledging', 'cleanup', 'releasing', 'retiring', 'released',
+                    'cleanup_unconfirmed'})
+# O0c M1: a recorded result whose child's cleanup can never be confirmed in this service. It keeps every
+# slot (a child may still be alive) and is no longer under way, so the host can be replaced once idle;
+# the stopping service settles it on the kernel's evidence, or the next one does.
+_HELD = frozenset({'cleanup_unconfirmed'})
 
 
 @dataclass
@@ -318,6 +335,9 @@ class RunDriver:
     _containers = None
     # C4: the recovery of earlier instances' container entries, made on its first use (containers only).
     _recovery = None
+    # O0c M7: retired runs' monitor attempts the monitor still refused after MAX_FORGET_ATTEMPTS
+    # (rebound, never mutated, so the class default stays empty).
+    _stuck_monitor = frozenset()
 
     def __init__(self, state, project_root, bundle_root, scope, runtime, *, clock=time.monotonic, history_endpoint=None):
         self._state, self._root, self._bundle = state, Path(project_root), Path(bundle_root)
@@ -1286,6 +1306,8 @@ class RunDriver:
             try:
                 lane.retain_cleanup(run.persistence)
             except HistoryError:
+                if self._cleanup_unconfirmed(run):
+                    run.state, run.reason = 'cleanup_unconfirmed', 'run_cleanup_unconfirmed'
                 return  # The tracked tree is not yet confirmed clean.
             lane.prepare_cleanup(run.persistence)
             run.state = 'cleanup'
@@ -1332,6 +1354,10 @@ class RunDriver:
             if state in {'cleaned', 'unknown'}:
                 if state == 'cleaned':
                     self._preparation.retire(run.prepared)
+                else:
+                    # O0c M4: its workspace removal did not finish. It is given back like any other
+                    # preparation: its removal is asked again and its slot retired once clean.
+                    self._giving_back.append(run.prepared)
                 try:
                     # Its tombstone keeps the slot, so the same submit can never launch again.
                     self._dispatch.retire_released(run.context)
@@ -1365,6 +1391,8 @@ class RunDriver:
                     refusals += 1
                     if refusals >= MAX_FORGET_ATTEMPTS:
                         del self._forgetting[binding]
+                        # O0c M7: its slot stays taken; the host is replaced once idle.
+                        self._stuck_monitor = self._stuck_monitor | {binding}
                     else:
                         self._forgetting[binding] = (refusals, now + min(
                             CLEANUP_RETRY_MAX_SECONDS, CLEANUP_RETRY_SECONDS * 2 ** (refusals - 1)))
@@ -1765,7 +1793,47 @@ class RunDriver:
         return hashlib.sha256(canonical_json([run.key[0], run.key[1], run.inputs_digest])).hexdigest()[:32]
 
     def busy(self):
-        return any(run.state not in {'registered', 'failed', 'released'} for run in self._runs.values())
+        return any(run.state not in {'registered', 'failed', 'released'} | _HELD for run in self._runs.values())
+
+    def _cleanup_unconfirmed(self, run):
+        """O0c M1: whether the run's execution can never be confirmed clean here: its worker returned
+        and left the execution unknown, which nothing in this service asks again (process mode; a
+        container's later proof of its end is C3's, so a container run keeps waiting)."""
+        if run.launch_token is not None or run.prepared_inputs is None:
+            return False
+        try:
+            supervisor = self._runtime.pool.supervisor(run.prepared_inputs.worker)
+            view = None if supervisor is None else supervisor.snapshot()
+        except Exception:
+            return False
+        return view is not None and view['state'] == 'unknown' and view['worker_returned'] is True
+
+    def _stranded(self, run):
+        """O0c M1, M3: a run that holds a host slot nothing in this service will free.
+
+        A failed run that keeps its preparation or its result entry and waits for no answer (its claim
+        was admitted, or its fence was given up), or one whose child's cleanup is unconfirmed. A
+        container run is C3's to settle first (`_settle_own_ended`); once settled it counts here too.
+        """
+        if run.state in _HELD:
+            return True
+        if (run.state != 'failed' or run.closed or run.future is not None or run.fence_at is not None
+                or (run.launch_token is not None and not run.own_settled)):
+            return False
+        return run.persistence is not None or run.prepared is not None
+
+    def stuck_slots(self):
+        """O0c M1, M3, M4, M7: host slots held by what nothing in this service will free: stranded runs,
+        given-back preparations whose removal was asked MAX_CLEANUP_ATTEMPTS times, and monitor attempts
+        given up. Each is held until the host is replaced: never freed while a process may live."""
+        preparations = sum(1 for handle in self._giving_back
+                           if self._cleanup_retry.get(handle, (0, 0.0))[0] >= MAX_CLEANUP_ATTEMPTS)
+        return sum(1 for run in self._runs.values() if self._stranded(run)) + preparations + len(self._stuck_monitor)
+
+    def replace_when_idle(self):
+        """O0c M3: something here holds a slot it will never free, so a fresh host replaces this one
+        once no run is under way and no client has called for the idle period."""
+        return not self.busy() and self.stuck_slots() > 0
 
     def retaining(self):
         """Whether recorded runs' originals are kept here for their verifiers and QA."""
@@ -1773,7 +1841,9 @@ class RunDriver:
 
     def exhausted(self):
         """No room for another run in this host's lifetime; a fresh host has it all."""
-        return not self.busy() and (len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS)
+        # O0c M3: with every run slot stuck nothing can run here, so it is replaced at once when idle.
+        return not self.busy() and (len(self._runs) >= MAX_RUNS or len(self._dispatch._jobs) >= DISPATCH_SLOTS
+                                    or self.stuck_slots() >= PREPARATION_SLOTS)
 
     def close(self):
         if self._closed:

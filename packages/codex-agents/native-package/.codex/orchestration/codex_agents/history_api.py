@@ -322,11 +322,16 @@ def _validate_result(request: HistoryRequest, result: object) -> None:
             raise HistoryError('history_invalid_response')
     elif operation == 'history.capacity_report':
         from .project_capacity_report import CAPACITY_NAMES
-        if (type(result) is not dict or set(result) != set(CAPACITY_NAMES)
+        # O0c M1, M3: a host's service also names the run slots it can no longer free.
+        slots = result.get('run_slots') if type(result) is dict else None
+        if (type(result) is not dict or set(result) - {'run_slots'} != set(CAPACITY_NAMES)
                 or any(type(value) is not dict or set(value) != {'live', 'limit'}
                        or not valid_integer(value['live'], maximum=1 << 32)
                        or (value['limit'] is not None and not valid_integer(value['limit'], minimum=1, maximum=1 << 32))
-                       for value in result.values())):
+                       for name, value in result.items() if name != 'run_slots')
+                or ('run_slots' in result and (type(slots) is not dict or set(slots) != {'stuck', 'limit'}
+                                               or not valid_integer(slots['stuck'], maximum=64)
+                                               or not valid_integer(slots['limit'], minimum=1, maximum=64)))):
             raise HistoryError('history_invalid_response')
     elif operation == 'history.orchestration_report':
         if (type(result) is not dict or result.get('orchestration_id') != request.payload['orchestration_id']
