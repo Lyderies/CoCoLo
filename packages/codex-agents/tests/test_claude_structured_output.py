@@ -103,6 +103,19 @@ class StructuredOutputTests(BridgeTestCase):
         self.assertEqual("init_client_unsupported", output["bridge_report"]["outcome"])
         self.assertEqual("failed", output["result"]["execution_state"])
 
+    def test_VF_5_a_structured_result_is_still_held_to_the_size_limit(self):
+        from codex_agents.result_contracts import MAX_RESULT_BODY_BYTES
+        huge = {**result(), "summary": "x" * MAX_RESULT_BODY_BYTES}
+        output = self.run_frames([init_frame(tools=STRUCTURED), RATE_LIMIT, final(huge)])
+        # The stream's own frame limit catches it first; either bound refuses it.
+        self.assertIn(output["bridge_report"]["outcome"], {"stream_too_large", "result_too_large"})
+        self.assertEqual("failed", output["result"]["execution_state"])
+
+    def test_VF_3_the_child_is_told_to_give_its_result_as_the_structured_output(self):
+        from codex_agents.bridge import child_prompt
+        _, assigned, _ = self.claude_run()
+        self.assertIn("structured output", child_prompt(assigned))  # verifier of 040-vf-design
+
     def test_VF_3_the_rules_name_the_exact_evidence_fields_for_the_primary_and_the_child(self):
         from codex_agents.bridge import child_prompt
         from codex_agents.contracts import EVIDENCE_FIELDS_RULE, result_preflight
