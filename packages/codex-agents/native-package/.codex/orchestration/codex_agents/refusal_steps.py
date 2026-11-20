@@ -25,8 +25,8 @@ EXACT = {
                           "shows it), then try again.",
     'history_orchestration_other_scope': "This orchestration belongs to an earlier service or version: open a new "
                                          "orchestration (learning-open-orchestration).",
-    'preparation_managed_configuration': "A managed Codex configuration is present: remove it or run this child from "
-                                         "a project without it.",
+    'preparation_managed_configuration': "A managed Codex configuration applies here and this child cannot run under "
+                                         "it: ask the configuration's owner for an approved setting.",
     'claim_busy': "Every run slot is in use: wait for a running child to finish, then try again.",
     'probe_busy': "The billing probe is busy: wait a moment, then try again.",
     'service_refused_busy': "The service is busy with other connections: wait a moment, then try again.",
@@ -63,8 +63,8 @@ FAMILY = {
 
 
 # A result that fails its contract (these codes share no family word).
-RESULT_STEP = ("The result does not meet its contract: correct it as the reason says; one structural repair is "
-               "allowed, with its repair_receipt.")
+RESULT_STEP = ("The result does not meet its contract: correct it as the reason says; validate-result returns a "
+               "repair_receipt only when a structural repair is allowed.")
 
 
 def next_step(reason_code: object) -> str:

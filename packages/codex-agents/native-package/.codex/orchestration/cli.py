@@ -286,10 +286,10 @@ def _bounded_json_input(path: str) -> dict:
 
 
 def _print(data: object) -> None:
-    if (type(data) is dict and data.get("ready") is False and type(data.get("reason_code")) is str
-            and "next_step" not in data):
+    if type(data) is dict and data.get("ready") is False and type(data.get("reason_code")) is str:
         from codex_agents.refusal_steps import next_step
-        data = {**data, "next_step": next_step(data["reason_code"])}  # S1-H1b: what to do next
+        # S1-H1b: what to do next, always the table's fixed text (never a supplied value).
+        data = {**data, "next_step": next_step(data["reason_code"])}
     print(json.dumps(data, indent=2, sort_keys=True))
 
 
