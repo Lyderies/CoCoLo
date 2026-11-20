@@ -572,6 +572,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "launch_journal.py::_read_recovery": {
+   "checks": 1,
+   "ends": "C4: the recovery report is one file replaced whole on every pass (orphans cut to the newest 16, details to 600 characters), so it never accumulates",
+   "test": "test_a_report_past_its_size_limit_is_not_written_and_the_last_one_stays"
+  },
   "launch_journal.py::_window": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
@@ -583,6 +588,11 @@
   "launch_journal.py::prune": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "launch_journal.py::write_recovery": {
+   "checks": 1,
+   "ends": "C4: the recovery report is one file replaced whole on every pass (orphans cut to the newest 16, details to 600 characters), so it never accumulates",
+   "test": "test_a_report_past_its_size_limit_is_not_written_and_the_last_one_stays"
   },
   "learning_analysis.py::analyze_outcomes": {
    "checks": 2,
