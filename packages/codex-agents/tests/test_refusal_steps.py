@@ -51,6 +51,25 @@ class RefusalStepTests(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertEqual(refusal_steps.RESULT_STEP, refusal_steps.next_step(code))
 
+    def test_H1b_review_a_supplied_next_step_is_always_replaced_by_the_tables(self):
+        import contextlib
+        import io
+        import json
+        from tests.test_bridge import cli
+        for supplied in (None, 'do something else /a/path'):
+            with self.subTest(supplied=supplied):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    cli._print({'ready': False, 'reason_code': 'claim_busy', 'next_step': supplied})
+                self.assertEqual(refusal_steps.next_step('claim_busy'), json.loads(out.getvalue())['next_step'])
+
+    def test_H1b_review_steps_never_advise_getting_around_a_rule(self):
+        step = refusal_steps.next_step('preparation_managed_configuration')
+        self.assertIn('owner', step)  # the configuration's owner decides, not the person refused
+        self.assertNotIn('remove', step.lower())
+        self.assertNotIn('without it', step)
+        self.assertNotIn('one structural repair is allowed', refusal_steps.RESULT_STEP)  # not true of every code
+
     def test_an_unknown_code_gets_the_default(self):
         self.assertEqual(refusal_steps.DEFAULT, refusal_steps.next_step('something_new'))
         self.assertEqual(refusal_steps.DEFAULT, refusal_steps.next_step(None))
