@@ -231,6 +231,24 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
         self.another_task('third-verifier')
         self.assertIsNone(self.pump(self.submit(request_id='third-open')).reason)  # the expired one does not
 
+    def test_RS_A_G12_the_binding_cap_reads_held_register_rows(self):
+        """O0b RS-A round 2 G12: by query plan, the cap counts from held register rows (run_holds_due), so a clock
+        rollback over released claimed history is a bounded lookup, never a scan of pending source bindings."""
+        statements = []
+        self.ledger._connection.set_trace_callback(statements.append)
+        try:
+            self.assertIsNone(self.pump(self.submit()).reason)
+        finally:
+            self.ledger._connection.set_trace_callback(None)
+        # The cap's statement, found by what it reads, not by its FROM clause (corrected with the code: the first
+        # filter named the old statement's 'FROM host_run_bindings h'; the requirement, the plan, is unchanged).
+        cap = [s for s in statements if 'host_run_bindings h' in s and "binding_state='pending'" in s
+               and 'expires_at_ms>' in s and s.lstrip().startswith('SELECT')]
+        self.assertEqual(1, len(cap), statements)
+        plan = ' | '.join(r[3] for r in self.ledger._connection.execute('EXPLAIN QUERY PLAN ' + cap[0]))
+        self.assertIn('run_holds_due', plan)
+        self.assertNotIn('host_run_bindings_live', plan)
+
     def test_actual_registered_signature_return_commits_minimal_original_open_without_central_history_copy(self):
         before = {table: self.ledger._connection.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]
             for table in ('orchestrations', 'orchestration_checkpoints', 'active_run_capacity', 'capacity_executions')}

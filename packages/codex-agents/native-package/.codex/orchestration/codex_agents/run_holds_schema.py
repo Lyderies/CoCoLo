@@ -11,6 +11,8 @@ adoption.
 """
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import json
 
 RUN_HOLD_KINDS = ("run_slot", "binding", "probe")
@@ -158,62 +160,110 @@ DECISION_RELEASED = (
     "AND a.release_digest IS NOT NULL AND r.receipt=a.release_digest AND r.released_at_ms=a.released_at_ms)")
 
 # Round 1 F2: each check finds a row that breaks the register's agreement with its holds.
-_INCONSISTENT = (
-    # every held row has its hold (a released row may outlive its pruned source as a tombstone)
-    "SELECT 1 FROM run_holds r WHERE r.state<>'released' AND ((r.kind='run_slot' AND NOT EXISTS(SELECT 1 FROM active_run_capacity a "
-    "WHERE a.project_id=r.project_id AND a.handle_digest=r.identity)) OR (r.kind='binding' AND NOT EXISTS("
-    "SELECT 1 FROM host_run_bindings h WHERE h.project_id=r.project_id AND h.handle_digest=r.identity)) "
-    "OR (r.kind='probe' AND NOT EXISTS(SELECT 1 FROM account_billing_probe_requests p "
-    "WHERE p.project_id=r.project_id AND p.request_key=r.identity))) LIMIT 1",
+# O0b RS-A round 2 G11: every check reads one source table once, each row with one register lookup by primary key
+# (a LEFT JOIN: a missing row is the coverage failure), or the held register rows through run_holds_due; never a
+# join over the whole register, so a tombstone costs nothing at open and each source row one lookup. Each kind's
+# rules are listed apart, one per line, and any one breaks the row (a rule's NULL never does, as in a WHERE).
+_SLOT_RULES = (
+    # every slot has its register row
+    "r.kind IS NULL",
     # states agree: a slot is released exactly when its capacity row is
-    "SELECT 1 FROM run_holds r JOIN active_run_capacity a ON a.project_id=r.project_id AND a.handle_digest=r.identity "
-    "WHERE r.kind='run_slot' AND (r.state='released') <> (a.released_at_ms IS NOT NULL) LIMIT 1",
-    # a binding no longer pending is released; a pending one is held unless it expired (a claimed binding stays
-    # pending for its settlement)
-    "SELECT 1 FROM run_holds r JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity "
-    "WHERE r.kind='binding' AND ((h.binding_state IS NOT 'pending' AND r.state<>'released') "
-    "OR (h.binding_state IS 'pending' AND r.state='released' AND r.release_kind IS NOT 'expired')) LIMIT 1",
-    # a probe is released exactly when its request is committed
-    "SELECT 1 FROM run_holds r JOIN account_billing_probe_requests p ON p.project_id=r.project_id "
-    "AND p.request_key=r.identity WHERE r.kind='probe' AND (r.state='released') <> (p.state='committed') LIMIT 1",
+    "(r.state='released') <> (a.released_at_ms IS NOT NULL)",
     # a lost or crashed decision matches its slot exactly
-    "SELECT 1 FROM run_holds r JOIN active_run_capacity a ON a.project_id=r.project_id AND a.handle_digest=r.identity "
-    "WHERE r.kind='run_slot' AND r.release_kind IN ('crashed','lost') AND (r.state<>'released' "
-    "OR r.receipt IS NULL OR r.receipt IS NOT a.release_digest OR r.released_at_ms IS NOT a.released_at_ms) LIMIT 1",
+    "(r.release_kind IN ('crashed','lost') AND (r.state<>'released' OR r.receipt IS NULL "
+    "OR r.receipt IS NOT a.release_digest OR r.released_at_ms IS NOT a.released_at_ms))",
     # O0b RS-A round 2 G1: a released slot's kind is a slot's (an ordinary completion or a decision), and an
     # ordinary completion carries its slot's own release time and digest
-    "SELECT 1 FROM run_holds r JOIN active_run_capacity a ON a.project_id=r.project_id AND a.handle_digest=r.identity "
-    "WHERE r.kind='run_slot' AND r.state='released' AND (r.release_kind NOT IN ('completed','crashed','lost') "
+    "(r.state='released' AND (r.release_kind NOT IN ('completed','crashed','lost') "
     "OR (r.release_kind='completed' AND (r.receipt IS NOT a.release_digest "
-    "OR r.released_at_ms IS NOT a.released_at_ms))) LIMIT 1",
-    # O0b RS-A round 2 G10: a lost or crashed decision keeps its evidence for the row's life (its only proof; it
-    # must hash to the receipt, checked by _evidence_matches)
-    "SELECT 1 FROM run_holds WHERE kind='run_slot' AND release_kind IN ('crashed','lost') AND evidence IS NULL LIMIT 1",
+    "OR r.released_at_ms IS NOT a.released_at_ms))))",
+)
+_BINDING_RULES = (
+    # every binding has its register row
+    "r.kind IS NULL",
+    # a binding no longer pending is released; a pending one is held unless it expired (a claimed binding stays
+    # pending for its settlement)
+    "(h.binding_state IS NOT 'pending' AND r.state<>'released')",
+    "(h.binding_state IS 'pending' AND r.state='released' AND r.release_kind IS NOT 'expired')",
     # O0b RS-A round 2 G1: an expired binding is released no earlier than its expiry (an unknown time stays allowed)
-    "SELECT 1 FROM run_holds r JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity "
-    "WHERE r.kind='binding' AND r.release_kind='expired' AND r.released_at_ms<h.expires_at_ms LIMIT 1",
+    "(r.release_kind='expired' AND r.released_at_ms<h.expires_at_ms)",
+)
+_PROBE_RULES = (
+    # every probe has its register row
+    "r.kind IS NULL",
+    # a probe is released exactly when its request is committed
+    "(r.state='released') <> (p.state='committed')",
+)
+_INCONSISTENT = (
+    "SELECT 1 FROM active_run_capacity a LEFT JOIN run_holds r ON r.project_id=a.project_id AND r.kind='run_slot' "
+    "AND r.identity=a.handle_digest WHERE " + " OR ".join(_SLOT_RULES) + " LIMIT 1",
+    "SELECT 1 FROM host_run_bindings h LEFT JOIN run_holds r ON r.project_id=h.project_id AND r.kind='binding' "
+    "AND r.identity=h.handle_digest WHERE " + " OR ".join(_BINDING_RULES) + " LIMIT 1",
+    "SELECT 1 FROM account_billing_probe_requests p LEFT JOIN run_holds r ON r.project_id=p.project_id "
+    "AND r.kind='probe' AND r.identity=p.request_key WHERE " + " OR ".join(_PROBE_RULES) + " LIMIT 1",
+    # every held row has its hold (a released row may outlive its pruned source as a tombstone)
+    "SELECT 1 FROM run_holds r INDEXED BY run_holds_due WHERE r.state<>'released' AND ((r.kind='run_slot' "
+    "AND NOT EXISTS(SELECT 1 FROM active_run_capacity a WHERE a.project_id=r.project_id "
+    "AND a.handle_digest=r.identity)) OR (r.kind='binding' AND NOT EXISTS(SELECT 1 FROM host_run_bindings h "
+    "WHERE h.project_id=r.project_id AND h.handle_digest=r.identity)) OR (r.kind='probe' AND NOT EXISTS("
+    "SELECT 1 FROM account_billing_probe_requests p WHERE p.project_id=r.project_id "
+    "AND p.request_key=r.identity))) LIMIT 1",
 )
 
 
+def _raw_digest(text):
+    """The digest of evidence stored as text, as its own bytes (None for any other value)."""
+    return hashlib.sha256(text.encode("ascii")).hexdigest() if type(text) is str and text.isascii() else None
+
+
 def _evidence_matches(connection) -> bool:
-    """O0b RS-A round 2 G1: retained decision evidence hashes to its receipt (evidence pruned to NULL is allowed)."""
+    """O0b RS-A round 2 G1: retained decision evidence hashes to its receipt (evidence pruned to NULL is allowed).
+    O0b RS-A round 2 G10: a lost or crashed decision keeps its evidence for the row's life (its only proof).
+    G11: one pass over the register for both. Evidence whose own bytes hash to its receipt (every writer stores
+    it as its canonical bytes) passes in SQL; any other row is decoded and re-encoded as before."""
     from .learning_contracts import content_digest
 
+    connection.create_function("run_hold_raw_digest", 1, _raw_digest, deterministic=True)
     for receipt, evidence in connection.execute(
-            "SELECT receipt,evidence FROM run_holds WHERE evidence IS NOT NULL"):
+            "SELECT receipt,evidence FROM run_holds WHERE (evidence IS NOT NULL "
+            "AND receipt IS NOT run_hold_raw_digest(evidence)) "
+            "OR (kind='run_slot' AND release_kind IN ('crashed','lost') AND evidence IS NULL)"):
+        if evidence is None or type(evidence) is not str:
+            return False  # G10: a decision without its evidence
         try:
-            if type(evidence) is not str or receipt != content_digest(json.loads(evidence)):
+            if receipt != content_digest(json.loads(evidence)):
                 return False
         except (ValueError, TypeError, RecursionError):
             return False
     return True
 
 
+# G11: the source passes are random reads of the register and its sources; memory-mapped reads roughly halve
+# them on a ledger with long history, so the checks map the file while they run (the setting is put back after).
+CHECK_MMAP_BYTES = 1 << 30
+
+
+@contextlib.contextmanager
+def _mapped(connection):
+    row = connection.execute("PRAGMA mmap_size").fetchone()
+    if row is None:  # a database with no file to map (in memory)
+        yield
+        return
+    previous = int(row[0])
+    connection.execute(f"PRAGMA mmap_size={CHECK_MMAP_BYTES}")
+    try:
+        yield
+    finally:
+        connection.execute(f"PRAGMA mmap_size={previous}")
+
+
 def check_run_holds_consistency(connection) -> bool:
     """Round 1 F2: every hold has its row, every row its hold, and their states agree (used at open, at restore
-    and by every backup check)."""
-    return check_run_holds_coverage(connection) and all(
-        connection.execute(sql).fetchone() is None for sql in _INCONSISTENT) and _evidence_matches(connection)
+    and by every backup check). G11: each source table read once, the register's held rows by index, and one pass
+    over the register for decision evidence."""
+    with _mapped(connection):
+        return all(connection.execute(sql).fetchone() is None for sql in _INCONSISTENT) \
+            and _evidence_matches(connection)
 
 
 def check_run_holds_coverage(connection) -> bool:

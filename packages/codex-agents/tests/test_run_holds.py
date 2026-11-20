@@ -687,6 +687,15 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.tampered_evidence("crashed", lambda raw: raw[:-1])
         self.refused()
 
+    def test_RS_A_G11_evidence_stored_in_another_form_that_still_hashes_to_its_receipt_opens(self):
+        """Round 2 G11: the register check's fast path (the stored bytes hash to the receipt) never narrows what
+        opens: evidence stored with other spacing, whose decoded form still hashes to its receipt, still opens
+        everywhere, as before."""
+        import json
+        self.crashed_release()
+        self.tampered_evidence("crashed", lambda raw: json.dumps(json.loads(raw), indent=1))
+        self.accepted()
+
     def test_RS_A_G1_pruned_evidence_unknown_times_and_pruned_sources_still_open(self):
         """Round 2 G1: what the register may legitimately lack (pruned evidence, history's unknown times, a
         tombstone whose source retention removed) is still accepted everywhere. (requirement) Round 2 G10
@@ -778,6 +787,146 @@ class RunHoldTests(ActiveRunCapacityTests):
         holds = [dict(r) for r in self.ledger._connection.execute(
             "SELECT kind, state FROM run_holds ORDER BY kind")]
         self.assertIn({"kind": "run_slot", "state": "held"}, holds)
+
+    def test_RS_A_G4_the_legacy_open_cap_admits_by_the_count_the_status_reports(self):
+        """Round 2 G4: open_host_run's binding cap skips a register-released claimed binding (still pending for
+        its settlement), as the status and the signature open's cap do, also after a clock rollback."""
+        self.case.claim()
+        binding = next(b for b in self.bindings() if b["binding_state"] == "pending")
+        row = self.rows()[0]
+        self.assertEqual(1, self.sweep(binding["expires_at_ms"] + 1, row["clock_reference_ns"] + 1))
+        # The fixture's clock is the claim's time again: rolled back, the binding is not past its expiry on it.
+        self.assertLess(self.ledger._clock_ms(), binding["expires_at_ms"])
+        live = self.ledger.account_capacity(self.project)["pending_bindings"]["live"]
+        with mock.patch.object(learning_store, "MAX_PENDING_HOST_RUNS", live + 1):
+            self.new_attempt()  # the cap's last place, by the status's count
+            with self.assertRaisesRegex(LedgerError, "pending host run capacity is exhausted"):
+                self.new_attempt()  # control: a live binding still counts
+        self.assertEqual(live + 1, self.ledger.account_capacity(self.project)["pending_bindings"]["live"])
+
+    def add_released_claimed_history(self, count, expired_at):
+        """`count` historical claimed bindings past their expiry, register-released `expired` and still pending
+        for their settlement, each with its claim (cloned from the fixture's claimed binding)."""
+        connection = self.ledger._connection
+        source = dict(connection.execute(
+            "SELECT h.* FROM host_run_bindings h JOIN launch_claims c ON c.project_id=h.project_id "
+            "AND c.handle_digest=h.handle_digest LIMIT 1").fetchone())
+        claim = dict(connection.execute("SELECT * FROM launch_claims WHERE project_id=? AND handle_digest=?",
+                                        (source["project_id"], source["handle_digest"])).fetchone())
+        bindings, claims = [], []
+        for index in range(count):
+            digest = hashlib.sha256(b"history-%d" % index).hexdigest()
+            bindings.append({**source, "handle_digest": digest, "run_id": "history-%d" % index,
+                             "expires_at_ms": expired_at, "binding_state": "pending"})
+            claims.append({**claim, "handle_digest": digest, "run_id": "history-%d" % index,
+                           "bridge_run_id": "brg_" + digest[:32]})
+        connection.execute("BEGIN IMMEDIATE")
+        for table, rows in (("host_run_bindings", bindings), ("launch_claims", claims)):
+            columns = list(rows[0])
+            connection.executemany(
+                f"INSERT INTO {table}({','.join(columns)}) VALUES({','.join('?' * len(columns))})",
+                [tuple(row[c] for c in columns) for row in rows])
+        connection.execute(
+            "UPDATE run_holds SET state='released',generation=generation+1,released_at_ms=?,release_kind='expired' "
+            "WHERE kind='binding' AND state='held' AND identity IN "
+            "(SELECT handle_digest FROM host_run_bindings WHERE run_id LIKE 'history-%')", (expired_at + 1,))
+        connection.execute("COMMIT")
+
+    def release_steps(self, now, monotonic):
+        """SQLite VM steps of one release batch (a progress handler counting every step) and what it released."""
+        steps = [0]
+
+        def count():
+            steps[0] += 1
+            return 0
+        self.ledger._connection.set_progress_handler(count, 1)
+        try:
+            released = self.sweep(now, monotonic)
+        finally:
+            self.ledger._connection.set_progress_handler(None, 0)
+        return steps[0], released
+
+    def test_RS_A_G5_an_empty_batch_s_work_does_not_grow_with_released_claimed_history(self):
+        """Round 2 G5: expiry candidates come from held register rows, so released claimed bindings (pending for
+        their settlement) are never re-examined: an empty batch does the same work with 2,000 of them."""
+        self.case.claim()
+        binding = next(b for b in self.bindings() if b["binding_state"] == "pending")
+        row = self.rows()[0]
+        now, monotonic = binding["expires_at_ms"] + 1, row["clock_reference_ns"] + 1
+        self.assertEqual(1, self.sweep(now, monotonic))
+        before, released = self.release_steps(now, monotonic)
+        self.assertEqual(0, released)
+        self.add_released_claimed_history(2000, binding["expires_at_ms"])
+        after, released = self.release_steps(now, monotonic)
+        self.assertEqual(0, released)
+        self.assertLessEqual(after, before + 200, (before, after))  # a constant, never a step per history row
+
+    def test_RS_A_G5_both_binding_expiry_queries_read_the_register_index(self):
+        """Round 2 G5: by query plan, the unclaimed and the claimed binding expiry select their candidates
+        through run_holds_due (held register rows), never by a scan of pending source bindings."""
+        self.case.claim()
+        statements = []
+        self.ledger._connection.set_trace_callback(statements.append)
+        try:
+            self.sweep(1, 1)
+        finally:
+            self.ledger._connection.set_trace_callback(None)
+        expiry = [s for s in statements if s.lstrip().startswith("UPDATE")
+                  and "expires_at_ms<=" in s and ("abandoned_reason='expired'" in s or "release_kind='expired'" in s)]
+        self.assertEqual(2, len(expiry), statements)
+        for statement in expiry:
+            plan = " | ".join(r[3] for r in self.ledger._connection.execute("EXPLAIN QUERY PLAN " + statement))
+            self.assertIn("run_holds_due", plan, statement)
+            self.assertNotIn("host_run_bindings_live", plan, statement)
+
+    def steps_of(self, call):
+        """SQLite VM steps of one call (a progress handler counting every step) and its result."""
+        steps = [0]
+
+        def count():
+            steps[0] += 1
+            return 0
+        self.ledger._connection.set_progress_handler(count, 1)
+        try:
+            result = call()
+        finally:
+            self.ledger._connection.set_progress_handler(None, 0)
+        return steps[0], result
+
+    def rolled_back_history(self):
+        """A claimed binding released `expired` by the sweep, then the clock back at the claim's time, so the
+        binding (and 2,000 historical copies added after the first measurement) are not past expiry on it."""
+        self.case.claim()
+        binding = next(b for b in self.bindings() if b["binding_state"] == "pending")
+        row = self.rows()[0]
+        self.assertEqual(1, self.sweep(binding["expires_at_ms"] + 1, row["clock_reference_ns"] + 1))
+        self.assertLess(self.ledger._clock_ms(), binding["expires_at_ms"])
+        return binding["expires_at_ms"]
+
+    def test_RS_A_G12_the_status_count_after_a_rollback_does_not_grow_with_history(self):
+        """Round 2 G12: the status's binding count reads held register rows, so 2,000 released claimed
+        bindings back inside their expiry by a clock rollback cost no work and are not counted."""
+        expires = self.rolled_back_history()
+        before, report = self.steps_of(lambda: self.ledger.account_capacity(self.project))
+        self.add_released_claimed_history(2000, expires)
+        after, again = self.steps_of(lambda: self.ledger.account_capacity(self.project))
+        self.assertEqual(report["pending_bindings"], again["pending_bindings"])
+        self.assertLessEqual(after, before + 200, (before, after))
+
+    def test_RS_A_G12_the_legacy_open_cap_after_a_rollback_does_not_grow_with_history(self):
+        """Round 2 G12: open_host_run's cap reads held register rows: an open does the same work with 2,000
+        released claimed bindings back inside their expiry, and still admits by the status's count."""
+        expires = self.rolled_back_history()
+        self.new_attempt()  # warm: the first open compiles what the second reuses
+        before, _ = self.steps_of(self.new_attempt)
+        self.add_released_claimed_history(2000, expires)
+        after, _ = self.steps_of(self.new_attempt)
+        self.assertLessEqual(after, before + 500, (before, after))
+        live = self.ledger.account_capacity(self.project)["pending_bindings"]["live"]
+        with mock.patch.object(learning_store, "MAX_PENDING_HOST_RUNS", live + 1):
+            self.new_attempt()  # the cap's last place, by the status's count
+            with self.assertRaisesRegex(LedgerError, "pending host run capacity is exhausted"):
+                self.new_attempt()
 
 
 def load_tests(loader, tests, pattern):
