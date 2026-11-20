@@ -197,6 +197,9 @@ _WORKER_RESULT_FILES = (
 REPAIR_RECEIPT_TTL_MS = 24 * 60 * 60 * 1000
 MAX_PENDING_REPAIR_RECEIPTS = 4096
 MAX_PENDING_HOST_RUNS = 4096
+# O0b RS-A (F7): a binding the register released (expired) never counts again, whatever the wall clock says.
+BINDING_HELD = ("NOT EXISTS(SELECT 1 FROM run_holds r WHERE r.project_id=h.project_id AND r.kind='binding' "
+                "AND r.identity=h.handle_digest AND r.state='released')")
 HOST_RUN_TTL_MS = 24 * 60 * 60 * 1000
 OPERATIONAL_CHECK_TTL_MS = 60 * 60 * 1000
 UPGRADE_RECONCILIATION_TTL_MS = 10 * 60 * 1000
@@ -11445,8 +11448,8 @@ class LearningLedger:
             receipts = live_cleanup_receipts(self, project_id)
             # O0b B0 (narrowed): the holds the open and probe caps count, by the rule each cap uses.
             bindings = self._connection.execute(
-                "SELECT COUNT(*) FROM host_run_bindings WHERE project_id=? AND binding_state='pending' "
-                "AND expires_at_ms>?", (project_id, self._clock_ms())).fetchone()[0]
+                "SELECT COUNT(*) FROM host_run_bindings h WHERE h.project_id=? AND h.binding_state='pending' "
+                f"AND h.expires_at_ms>? AND {BINDING_HELD}", (project_id, self._clock_ms())).fetchone()[0]
             probes = self._connection.execute(
                 "SELECT COUNT(*) FROM account_billing_probe_requests WHERE project_id=? AND state<>'committed'",
                 (project_id,)).fetchone()[0]
@@ -11571,6 +11574,18 @@ class LearningLedger:
                 from .account_billing_admission import close_expired_reserved
                 released += close_expired_reserved(self, now, limit - released)
             if released < limit:
+                # F7: an unclaimed binding is ended in its own row too (the trigger then releases its register
+                # row `expired`), so a claim checking the binding refuses it whatever the wall clock later says.
+                cursor = self._connection.execute(
+                    "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='expired' WHERE rowid IN "
+                    "(SELECT h.rowid FROM host_run_bindings h WHERE h.binding_state='pending' AND h.expires_at_ms<=? "
+                    "AND NOT EXISTS(SELECT 1 FROM launch_claims c WHERE c.project_id=h.project_id "
+                    "AND c.handle_digest=h.handle_digest) AND NOT EXISTS(SELECT 1 FROM active_run_capacity a "
+                    "WHERE a.project_id=h.project_id AND a.handle_digest=h.handle_digest) LIMIT ?)",
+                    (now, limit - released))
+                released += cursor.rowcount
+            if released < limit:
+                # A claimed binding stays pending for its settlement; only its register row is released.
                 cursor = self._connection.execute(
                     "UPDATE run_holds SET state='released',generation=generation+1,released_at_ms=?,"
                     "release_kind='expired' WHERE rowid IN (SELECT r.rowid FROM run_holds r JOIN host_run_bindings h "
