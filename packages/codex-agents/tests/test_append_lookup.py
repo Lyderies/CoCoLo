@@ -30,9 +30,10 @@ class AppendLookupTests(unittest.TestCase):
     def lookups(self):
         """The statements one append runs to find the next sequence and the latest observed time."""
         seen = []
+        self._probes = getattr(self, '_probes', 0) + 1  # a fresh id each call (review 040-ap-code)
         self.ledger._connection.set_trace_callback(seen.append)
         try:
-            self.append(f'probe_{id(seen)}')
+            self.append(f'probe_{self._probes}')
         finally:
             self.ledger._connection.set_trace_callback(None)
         return [sql for sql in seen if 'MAX(' in sql.upper() and 'RECORDS' in sql.upper()]
@@ -96,14 +97,17 @@ class AppendLookupTests(unittest.TestCase):
         lates = [check(self.project, f'ap2_{index}', observed)
                  for index, observed in enumerate((5_000, 9_000, 7_000, 8_000, 9_000, 12_000, 1_000))]
         self.assertEqual(1, lates[3])
-        other = self.ledger.project_for_root(self.store.project_b)
-        empty = self.ledger._connection.execute(
-            'SELECT COUNT(*) FROM records WHERE project_id=?', (other,)).fetchone()[0]
-        if empty == 0:  # an empty project: sequence 1, and observed time 0 is not late
-            self.assertEqual(0, check(other, 'ap2_empty', 0))
-            self.assertEqual(1, self.ledger._connection.execute(
-                'SELECT source_sequence FROM records WHERE project_id=? AND record_id=?',
-                (other, 'ap2_empty')).fetchone()[0])
+        # An empty project, made here so the check always runs (review 040-ap-code): sequence 1, and
+        # observed time 0 is not late.
+        empty_root = self.store.project_a.parent / 'project-ap2-empty'
+        (empty_root / '.git').mkdir(parents=True)
+        other = self.ledger.register_project(empty_root)
+        self.assertEqual(0, self.ledger._connection.execute(
+            'SELECT COUNT(*) FROM records WHERE project_id=?', (other,)).fetchone()[0])
+        self.assertEqual(0, check(other, 'ap2_empty', 0))
+        self.assertEqual(1, self.ledger._connection.execute(
+            'SELECT source_sequence FROM records WHERE project_id=? AND record_id=?',
+            (other, 'ap2_empty')).fetchone()[0])
         check(other, 'ap2_other_high', 99_000)  # another project's larger maximum does not reach this one
         self.assertEqual(0, check(self.project, 'ap2_after_other', 13_000))
 
