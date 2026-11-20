@@ -7038,7 +7038,7 @@ class LearningLedger:
                 raise ClaimError('claim_terminal_unavailable')
             row = self._connection.execute(
                 'SELECT a.*,h.assignment_digest,h.task_digest,h.route_digest,h.configuration_digest,'
-                'h.native_assignment_id,h.binding_state,h.consumed_at_ms,h.client_version,'
+                'h.native_assignment_id,h.binding_state,h.abandoned_reason,h.consumed_at_ms,h.client_version,'
                 'e.owner_digest FROM active_run_capacity a '
                 'JOIN host_run_bindings h ON h.project_id=a.project_id AND h.handle_digest=a.handle_digest AND h.run_id=a.run_id '
                 'JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest '
@@ -7068,17 +7068,28 @@ class LearningLedger:
                     raise ClaimError('claim_terminal_conflict')
                 from .account_cleanup import record_terminal
                 record_terminal(self, expected, grant, delivery, known=True)
-                # A terminal ACK must not hide corrupt release metadata.
+                # A terminal ACK must not hide corrupt release metadata (a completion's own time when a written
+                # decision released the slot: round 1 F9).
                 completed = self._capacity_completion_locked(OwnedExecutionKey(
                     project_id, context.handle, grant.binding.run_id, grant.binding.claim_id))
-                if completed['released_at_ms'] is not None and not secrets.compare_digest(
-                        self._capacity_completion_digest(completed, completed['released_at_ms']), completed['receipt_digest']):
+                at = (completed['completion_released_at_ms']
+                      if self._slot_decision_locked(project_id, context.handle, completed['release_digest'])
+                      else completed['released_at_ms'])
+                if at is not None and not secrets.compare_digest(
+                        self._capacity_completion_digest(completed, at), completed['receipt_digest']):
                     raise ClaimError('claim_terminal_unavailable')
                 return terminal_receipt(key, grant, delivery, known=True)
             if require_known:
                 raise ClaimError('claim_terminal_unavailable')
             now = self._clock_ms()
-            if (row['released_at_ms'] is not None or row['binding_state'] != 'pending' or row['consumed_at_ms'] is not None
+            # O0b RS-A round 1 F9: a terminal after a written decision is the run's own fact and is kept; the
+            # decision stays as written. A lost decision's binding was settled service_lost.
+            from .active_run_capacity import LOST_RUN_REASON
+            decided = self._slot_decision_locked(project_id, context.handle, row['release_digest'])
+            open_binding = row['binding_state'] == 'pending' or (
+                decided == 'lost' and row['binding_state'] == 'abandoned' and row['abandoned_reason'] == LOST_RUN_REASON)
+            if ((row['released_at_ms'] is not None and decided is None) or not open_binding
+                    or row['consumed_at_ms'] is not None
                     or type(now) is not int or not grant.claimed_at_ms <= observed <= now <= MAX_CLAIM_INTEGER):
                 raise ClaimError('claim_terminal_unavailable')
             from .account_cleanup import record_terminal
@@ -7159,7 +7170,7 @@ class LearningLedger:
         row = self._connection.execute(
             "SELECT a.*,c.terminal_record_id,c.terminal_content_digest,c.released_at_ms AS completion_released_at_ms,"
             "c.receipt_digest,e.owner_digest AS execution_owner_digest,e.cleanup_reservation_digest "
-            "FROM active_run_capacity a JOIN capacity_completions c "
+            "FROM active_run_capacity a LEFT JOIN capacity_completions c "
             "ON c.project_id=a.project_id AND c.handle_digest=a.handle_digest "
             "AND c.run_id=a.run_id AND c.bridge_run_id=a.bridge_run_id "
             "LEFT JOIN capacity_executions e ON e.project_id=a.project_id AND e.handle_digest=a.handle_digest "
@@ -7169,10 +7180,12 @@ class LearningLedger:
         ).fetchone()
         if row is None or row["kind"] != "claimed":
             raise LedgerError("capacity completion is unavailable")
-        # O0b RS-A: a slot released by a written lost or crashed decision keeps its completion separately.
-        if (self._slot_decision_locked(key.project_id, key.handle_digest, row["release_digest"]) is None
-                and (row["released_at_ms"] != row["completion_released_at_ms"]
-                     or row["release_digest"] != row["receipt_digest"])):
+        # O0b RS-A: a slot released by a written lost or crashed decision keeps its completion separately, and
+        # may have none yet (round 1 F10); any other slot needs its completion row.
+        decided = self._slot_decision_locked(key.project_id, key.handle_digest, row["release_digest"])
+        if decided is None and (row["terminal_record_id"] is None
+                                or row["released_at_ms"] != row["completion_released_at_ms"]
+                                or row["release_digest"] != row["receipt_digest"]):
             raise LedgerError("capacity completion is unavailable")
         return row
 
@@ -7195,6 +7208,8 @@ class LearningLedger:
         with self._account_transaction():
             row = self._capacity_completion_locked(key)
             decided = self._slot_decision_locked(key.project_id, key.handle_digest, row["release_digest"])
+            if row["terminal_record_id"] is None:  # a completion needs its stored terminal first
+                raise LedgerError("capacity completion is unavailable")
             # O0b RS-A-2: after a written lost or crashed decision the slot is already free; a late release
             # stores only the completion (or answers the one stored), and the decision stays as written.
             known = (row["completion_released_at_ms"] if decided else row["released_at_ms"]) is not None
@@ -7294,6 +7309,10 @@ class LearningLedger:
                 if cap["released_at_ms"] is not None:
                     key = OwnedExecutionKey(project_id, handle, cap["run_id"], status.bridge_run_id)
                     row = self._capacity_completion_locked(key)
+                    if self._slot_decision_locked(project_id, handle, row["release_digest"]) is not None:
+                        # Round 1 F10: released by a written decision; the slot's own receipt and time.
+                        return checked_capacity_status({"state": "released", "receipt_digest": row["release_digest"],
+                                                        "released_at_ms": row["released_at_ms"]})
                     digest = self._capacity_completion_digest(row, row["released_at_ms"])
                     if not secrets.compare_digest(digest, row["receipt_digest"]):
                         raise LedgerError("capacity status is unavailable")
@@ -11654,7 +11673,10 @@ class LearningLedger:
                 # O0b RS-A: a run is terminal from completion evidence, never from a written lost or crashed release.
                 "SUM(h.consumed_at_ms IS NOT NULL OR (c.released_at_ms IS NOT NULL AND NOT EXISTS(SELECT 1 "
                 "FROM run_holds r WHERE r.project_id=c.project_id AND r.kind='run_slot' AND r.identity=c.handle_digest "
-                "AND r.release_kind IN ('lost','crashed') AND r.receipt IS c.release_digest))) AS terminal,"
+                "AND r.release_kind IN ('lost','crashed') AND r.receipt IS c.release_digest)) "
+                # round 1 F11: a late completion after a decision counts the run as terminal
+                "OR EXISTS(SELECT 1 FROM capacity_completions cc WHERE cc.project_id=h.project_id "
+                "AND cc.handle_digest=h.handle_digest AND cc.released_at_ms IS NOT NULL)) AS terminal,"
                 "SUM(h.binding_state='pending' AND c.released_at_ms IS NULL) AS pending,"
                 "SUM(h.native_assignment_id IS NOT NULL) AS native_bound,"
                 "SUM(h.usage_complete=1) AS usage_complete,"
