@@ -5297,11 +5297,14 @@ class LearningLedger:
                         or receipt["run_id"] != orchestration_id
                     ):
                         raise LedgerError("fallback receipt is unavailable for this run")
+                # O0b RS-A round 2 G4: the cap counts as the status and the signature open do, only live
+                # bindings (pending, not past expiry, and not released by the register), so a released claimed
+                # binding kept pending for its settlement never fills it, even after a clock rollback.
                 pending = int(
                     self._connection.execute(
-                        "SELECT COUNT(*) FROM host_run_bindings WHERE project_id=? "
-                        "AND binding_state='pending'",
-                        (project_id,),
+                        "SELECT COUNT(*) FROM host_run_bindings h WHERE h.project_id=? "
+                        f"AND h.binding_state='pending' AND h.expires_at_ms>? AND {BINDING_HELD}",
+                        (project_id, timestamp),
                     ).fetchone()[0]
                 )
                 if pending >= MAX_PENDING_HOST_RUNS:
@@ -11726,21 +11729,26 @@ class LearningLedger:
         if released < limit:
             # F7: an unclaimed binding is ended in its own row too (the trigger then releases its register
             # row `expired`), so a claim checking the binding refuses it whatever the wall clock later says.
+            # Round 2 G5: candidates come from held register rows (run_holds_due), never from pending source
+            # rows, so released claimed bindings, pending for their settlement, are never examined again.
             cursor = self._connection.execute(
                 "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='expired' WHERE rowid IN "
-                "(SELECT h.rowid FROM host_run_bindings h WHERE h.binding_state='pending' AND h.expires_at_ms<=? "
+                "(SELECT h.rowid FROM run_holds r INDEXED BY run_holds_due CROSS JOIN host_run_bindings h "
+                "ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.state<>'released' "
+                "AND r.kind='binding' AND h.binding_state='pending' AND h.expires_at_ms<=? "
                 "AND NOT EXISTS(SELECT 1 FROM launch_claims c WHERE c.project_id=h.project_id "
                 "AND c.handle_digest=h.handle_digest) AND NOT EXISTS(SELECT 1 FROM active_run_capacity a "
                 "WHERE a.project_id=h.project_id AND a.handle_digest=h.handle_digest) LIMIT ?)",
                 (now, limit - released))
             released += cursor.rowcount
         if released < limit:
-            # A claimed binding stays pending for its settlement; only its register row is released.
+            # A claimed binding stays pending for its settlement; only its register row is released (G5: found
+            # from held register rows, as above).
             cursor = self._connection.execute(
                 "UPDATE run_holds SET state='released',generation=generation+1,released_at_ms=?,"
-                "release_kind='expired' WHERE rowid IN (SELECT r.rowid FROM run_holds r JOIN host_run_bindings h "
-                "ON h.project_id=r.project_id AND h.handle_digest=r.identity WHERE r.kind='binding' "
-                "AND r.state='held' AND h.binding_state='pending' AND h.expires_at_ms<=? LIMIT ?)",
+                "release_kind='expired' WHERE rowid IN (SELECT r.rowid FROM run_holds r INDEXED BY run_holds_due "
+                "CROSS JOIN host_run_bindings h ON h.project_id=r.project_id AND h.handle_digest=r.identity "
+                "WHERE r.state<>'released' AND r.kind='binding' AND r.state='held' AND h.binding_state='pending' AND h.expires_at_ms<=? LIMIT ?)",
                 (now, now, limit - released))
             released += cursor.rowcount
         return released
