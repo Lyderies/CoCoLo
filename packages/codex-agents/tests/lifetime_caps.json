@@ -208,7 +208,7 @@
   "billing_probe_worker.py::prepare": {
    "checks": 1,
    "ends": "O0c M10: a worker is freed when its job retires; one held unknown faults the probe worker lane; its admitted row is settled once its child is proven gone, and the self-restart (H1c) frees the worker",
-   "test": "test_M10_an_unknown_probe_execution_restarts_the_account_and_a_probe_succeeds"
+   "test": "test_M10_M5_an_unknown_probe_execution_keeps_its_records_restarts_and_the_next_probe_reuses_them"
   },
   "billing_probe_worker.py::probe_payload": {
    "checks": 1,

@@ -277,6 +277,88 @@ def process_gone(pid: int) -> bool:
     return False
 
 
+def create_child(factory, arguments, options):
+    """O0c review M2: run the process factory (a `subprocess.Popen` class) and say what a failure left.
+
+    Returns (process, error, child_left). On success: (process, None, True). On failure, `child_left`
+    is False only when no child can exist: the factory raised an ordinary error before it created one
+    (refused before the fork, or the fork itself failed), or it created one and reaped it itself
+    (CPython's Popen waits for a child whose exec failed before raising). A child it created and did
+    not reap is returned with the error, so the caller can stop and reap it. An interruption with no
+    child recorded, a factory that is not a class (what it left cannot be read), or any doubt, leaves
+    `child_left` True. Never raises.
+    """
+
+    if not isinstance(factory, type):
+        try:
+            return factory(arguments, **options), None, True
+        except BaseException as error:  # noqa: BLE001 - reported to the caller, which re-raises it
+            return None, error, True
+    try:
+        process = factory.__new__(factory)
+        process.__init__(arguments, **options)
+    except BaseException as error:  # noqa: BLE001 - reported to the caller, which re-raises it
+        process = locals().get("process")
+        created = getattr(process, "_child_created", False) is True
+        if created and getattr(process, "returncode", None) is None:
+            return process, error, True
+        return None, error, not (created or isinstance(error, Exception))
+    return process, None, True
+
+
+def group_empty(group: int) -> bool:
+    """No process (of any user) is in this process group: the kernel answers ESRCH."""
+
+    if type(group) is not int or group <= 1:
+        return False
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def end_child(process, *, wait_s: float, end_group_after_reap: bool = False) -> str | None:
+    """O0c review M4: end one child started in a session of its own; None once it is proven gone.
+
+    Proof: the child is this process's own, reaped by its wait, and no process is left in its group
+    (the group it led; any descendant that did not change group is in it). While the child is not
+    reaped its pid, and so its group id, cannot belong to anyone else, so the whole group is killed
+    first. `end_group_after_reap` (only right after the child was reaped, where its group cannot yet
+    have been replaced) also kills what is left in the group and waits up to `wait_s` for it to empty.
+    Otherwise the reason it is not proven: `not_reaped` or `group_not_empty`. Never raises.
+    """
+
+    try:
+        pid = process.pid
+        if process.returncode is None:
+            with contextlib.suppress(OSError):
+                os.killpg(pid, signal.SIGKILL)
+            with contextlib.suppress(OSError):
+                process.kill()
+            try:
+                process.wait(timeout=wait_s)
+            except subprocess.TimeoutExpired:
+                return "not_reaped"
+            end_group_after_reap = True  # reaped just now, after its group was killed
+        if group_empty(pid):
+            return None
+        if not end_group_after_reap:
+            return "group_not_empty"
+        with contextlib.suppress(OSError):
+            os.killpg(pid, signal.SIGKILL)
+        end = time.monotonic() + wait_s
+        while not group_empty(pid):
+            if time.monotonic() >= end:
+                return "group_not_empty"
+            time.sleep(0.01)
+        return None
+    except Exception:  # noqa: BLE001 - nothing proven
+        return "unchecked"
+
+
 def new_run_tag() -> str:
     """A fresh, unguessable per-run marker value for a child's environment."""
     return secrets.token_hex(16)

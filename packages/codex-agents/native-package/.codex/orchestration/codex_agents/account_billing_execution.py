@@ -118,9 +118,16 @@ class AccountBillingExecutions:
         if handle is None:
             return True
         job = self._jobs[handle]
-        if job.ticket is None and self.ticketed(reservation):
-            return False  # a ticket this proof does not hold (C9d): never settled
-        return self._workers.children_ended(job.worker, job.ticket)
+        if not self.ticketed(reservation):
+            return self._workers.children_ended(job.worker)  # never offered: nothing can have started
+        # Ticketed (the same answer settle_unlaunched relies on, read inside its transaction): its child
+        # is proven only through the ticket this owner holds.
+        return job.ticket is not None and self._workers.children_ended(job.worker, job.ticket)
+
+    def returned(self, handle):
+        """O0c review M5: whether this preparation's worker returned a packet (its probe ran)."""
+        job = self._jobs.get(handle) if type(handle) is object else None
+        return job is not None and job.state == 'offered' and self._workers.snapshot(job.worker)['returned']
 
     def snapshot(self, handle):
         job = self._job(handle)
@@ -164,12 +171,13 @@ class AccountBillingExecutions:
         job.state = 'offered'
         return self._workers.supervisor(job.worker)
 
-    def _completion(self, job):
+    def _completion(self, job, kept_workspace=False):
         inputs, row = self._owner._execution(job.permit)
         if inputs is not job.inputs or job.state != 'offered' or job.ticket is None:
             raise ProbeAdmissionError('probe_conflict')
         packet = self._workers.packet(job.worker)
-        if (not packet.workspace_removed or packet.inputs_digest != hashlib.sha256(job.payload).hexdigest()):
+        if ((not packet.workspace_removed and not kept_workspace)
+                or packet.inputs_digest != hashlib.sha256(job.payload).hexdigest()):
             raise ProbeAdmissionError()
         if job.cleanup is None:
             job.cleanup = self._registry.retain_cleanup(job.ticket, self._workers, job.worker,
@@ -214,10 +222,24 @@ class AccountBillingExecutions:
 
     def complete(self, handle):
         """Commit original records and capacity settlement atomically, then retire."""
+        return self._commit(handle, kept_workspace=False)
+
+    def complete_ended(self, handle):
+        """O0c review M5: commit a lost probe's records once its child is proven gone.
+
+        The probe ran and its worker returned a valid packet, but its workspace could not be removed, so
+        the normal completion refused it. The workspace is a folder, not a child: the records and the
+        row's settlement are committed exactly as `complete` commits them (the same validation and
+        cleanup proof), the ticket is released, and the worker stays held with its workspace until the
+        account restarts. Its caller already had its answer, so only the project context is checked, not
+        the caller's publication callback. A packet that does not validate raises ProbeAdmissionError."""
+        return self._commit(handle, kept_workspace=True)
+
+    def _commit(self, handle, *, kept_workspace):
         job = self._job(handle)
         owner, ledger = self._owner, self._owner._ledger
         with ledger._account_transaction():
-            row, packet, identity, records, digest = self._completion(job)
+            row, packet, identity, records, digest = self._completion(job, kept_workspace)
             references = [{'project_id': row['project_id'], 'record_id': identity['record_id'],
                            'content_digest': content_digest(identity)}]
             for record in records:
@@ -226,7 +248,7 @@ class AccountBillingExecutions:
                 owner._execution(job.permit)
                 references.append({'project_id': row['project_id'], 'record_id': record['record_id'],
                                    'content_digest': content_digest(record)})
-            if self._completion(job) != (row, packet, identity, records, digest):
+            if self._completion(job, kept_workspace) != (row, packet, identity, records, digest):
                 raise ProbeAdmissionError('probe_conflict')
             value = canonical_json({'probe': 'completed', 'reason_code': packet.reason_code,
                                     'records': references, 'completion_digest': digest})
@@ -234,21 +256,27 @@ class AccountBillingExecutions:
                 raise ProbeAdmissionError()
             final = owner._update(row, state='committed', references_json=value.decode())
             reservation = job.inputs.reservation
-            owner._authorize(reservation.context, reservation.snapshot, reservation.authorize)
+            # Review M5: a lost probe's records are the account's own readings and reach no caller, so
+            # its caller's publication callback is not asked; its project context still is.
+            authorize = (lambda: True) if kept_workspace else reservation.authorize
+            owner._authorize(reservation.context, reservation.snapshot, authorize)
             # Revalidate the actual cleanup after all persistence/callback work.
             self._registry.cleanup_snapshot(job.cleanup)
             if self._workers.packet(job.worker) is not packet or owner._row(row['project_id'], row['request_key']) != final:
                 raise ProbeAdmissionError('probe_conflict')
         self._registry.acknowledge_release(job.ticket)
-        self._workers.retire(job.worker)
-        self._jobs.pop(handle)
-        self._reservations.pop(reservation)
+        if kept_workspace:
+            job.state = 'committed'  # its worker stays held, with its workspace, until the restart
+        else:
+            self._workers.retire(job.worker)
+            self._jobs.pop(handle)
+            self._reservations.pop(reservation)
         owner._execution_inputs.pop(job.permit)
         owner._permits.pop(reservation)
         owner._pending.pop((reservation.project, reservation.key))
         owner._reserved_inputs.pop(reservation)
         reply = owner._reply(final, known=False)
-        owner._authorize(reservation.context, reservation.snapshot, reservation.authorize)
+        owner._authorize(reservation.context, reservation.snapshot, authorize)
         if owner._row(row['project_id'], row['request_key']) != final:
             raise ProbeAdmissionError('probe_conflict')
         return reply

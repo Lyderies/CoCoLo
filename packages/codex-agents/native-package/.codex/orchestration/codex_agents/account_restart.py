@@ -81,8 +81,9 @@ def check(read_notes, read_idle, previous, *, now_ms, mono_ns=None, read_childre
 
     O0c M8-M10: a restart frees every slot the account holds in memory, so it happens only once
     `read_children` (the account host's `unended_children`) says every child its lanes started is
-    proven gone. It is asked only when a restart is due; it returns the lanes whose children are not,
-    and while any is (or it cannot say) the decision is `wait`, naming them in `held['children']`."""
+    proven gone. It is asked only when a restart is due; it returns the lanes whose children are not
+    (review M3: with each process and why, `held['processes']`), and while any is (or it cannot say)
+    the decision is `wait`, naming them in `held['children']`."""
     try:
         notes = read_notes()
     except Exception:
@@ -98,15 +99,38 @@ def check(read_notes, read_idle, previous, *, now_ms, mono_ns=None, read_childre
     if decision['action'] != 'restart':
         return decision
     try:
-        pending = read_children()
-        if type(pending) not in (list, tuple) or any(name not in LANES for name in pending):
-            raise ValueError()
-        pending = sorted(set(pending))
+        pending, processes = _children(read_children())
     except Exception:
-        pending = ['unknown']  # never restart blind
+        pending, processes = ['unknown'], []  # never restart blind
     if pending:
-        return {**decision, 'action': 'wait', 'held': {**decision['held'], 'children': pending}}
+        return {**decision, 'action': 'wait',
+                'held': {**decision['held'], 'children': pending, 'processes': processes}}
     return decision
+
+
+# Why a process a lane started is not proven gone (review M3: each is shown with what to check).
+CHILD_REASONS = frozenset({'running', 'not_reaped', 'group_not_empty', 'session_not_empty',
+                           'tree_not_confirmed', 'no_handle', 'unchecked'})
+
+
+def _children(answer):
+    """(lanes, processes) from the account host's answer: a list of lanes, or {lane: [{'pid', 'why'}]}.
+    Anything else raises, and the decision waits."""
+    if type(answer) in (list, tuple):
+        if any(name not in LANES for name in answer):
+            raise ValueError()
+        return sorted(set(answer)), []
+    if type(answer) is not dict or any(name not in LANES or type(items) is not list for name, items in answer.items()):
+        raise ValueError()
+    processes = []
+    for name, items in answer.items():
+        for item in items:
+            if (type(item) is not dict or set(item) != {'pid', 'why'} or item['why'] not in CHILD_REASONS
+                    or not (item['pid'] is None or (type(item['pid']) is int and item['pid'] > 1))):
+                raise ValueError()
+            processes.append({'lane': name, 'pid': item['pid'], 'why': item['why']})
+    processes.sort(key=lambda item: (item['lane'], -1 if item['pid'] is None else item['pid'], item['why']))
+    return sorted(name for name, items in answer.items() if items), processes[:16]
 
 
 def record_restart(state_root, *, lane, cause, now_ms, mono_ns) -> bool:

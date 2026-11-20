@@ -7,11 +7,16 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - Claims, opens and probes no longer stop machine-wide after two account executions end unconfirmed. An
   unconfirmed signature execution, a billing job left unknown or a probe worker held unknown now faults its
   account lane, so the account restarts itself at its next check; unknown work held in one lane no longer stops
-  another lane's restart. The restart first proves every child the account started is gone (each signature
-  helper reaped, each probe's process tree confirmed empty or never started) and waits, naming the lane, while
-  one may still run. An unknown probe whose child is proven gone has its admitted row settled at once, so it no
-  longer holds the machine's probe capacity. A claim, open or probe that could only wait for a stuck signature
-  lane is refused at once (`claim_unavailable`, `open_unavailable`, `probe_unavailable`).
+  another lane's restart. The restart first proves every process the account started is gone: each signature
+  helper reaped (inside the macOS sandbox that refuses every new process, or with its group and session empty
+  on Linux), each probe's process tree confirmed empty or never started, and each provider CLI the observation
+  lane started reaped with its process group empty (its group is killed first). A start that failed with no
+  process left is not in doubt. While one cannot be proven, `learning-status` names the process, the command
+  that checks it and the next step (restart the collector once nothing is listed). An unknown probe whose model
+  is proven gone is settled at once (retried while the records are busy): one that ran keeps its billing
+  records, so the next probe reuses them; one that never ran is settled as a denial. A claim, open or probe that
+  could only wait for a stuck signature lane is refused at once (`claim_unavailable`, `open_unavailable`,
+  `probe_unavailable`).
 - A project's run opens no longer stop for good after 256: the account counted every open request ever made
   (and refused the next with `open_busy`), in every release since the open journal was added. Only opens in
   progress count now (four at once), and a full limit says so (`open_capacity_full`, with its next step).

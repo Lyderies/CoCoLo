@@ -16,6 +16,7 @@ from .account_observation_jobs import AccountObservationJobs
 from .admission_inputs import AdmissionCaptureError, public_capture_reason
 from .billing_probe_contracts import PROBE_STEP_REASONS
 from .billing_probe_worker import BillingProbeWorkers, ProbeWorkerError
+from .owned_execution import ExecutionCustodyError
 from .history_contracts import _DIGEST, _ID, _PROJECT, matches
 from .provider_observation_contracts import OBSERVATION_REASONS, ObservationInput
 from .signature_job_intake import SignatureJobError
@@ -64,6 +65,7 @@ class _Job:
     closed: bool = False  # O0b RS-A round 2 G9: its reservation was closed by the sweep; ends with the stored answer
     timed_out: bool = False  # O0b RS-A round 3: cancelled by its own deadline, not by a caller or the close
     ended: bool = False  # O0c M10: unknown, and its admitted row settled (or none was admitted) once its child ended
+    settle_after_ns: int = 0  # O0c review H1: a failed settlement is tried again from then
 
 
 @dataclass(frozen=True, repr=False)
@@ -279,20 +281,35 @@ class AccountBillingJobs:
 
     def _settle_ended(self, job):
         """O0c M10: an unknown job's admitted row is settled once no model it launched can still run, so
-        it stops holding probe capacity and the self-restart. Asked again on later steps until then."""
-        if job.ended or job.settled or job.reservation is None:
+        it stops holding probe capacity and the self-restart. Review M5: a probe that ran and returned
+        valid records has them committed, as its normal completion would; otherwise the row becomes a
+        denial naming the failed step. Review H1: any error (a busy ledger) is retried a second later;
+        the job is done only once its row is settled or no longer admitted."""
+        if job.ended or job.settled or job.reservation is None or time.monotonic_ns() < job.settle_after_ns:
             return
         try:
             if not self._executions.child_ended(job.reservation):
                 return
             row = self._owner._row(job.key[0], job.reservation.key)
-            if row is not None and row['state'] == 'admitted':
-                reason = job.reason if job.reason in PROBE_STEP_REASONS else 'probe_worker_failed'
-                self._owner.settle_ended(job.reservation, reason)
+            if row is None or row['state'] != 'admitted':
+                job.ended = True  # nothing admitted to settle
+                return
+            if job.preparation is not None and self._executions.returned(job.preparation):
+                try:
+                    self._executions.complete_ended(job.preparation)
+                    job.ended = True
+                    return
+                except (ProbeAdmissionError, ExecutionCustodyError):
+                    # Its packet does not validate, or its execution has no cleanup to retain (it never
+                    # started a child): settled as a denial below. A busy ledger is retried instead.
+                    pass
+            reason = job.reason if job.reason in PROBE_STEP_REASONS else 'probe_worker_failed'
+            self._owner.settle_ended(job.reservation, reason)
+            job.ended = True
         except Exception as error:
-            # Not settled: the row keeps holding, as before M10, and the restart waits on it.
+            # Not settled yet: the row keeps holding, and this is tried again.
+            job.settle_after_ns = time.monotonic_ns() + 1_000_000_000
             lane_health.safely(lambda error=error: self.health.note_failure(self._note, 'probe_settle_failed', error))
-        job.ended = True  # settled now, nothing admitted to settle, or it could not be (noted)
 
     def _step(self, ticket, job):
         if job.state == 'unknown':

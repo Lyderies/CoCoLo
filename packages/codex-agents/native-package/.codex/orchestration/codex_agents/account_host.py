@@ -75,20 +75,32 @@ ACCOUNT_INTAKE_LIMITS = SignatureIntakeLimits(8, 3, 4096, 2 * 1_048_576, 4)
 ACCOUNT_WORKER_LIMITS = SignatureWorkerLimits(2, 32 * 1_048_576, 30_000_000_000, 10_000_000, 5_000_000_000)
 
 
-def unended_children(pool, workers):
-    """O0c M8-M10: the account lanes whose children are not proven gone ([] when every one is), asked
-    by the self-restart before it frees what the account holds in memory. Only the signature workers and
-    the probe workers start children here: the signature helper (each root reaped inside its no-fork
-    confinement) and the probe's model (its tree confirmed empty, or never started). The collector's
-    own exit ends none of them: each was started in a session of its own. Owner thread; never raises."""
-    pending = []
-    for lane, owner in (('signature', pool), ('probe_worker', workers)):
+def unended_processes(pool, workers, observations=None):
+    """O0c M8-M10: per account lane, the processes it started that are not proven gone, as
+    {lane: [{'pid', 'why'}]} (a lane is absent once all are), asked by the self-restart before it frees
+    what the account holds in memory. Three lanes start children here, each in a session of its own,
+    so the collector's own exit ends none of them: the signature helper (reaped inside its no-fork
+    confinement), the probe's model (its tree confirmed empty, or never possible) and, review M4, the
+    observation lane's provider CLIs (their group killed, reaped, and the group empty). Owner thread;
+    never raises."""
+    pending = {}
+    for lane, owner in (('signature', pool), ('probe_worker', workers), ('observations', observations)):
+        if owner is None:
+            continue
         try:
-            if owner is not None and owner.children_ended() is not True:
-                pending.append(lane)
+            items = owner.unproven_children()
+            if type(items) is not list:
+                raise ValueError()
         except Exception:
-            pending.append(lane)
+            items = [{'pid': None, 'why': 'unchecked'}]
+        if items:
+            pending[lane] = items
     return pending
+
+
+def unended_children(pool, workers, observations=None):
+    """O0c M8-M10: the account lanes whose children are not proven gone ([] when every one is)."""
+    return sorted(unended_processes(pool, workers, observations))
 
 
 def account_endpoint(state):
@@ -244,9 +256,9 @@ class AccountServiceHost:
         return {name: lane.view() for name, lane in lanes.items() if lane is not None}
 
     def unended_children(self):
-        """O0c M8-M10: see `unended_children`; the self-restart asks this on the owner thread."""
+        """O0c M8-M10: see `unended_processes`; the self-restart asks this on the owner thread."""
         self._owner()
-        return unended_children(self._claims and self._claims._pool, self._workers)
+        return unended_processes(self._claims and self._claims._pool, self._workers, self._observations)
 
     def serve_once(self):
         self._owner()

@@ -718,15 +718,54 @@ def _restart_attention(decision, this_project=None):
         named = [f"{name} ({count})" for name, count in sorted(lanes.items())
                  if name in _LANE_LABELS and account_integer(count)]
         parts.append("work in lane(s) " + ', '.join(named))
-    children = held.get('children')
-    if type(children) is list and children:  # O0c M8-M10: the restart waits until they are proven gone
-        named = [_LANE_LABELS[name] for name in children if name in _LANE_LABELS]
-        parts.append(f"a child process of the {', '.join(named)} lane(s) may still be running" if named
-                     else "it cannot yet say that every child process it started has ended")
     if held.get('unknown') is True:
         parts.append("the ledger could not say what is running")
+    children = held.get('children')
+    if type(children) is list and children:
+        # O0c M8-M10, review M3: it waits until every process its lanes started is proven gone; say which,
+        # how to check each, and what to do then.
+        named = _waiting_processes(held.get('processes'), children)
+        return [f"the account is stuck{cause} and waits to restart itself until it can prove the processes "
+                f"it started have ended: {'; '.join(parts + named)}; once nothing is listed, restart the "
+                "collector (./setup.sh repairs it)"]
     what = ', '.join(parts) or 'work still running'
     return [f"the account is stuck{cause} but is not restarting itself while something runs: {what}"]
+
+
+_PROCESS_NAMES = {'signature': 'signature helper process', 'probe_worker': 'probe model process',
+                  'observations': 'observation process'}
+
+
+def _waiting_processes(processes, children):
+    """Review M3: one plain phrase per process a self-restart waits for, with the command that checks it."""
+    phrases = []
+    for item in processes if type(processes) is list else []:
+        if type(item) is not dict or item.get('lane') not in _PROCESS_NAMES:
+            continue
+        lane, why, pid = item['lane'], item.get('why'), item.get('pid')
+        name, label = _PROCESS_NAMES[lane], _LANE_LABELS[lane]
+        pid = pid if account_integer(pid) and pid > 1 else None
+        if why == 'running':
+            phrases.append(f"the {label} lane is still running a job (it ends by its own deadline)")
+        elif pid is None:
+            phrases.append(f"the {label} lane may have started a process whose id it does not have "
+                           "(check: ps -ax for a leftover COCOLO helper)")
+        elif why == 'not_reaped':
+            phrases.append(f"{name} {pid} has not exited (check: ps -p {pid})")
+        elif why == 'group_not_empty':
+            phrases.append(f"a process is still in the group of {name} {pid} (check: pgrep -g {pid})")
+        elif why == 'session_not_empty':
+            phrases.append(f"a process is still in the session of {name} {pid} (check: pgrep -s {pid})")
+        elif why == 'tree_not_confirmed':
+            phrases.append(f"{name} {pid} was not confirmed ended with every process it started "
+                           f"(check: pgrep -g {pid})")
+        else:
+            phrases.append(f"{name} {pid} could not be checked (check: ps -p {pid})")
+    if not phrases:
+        named = [_LANE_LABELS[name] for name in children if name in _LANE_LABELS]
+        phrases.append(f"a process the {', '.join(named)} lane(s) started may not have ended" if named
+                       else "it cannot yet say that every process it started has ended")
+    return phrases
 
 
 def _account_health_of(report, raw_lanes, raw_slots):

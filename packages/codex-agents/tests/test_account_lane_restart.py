@@ -736,8 +736,11 @@ class ObservationLaneRestartTests(unittest.TestCase):
             self.obs.begin()
             self.obs.wait(lambda: self.obs.jobs.health.view()['faulted'])
             self.obs.keeps_custody = True
-            time.sleep(.2)
-            named = account_host.unended_processes(None, None, self.obs.jobs)
+            end = time.monotonic() + 15  # the worker first tries for 5 s to end it itself
+            while (named := account_host.unended_processes(None, None, self.obs.jobs)) == {
+                    'observations': [{'pid': None, 'why': 'running'}]}:
+                self.assertLess(time.monotonic(), end)
+                time.sleep(.05)
             self.assertEqual({'observations': [{'pid': self.children[0].pid, 'why': 'not_reaped'}]}, named)
             notes = notes_of(observations=self.obs.jobs.health.view())
             decision = account_restart.check(lambda: notes, lambda: IDLE, None, now_ms=NOW,
