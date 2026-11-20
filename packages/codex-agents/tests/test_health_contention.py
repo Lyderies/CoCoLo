@@ -174,11 +174,18 @@ class HealthContentionTests(unittest.TestCase):
 
         def body():
             server, _ = self.serve()
-            self.hold_lock(30)
+            release = self.hold_lock(30)
             time.sleep(0.3)  # the cycle is waiting for the lock now
-            started = time.monotonic()
-            server.stop()
-            self.assertLess(time.monotonic() - started, 2.0)
+            # stop() itself ends by taking the lock to release the collector's claim (as always), so it
+            # runs on a thread; what H1a-6b needs is the waiting cycle ending at once, without sweeping.
+            stopper = threading.Thread(target=server.stop)
+            stopper.start()
+            deadline = time.monotonic() + 2
+            while server._sweeps.is_alive():
+                self.assertLess(time.monotonic(), deadline, 'the sweep cycle kept waiting for the lock')
+                time.sleep(0.02)
+            release.set()
+            stopper.join(10)
             self.assertEqual([], calls)
         self.run_with(self.patched_sweeps(calls), body)
 

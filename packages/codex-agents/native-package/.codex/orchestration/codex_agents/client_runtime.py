@@ -347,6 +347,22 @@ def _status_collector_fields(health):
             'ingestion': ingestion, 'provider_attestations': attestations}
 
 
+class _LedgerBusy(Exception):
+    """The collector answered, but its ledger was busy (S1-H1a-6c)."""
+
+
+def _apply_health(report, health):
+    """S1-H1a-6c: one health reading into the report; False when the collector answered that its
+    ledger was busy, which leaves the project fields unavailable and the status not ready."""
+    if health.get('ledger_busy') is True:
+        report.update(active=True, reason_code='status_ledger_busy',
+                      error="The collector is busy; this project's status could not be read in time.")
+        return False
+    report.update(_status_collector_fields(health))
+    report['account_capacity'] = _status_account_capacity(health.get('account_capacity'))
+    return True
+
+
 def status_client(state_root, project_root):
     """Observe existing collector/account APIs once each; never start or open a DB."""
     report = {'ready': False, 'active': False, 'client_failures': {},
@@ -371,8 +387,8 @@ def status_client(state_root, project_root):
     collector_ready = False
     try:
         health = CollectorClient(state.socket, timeout=1).health(project_root)
-        report.update(_status_collector_fields(health))
-        report['account_capacity'] = _status_account_capacity(health.get('account_capacity'))
+        if not _apply_health(report, health):
+            raise _LedgerBusy()
         report['active'] = collector_ready = True
         try:
             moved = CollectorClient(state.socket, timeout=1).learning_migration(Path(project_root))
@@ -390,6 +406,8 @@ def status_client(state_root, project_root):
             report['ingestion'] = empty_ingestion_snapshot(registered=False)
     except OSError:
         report.update(reason_code='status_collector_transport_unavailable', error='Collector status is unavailable.')
+    except _LedgerBusy:
+        pass  # Active and busy: the reason is set; never read as unreachable.
     except (KeyError, TypeError, ValueError):
         report.update(reason_code='status_collector_unavailable', error='Collector status is unavailable.')
     owner_ready = False
@@ -406,8 +424,8 @@ def status_client(state_root, project_root):
             # status shows the services running and the host's start-up timings.
             try:
                 health = CollectorClient(state.socket, timeout=1).health(project_root)
-                report.update(_status_collector_fields(health))
-                report['account_capacity'] = _status_account_capacity(health.get('account_capacity'))
+                if not _apply_health(report, health):
+                    collector_ready = False  # A busy second reading never ends ready (review 040-h1a6-design).
             except (CollectorError, OSError, KeyError, TypeError, ValueError):
                 pass  # The first reading stands.
         if not collector_ready and report['ingestion']['registered_project_state'] == 'unavailable':

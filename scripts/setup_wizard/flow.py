@@ -1157,7 +1157,8 @@ class Wizard:
             if steps.get(self.last_reply, "ready") == "true":
                 return True
             if steps.get(self.last_reply, "reason_code") not in ("status_collector_transport_unavailable",
-                                                                  "status_account_unavailable"):
+                                                                  "status_account_unavailable",
+                                                                  "status_ledger_busy"):  # S1-H1a-6c
                 return False
             waited = int(time.monotonic() - started)
             if waited >= self.collector_ready_seconds:

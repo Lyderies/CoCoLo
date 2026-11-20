@@ -172,6 +172,9 @@ WORKER_RESULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 # The persistent collector deletes expired worker results this often, so the
 # limit holds even while no lifecycle command opens the ledger.
 WORKER_RESULT_SWEEP_SECONDS = 60.0
+# S1-H1a-6: the health route waits at most this for the ledger lock, well inside the client's
+# 1-second health timeout; what it cannot read in time it leaves out (`ledger_busy`).
+HEALTH_LEDGER_WAIT_MS = 250
 # A collector request must arrive whole within this, well inside the sweep
 # interval, so a slow or stalled sender can never postpone a sweep.
 COLLECTOR_REQUEST_DEADLINE_SECONDS = 5.0
@@ -11811,6 +11814,9 @@ class CollectorServer:
         self.account_restart = None  # S1-H1c, set by collector_host: its latest restart decision
         self.account_restart_last = None  # S1-H1c D5: the last self-restart kept (time, lane, cause)
         self.thread_error: BaseException | None = None
+        self.sweep_error: str | None = None  # S1-H1a-6: the type of an error that ended the sweep thread
+        self._sweeps: threading.Thread | None = None
+        self._sweeps_stop = threading.Event()
         self._clients = client_capabilities or load_client_capabilities(
             Path(__file__).resolve().parent.parent / "config" / "learning-clients.json"
         )
@@ -11854,22 +11860,12 @@ class CollectorServer:
         listener.settimeout(0.1)
         self._started_at_ms = time.time_ns() // 1_000_000
         self._ready.set()
-        next_sweep = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS
+        # S1-H1a-6b: the sweeps run on their own thread, so no request waits behind one.
+        self._sweeps_stop.clear()
+        self._sweeps = threading.Thread(target=self._sweep_loop, name="collector-sweeps", daemon=True)
+        self._sweeps.start()
         try:
             while not self._stop.is_set():
-                if time.monotonic() >= next_sweep:
-                    # Kept worker results expire on time even while the
-                    # collector is the only process holding the ledger.
-                    next_sweep = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS
-                    with contextlib.suppress(LedgerError, OSError, sqlite3.Error):
-                        self.ledger.sweep_worker_results()
-                    # Raw events past their weight's period are summarised and removed,
-                    # a small batch at a time, without the owner running anything.
-                    with contextlib.suppress(LedgerError, OSError, sqlite3.Error, ValueError, KeyError):
-                        self.ledger.sweep_event_retention()
-                    # Finished account rows past their retention go too, so no limit fills for good (0.3.4 R6).
-                    with contextlib.suppress(LedgerError, OSError, sqlite3.Error, ValueError, KeyError):
-                        self.ledger.sweep_account_retention()
                 try:
                     connection, _ = listener.accept()
                 except TimeoutError:
@@ -11883,10 +11879,49 @@ class CollectorServer:
             self.thread_error = error
             raise
         finally:
+            # Its own event, not _stop: the host reads _stop as "asked to stop" (C10d).
+            self._sweeps_stop.set()
+            self._sweeps.join(5)
             listener.close()
             self._socket = None
             with contextlib.suppress(FileNotFoundError):
                 self.state.socket.unlink()
+
+    def _sweep_loop(self) -> None:
+        """Every WORKER_RESULT_SWEEP_SECONDS from the last cycle's start (as on the request loop), one
+        sweep cycle. An unexpected error is recorded by type and the next cycle runs (S1-H1a-6b)."""
+        due = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS
+        while not self._sweeps_stop.wait(max(0.0, due - time.monotonic())):
+            due = time.monotonic() + WORKER_RESULT_SWEEP_SECONDS
+            try:
+                self._sweep_cycle()
+            except Exception as error:
+                self.sweep_error = type(error).__name__
+
+    def _sweep_cycle(self) -> None:
+        """The three sweeps in their old order, under one hold of the ledger lock, and none while a
+        reader (which spans several holds) or a transaction is active (review 040-h1a6-design). The
+        lock is never waited on past a stop."""
+        lock = self.ledger._lock
+        while not lock.acquire(timeout=0.1):
+            if self._sweeps_stop.is_set():
+                return
+        try:
+            if self.ledger._active_readers or self.ledger._connection.in_transaction:
+                return
+            loose = (LedgerError, OSError, sqlite3.Error, ValueError, KeyError)
+            # Kept worker results expire on time even while the collector is the only process holding
+            # the ledger; raw events past their weight's period are summarised and removed, a small batch
+            # at a time; finished account rows past their retention go too (0.3.4 R6).
+            for sweep, errors in ((self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
+                                  (self.ledger.sweep_event_retention, loose),
+                                  (self.ledger.sweep_account_retention, loose)):
+                if self._sweeps_stop.is_set():
+                    return
+                with contextlib.suppress(*errors):
+                    sweep()
+        finally:
+            lock.release()
 
     def _handle(self, connection: socket.socket) -> dict[str, Any]:
         raw = bytearray()
@@ -12077,21 +12112,25 @@ class CollectorServer:
                         response["account_lanes"] = {"available": False}
                 if "project_root" in request:
                     project_root = Path(request["project_root"])
-                    project_id = self.ledger.project_for_root(project_root)
-                    response["provider_attestations"] = (
-                        self.ledger.provider_attestation_status(project_id)
-                    )
-                    response["collector_health"] = self.ledger.health_snapshot(
-                        project_id
-                    )
-                    response["account_capacity"] = self.ledger.account_capacity(project_id)
-                    response["account_slots"] = self.ledger.account_slot_health(project_id)  # S1-H1a
-                    response["ingestion"] = self.ledger.ingestion_snapshot(
-                        project_id,
-                        client_failures=client_health_snapshot(
-                            self.ledger.state, project_root
-                        ),
-                    )
+                    # Read from the filesystem before the hold, so it covers ledger reads only.
+                    client_failures = client_health_snapshot(self.ledger.state, project_root)
+                    # S1-H1a-6a: one bounded hold for every project read (they re-enter it at once);
+                    # when it is not free in time, none is read and the reply says so.
+                    if not self.ledger._lock.acquire(timeout=HEALTH_LEDGER_WAIT_MS / 1000):
+                        response["ledger_busy"] = True
+                        return response
+                    try:
+                        project_id = self.ledger.project_for_root(project_root)
+                        project = {
+                            "provider_attestations": self.ledger.provider_attestation_status(project_id),
+                            "collector_health": self.ledger.health_snapshot(project_id),
+                            "account_capacity": self.ledger.account_capacity(project_id),
+                            "account_slots": self.ledger.account_slot_health(project_id),  # S1-H1a
+                            "ingestion": self.ledger.ingestion_snapshot(project_id, client_failures=client_failures),
+                        }
+                    finally:
+                        self.ledger._lock.release()
+                    response.update(project)
                 return response
             if request.get("op") == "learning_migration" and set(request) == {
                 "protocol", "op", "project_root",
@@ -12136,7 +12175,7 @@ class CollectorServer:
         self._stop.set()
         if self._thread:
             self._thread.join(5)
-            if self._thread.is_alive():
+            if self._thread.is_alive() or (self._sweeps is not None and self._sweeps.is_alive()):
                 raise CollectorError("collector did not stop")
         self._release_lock()
 
