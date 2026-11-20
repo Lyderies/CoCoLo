@@ -58,6 +58,16 @@ def project_cli(project_root: Path):
 
 def run(step, spec, work_dir, project_root, *, cli=None, status='completed'):
     """Run one stage (`worker`, `verify` or `finish`); returns its summary, or raises ReviewError."""
+    try:
+        return _run(step, spec, work_dir, project_root, cli=cli, status=status)
+    except ReviewError:
+        raise
+    except (KeyError, TypeError, ValueError, AttributeError):
+        # A child reply (or a saved marker) without what the next step needs stops the review plainly.
+        raise ReviewError('review_step_unreadable') from None
+
+
+def _run(step, spec, work_dir, project_root, *, cli, status):
     project_root = Path(project_root).resolve()  # F3: absolute before any step
     check_spec(spec, project_root)
     cli = cli or project_cli(project_root)
@@ -163,8 +173,8 @@ def run(step, spec, work_dir, project_root, *, cli=None, status='completed'):
                         '--assignment', assignment_file, '--parent-grant', grant_file, '--result', result_file,
                         '--observation', observation_file, *root)
         verdict = dispatched['result'].get('semantic_verdict')
-        if verdict is None:
-            raise ReviewError('review_no_verdict', prefix or 'worker')  # H1d-2
+        if type(verdict) is not str or not verdict:  # H1d-2: an empty verdict is none
+            raise ReviewError('review_no_verdict', 'verifier' if prefix else 'worker')
         return {'digest': recorded['host_outcome_digest'], 'provider': provider, 'verdict': verdict,
                 'summary': dispatched['result'].get('summary')}
 
