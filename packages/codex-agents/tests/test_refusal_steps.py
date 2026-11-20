@@ -70,6 +70,20 @@ class RefusalStepTests(unittest.TestCase):
         self.assertNotIn('without it', step)
         self.assertNotIn('one structural repair is allowed', refusal_steps.RESULT_STEP)  # not true of every code
 
+    def test_H1b_verifier_every_refusal_gets_a_step_and_no_step_advises_an_unsafe_action(self):
+        import contextlib
+        import io
+        import json
+        from tests.test_bridge import cli
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli._print({'ready': False, 'error': 'something unavailable'})  # no reason code at all
+        self.assertEqual(refusal_steps.DEFAULT, json.loads(out.getvalue())['next_step'])
+        self.assertIn('no run is active', refusal_steps.next_step('history_service_unavailable'))
+        run = refusal_steps.next_step('run_lost_held')
+        self.assertIn('learning-run-status', run)
+        self.assertLess(run.index('learning-run-status'), run.index('abandoned'))  # check before classifying
+
     def test_an_unknown_code_gets_the_default(self):
         self.assertEqual(refusal_steps.DEFAULT, refusal_steps.next_step('something_new'))
         self.assertEqual(refusal_steps.DEFAULT, refusal_steps.next_step(None))
