@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 import contextlib
 import os
 import queue
+import secrets
 import sqlite3
 import threading
 import time
@@ -151,6 +152,9 @@ class ResultPersistenceLane:
         self._project = owner._monitor.scope().project_id
         # This service's scope, read here on the owner thread; the writer thread cannot ask (0.3.4 R10).
         self._service_scope = owner._monitor.scope()
+        # This service process's own instance, new at every start (O10 D2). The scope's supervisor id is
+        # durable per project, so it cannot tell a restarted service's rows from its predecessor's.
+        self._service_instance = 'svc-' + secrets.token_hex(16)
         self._runtime = owner._monitor.scope().runtime_digest
         self._pid, self._thread = os.getpid(), threading.current_thread()
         self._maximum = max_entries
@@ -1007,10 +1011,10 @@ class ResultPersistenceLane:
         return self._queue_counted(_EarlierLeases('expire'), '_earlier_held', EARLIER_SLOTS)
 
     def report_registered_run(self, orchestration_handle, run_handle, run_id, attempt):
-        """S1-R6: record that the driver registered this run, under this service's supervisor instance;
+        """S1-R6: record that the driver registered this run, under this service process's own instance (O10 D2);
         poll its `state`. `history_writer_busy` when every reporting slot is in use: ask again later."""
         return self._queue_report(_EarlierLeases('register', arguments=(
-            orchestration_handle, run_handle, run_id, attempt, self._service_scope.supervisor_instance_id)))
+            orchestration_handle, run_handle, run_id, attempt, self._service_instance)))
 
     def report_failed_before_open(self, run_handle, attempt, reason):
         """S1-R6: record that a registered run failed before its host open (reporting only)."""
@@ -1054,8 +1058,11 @@ class ResultPersistenceLane:
                 with contextlib.suppress(HistoryError, sqlite3.Error):
                     history._orchestration_owner().end_earlier(self._service_scope, 10)
                 with contextlib.suppress(HistoryError, sqlite3.Error):  # S1-R6-8, reporting only
-                    history.settle_earlier_registrations(self._service_scope.supervisor_instance_id,
-                                                         now_ms=history._result_now())
+                    history.settle_earlier_registrations(self._service_instance, now_ms=history._result_now())
+                # An earlier service's unarmed lease past its time can never be armed; release it here,
+                # with no client action (O10 D1). Armed leases are never expired by time.
+                with contextlib.suppress(HistoryError, sqlite3.Error):
+                    history.expire_result_leases(limit=10)
                 result = history.expire_results(limit=10)
             elif request.kind == 'register':
                 handle, run_handle, run_id, attempt, instance = request.arguments
