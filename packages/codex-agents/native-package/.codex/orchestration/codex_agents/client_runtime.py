@@ -449,7 +449,10 @@ def status_client(state_root, project_root):
               'account_holds': None,
               # O10 D6: this project's launch journal entries no running service can settle
               # (never-settling states, unreadable entries), each with its age.
-              'unresolved_launches': None}
+              'unresolved_launches': None,
+              # C3 (RS-C-12): this project's run containers by state, each one that could not be
+              # stopped named with its reason; each of those is also an owner alert (attention).
+              'container_holds': None}
     try:
         state = CollectorPaths(state_root)
         report['client_failures'] = client_health_snapshot(state, project_root)
@@ -492,9 +495,10 @@ def status_client(state_root, project_root):
     try:
         project_id, endpoint = _account_target(state, project_root)
         this_project = project_id  # S1-H1c E4: marks the caller's own project among those holding work
-        from .launch_journal import unresolved
+        from .launch_journal import container_holds, unresolved
         if type(project_id) is str and re.fullmatch(r'prj_[0-9a-f]{32}', project_id):
             report['unresolved_launches'] = unresolved(Path(state.root) / 'projects' / project_id / 'launches')
+            report['container_holds'] = container_holds(Path(state.root) / 'projects' / project_id / 'launches')
         enroll_clients(state, project_root, None, account=endpoint)
         owner = AccountClient(endpoint, project_id, COLLECTOR_RUNTIME_DIGEST, timeout=1).owner_key()
         report['owner_key'] = {name: owner[name] for name in ('state', 'fingerprint', 'replacements', 'last_replaced_at_ms')}
@@ -521,7 +525,20 @@ def status_client(state_root, project_root):
             report.update(reason_code='status_account_unavailable', error='Account status is unavailable.')
     report['ready'] = collector_ready and owner_ready
     report['account_health'] = _account_health(report, this_project)
+    _container_attention(report)
     return report
+
+
+def _container_attention(report):
+    """C3: each run container that could not be stopped is an owner alert; its slot stays held."""
+    holds, health = report.get('container_holds'), report.get('account_health')
+    if type(holds) is not dict or type(health) is not dict or type(health.get('attention')) is not list:
+        return
+    lines = [line for line in holds.get('attention') or [] if type(line) is str]
+    if lines:
+        health['attention'] = [*health['attention'], *lines]
+        if health.get('state') == 'ok':
+            health['state'] = 'degraded'
 
 
 _LANE_KEYS = {'faulted', 'kept', 'busy', 'queued', 'last_failure', 'held_since_ms'}

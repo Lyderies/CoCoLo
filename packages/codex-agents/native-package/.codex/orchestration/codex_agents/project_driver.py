@@ -34,7 +34,16 @@ C2 (behind `container_launch.SETTINGS`, off as shipped): with containers switche
 on, the run's container intent is written to the journal before its claim is
 sent (no intent, no claim), the admitted claim is recorded on it, and the child
 is launched in that container (`container_launch`). Such entries are never
-settled by the process rule above; their recovery is a later slice (C4).
+settled by the process rule above; their recovery after a restart is a later
+slice (C4).
+
+C3: every stop of a run's container goes through the launcher's one stop action;
+a stop that did not prove the container gone is retried by the sweep. A run of
+this service that failed after its claim was admitted is settled by this service
+itself once the OS says its container is gone (`_settle_own_ended`): the account
+settles it as lost, its entry is `settled` and its preparation given back, with
+no wait for the service to stop. At its own stop the service stops its containers
+not yet gone once more (`service_close`) and settles those gone.
 """
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -65,6 +74,7 @@ from .history_contracts import AttemptBinding, HistoryError, _DIGEST, _ID, match
 from .host_open_contracts import OpenProvenanceInput
 from .hosts import HOST_CLIENTS
 from .launch_journal import JournalError, LaunchJournal, tree_state
+from .launch_journal import entry_key as launch_journal_key
 from .learning_contracts import canonical_json, content_digest, parse_bounded_json
 from .lost_run_contracts import SettleLostInput
 from .open_scope_contracts import OpenScopeContext, open_inputs_digest
@@ -219,6 +229,12 @@ class _Run:
     publish_attempts: int = 0  # Failed publications of the run's result retried (O10 D4).
     publish_at: float | None = None  # When the failed publication is retried.
     launch_token: str | None = None  # C2: its container intent's token (containers switched on only).
+    # C3: a failed admitted run's own settlement once its container is gone: the account call under
+    # way, whether it is done, and the refused ones (with when it is asked again).
+    own_settle: object = None
+    own_settled: bool = False
+    own_settle_failures: int = 0
+    own_settle_at: float | None = None
 
 
 class _Call(local):
@@ -295,6 +311,9 @@ class _RateLimitRecorder:
 
 
 class RunDriver:
+    # C2: the container launcher; None while containers are switched off (`container_launch.SETTINGS`).
+    _containers = None
+
     def __init__(self, state, project_root, bundle_root, scope, runtime, *, clock=time.monotonic, history_endpoint=None):
         self._state, self._root, self._bundle = state, Path(project_root), Path(bundle_root)
         # This host's own project API, read from the helper thread for a verifier's worker result.
@@ -961,6 +980,7 @@ class RunDriver:
         self._retire_given_back()
         self._forget_retired()
         self._sweep_lost()
+        self._settle_own_ended()
         self._fence_earlier()
         self._expire_results()
         self._send_reports()
@@ -1491,6 +1511,64 @@ class RunDriver:
         if self._clock() >= self._next_sweep:
             self._sweep = self._sweeper.submit(self._settle_lost, False)
 
+    def _settle_own_ended(self):
+        """Owner step (C3, RS-C-7): settle this service's own failed runs whose container is gone.
+
+        Only the owner thread chooses between a run's normal release and this: a run is eligible
+        only once it failed with an admitted claim (so it never enters the normal release) and no
+        account call of it is outstanding. Its container entry must say `gone`, which only the
+        OS's answer writes; from then on nothing can launch it again (a container starts only from
+        an admitted `intent`). The account settles it as lost (`settle_lost_run`, on the sweep's
+        helper thread), the entry becomes `settled` and the run's preparation is given back: the
+        account no longer holds it. A refused or unreachable settlement is asked again later.
+        """
+        now = self._clock()
+        for run in self._runs.values():
+            if (run.own_settled or run.launch_token is None or run.receipt is None or run.state != 'failed'
+                    or run.future is not None):
+                continue
+            if run.own_settle is not None:
+                if not run.own_settle.done():
+                    continue
+                future, run.own_settle = run.own_settle, None
+                try:
+                    reply = future.result()
+                except Exception:
+                    run.own_settle_failures += 1
+                    run.own_settle_at = now + container_launch.stop_retry_delay(run.own_settle_failures)
+                    continue
+                try:
+                    self._journal.settled(run.launch_token, reply['state'])
+                except JournalError:
+                    pass  # The account settled it; a later service asks again and gets the same answer.
+                self._settled_own(run)
+                continue
+            if run.own_settle_at is not None and now < run.own_settle_at:
+                continue
+            try:
+                entry = self._journal.entry(run.launch_token)
+            except JournalError:
+                continue
+            if entry is None or entry['state'] == 'settled':
+                if entry is not None:
+                    self._settled_own(run)
+                continue
+            if entry['state'] != 'gone' or entry['instance'] != self._journal.instance:
+                continue
+            run.own_settle = self._sweeper.submit(self._settle_entry, entry)
+
+    def _settled_own(self, run):
+        """The account no longer holds the run: its preparation goes back, as a run never admitted's does."""
+        run.own_settled, run.own_settle_at = True, None
+        if run.prepared is None:
+            return
+        try:
+            self._preparation.discard(run.prepared)
+        except Exception:
+            return  # Bound to an execution, or the lane is gone: it stays.
+        self._giving_back.append(run.prepared)
+        run.prepared = None
+
     def _settle_lost(self, own):
         """Settle every run of a stopped instance whose whole tree is provably gone; return what is known.
 
@@ -1498,7 +1576,18 @@ class RunDriver:
         launch or own its child; with `own`, this instance's threads have
         stopped too. Nothing is ever signalled; an entry that cannot be read is
         left as it is, and its capacity to the account's timed rule.
+
+        C3: the live sweep first retries the container stops that did not prove the container
+        gone. A container entry is settled here only when it is this instance's own and `own`
+        (its service is stopping): one not yet gone is stopped once more (`service_close`) and
+        settled once the OS says it is gone. Another instance's container entries are left to
+        their recovery (C4).
         """
+        if self._containers is not None and not own:
+            try:
+                self._containers.retry_stops()
+            except Exception:
+                pass  # Asked again on the next sweep.
         journal, lost, stopped = self._journal, {}, {}
         for entry in journal.entries():
             if entry['state'] is None:
@@ -1514,7 +1603,10 @@ class RunDriver:
             elif stopped.setdefault(instance, journal.instance_stopped(instance)) is not True:
                 continue
             lost[handle] = (host_client, 'held')
-            if tree_state(entry) != 'gone':
+            if entry.get('version') == 2:
+                if instance != journal.instance or not self._own_container_gone(entry):
+                    continue
+            elif tree_state(entry) != 'gone':
                 continue
             try:
                 reply = self._settle_entry(entry)
@@ -1522,7 +1614,7 @@ class RunDriver:
                 continue  # The account is unreachable or refused: asked again on the next sweep.
             self._remove_workspace(entry['workspace'])
             try:
-                journal.settled(entry['bridge_run_id'], reply['state'])
+                journal.settled(launch_journal_key(entry), reply['state'])
             except JournalError:
                 continue
             lost[handle] = (host_client, 'released')
@@ -1531,6 +1623,21 @@ class RunDriver:
             if instance != journal.instance:
                 journal.forget_instance(instance)
         return lost
+
+    def _own_container_gone(self, entry):
+        """C3, at this service's own stop: whether its run's container is gone, stopping it once more
+        (`service_close`, at once) when it was started and not yet proven gone."""
+        if entry['state'] == 'gone':
+            return True
+        if (entry['state'] not in {'started', 'stopping', 'stop_failed'} or self._containers is None
+                or entry['container_id'] is None):
+            return False  # Never started (an intent): its recovery fences the claim (C4).
+        started = container_launch.StartedContainer(entry['token'], entry['container_name'], entry['container_id'],
+                                                    entry['cgroup_path'] or '')
+        try:
+            return self._containers.stop(started, 'service_close', now=True) is True
+        except Exception:
+            return False
 
     def _settle_entry(self, entry):
         """Helper thread: the account's settlement of this run, sent with the run's own custody."""
@@ -1583,6 +1690,8 @@ class RunDriver:
         self._sweeper.shutdown(wait=True)
         self._executor.shutdown(wait=True)
         if not settle:
+            if self._containers is not None:
+                self._containers.close()
             self._journal.release()
             return
         install_enrollment(self._preamble, owner=self._owner_name)
@@ -1592,6 +1701,8 @@ class RunDriver:
             pass
         finally:
             install_enrollment(None, owner=self._owner_name)
+            if self._containers is not None:
+                self._containers.close()
         self._journal.release()
 
     @staticmethod

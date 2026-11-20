@@ -836,8 +836,59 @@ def write_cleanup_marker(path: str, bridge_run_id: str, pid: int, birth: str) ->
     return True
 
 
+class _ContainerWatch:
+    """C3: the run's container, as the detached watchdog sees it (container mode)."""
+
+    def __init__(self, runtime, name: str, grace: int, cgroup: str | None, parent: int) -> None:
+        self.runtime, self.name, self.grace, self.cgroup, self.parent = runtime, name, grace, cgroup, parent
+
+    def parent_alive(self) -> bool:
+        # The service that started this watchdog is its parent; once it dies the watchdog is
+        # reparented, so its parent pid changes and can never be the service's again.
+        return os.getppid() == self.parent
+
+    def stop(self):
+        return self.runtime.stop(self.name, grace_seconds=self.grace, cgroup_path=self.cgroup)
+
+
+_CONTAINER_NAME = re.compile(r"[a-z][a-z0-9-]{0,30}-[0-9a-f]{32}")
+
+
+def container_watcher(argument: str) -> _ContainerWatch:
+    """C3: the container this watchdog stops through the container primitive (`container_runtime`,
+    loaded from this file's own folder: the watchdog runs this file as a script). ValueError when
+    the bridge's argument is not exactly what `container_launch.watchdog_config` writes."""
+    try:
+        config = json.loads(argument)
+    except (TypeError, ValueError, RecursionError):
+        raise ValueError("the container argument is not JSON") from None
+    keys = {"project", "prefix", "podman", "global", "name", "grace", "cgroup", "parent"}
+    if (type(config) is not dict or config.keys() != keys or type(config["podman"]) is not str
+            or not os.path.isabs(config["podman"]) or type(config["global"]) is not list
+            or not all(type(item) is str for item in config["global"])
+            or type(config["name"]) is not str or _CONTAINER_NAME.fullmatch(config["name"]) is None
+            or type(config["grace"]) is not int or not 0 <= config["grace"] <= 3600
+            or (config["cgroup"] is not None and type(config["cgroup"]) is not str)
+            or type(config["parent"]) is not int or config["parent"] <= 1
+            or type(config["project"]) is not str or type(config["prefix"]) is not str):
+        raise ValueError("the container argument is invalid")
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "container_runtime.py")
+    spec = importlib.util.spec_from_file_location("cocolo_watchdog_container_runtime", path)
+    if spec is None or spec.loader is None:
+        raise ValueError("the container primitive is missing")
+    module = sys.modules.get(spec.name)
+    if module is None:
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    runner = module.SubprocessPodman(config["podman"], global_args=config["global"])
+    runtime = module.ContainerRuntime(config["project"], name_prefix=config["prefix"], runner=runner)
+    return _ContainerWatch(runtime, config["name"], config["grace"], config["cgroup"], config["parent"])
+
+
 def watch(root: int, birth: str, deadline: float, announce, marker: str | None = None,
-          bridge_run_id: str | None = None, run_tag: str | None = None) -> None:
+          bridge_run_id: str | None = None, run_tag: str | None = None, *, container=None) -> None:
     """The detached deadline watchdog for one bridged child.
 
     It verifies the child's identity from the bridge, which keeps the child
@@ -849,6 +900,11 @@ def watch(root: int, birth: str, deadline: float, announce, marker: str | None =
     With `marker`, once the tree it tracked is confirmed empty (and, with
     `run_tag`, no process still carries the run's marker) it records that there
     before exiting (`write_cleanup_marker`).
+
+    C3, with `container` (container mode: the child streams a container's output): once the
+    service that started it has died, the container is stopped through the container primitive
+    (SIGTERM, the grace, the kill, removal, gone asked of the OS) before the tree is killed. While
+    the service lives it stops its own runs' containers, so the watchdog leaves them to it.
     """
 
     tree = ProcessTree(root, run_tag)
@@ -862,7 +918,11 @@ def watch(root: int, birth: str, deadline: float, announce, marker: str | None =
         table = process_table()
         if table is not None:
             tree.update(table)
-        if tree.root_exited() or time.monotonic() >= deadline:
+        orphaned = container is not None and not container.parent_alive()
+        if orphaned or tree.root_exited() or time.monotonic() >= deadline:
+            if orphaned:
+                with contextlib.suppress(Exception):
+                    container.stop()  # Nothing records it here: recovery asks the OS again.
             tree.terminate()
             if marker is not None and bridge_run_id is not None and tree.cleanup_confirmed():
                 write_cleanup_marker(marker, bridge_run_id, root, tree.root_birth)
@@ -881,6 +941,12 @@ def _announce() -> None:
 
 
 if __name__ == "__main__":
-    # root birth deadline [marker bridge_run_id [run_tag]]
-    watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
-          *(sys.argv[4:7] if len(sys.argv) in (6, 7) else ()))
+    # root birth deadline [marker bridge_run_id [run_tag]] | root birth deadline --container <json>
+    if len(sys.argv) == 6 and sys.argv[4] == "--container":
+        # A container it cannot take on is never left unguarded quietly: it exits without
+        # acknowledging, so the bridge refuses the run.
+        watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
+              container=container_watcher(sys.argv[5]))
+    else:
+        watch(int(sys.argv[1]), sys.argv[2], float(sys.argv[3]), _announce,
+              *(sys.argv[4:7] if len(sys.argv) in (6, 7) else ()))

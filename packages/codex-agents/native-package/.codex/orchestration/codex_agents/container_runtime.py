@@ -86,6 +86,11 @@ CLONE_NEWUSER = 0x10000000
 DEFAULT_SECCOMP_PATH = "/usr/share/containers/seccomp.json"
 # Fixed paths, never a search path (the same rule as process_tree's ps).
 PODMAN_PATHS = ("/opt/podman/bin/podman", "/opt/homebrew/bin/podman", "/usr/local/bin/podman", "/usr/bin/podman")
+# C3: what the podman client reads from its environment to find its machine or service (a process
+# started with a bare environment, such as the detached watchdog, is given these and nothing else).
+PODMAN_ENVIRONMENT = ("HOME", "USER", "LOGNAME", "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+                      "CONTAINER_HOST", "CONTAINER_CONNECTION", "CONTAINER_SSHKEY", "CONTAINERS_CONF",
+                      "CONTAINERS_REGISTRIES_CONF", "CONTAINERS_STORAGE_CONF")
 _ZERO_CAPS = "0000000000000000"
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")

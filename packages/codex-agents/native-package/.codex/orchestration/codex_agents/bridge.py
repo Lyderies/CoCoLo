@@ -592,21 +592,27 @@ class _WatchdogOwner:
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
 
-    def start(self, root: int, birth: str, deadline_monotonic: float, marker: tuple[str, str, str] | None = None) -> None:
+    def start(self, root: int, birth: str, deadline_monotonic: float, marker: tuple[str, str, str] | None = None,
+              container: dict | None = None) -> None:
         # The child remains unreaped through the acknowledgement, so its pid
         # cannot pass to another process. Output processing waits for verification.
+        # C3: with `container` (container mode, no marker) the watchdog also stops the run's
+        # container through the container primitive once this service has died; it is given the
+        # podman client's own environment variables for that, and nothing else.
+        tail = ("--container", container["argument"]) if container is not None else (marker or ())
+        environment = {"PATH": os.defpath, **(container["environment"] if container is not None else {})}
         try:
             self._process = subprocess.Popen(
                 [
                     sys.executable, *PYTHON_ISOLATION_FLAGS, str(WATCHDOG_SCRIPT),
-                    str(root), birth, repr(deadline_monotonic), *(marker or ()),
+                    str(root), birth, repr(deadline_monotonic), *tail,
                 ],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
                 close_fds=True,
-                env={"PATH": os.defpath},
+                env=environment,
             )
         except OSError as exc:
             raise _Abort("watchdog_unavailable") from exc
@@ -793,17 +799,20 @@ def run_child(
                 execution_bound = True
             except ExecutionCustodyError:
                 raise _Abort("process_tracking_unavailable") from None
-        marker = None
+        marker = container = None
         if _execution is not None:
             # Where the watchdog confirms, before it exits, that the tree it tracked is empty.
             try:
                 marker = _execution.watchdog_marker()
+                # C3: in container mode, the container it stops once this service has died.
+                container = _execution.watchdog_container()
             except ExecutionCustodyError:
                 raise _Abort("watchdog_unavailable") from None
         watchdog.start(
             process.pid, tree.root_birth,
             deadline + WATCHDOG_GRACE_SECONDS,
             *(() if marker is None else ((*marker, run_tag),)),
+            **({} if container is None else {"container": container}),
         )
         if _execution is not None:
             # The project service records the acknowledged watchdog durably, so a
@@ -878,7 +887,11 @@ def run_child(
         # the first nonlocal exit, and never infer custody from a failed step.
         if process is not None:
             if _execution is not None:
-                cleanup_entered, _ = cleanup_step(_execution.begin_cleanup)
+                # C3: why the run is stopped, for its container's one stop action (a stop the
+                # liveness clock asked for keeps its own reason).
+                reason = {"timed_out": "absolute_deadline", "cancelled": "cancel_requested"}.get(
+                    outcome["abort"], "run_ended")
+                cleanup_entered, _ = cleanup_step(lambda: _execution.begin_cleanup(reason))
             cleanup_step(lambda: _stop_child(process, tree))
         elif _execution is not None:
             cleanup_step(_execution.abort_handoff, ignored=(ExecutionCustodyError,))
