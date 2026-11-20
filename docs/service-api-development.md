@@ -819,8 +819,9 @@ against a pinned real client without keeping anything a child said:
   the path that reads the child's output and applies the fences does no file work for the
   record (`test_no_file_is_touched_while_the_child_runs`). What it does add there is the
   small, bounded work of shaping each frame. A failure switches recording off for that run
-  and is not reported. Nothing is recorded once the folder holds 512 files or 256 MiB: the
-  owner deletes records to make room. That limit is checked when a run starts, so runs that
+  and is not reported. The folder stays under 512 files and 256 MiB: when a run starts, the
+  oldest records COCOLO wrote are removed to make room (anything else in the folder is never
+  touched; if it alone fills the folder, nothing is recorded). That limit is checked when a run starts, so runs that
   are under way together can pass it by their own records (16 MiB each at most, and the
   number of runs is capped), and each holds up to that much in memory until it ends. A
   service that is killed mid-run leaves no record of that run.
