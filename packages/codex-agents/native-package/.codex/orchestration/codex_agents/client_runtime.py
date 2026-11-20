@@ -27,7 +27,7 @@ from .contracts import effective_dispatch_bounds, effective_dispatch_limits
 from .admission_metadata import api_keys_present
 from .dispatch_api import DISPATCH_REASONS, DispatchClient, DispatchError
 from .history_api import HistoryClient
-from .history_contracts import HISTORY_REASON_CODES, AttemptBinding, HistoryError, _ID, matches
+from .history_contracts import HISTORY_REASON_CODES, AttemptBinding, HistoryError, _ID, _PROJECT, matches
 from .host_result_contracts import HostResultReference
 from .hosts import HOST_CLIENTS, OWNER_CLIENT, HostClientMismatch, HostClientUnknown, detect_host_client
 from .learning_contracts import ADMISSION_REASON_CODES, canonical_json, content_digest, keyed_digest, parse_bounded_json
@@ -477,6 +477,8 @@ def _account_health(report):
     if health is not None:
         try:
             health['attention'] += _restart_attention(restart)
+            if type(restart) is dict and restart.get('action') == 'suppressed':
+                health['reasons'] = [*health['reasons'], 'account_restart_suppressed']  # C6
         except Exception:
             pass  # a malformed decision is ignored; the rest of the health stands
         return health
@@ -499,12 +501,14 @@ def _restart_attention(decision):
     held = decision.get('held') if type(decision.get('held')) is dict else {}
     parts = []
     for name, text in (('run_slots', 'run slots'), ('probes', 'probes')):
-        projects = held.get(name)
-        if type(projects) is list and projects:
-            parts.append(f"{text} in {len(projects)} project(s)")
+        projects = [p for p in held.get(name) or [] if matches(p, _PROJECT)] if type(held.get(name)) is list else []
+        if projects:  # C6: named by their opaque project id
+            parts.append(f"{text} in project(s) {', '.join(projects[:8])}")
     lanes = held.get('lanes')
     if type(lanes) is dict and lanes:
-        parts.append(f"work in {len(lanes)} lane(s)")
+        named = [f"{name} ({count})" for name, count in sorted(lanes.items())
+                 if name in _LANE_LABELS and account_integer(count)]
+        parts.append("work in lane(s) " + ', '.join(named))
     if held.get('unknown') is True:
         parts.append("the ledger could not say what is running")
     what = ', '.join(parts) or 'work still running'
