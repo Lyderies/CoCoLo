@@ -39,6 +39,7 @@ class AccountObservationSchemaTests(unittest.TestCase):
         db.execute('DROP INDEX IF EXISTS records_observed_at')  # O10 AP: 0.4.0's additive index is newer
         db.execute('DROP INDEX IF EXISTS records_type_project')  # O10 AP5: likewise
         db.execute('DROP INDEX IF EXISTS host_run_bindings_live')  # O0b B0-1: likewise
+        db.execute('DROP INDEX IF EXISTS billing_probes_in_progress')  # O0b B0-5: likewise
         db.execute('PRAGMA user_version=11')
         expected = json.loads((Path(__file__).parent / 'fixtures/learning/schema11-layout.json').read_text())
         actual = {kind + ':' + name: hashlib.sha256(' '.join(sql.replace('"', '').split()).encode()).hexdigest()

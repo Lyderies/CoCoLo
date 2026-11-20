@@ -2067,6 +2067,12 @@ class LearningLedger:
                 "CREATE INDEX IF NOT EXISTS host_run_bindings_live ON host_run_bindings(project_id, expires_at_ms) "
                 "WHERE binding_state='pending'"
             )
+            # O0b B0-5 (narrowed; review 040-b0n-code): the probe cap and its status count read only
+            # probes in progress, never the finished ones kept for replay.
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS billing_probes_in_progress ON account_billing_probe_requests(project_id) "
+                "WHERE state<>'committed'"
+            )
             self._record_first_owner_key()
             self.state.mark_initialized()
             self._reconcile_managed_files()
