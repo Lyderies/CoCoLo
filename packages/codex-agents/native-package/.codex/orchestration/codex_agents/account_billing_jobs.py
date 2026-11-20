@@ -387,6 +387,8 @@ class AccountBillingJobs:
 
     def drive(self):
         self._guard()
+        # O0b RS-A round 2 G3: each owner step, with or without a request, forgets probes a sweep has closed.
+        self._owner.forget_expired()
         for _ in range(min(self._limits.owner_steps, len(self._rotation))):
             project = self._rotation.popleft()
             self._rotation.append(project)
