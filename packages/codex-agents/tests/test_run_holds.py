@@ -308,12 +308,87 @@ class RunHoldTests(ActiveRunCapacityTests):
             (self.project, digest)).fetchone()
         return None if row is None else tuple(row)
 
+    REQUEST = "a" * 64
+
+    def withdraw(self, project, handle, *, request_digest=REQUEST, generation=1):
+        """Round 1 F13: a withdrawal names the request's digest and the binding's generation (a held one is 1)."""
+        return self.ledger.withdraw_open(project, run_handle=handle, request_digest=request_digest,
+                                         generation=generation)
+
+    def binding_generation(self, handle):
+        from codex_agents.learning_contracts import keyed_digest
+        return self.ledger._connection.execute(
+            "SELECT generation FROM run_holds WHERE kind='binding' AND project_id=? AND identity=?",
+            (self.project, keyed_digest(self.ledger.state.digest_key(), handle))).fetchone()[0]
+
+    def test_RS_A_F13_a_withdrawal_keeps_its_request_digest_and_generation_with_its_receipt(self):
+        """Round 1 F13 (draft 4 item 2): the receipt is stored with the request's digest and the generation it
+        named, and is the digest of that stored evidence."""
+        import json
+        from codex_agents.learning_contracts import content_digest, keyed_digest
+        project, launch = self.new_attempt()
+        first = self.withdraw(project, launch.run_handle)
+        hold = self.ledger._connection.execute(
+            "SELECT receipt, evidence FROM run_holds WHERE kind='binding' AND identity=?",
+            (keyed_digest(self.ledger.state.digest_key(), launch.run_handle),)).fetchone()
+        evidence = json.loads(hold["evidence"])
+        self.assertEqual((self.REQUEST, 1), (evidence["request_digest"], evidence["generation"]))
+        self.assertEqual(hold["receipt"], content_digest(evidence))
+        self.assertEqual(hold["receipt"], first["receipt"])
+
+    def test_RS_A_F13_an_identical_retry_after_a_restart_gets_the_stored_receipt(self):
+        """Round 1 F13: a reply lost, the ledger reopened, the same request again: the same answer, known."""
+        project, launch = self.new_attempt()
+        first = self.withdraw(project, launch.run_handle)
+        self.reopened()
+        self.assertEqual({**first, "known": True}, self.withdraw(project, launch.run_handle))
+
+    def test_RS_A_F13_an_identical_retry_after_its_binding_is_pruned_gets_the_stored_receipt(self):
+        """Round 1 F13 (draft 4 item 2, kept through pruning): the tombstone answers once the binding is gone."""
+        from codex_agents.learning_contracts import keyed_digest
+        project, launch = self.new_attempt()
+        first = self.withdraw(project, launch.run_handle)
+        with self.ledger._account_transaction():
+            self.ledger._connection.execute("DELETE FROM host_run_bindings WHERE handle_digest=?",
+                                            (keyed_digest(self.ledger.state.digest_key(), launch.run_handle),))
+        self.assertEqual({**first, "known": True}, self.withdraw(project, launch.run_handle))
+
+    def test_RS_A_F13_a_stale_generation_is_refused_and_changes_nothing(self):
+        """Round 1 F13: a different request naming the generation before the withdrawal is stale; one naming
+        a generation the held binding does not have is refused too, and the binding stays held."""
+        project, launch = self.new_attempt()
+        with self.assertRaisesRegex(LedgerError, "stale"):
+            self.withdraw(project, launch.run_handle, generation=2)
+        self.assertEqual((("held", None), 1), (self.binding_hold(launch.run_handle),
+                                               self.binding_generation(launch.run_handle)))
+        first = self.withdraw(project, launch.run_handle)
+        with self.assertRaisesRegex(LedgerError, "stale"):
+            self.withdraw(project, launch.run_handle, request_digest="b" * 64, generation=1)
+        self.assertEqual({**first, "known": True}, self.withdraw(project, launch.run_handle))
+
+    def test_RS_A_F13_a_new_withdrawal_without_a_generation_is_refused_generation_required(self):
+        """Round 1 F13 (draft 4b item 2): an older client cannot perform a new transition."""
+        project, launch = self.new_attempt()
+        with self.assertRaisesRegex(LedgerError, "generation_required"):
+            self.withdraw(project, launch.run_handle, generation=None)
+        self.assertEqual(("held", None), self.binding_hold(launch.run_handle))
+
+    def test_RS_A_F13_an_identical_retry_without_a_generation_gets_the_stored_receipt(self):
+        """Round 1 F13 (draft 4b item 2): matched by its request digest, an older client's retry is answered;
+        a different one without a generation is refused."""
+        project, launch = self.new_attempt()
+        first = self.withdraw(project, launch.run_handle)
+        self.assertEqual({**first, "known": True}, self.withdraw(project, launch.run_handle, generation=None))
+        with self.assertRaisesRegex(LedgerError, "generation_required"):
+            self.withdraw(project, launch.run_handle, request_digest="c" * 64, generation=None)
+
     def test_RS_A_2_a_never_claimed_binding_is_withdrawn_for_good(self):
         project, launch = self.new_attempt()
-        first = self.ledger.withdraw_open(project, run_handle=launch.run_handle)
+        # (requirement) round 1 F13, design draft 4 item 2: a withdrawal names its generation and request digest.
+        first = self.withdraw(project, launch.run_handle)
         self.assertEqual(("released", "withdrawn"), self.binding_hold(launch.run_handle))
         self.assertEqual("withdrawn", first["state"])
-        self.assertEqual({**first, "known": True}, self.ledger.withdraw_open(project, run_handle=launch.run_handle))
+        self.assertEqual({**first, "known": True}, self.withdraw(project, launch.run_handle))
         denied = self.claim((project, launch), "after-withdrawal")  # a claim after it is refused
         self.assertEqual(("denied", "claim_not_open"), (denied["state"], denied["reason_code"]))
 
@@ -321,7 +396,7 @@ class RunHoldTests(ActiveRunCapacityTests):
         project, launch = self.new_attempt()
         self.claim((project, launch), "admitted")
         with self.assertRaises(LedgerError):
-            self.ledger.withdraw_open(project, run_handle=launch.run_handle)
+            self.withdraw(project, launch.run_handle)  # (requirement) round 1 F13: generation and digest named
         self.assertEqual(("held", None), self.binding_hold(launch.run_handle))
 
     def test_RS_A_5_withdrawal_for_another_project_or_handle_changes_nothing(self):
@@ -329,7 +404,7 @@ class RunHoldTests(ActiveRunCapacityTests):
         other = self.second_project()
         for target, handle in ((other, launch.run_handle), (project, "hrn_" + "0" * 48)):
             with self.subTest(target=target, handle=handle), self.assertRaises(LedgerError):
-                self.ledger.withdraw_open(target, run_handle=handle)
+                self.withdraw(target, handle)  # (requirement) round 1 F13: generation and digest named
         self.assertEqual(("held", None), self.binding_hold(launch.run_handle))
 
     def test_RS_A_deletion_keeps_todays_caution_inside_the_day_after_a_crashed_release(self):
@@ -366,7 +441,7 @@ class RunHoldTests(ActiveRunCapacityTests):
         project, launch = self.new_attempt()
         at = self.case.stamp + 12_345
         with mock.patch.object(self.ledger, "_clock_ms", return_value=at):
-            self.ledger.withdraw_open(project, run_handle=launch.run_handle)
+            self.withdraw(project, launch.run_handle)  # (requirement) round 1 F13: generation and digest named
         from codex_agents.learning_contracts import keyed_digest
         self.assertEqual(at, self.ledger._connection.execute(
             "SELECT released_at_ms FROM run_holds WHERE kind='binding' AND identity=?",
@@ -375,7 +450,7 @@ class RunHoldTests(ActiveRunCapacityTests):
     def test_RS_A_F5_an_adopted_release_whose_time_history_lacks_keeps_it_unknown(self):
         """Round 1 F5: adoption never writes a creation time as a release time."""
         project, launch = self.new_attempt()
-        self.ledger.withdraw_open(project, run_handle=launch.run_handle)
+        self.withdraw(project, launch.run_handle)  # (requirement) round 1 F13: generation and digest named
         self.schema_fourteen(backup=True)
         ledger = self.upgraded()
         from codex_agents.learning_contracts import keyed_digest
@@ -443,7 +518,7 @@ class RunHoldTests(ActiveRunCapacityTests):
     def test_RS_A_F2_a_valid_ledger_with_every_kind_of_release_still_opens(self):
         row = self.crashed_release()
         project, launch = self.new_attempt()
-        self.ledger.withdraw_open(project, run_handle=launch.run_handle)
+        self.withdraw(project, launch.run_handle)  # (requirement) round 1 F13: generation and digest named
         self.reopened()
 
     def test_RS_A_F4_a_caller_time_never_moves_deletion_past_the_caution_day(self):

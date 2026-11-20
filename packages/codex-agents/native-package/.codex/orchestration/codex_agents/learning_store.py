@@ -11577,35 +11577,66 @@ class LearningLedger:
         remaining_ns = row["execution_deadline_ns"] + CRASHED_CLAIM_GRACE_MS * 1_000_000 - monotonic
         return max(wall, now - (-remaining_ns // 1_000_000)) if remaining_ns > 0 else wall
 
-    def withdraw_open(self, project_id: str, *, run_handle: str) -> dict[str, Any]:
+    def withdraw_open(self, project_id: str, *, run_handle: str, request_digest: str,
+                      generation: int | None) -> dict[str, Any]:
         """O0b RS-A-2: withdraw a run opened but never claimed, so its binding ends now, not at its expiry.
 
         In one account transaction, serialized with claim admission (both take the ledger's write lock): the
         binding must be this project's and still pending, and no claim may exist for it. It is then
         abandoned with reason `withdrawn` (its register row is released `withdrawn` by the trigger), and every
-        later claim refuses it as not pending. An identical repeat answers the same, `known`. The caller's
-        authority (the project's service, or the host session that opened it) is checked by the account."""
-        if type(run_handle) is not str or not re.fullmatch(r"hrn_[0-9a-f]{48}", run_handle):
+        later claim refuses it as not pending. The caller's authority (the project's service, or the host
+        session that opened it) is checked by the account.
+
+        O0b RS-A round 1 F13 (design draft 4 item 2, draft 4b item 2): the receipt is stored with the request's
+        digest and the generation it named. A request whose digest matches the stored receipt gets it back,
+        `known`, whatever the row's generation is now (through restart and pruning: the tombstone answers). A
+        new transition must name the row's current generation (else `stale`); one naming none (an older
+        client) is refused `generation_required`."""
+        if (type(run_handle) is not str or not re.fullmatch(r"hrn_[0-9a-f]{48}", run_handle)
+                or type(request_digest) is not str or not re.fullmatch(r"[0-9a-f]{64}", request_digest)
+                or (generation is not None and (type(generation) is not int or generation < 1))):
             raise LedgerError("withdrawal is unavailable")
         handle = keyed_digest(self.state.digest_key(), run_handle)
         with self._account_transaction():
-            row = self._connection.execute(
-                "SELECT binding_state,abandoned_reason FROM host_run_bindings WHERE project_id=? AND handle_digest=?",
-                (project_id, handle)).fetchone()
-            if row is None:
+            hold = self._connection.execute(
+                "SELECT state,release_kind,generation,receipt,evidence FROM run_holds "
+                "WHERE project_id=? AND kind='binding' AND identity=?", (project_id, handle)).fetchone()
+            if hold is None:
                 raise LedgerError("withdrawal is unavailable")
-            if row["binding_state"] == "abandoned" and row["abandoned_reason"] == "withdrawn":
-                return {"state": "withdrawn", "run_handle": run_handle, "known": True}
+            if hold["release_kind"] == "withdrawn" and hold["evidence"] is not None:
+                stored = json.loads(hold["evidence"])
+                if stored.get("request_digest") == request_digest:
+                    return {**stored["answer"], "run_handle": run_handle, "receipt": hold["receipt"], "known": True}
+            if generation is None:
+                raise LedgerError("generation_required")
+            if generation != hold["generation"]:
+                raise LedgerError("withdrawal is stale")
+            row = self._connection.execute(
+                "SELECT binding_state FROM host_run_bindings WHERE project_id=? AND handle_digest=?",
+                (project_id, handle)).fetchone()
             claimed = self._connection.execute(
                 "SELECT 1 FROM launch_claims WHERE project_id=? AND handle_digest=? UNION ALL "
                 "SELECT 1 FROM active_run_capacity WHERE project_id=? AND handle_digest=? LIMIT 1",
                 (project_id, handle, project_id, handle)).fetchone()
-            if row["binding_state"] != "pending" or claimed is not None:
+            if row is None or row["binding_state"] != "pending" or claimed is not None or hold["state"] != "held":
                 raise LedgerError("withdrawal is unavailable")
             self._connection.execute(
                 "UPDATE host_run_bindings SET binding_state='abandoned',abandoned_reason='withdrawn' "
                 "WHERE project_id=? AND handle_digest=? AND binding_state='pending'", (project_id, handle))
-        return {"state": "withdrawn", "run_handle": run_handle, "known": False}
+            released = self._connection.execute(
+                "SELECT released_at_ms FROM run_holds WHERE project_id=? AND kind='binding' AND identity=?",
+                (project_id, handle)).fetchone()["released_at_ms"]
+            answer = {"state": "withdrawn"}
+            evidence = {"decision": "binding-withdrawal-v1", "project_id": project_id, "handle_digest": handle,
+                        "request_digest": request_digest, "generation": generation, "release_kind": "withdrawn",
+                        "released_at_ms": released, "answer": answer}
+            receipt = content_digest(evidence)
+            # F13: written with the release, so a lost reply's retry finds it.
+            self._connection.execute(
+                "UPDATE run_holds SET receipt=?,evidence=? WHERE project_id=? AND kind='binding' AND identity=? "
+                "AND state='released' AND release_kind='withdrawn'",
+                (receipt, canonical_json(evidence).decode(), project_id, handle))
+        return {**answer, "run_handle": run_handle, "receipt": receipt, "known": False}
 
     def release_due_account_holds(self, *, limit: int = 64) -> int:
         """O0b RS-A: release the account holds whose own predicate now says so, writing each decision once.
