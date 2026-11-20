@@ -104,6 +104,16 @@ def _held(slot, job, cause, error=None, *, faulted=False):
     lane_health.safely(record)
 
 
+def _released(slot, job):
+    """S1-H1a C6: this worker's job was confirmed clean: withdraw it from kept and from the held
+    episode; its failure note stays. Never raises."""
+    def record():
+        job.held = False
+        slot.note.publish(kept=frozenset())
+        slot.lane.leave_held()
+    lane_health.safely(record)
+
+
 class _Slot:
     def __init__(self):
         self.incoming = queue.Queue(maxsize=1)
@@ -309,6 +319,8 @@ def _worker(slot, registry):
                     state = job.state
                 if state == 'unknown' and not job.held:
                     _held(slot, job, 'cleanup_incomplete', _take_caught())
+                elif state == 'cleaned' and job.held:
+                    _released(slot, job)  # S1-H1a C6: confirmed clean, so no longer held
                 if slot.stop.is_set():
                     return
             elif operation == 'execute':
