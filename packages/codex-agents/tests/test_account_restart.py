@@ -23,8 +23,8 @@ IDLE = {'run_slots': [], 'probes': []}
 
 
 class RestartDecisionTests(unittest.TestCase):
-    def decide(self, notes, idle=IDLE, previous=None):
-        return account_restart.decide(notes, idle, previous, now_ms=NOW)
+    def decide(self, notes, idle=IDLE, previous=None, mono_ns=None):
+        return account_restart.decide(notes, idle, previous, now_ms=NOW, mono_ns=mono_ns)
 
     def test_H1c_1_a_healthy_account_is_left_alone(self):
         self.assertEqual('ok', self.decide(lanes())['action'])
@@ -54,6 +54,19 @@ class RestartDecisionTests(unittest.TestCase):
         busy = lanes(claims=lane(faulted=True), observations=lane(busy=1))
         decision = self.decide(busy)
         self.assertEqual(('wait', {'observations': 1}), (decision['action'], decision['held']['lanes']))
+
+    def test_D2_D3_D6_unreadable_history_and_either_clock_saying_recent_suppress_with_their_reason(self):
+        notes = lanes(ingress=lane(faulted=True))
+        unreadable = self.decide(notes, previous='unreadable')
+        self.assertEqual(('suppressed', 'history_unreadable'), (unreadable['action'], unreadable['reason']))
+        mono = 10 ** 15
+        jumped = {'at_ms': NOW - 61 * MINUTE, 'mono_ns': mono - 10 * MINUTE * 1_000_000}  # wall jumped forward
+        decision = self.decide(notes, previous=jumped, mono_ns=mono)
+        self.assertEqual(('suppressed', 'recent'), (decision['action'], decision['reason']))
+        rebooted = {'at_ms': NOW - 61 * MINUTE, 'mono_ns': mono + 1}  # monotonic restarted: the wall decides
+        self.assertEqual('restart', self.decide(notes, previous=rebooted, mono_ns=mono)['action'])
+        both_old = {'at_ms': NOW - 61 * MINUTE, 'mono_ns': mono - 61 * MINUTE * 1_000_000}
+        self.assertEqual('restart', self.decide(notes, previous=both_old, mono_ns=mono)['action'])
 
     def test_C3_kept_work_outside_the_stuck_lane_means_wait(self):
         notes = lanes(ingress=lane(faulted=True), billing=lane(kept=1))
@@ -92,20 +105,36 @@ class RestartRecordTests(unittest.TestCase):
         import os
         self.assertIsNone(account_restart.last_restart(self.root))
         self.assertTrue(account_restart.record_restart(self.root, lane='ingress', cause='ingress_cleanup_failed',
-                                                       now_ms=NOW))
-        self.assertEqual({'at_ms': NOW, 'lane': 'ingress', 'cause': 'ingress_cleanup_failed'},
+                                                       now_ms=NOW, mono_ns=5))
+        self.assertEqual({'at_ms': NOW, 'mono_ns': 5, 'lane': 'ingress', 'cause': 'ingress_cleanup_failed'},
                          account_restart.last_restart(self.root))
         self.assertEqual(0o600, os.stat(self.root / 'account-restart.json').st_mode & 0o777)
 
     def test_C4_a_restart_that_cannot_be_recorded_does_not_happen(self):
         from unittest import mock
         with mock.patch.object(account_restart.os, 'replace', side_effect=OSError('full')):
-            self.assertFalse(account_restart.record_restart(self.root, lane='ingress', cause='x_failed', now_ms=NOW))
+            self.assertFalse(account_restart.record_restart(self.root, lane='ingress', cause='x_failed', now_ms=NOW,
+                                                            mono_ns=5))
         self.assertIsNone(account_restart.last_restart(self.root))
+        self.assertEqual([], [p.name for p in self.root.iterdir()])  # nothing temporary left
 
-    def test_a_malformed_record_reads_as_none(self):
+    def test_D4_a_folder_that_cannot_be_synced_means_no_restart(self):
+        import stat
+        from unittest import mock
+        real = account_restart.os.fsync
+
+        def folder_fails(descriptor):
+            if stat.S_ISDIR(account_restart.os.fstat(descriptor).st_mode):
+                raise OSError('folder sync failed')
+            return real(descriptor)
+        with mock.patch.object(account_restart.os, 'fsync', folder_fails):
+            self.assertFalse(account_restart.record_restart(self.root, lane='ingress', cause='x_failed', now_ms=NOW,
+                                                            mono_ns=5))
+
+    def test_D2_a_malformed_record_reads_as_unreadable_not_as_absent(self):
+        # Requirement-driven change (D2): it used to read as None, which allowed a restart.
         (self.root / 'account-restart.json').write_text('{"at_ms": "soon"}')
-        self.assertIsNone(account_restart.last_restart(self.root))
+        self.assertEqual('unreadable', account_restart.last_restart(self.root))
 
 
 class RestartCheckTests(unittest.TestCase):

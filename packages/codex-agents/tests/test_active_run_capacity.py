@@ -171,6 +171,12 @@ class ActiveRunCapacityTests(unittest.TestCase):
                 mock.patch.object(learning_store.time, "monotonic_ns", return_value=ended):
             # C1 (review 040-s1-h1c): no longer counted, but its child may outlive that: still listed.
             self.assertEqual({'run_slots': [self.project], 'probes': []}, self.ledger.machine_idle())
+        # D1 (review 040-s1-h1c-2): a wall clock jumped past the day while the child's monotonic deadline
+        # has not passed: still counted, so still listed.
+        jumped = (row["claimed_at_ms"] + learning_store.LEGACY_RUN_MAX_MS + 1) * 1_000_000
+        with mock.patch.object(learning_store.time, "time_ns", return_value=jumped), \
+                mock.patch.object(learning_store.time, "monotonic_ns", return_value=row["execution_deadline_ns"] - 1):
+            self.assertEqual({'run_slots': [self.project], 'probes': []}, self.ledger.machine_idle())
         day_after = (row["claimed_at_ms"] + learning_store.LEGACY_RUN_MAX_MS + 1) * 1_000_000
         with mock.patch.object(learning_store.time, "time_ns", return_value=day_after), \
                 mock.patch.object(learning_store.time, "monotonic_ns", return_value=ended):

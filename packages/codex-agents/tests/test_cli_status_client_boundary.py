@@ -227,6 +227,18 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
                 # is also a reason code.
                 self.assertEqual(decision['action'] == 'suppressed',
                                  'account_restart_suppressed' in report['account_health']['reasons'])
+        # D5/D6: the last self-restart is shown whatever the current decision; each suppression says why.
+        self.collector.account_restart = {'action': 'suppressed', 'reason': 'unrecorded', 'lane': 'claims',
+                                          'cause': 'claim_owner_failed', 'held': {}}
+        self.collector.account_restart_last = {'at_ms': 1_700_000_000_000, 'mono_ns': 1, 'lane': 'ingress',
+                                               'cause': 'ingress_cleanup_failed'}
+        code, report = self.status_with(faulted)
+        text = ' '.join(report['account_health']['attention'])
+        self.assertIn('could not record', text)
+        self.assertNotIn('less than an hour ago', text)
+        self.assertIn('restarted itself at', text)
+        self.assertIn('ingress_cleanup_failed', text)
+        self.collector.account_restart_last = None
         self.collector.account_restart = ['malformed']
         code, report = self.status_with(faulted)
         self.assertEqual(('faulted', True), (report['account_health']['state'], report['ready']))
