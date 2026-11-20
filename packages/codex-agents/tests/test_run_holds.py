@@ -188,6 +188,16 @@ class RunHoldTests(ActiveRunCapacityTests):
                 self.ledger.withdraw_open(target, run_handle=handle)
         self.assertEqual(("held", None), self.binding_hold(launch.run_handle))
 
+    def test_RS_A_deletion_keeps_todays_caution_inside_the_day_after_a_crashed_release(self):
+        """Draft 4b: a crashed or lost release inside machine_idle's day still blocks deletion, since its
+        child may still be running; before RS-A the unreleased row blocked it the same way."""
+        self.case.claim()
+        row = self.rows()[0]
+        now = row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS + 1
+        self.assertEqual(1, self.sweep(now, row["clock_reference_ns"] - 1))  # released crashed
+        with self.assertRaisesRegex(LedgerError, "project_has_active_launch_capacity"):
+            self.ledger.delete_project(self.project, now_ms=now)
+
     def test_RS_A_1_each_account_hold_has_its_register_row(self):
         self.case.claim()
         holds = [dict(r) for r in self.ledger._connection.execute(
