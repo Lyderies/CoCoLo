@@ -188,6 +188,11 @@ class DirectDriverMixin:
             if matches("*cli.py learning-register *"):
                 self._append(self.base / "register.log", joined)
                 return 0, (env["FAKE_REGISTER"] + "\n").encode(), b""
+            if matches("*cli.py provider-observe *"):  # S4-3: refused unless FAKE_OBSERVE gives the reply
+                self._append(self.base / "register.log", joined)
+                if not env.get("FAKE_OBSERVE"):
+                    return 2, b'{"ready": false, "reason_code": "provider_unavailable"}\n', b""
+                return 0, (env["FAKE_OBSERVE"] + "\n").encode(), b""
             if matches("*cli.py learning-start-project-service *"):  # S1-U8
                 self._append(self.base / "register.log", joined)
                 reply = env.get("FAKE_START") or '{"ready": true, "serving": true}'
@@ -199,6 +204,8 @@ class DirectDriverMixin:
                 if n <= int(env.get("FAKE_STATUS_STARTING") or 0):
                     reason = env.get("FAKE_STATUS_REASON") or "status_collector_transport_unavailable"
                     return 2, f'{{"ready": false, "reason_code": "{reason}"}}\n'.encode(), b""
+                if env.get("FAKE_STATUS_REPLY"):  # S4-3
+                    return 0, (env["FAKE_STATUS_REPLY"] + "\n").encode(), b""
                 return 0, b'{"ready": true, "collector_runtime_version": "0.0.0"}\n', b""
         if matches('*attest.py scratch setup-*'):  # out=$(...): trailing newlines dropped, one printed
             status, out, err = self._real(args)

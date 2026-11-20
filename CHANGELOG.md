@@ -18,6 +18,10 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   records, the Codex profile and the commands rule; attest.py still asks for the passphrase), with no
   do-it-now menus or pauses; "Configure step by step" asks every question as before. An installed
   project: "Update this project (recommended)", or "Configure" for the full menu as before.
+- An update skips the billing attestation, and so the passphrase, when every enabled provider is
+  observed again and already has an attestation for its current account. Anything else (a provider
+  that cannot be observed, a missing attestation, a status that cannot be read) runs it as before;
+  an answers file and "Re-run the billing attestation only" always run it.
 - `./setup.sh --answers FILE` installs a project with no menu from a JSON answers file
   (docs/setup-wizard.md); a missing, unknown or invalid answer is refused by name before anything
   changes.

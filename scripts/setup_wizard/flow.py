@@ -1270,10 +1270,37 @@ class Wizard:
         self.t.pause()
         return True
 
+    def already_attested(self) -> bool:
+        """S4-3: an update (not an answers file) skips attest.py only when every enabled provider is
+        observed now and the status says its current account is attested (steps.billing_current)."""
+        try:
+            path = Path(self.project) / ".codex" / "orchestration" / "provider-routing.json"
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(descriptor, "rb") as handle:
+                routing = handle.read(65537).decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            return False
+        if len(routing) > 65536:
+            return False
+        observed = {}
+        for name in steps.enabled_providers(routing):
+            status = self.run_owner_cli(f"Observing {name}", "provider-observe", "--provider", name,
+                                        "--project-root", self.project)
+            observed[name] = status == 0 and type(self.last_reply) is dict and self.last_reply.get("ready") is True
+            if not observed[name]:
+                return False
+        if self.run_owner_cli("Checking attestations", "learning-status", "--project-root", self.project) != 0:
+            return False
+        return steps.billing_current(routing, observed, self.last_reply)
+
     def step_billing(self) -> None:
         t = self.t
         self.begin_step(6)
         if self.no_cli(6, "The project CLI is not installed, so attestation is not possible yet."):
+            return
+        if self.update and self.answers is None and self.already_attested():
+            t.list_add("ok", "Every enabled provider's current account is already attested; no passphrase needed")
+            self.mark_step(6, "ok", "already attested")
             return
         t.body("No child agent runs until you confirm that each account cannot be charged beyond its subscription. "
                "This is a statement about your own billing settings, which only you can check.")

@@ -23,6 +23,34 @@ def expand_home(value: str, home: str) -> str:
     return value
 
 
+def enabled_providers(routing_text: str) -> list[str]:
+    """The providers a provider-routing.json enables, or [] when it cannot be read as one."""
+    import json
+    try:
+        providers = json.loads(routing_text)["providers"]
+        return [name for name in ("codex", "claude")
+                if type(providers.get(name)) is dict and providers[name].get("enabled") is True]
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return []
+
+
+def billing_current(routing_text: str, observed: dict, status) -> bool:
+    """S4-3: whether an update may skip the attestation. Only when every provider the routing enables
+    was just observed (so its account is the current one) and the status says that account is attested;
+    anything missing, failed or malformed means the attestation runs as before."""
+    enabled = enabled_providers(routing_text)
+    if not enabled or type(status) is not dict or status.get("ready") is not True:
+        return False
+    attestations = status.get("provider_attestations")
+    if type(attestations) is not dict:
+        return False
+    for name in enabled:
+        entry = attestations.get(name)
+        if observed.get(name) is not True or type(entry) is not dict or entry.get("state") != "present":
+            return False
+    return True
+
+
 def provider_routing(*choices: str) -> str:
     """W4.1-W4.3: the provider routing for four choices (Codex, Claude, Claude models, bridging), byte
     for byte as setup.sh's routing_json writes it."""
