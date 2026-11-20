@@ -11659,12 +11659,23 @@ class LearningLedger:
         """
         if type(limit) is not int or not 1 <= limit <= 1024:
             raise LedgerError("invalid release batch")
+        probes: list[int] = []
         with self._account_transaction():
-            return self._release_due_locked(self._clock_ms(), self._capacity_clock_reference(), limit)
+            released = self._release_due_locked(self._clock_ms(), self._capacity_clock_reference(), limit,
+                                                probes=probes)
+        # O0b RS-A round 2 G3: only after the commit (a rollback raised above) is the probe owner told, so it
+        # forgets the closed originals on its own thread without waiting for another reservation.
+        owner = getattr(self, "_billing_admission_owner", None)
+        if owner is not None and sum(probes):
+            # The releases are committed whatever happens here; a failed forget is retried at the owner's step.
+            with contextlib.suppress(Exception):
+                owner.probes_closed()
+        return released
 
-    def _release_due_locked(self, now: int, monotonic: int, limit: int) -> int:
+    def _release_due_locked(self, now: int, monotonic: int, limit: int, *, probes: list | None = None) -> int:
         """The sweep's releases inside the caller's account transaction (the sweep's batches and the 14 -> 15
-        upgrade, before activation): at most `limit`."""
+        upgrade, before activation): at most `limit`. `probes`, when given, receives how many reserved probes
+        were closed (round 2 G3)."""
         from .active_run_capacity import LOST_RUN_REASON, crashed_claim
 
         released = 0
@@ -11682,7 +11693,10 @@ class LearningLedger:
         if released < limit:
             # O0b RS-A-2: reserved probes past their deadline, closed as unlaunched denials.
             from .account_billing_admission import close_expired_reserved
-            released += close_expired_reserved(self, now, limit - released)
+            closed = close_expired_reserved(self, now, limit - released)
+            released += closed
+            if probes is not None:
+                probes.append(closed)
         if released < limit:
             # F7: an unclaimed binding is ended in its own row too (the trigger then releases its register
             # row `expired`), so a claim checking the binding refuses it whatever the wall clock later says.

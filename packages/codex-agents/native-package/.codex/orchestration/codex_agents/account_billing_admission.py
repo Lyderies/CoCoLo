@@ -7,6 +7,7 @@ Native authentication, launch containment and confirmed return are separate gate
 from dataclasses import dataclass, replace
 import hmac
 import os
+import threading
 import time
 
 from .account_claim_contracts import ClaimError
@@ -87,6 +88,10 @@ class AccountBillingAdmission:
         self._pid, self._key, self._timeout = os.getpid(), ledger.state.digest_key(), timeout_ms
         self._limits = SQLReadLimits(work_limits.max_callbacks, work_limits.max_duration_ms, work_limits.max_value_bytes)
         self._pending, self._signatures, self._permits, self._execution_inputs, self._reserved_inputs = {}, {}, {}, {}, {}
+        # O0b RS-A round 2 G3: set (from any thread) once a sweep has committed expired probes; read on the owner.
+        self._closed_notice = threading.Event()
+        # O0b RS-A round 2 G9: closed originals a live billing job still holds; that job ends them.
+        self._closed_live = set()
         ledger._billing_admission_owner = self
 
     def _guard(self):
@@ -168,6 +173,9 @@ class AccountBillingAdmission:
                     self._authorize(context, snapshot, before_commit)
                     if self._project(project, context) != root or self._row(project, key) != row:
                         raise ProbeAdmissionError('probe_conflict')
+                    # O0b RS-A round 2 G3: a replay of a request the sweep closed frees its memory (its row
+                    # was committed by an earlier transaction, so this one rolling back cannot undo it).
+                    self._forget_closed()
                     return reply
                 original = self._pending.get((project, key))
                 if original is None:
@@ -435,20 +443,50 @@ class AccountBillingAdmission:
         self._signatures.pop(reservation, None)
 
     def _forget_closed(self):
-        """O0b RS-A (F6): forget the originals the supervisor closed (their rows already committed, by the
-        sweep's expiry), with their pooled signature work, so they never fill this owner's memory. Memory goes
-        only after the durable commit, so a rolled-back close keeps it. At most MAX_PENDING_PROBES rows read."""
+        """Forget the originals the supervisor closed (their rows already committed, by the sweep's expiry),
+        with their pooled signature work, so they never fill this owner's memory. Memory goes only after the
+        durable commit, so a rolled-back close keeps it. At most MAX_PENDING_PROBES rows read.
+        O0b RS-A F6: run when a new reservation arrives. Round 2 G3: also on the owner's step after a committed
+        sweep (forget_expired) and on a replay of the closed request. Round 2 G9: an original a live billing job
+        still holds is left to that job (noted in _closed_live), which ends it with the stored answer and drops
+        its own handle mapping in the same step; known_reply forgets as reserve()'s replay does."""
+        jobs = getattr(self, '_billing_jobs', None)
+        held = jobs.held_reservations() if jobs is not None else frozenset()
         for (project, key), reservation in list(self._pending.items()):
             if reservation in self._permits:
                 continue
             row = self._row(project, key)
             if row is None or row['state'] != 'committed':
                 continue
+            if reservation in held:
+                self._closed_live.add(reservation)
+                continue
             self._pending.pop((project, key))
             self._reserved_inputs.pop(reservation, None)
             handle = self._signatures.pop(reservation, None)
             if handle is not None:  # returned work is discarded; queued or running work is cancelled
                 (self._pool.discard if handle in self._pool._returned else self._pool.cancel)(handle)
+
+    def probes_closed(self):
+        """O0b RS-A round 2 G3: told by the ledger after a sweep's transaction has committed expired probes
+        (never on rollback). Any thread may call this; only the owner thread touches memory or the pool, here
+        at once when the sweep ran on it, else at its next forget_expired() step."""
+        self._closed_notice.set()
+        if self._pid == os.getpid() and self._pool._thread is threading.current_thread():
+            self.forget_expired()
+
+    def forget_expired(self):
+        """O0b RS-A round 2 G3: the owner's step, run from each drive with or without a request: after a
+        committed sweep, forget the originals it closed and their signature work (see _forget_closed)."""
+        self._guard()
+        if not self._closed_notice.is_set():
+            return
+        self._closed_notice.clear()  # cleared first, so a sweep committing meanwhile is seen next step
+        try:
+            self._forget_closed()
+        except BaseException:
+            self._closed_notice.set()  # tried again at the next step
+            raise
 
     def known_reply(self, project, runtime, caller, identity, context, *, before_commit):
         """Read a committed original even after a local post-commit fault.
@@ -475,7 +513,17 @@ class AccountBillingAdmission:
             self._authorize(context, snapshot, before_commit)
             if self._project(project, context) != root or self._row(project, key) != row:
                 raise ProbeAdmissionError('probe_conflict')
+            self._forget_closed()  # O0b RS-A round 2 G9: as reserve()'s replay does
             return reply
+
+    @staticmethod
+    def closed_unlaunched(row):
+        """O0b RS-A round 2 G9: whether this committed row is the sweep's close of an expired reservation."""
+        if row is None or row['state'] != 'committed' or type(row['references_json']) is not str:
+            return False
+        value = parse_bounded_json_value(row['references_json'].encode(), max_bytes=4096)
+        return type(value) is dict and value.get('probe') == 'denied' and value.get(
+            'reason_code') == 'probe_unlaunched_expired'
 
     def _execution(self, permit, *, launching=False):
         """Original owner data only. Native launch authority is checked by its adapter."""
