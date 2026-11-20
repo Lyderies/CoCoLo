@@ -509,8 +509,11 @@ class ProjectServiceHost:
             # The project's own learning: any enrolled primary of this project may run and
             # read it. Reviewing a case is the owner's command, by the same convention as
             # every earlier version (the installed deny rules keep it from model sessions).
+            # O0c M1, M3: the capacity report also says which run slots this host can no longer free.
             return HistoryAuthorization(request.project_id, request.runtime_digest, history_request_digest(request), 'host',
-                                        frozenset({request.operation}))
+                                        frozenset({request.operation}),
+                                        run_slots=self.stuck_run_slots()
+                                        if request.operation == 'history.capacity_report' else None)
         if request.operation == 'history.learning_feedback':
             # The authority is the owner's signature over this record, checked by the
             # account owner that holds the owner key; this process never reads that key.
@@ -608,6 +611,20 @@ class ProjectServiceHost:
     def exhausted(self):
         self._owner()
         return self._driver is not None and self._driver.exhausted()
+
+    def replacing(self):
+        """O0c M3: this host holds slots it will never free and no run is under way; it stops once idle."""
+        self._owner()
+        return self._driver is not None and self._driver.replace_when_idle()
+
+    def client_idle_ns(self):
+        """Time since the last enrolled connection, whatever this host holds."""
+        return max(0, self._clock_ns() - self._frontend.last_enrolled_ns)
+
+    def stuck_run_slots(self):
+        """O0c M1, M3: (slots held that nothing here will free, the run slots there are), for status."""
+        from .project_driver import PREPARATION_SLOTS
+        return (0 if self._driver is None else self._driver.stuck_slots(), PREPARATION_SLOTS)
 
     def retaining(self):
         self._owner()

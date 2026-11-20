@@ -399,7 +399,9 @@ for row in json.loads((root / "frames.json").read_text()):
                 self.assertEqual("worker_input_invalid", packet.error_code)
                 self.assertIsNone(packet.body)
                 self.assertFalse((prepared[0] / "launches").exists())
-                self.assertFalse(prepared[4].snapshot()["cleanup_confirmed"])
+                # Corrected for O0c M1 (requirement): an execution that provably never launched is clean
+                # once its worker returned, so its normal release frees its slots (it held them for good).
+                self.assertTrue(prepared[4].snapshot()["cleanup_confirmed"])
                 self.assertNotIn("PRIVATE", repr(packet))
 
     def test_publication_fault_keeps_unknown_custody_and_cannot_deliver_a_success(self):

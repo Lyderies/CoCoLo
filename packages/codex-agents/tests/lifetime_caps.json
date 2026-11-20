@@ -1027,8 +1027,9 @@
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
   "project_driver.py::exhausted": {
-   "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "checks": 2,
+   "ends": "O0c M3: MAX_RUNS and DISPATCH_SLOTS as audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); stuck_slots() >= PREPARATION_SLOTS is not a limit on new work but the trigger that replaces the host: the replacement ends every stuck hold (the stopping service settles its runs on kernel evidence, the next starts with all slots free)",
+   "test": "test_M3_with_every_slot_stuck_the_host_is_replaced_at_once_when_no_run_is_under_way"
   },
   "project_driver.py::handle": {
    "checks": 1,
@@ -1037,6 +1038,11 @@
   "project_driver.py::record_claude_rate_limit_event": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "project_driver.py::stuck_slots": {
+   "checks": 1,
+   "ends": "O0c M4: counts given-back preparations whose removal was asked MAX_CLEANUP_ATTEMPTS times; each is retired once its retried removal finishes, and all end when the host they hold is replaced once idle",
+   "test": "test_M4_a_preparation_whose_removal_was_given_up_is_kept_and_counted_stuck"
   },
   "project_history.py::_checked_record": {
    "checks": 1,

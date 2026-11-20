@@ -104,6 +104,7 @@
  "codex:tests.test_host_open_lane": "integration",
  "codex:tests.test_host_open_provenance": "integration",
  "codex:tests.test_host_paths": "integration",
+ "codex:tests.test_host_slots": "integration",
  "codex:tests.test_hosts": "unit",
  "codex:tests.test_installer": "integration",
  "codex:tests.test_lane_health": "unit",

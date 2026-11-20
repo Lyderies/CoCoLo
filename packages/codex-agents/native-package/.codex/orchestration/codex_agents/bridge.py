@@ -901,7 +901,9 @@ def run_child(
         _, watchdog_reaped = cleanup_step(watchdog.reap)
         if not watchdog_reaped and outcome["abort"] is None:
             outcome["abort"] = "watchdog_unavailable"
-        if watchdog_reaped and execution_bound and cleanup_entered:
+        # O0c M1: a child stopped before its bind is confirmed too once its tree was identified.
+        if watchdog_reaped and cleanup_entered and _execution is not None and (
+                execution_bound or (tree is not None and tree.identified)):
             cleanup_step(lambda: _execution.finish(process, tree), ignored=(ExecutionCustodyError,))
         if cleanup_error is not None:
             if original_error is not None and not isinstance(original_error, Exception):

@@ -222,6 +222,10 @@ class _Owned:
     # that the container is gone then confirms the run clean).
     container_stop_requested: bool = False
     local_confirmed: bool = False
+    # O0c M1: set before anything that could create a child (the container's start, the process
+    # factory) and cleared only when the factory provably left none. With it unset when the worker
+    # returns, the execution never launched: nothing is left to clean up.
+    child_possible: bool = False
 
 
 class OwnedExecutionRegistry:
@@ -515,12 +519,25 @@ class OwnedExecutionRegistry:
             if entry.worker_pool is not pool or entry.worker_handle is not handle or entry.worker_returned:
                 raise ExecutionCustodyError()
             entry.worker_returned = True
+            self._never_launched(entry)
             if entry.activity is None:
                 raise ExecutionCustodyError()
             try:
                 entry.activity.complete()
             except ActivityUnavailable:
                 pass  # Actual return remains known; failed timing fences acceptance.
+
+    @staticmethod
+    def _never_launched(entry):
+        """O0c M1, under the lock, once the fixed worker returned: an execution that provably never
+        launched a child (cancelled or past its deadline before the spawn, refused before or by the
+        process factory with no child left, or never entered) is clean, so its normal release frees
+        every slot it took. Its ticket is no longer usable: only the returned worker held it. A
+        container's start, or any doubt, leaves it unknown."""
+        if (entry.worker_returned and entry.state in {"issued", "unknown"} and not entry.child_possible
+                and entry.process is None and entry.tree is None and entry.container is None):
+            entry.cleanup_started = True
+            entry.state = "cleaned"
 
     def _begin_cleanup(self, entry):
         if not entry.cleanup_started:
@@ -676,6 +693,8 @@ class OwnedExecutionRegistry:
         try:
             launcher = self.container_launch
             if launcher is not None:
+                with self._lock:
+                    entry.child_possible = True  # A container may exist from here on.
                 # C2: the child runs in its container, created only after its admitted intent was
                 # read back, with its deadline set on it; `started` is on disk before this returns.
                 # The local process streams the container's output and ends with it.
@@ -702,7 +721,7 @@ class OwnedExecutionRegistry:
                     journal.spawning(entry.key.bridge_run_id)
                 except Exception:
                     raise ExecutionCustodyError() from None
-            process = _POPEN(arguments, **options)
+            process = self._create(entry, arguments, options)
             with self._lock:
                 # Retain the actual process before any fallible metadata work.
                 entry.process = process
@@ -730,6 +749,30 @@ class OwnedExecutionRegistry:
                     raise
             raise
 
+    def _create(self, entry, arguments, options):
+        """The process factory, keeping what it knows when it fails (O0c M1).
+
+        A factory error with no child created (refused before the fork, or the fork failed), or with
+        its child already reaped (Popen waits for a child whose exec failed before raising), leaves
+        no child: the execution can then be released as never launched. A child created and not
+        reaped is retained, so the abort path stops and reaps it; an interruption keeps the doubt.
+        """
+        with self._lock:
+            entry.child_possible = True
+        process = _POPEN.__new__(_POPEN)
+        try:
+            process.__init__(arguments, **options)
+        except BaseException as error:
+            created = process._child_created
+            if created and process.returncode is None:
+                with self._lock:
+                    entry.process = process  # Stopped and reaped by the abort path.
+            elif (created or isinstance(error, Exception)) and self.container_launch is None:
+                with self._lock:
+                    entry.child_possible = False
+            raise
+        return process
+
     def tree(self, ticket, process):
         with self._lock:
             entry = self._entry(ticket)
@@ -754,9 +797,13 @@ class OwnedExecutionRegistry:
     def finish(self, ticket, process, tree):
         with self._lock:
             entry = self._entry(ticket)
+            # O0c M1: a child stopped before its tree was bound (a stop or a refusal between the spawn
+            # and the bind) is confirmed by the same kernel evidence, against the birth its own tree saw.
+            birth = (entry.birth if entry.birth is not None or entry.state != "unknown" or entry.container is not None
+                     or type(tree) is not ProcessTree or not tree.identified else tree.root_birth)
             if (self._pending.get(ticket) is not entry or entry.state not in {"active", "unknown"}
-                    or not entry.cleanup_started
-                    or process is not entry.process or tree is not entry.tree or tree.root_birth != entry.birth):
+                    or not entry.cleanup_started or birth is None
+                    or process is not entry.process or tree is not entry.tree or tree.root_birth != birth):
                 raise ExecutionCustodyError()
             entry.state = "unknown"
         # Kernel observations are outside the metadata lock and outside the

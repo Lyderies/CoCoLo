@@ -509,6 +509,19 @@ def _start_reply(serving, migration_failure):
     return report
 
 
+def _service_slots(slots):
+    """learning-status: the project service's run slots it can no longer free (O0c M1, M3), with one plain line."""
+    stuck, limit = slots['stuck'], slots['limit']
+    if stuck == 0:
+        summary = f"Project service: none of its {limit} run slots is stuck."
+    else:
+        summary = (f"Project service: {stuck} of its {limit} run slots {'is' if stuck == 1 else 'are'} held by "
+                   "runs it cannot finish (a run failed after its claim, or a child's end could not be confirmed). "
+                   "It keeps them, since a child may still run, and it will be replaced by a fresh service once "
+                   "no run is under way and it has been idle; the new service settles them.")
+    return {'stuck_run_slots': stuck, 'limit': limit, 'replaced_when_idle': stuck > 0, 'summary': summary}
+
+
 def _start_project_host(args):
     """Start this project's service unless one serves; first settle where its learning lives.
 
@@ -2348,6 +2361,10 @@ def main() -> int:
                 label = OWNER_CLIENT
             # How near each limit of this project's store is (0.3.4 R9); None while its service is not running.
             report['project_capacity'] = capacity_report_client(args.state_root, args.project_root, host_client=label)
+            # O0c M1, M3: the run slots this project's service can no longer free, said plainly.
+            slots = (report['project_capacity'] or {}).pop('run_slots', None)
+            if slots is not None:
+                report['project_service'] = _service_slots(slots)
             if report.get('reason_code') == 'status_collector_transport_unavailable':
                 _COLLECTOR_UNREACHED = True
                 report = _with_codex_hint(args.command, report)

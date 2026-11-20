@@ -51,6 +51,8 @@ class HistoryAuthorization:
     operational_qa_context: OperationalQAContext | None = None
     operational_check_context: OperationalCheckContext | None = None
     open_scope_context: OpenScopeContext | None = None
+    # O0c M1, M3: (run slots this host can no longer free, run slots it has), for the capacity report.
+    run_slots: tuple | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -66,6 +68,8 @@ class HistoryAuthorization:
             or (self.operational_qa_context is not None and type(self.operational_qa_context) is not OperationalQAContext)
             or (self.operational_check_context is not None and type(self.operational_check_context) is not OperationalCheckContext)
             or (self.open_scope_context is not None and type(self.open_scope_context) is not OpenScopeContext)
+            or (self.run_slots is not None and (type(self.run_slots) is not tuple or len(self.run_slots) != 2
+                                                or any(type(n) is not int or n < 0 for n in self.run_slots)))
         ):
             raise HistoryError("history_not_authorized")
 
@@ -401,6 +405,9 @@ class HistoryService:
                 from .project_capacity_report import capacity_report
                 self._history()
                 result = capacity_report(self._store)
+                if authorization.run_slots is not None:
+                    stuck, limit = authorization.run_slots
+                    result['run_slots'] = {'stuck': stuck, 'limit': limit}
             elif request.operation == 'history.orchestration_report':
                 from .project_orchestration_report import orchestration_report
                 self._history()

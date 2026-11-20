@@ -200,6 +200,91 @@ class RetiredMonitorSlotTests(unittest.TestCase):
 
 
 
+class StuckSlotTests(unittest.TestCase):
+    """O0c M1, M3, M4, M7: a hold nothing in this service will free is counted, kept, and makes the host
+    replaced once idle (at once when no run slot is left); never freed while a process may live."""
+
+    def stuck_driver(self, *runs):
+        value = driver()
+        value._runs = {run.key: run for run in runs}
+        value._dispatch = SimpleNamespace(_jobs={})
+        return value
+
+    def test_M4_a_preparation_whose_removal_was_given_up_is_kept_and_counted_stuck(self):
+        value = self.stuck_driver()
+        value._giving_back = ['preparation']
+        value._preparation.snapshot.side_effect = lambda handle: {'state': 'unknown'}
+        value._preparation.retry_cleanup.side_effect = project_driver.PreparationError('preparation_busy')
+        self.assertEqual(0, value.stuck_slots())
+        for _ in range(project_driver.MAX_CLEANUP_ATTEMPTS + 1):
+            value._retire_given_back()
+            value._clock.now += project_driver.CLEANUP_RETRY_MAX_SECONDS
+        self.assertEqual(['preparation'], value._giving_back)  # kept: its workspace may still be there
+        self.assertEqual(1, value.stuck_slots())
+        self.assertTrue(value.replace_when_idle())
+
+    def test_M7_a_monitor_attempt_given_up_is_counted_stuck(self):
+        value = self.stuck_driver()
+        value._forgetting = {('binding',): (0, value._clock())}
+        value._runtime.owner.forget.side_effect = ProjectMonitorError('monitor_attempt_live')
+        for _ in range(project_driver.MAX_FORGET_ATTEMPTS + 1):
+            value._forget_retired()
+            value._clock.now += project_driver.CLEANUP_RETRY_MAX_SECONDS
+        self.assertEqual(({}, 1), (value._forgetting, value.stuck_slots()))
+        self.assertEqual(0, self.stuck_driver().stuck_slots())  # never shared between drivers
+
+    def test_M3_an_admitted_failed_run_keeps_everything_and_is_stuck(self):
+        admitted = fencing_run(state='binding', receipt={'state': 'claimed'})
+        value = self.stuck_driver(admitted)
+        value._fail(admitted, 'run_failed')
+        self.assertEqual(('failed', 'preparation', 'lease-job'), (admitted.state, admitted.prepared, admitted.persistence))
+        self.assertEqual(1, value.stuck_slots())
+        self.assertTrue(value.replace_when_idle())
+        self.assertFalse(value.exhausted())  # two slots are still free: replaced once idle, not at once
+
+    def test_M3_a_run_still_waiting_for_an_answer_is_not_stuck(self):
+        fencing = fencing_run(state='failed', fence_at=200.0)
+        calling = fencing_run(state='failed', future=object(), key=('hrn_' + 'b' * 48, 1))
+        closed = fencing_run(state='failed', closed=True, key=('hrn_' + 'c' * 48, 1))
+        self.assertEqual(0, self.stuck_driver(fencing, calling, closed).stuck_slots())
+
+    def test_M3_with_every_slot_stuck_the_host_is_replaced_at_once_when_no_run_is_under_way(self):
+        runs = [fencing_run(state='failed', receipt={'state': 'claimed'}, key=('hrn_' + c * 48, 1)) for c in 'abc']
+        value = self.stuck_driver(*runs)
+        self.assertEqual(3, value.stuck_slots())
+        self.assertTrue(value.exhausted())
+        busy = fencing_run(state='ready', key=('hrn_' + 'd' * 48, 1))
+        value._runs[busy.key] = busy
+        self.assertFalse(value.exhausted())  # never from under a run under way
+        self.assertFalse(value.replace_when_idle())
+
+    def test_M1_a_cleanup_unconfirmed_run_is_held_not_busy_and_stuck(self):
+        held = fencing_run(state='cleanup_unconfirmed', receipt={'state': 'claimed'}, reason='run_cleanup_unconfirmed')
+        value = self.stuck_driver(held)
+        self.assertFalse(value.busy())
+        self.assertEqual(1, value.stuck_slots())
+        self.assertEqual({'state': 'ready', 'reason_code': 'run_cleanup_unconfirmed'}, RunDriver._view(held))
+
+    def test_M1_only_an_execution_left_unknown_after_its_worker_returned_is_held_unconfirmed(self):
+        from codex_agents.history_contracts import HistoryError
+        for token, view, expected in (
+                (None, {'state': 'unknown', 'worker_returned': True}, 'cleanup_unconfirmed'),
+                (None, {'state': 'active', 'worker_returned': False}, 'acknowledging'),  # still running
+                (None, {'state': 'unknown', 'worker_returned': False}, 'acknowledging'),  # cleanup under way
+                ('token', {'state': 'unknown', 'worker_returned': True}, 'acknowledging')):  # C3's container proof
+            with self.subTest(token=token, view=view):
+                run = fencing_run(state='acknowledging', receipt={'state': 'claimed'}, launch_token=token,
+                                  prepared_inputs=SimpleNamespace(worker='worker'))
+                value = self.stuck_driver(run)
+                value._runtime.pool = mock.Mock()
+                value._runtime.pool.supervisor.return_value.snapshot.return_value = view
+                value._runtime.persistence.snapshot.return_value = {'state': 'acknowledged'}
+                value._runtime.persistence.retain_cleanup.side_effect = HistoryError('history_not_authorized')
+                value._advance(run)
+                self.assertEqual(expected, run.state)
+                self.assertEqual(expected == 'cleanup_unconfirmed', value.stuck_slots() == 1)
+
+
 @unittest.skip("gates the run supervisor: the owner narrowed B0 on 2026-11-20 and moved the never-armed "
                "withdrawal there (DESIGN-0.4.0-B0-holds.md, Stop and analyse)")
 class UnclaimedRunFenceTests(unittest.TestCase):
