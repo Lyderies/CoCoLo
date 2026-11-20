@@ -195,6 +195,22 @@ class LedgerLockLimitTests(unittest.TestCase):
         self.assertEqual([], client_runtime._ledger_waits_attention({}))
         self.assertEqual([], client_runtime._ledger_waits_attention(None))
 
+    def test_E1a_T4_a_failing_transaction_body_rolls_back_and_frees_the_lock(self):
+        """Review 040-m4b-e1a-code-2: a body that raises leaves nothing written, no open transaction,
+        and the lock free for the next caller at once."""
+        connection = self.ledger._connection
+        before = connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+        self.assertGreater(before, 0)  # something the failed body tries to remove
+        with self.assertRaises(RuntimeError):
+            with self.ledger._account_transaction():
+                connection.execute("DELETE FROM projects")
+                raise RuntimeError()
+        self.assertFalse(connection.in_transaction)
+        self.assertEqual(before, connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0])
+        self.assertTrue(self.ledger._lock.acquire(timeout=0))  # free, not left held
+        self.ledger._lock.release()
+        self.assertEqual({}, self.ledger.lock_refusals())
+
     def test_E1a_3_a_busy_status_still_shows_the_refusals(self):
         """Review 040-m4b-e1a-code-2 (medium): the counts matter most while the ledger is busy, when the
         project's health reply is ledger_busy."""
