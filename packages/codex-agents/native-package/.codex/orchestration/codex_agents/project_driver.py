@@ -34,8 +34,10 @@ C2 (behind `container_launch.SETTINGS`, off as shipped): with containers switche
 on, the run's container intent is written to the journal before its claim is
 sent (no intent, no claim), the admitted claim is recorded on it, and the child
 is launched in that container (`container_launch`). Such entries are never
-settled by the process rule above; their recovery after a restart is a later
-slice (C4).
+settled by the process rule above: C4's recovery (`container_recovery`) settles
+an earlier instance's container runs at start and on each sweep, once the OS
+says each container is gone (stopping it first), and an intent never admitted
+through the account's fence; podman unreachable settles nothing.
 
 C3: every stop of a run's container goes through the launcher's one stop action;
 a stop that did not prove the container gone is retried by the sweep. A run of
@@ -67,6 +69,7 @@ from .codex_preparation import (
 )
 from .collector_client import COLLECTOR_RUNTIME_DIGEST
 from . import container_launch
+from .container_recovery import ContainerRecovery
 from .control_api import ControlScope
 from .dispatch_api import dispatch_request_digest
 from .execution_grant import ExecutionRegistrationInput, checked_execution_grant
@@ -313,6 +316,8 @@ class _RateLimitRecorder:
 class RunDriver:
     # C2: the container launcher; None while containers are switched off (`container_launch.SETTINGS`).
     _containers = None
+    # C4: the recovery of earlier instances' container entries, made on its first use (containers only).
+    _recovery = None
 
     def __init__(self, state, project_root, bundle_root, scope, runtime, *, clock=time.monotonic, history_endpoint=None):
         self._state, self._root, self._bundle = state, Path(project_root), Path(bundle_root)
@@ -1578,17 +1583,20 @@ class RunDriver:
         left as it is, and its capacity to the account's timed rule.
 
         C3: the live sweep first retries the container stops that did not prove the container
-        gone. A container entry is settled here only when it is this instance's own and `own`
-        (its service is stopping): one not yet gone is stopped once more (`service_close`) and
-        settled once the OS says it is gone. Another instance's container entries are left to
-        their recovery (C4).
+        gone. A container entry of this instance is settled here only when `own` (its service is
+        stopping): one not yet gone is stopped once more (`service_close`) and settled once the OS
+        says it is gone. C4: the live sweep hands every container entry of a stopped instance, and
+        each one this instance took over from one, to the container recovery (`container_recovery`),
+        which also stops orphan containers; at this service's own stop only the ones it took over,
+        and no orphan sweep.
         """
         if self._containers is not None and not own:
             try:
                 self._containers.retry_stops()
             except Exception:
                 pass  # Asked again on the next sweep.
-        journal, lost, stopped = self._journal, {}, {}
+        recovery = self._container_recovery()
+        journal, lost, stopped, recovering = self._journal, {}, {}, []
         for entry in journal.entries():
             if entry['state'] is None:
                 continue
@@ -1597,13 +1605,20 @@ class RunDriver:
                 lost[handle] = (host_client, 'released')
                 continue
             instance = entry['instance']
-            if instance == journal.instance:
+            adopted = entry.get('version') == 2 and recovery is not None and recovery.owns(entry['token'])
+            if adopted:
+                pass
+            elif instance == journal.instance:
                 if not own:
                     continue
             elif stopped.setdefault(instance, journal.instance_stopped(instance)) is not True:
                 continue
             lost[handle] = (host_client, 'held')
             if entry.get('version') == 2:
+                if adopted or (instance != journal.instance and not own):
+                    if recovery is not None:
+                        recovering.append(entry)
+                    continue
                 if instance != journal.instance or not self._own_container_gone(entry):
                     continue
             elif tree_state(entry) != 'gone':
@@ -1618,11 +1633,30 @@ class RunDriver:
             except JournalError:
                 continue
             lost[handle] = (host_client, 'released')
+        if recovery is not None:
+            try:
+                recovered = recovery.recover(recovering, orphans=not own)
+            except Exception:
+                recovered = {}  # Asked again on the next sweep.
+            for entry in recovering:
+                if entry['token'] in recovered:
+                    lost[entry['run_handle']] = (entry['host_client'], 'released')
         journal.prune()
         for instance in journal.instances():
             if instance != journal.instance:
                 journal.forget_instance(instance)
         return lost
+
+    def _container_recovery(self):
+        """C4: this service's container recovery, or None while containers are switched off."""
+        if self._containers is None:
+            return None
+        if self._recovery is None:
+            self._recovery = ContainerRecovery(
+                self._containers, self._journal, fence=lambda entry: self._fence_entry(entry),
+                settle=lambda entry: self._settle_entry(entry),
+                remove_workspace=lambda workspace: self._remove_workspace(workspace), clock=self._clock)
+        return self._recovery
 
     def _own_container_gone(self, entry):
         """C3, at this service's own stop: whether its run's container is gone, stopping it once more
@@ -1656,6 +1690,27 @@ class RunDriver:
                                    timeout=SETTLE_TIMEOUT_SECONDS)
             return client.settle_lost_run(
                 settle, request_id='lost-' + hashlib.sha256(entry['bridge_run_id'].encode()).hexdigest()[:32])
+        finally:
+            call.role = call.host_client = call.context = None
+
+    def _fence_entry(self, entry):
+        """Helper thread (C4): the account's fence for a recovered intent's own claim request, with the run's
+        custody: it closes the request for good, or returns the receipt of the claim it admitted after all."""
+        lease = ResultLeaseBinding(**entry['lease'])
+        if lease.project_id != self._scope.project_id or entry['host_client'] not in HOST_CLIENTS:
+            raise HistoryError('history_conflict')
+        evidence = bytes.fromhex(entry['storage_evidence'])
+        fence = FenceClaimInput(entry['run_handle'], entry['identity_digest'], entry['claim_request_id'],
+                                parse_bounded_json(evidence)['lease']['lease_digest'])
+        custody = canonical_json({'purpose': 'run', 'lease': entry['lease'], 'storage_evidence': entry['storage_evidence'],
+                                  'terminal_evidence': None, 'cleanup_evidence': None})
+        call = self._call
+        call.role, call.host_client, call.context = 'project', entry['host_client'], custody
+        try:
+            client = AccountClient(self._account, self._scope.project_id, COLLECTOR_RUNTIME_DIGEST,
+                                   timeout=SETTLE_TIMEOUT_SECONDS)
+            return client.fence_claim(
+                fence, request_id='recover-' + hashlib.sha256(entry['token'].encode()).hexdigest()[:32])
         finally:
             call.role = call.host_client = call.context = None
 

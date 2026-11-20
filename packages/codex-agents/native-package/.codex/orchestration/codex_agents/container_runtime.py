@@ -46,6 +46,14 @@ Requirements:
   the timeout podman reports with it (fail closed). `attach_arguments` names the local command that
   streams the container's output and exits with its exit code.
 
+- C4 (PLAN-0.4.0-supervisor-slices.md): a per-run network must carry the run's own `cocolo.run` and
+  `cocolo.project` labels, or the launch is refused before anything exists (`network_not_this_run`).
+  `stop` may be given the labels the container must carry: a container under that name whose labels
+  differ is not the run's and is left alone (`stop_failed`, never "gone"). The project's listing
+  (`list_project`) and the orphan stop (`stop_orphans`) are separate steps, so a caller can read its
+  live set after the listing (an identity recorded before its container was created is then never
+  swept).
+
 The caller's duties (not done here): include every run whose identity it recorded in the live set
 it gives the sweep (a launch between its snapshot and the listing would otherwise be swept), keep
 the slot of any run whose stop is not "gone", and keep the seccomp profile file owner-only.
@@ -543,7 +551,7 @@ class ContainerRuntime:
         identity = self.identity(spec.run_id)
         try:
             if spec.network is not None:
-                refusal = self._network_refusal(spec.network)
+                refusal = self._network_refusal(spec.network, identity)
                 if refusal is not None:
                     return refusal
             try:
@@ -571,18 +579,24 @@ class ContainerRuntime:
         except _Refused as refused:
             return refused.refusal
 
-    def _network_refusal(self, network: str) -> Refusal | None:
+    def _network_refusal(self, network: str, identity: ContainerIdentity) -> Refusal | None:
         result = self._podman(["network", "inspect", "--format=json", network])
         if result.returncode != 0:
             return Refusal("network_missing", f"the network {network} does not exist")
         try:
             rows = json.loads(result.stdout)
             internal = rows[0].get("internal") is True and len(rows) == 1
+            labels = rows[0].get("labels") or {}
         except (ValueError, IndexError, AttributeError, TypeError):
-            internal = False
+            internal, labels = False, {}
         if not internal:
             return Refusal("network_not_internal", f"the network {network} is not an internal (per-run) network; "
                            "a container gets no network or an internal one")
+        # C4: the per-run network is this run's own, by its labels.
+        if (not isinstance(labels, dict) or labels.get(RUN_LABEL) != identity.run_id
+                or labels.get(PROJECT_LABEL) != identity.project_id):
+            return Refusal("network_not_this_run", f"the network {network} is not this run's own (its "
+                           f"{RUN_LABEL} and {PROJECT_LABEL} labels do not name this run); it was not used")
         return None
 
     def _check_and_open(self, spec: ContainerSpec, identity: ContainerIdentity) -> Launched | Refusal:
@@ -723,20 +737,26 @@ class ContainerRuntime:
 
     # -- stop (CS-3, CS-4)
     def stop(self, ref: str, *, grace_seconds: int = DEFAULT_GRACE_SECONDS,
-             gone_timeout: float = DEFAULT_GONE_TIMEOUT_SECONDS, cgroup_path: str | None = None) -> StopResult:
+             gone_timeout: float = DEFAULT_GONE_TIMEOUT_SECONDS, cgroup_path: str | None = None,
+             labels: Mapping[str, str] | None = None) -> StopResult:
+        """Stop and remove the container; with `labels`, only one that carries every one of them (C4)."""
         try:
-            return self._stop(ref, grace_seconds, gone_timeout, cgroup_path)
+            return self._stop(ref, grace_seconds, gone_timeout, cgroup_path, labels)
         except _Refused as refused:
             return StopResult("refused", refused.refusal.message + "; the container is not known to be gone",
                               refusal=refused.refusal)
 
-    def _stop(self, ref: str, grace_seconds: int, gone_timeout: float, cgroup_path: str | None) -> StopResult:
+    def _stop(self, ref: str, grace_seconds: int, gone_timeout: float, cgroup_path: str | None,
+              labels: Mapping[str, str] | None = None) -> StopResult:
         if type(grace_seconds) is not int or grace_seconds < 0:
             raise ValueError("grace_seconds must be a whole number of seconds, 0 or more")
         if cgroup_path is not None and not _HOST_PATH.fullmatch(cgroup_path):
             raise ValueError("cgroup_path is not a cgroup path")
         info = self._inspect(ref)
         exit_code = None
+        if info is not None and labels is not None and not self._carries(info, labels):
+            return StopResult("stop_failed", f"a container named {ref} exists but its labels are not this run's; it "
+                              "was left alone. Hold its slot and tell the owner")
         if info is not None:
             state = info.get("State") or {}
             cgroup_path = cgroup_path or state.get("CgroupPath") or None
@@ -757,8 +777,17 @@ class ContainerRuntime:
                 return StopResult("stop_failed", f"not gone {gone_timeout:g} s after the kill: {state.detail}; "
                                   "hold its slot and tell the owner", exit_code)
             self.sleep(self.poll_seconds)
-            if self._inspect(ref) is not None:
+            again = self._inspect(ref)
+            if again is not None:
+                if labels is not None and not self._carries(again, labels):
+                    return StopResult("stop_failed", f"a container named {ref} that is not this run's appeared; it "
+                                      "was left alone. Hold its slot and tell the owner", exit_code)
                 self._remove(ref)
+
+    @staticmethod
+    def _carries(info: Mapping, labels: Mapping[str, str]) -> bool:
+        found = (info.get("Config") or {}).get("Labels")
+        return isinstance(found, dict) and all(found.get(name) == value for name, value in labels.items())
 
     def attach_arguments(self, ref: str) -> list[str]:
         """C2: a local command that streams the container's output (`podman logs --follow`, from its
@@ -774,24 +803,37 @@ class ContainerRuntime:
         """Kill whatever is left in the container and remove it."""
         self._podman(["rm", "--force", "--time=0", ref])
 
-    # -- health monitor check 1 (CS-5)
-    def sweep_orphans(self, live_run_ids: Iterable[str], *, grace_seconds: int = DEFAULT_GRACE_SECONDS,
-                      gone_timeout: float = DEFAULT_GONE_TIMEOUT_SECONDS) -> SweepReport:
-        live = set(live_run_ids)
+    # -- health monitor check 1 (CS-5), and C4's recovery listing
+    def list_project(self) -> list[dict] | Refusal:
+        """Every container carrying this project's label (`podman ps --all`), or a Refusal (podman unusable)."""
         try:
             listing = self._podman(["ps", "--all", f"--filter=label={PROJECT_LABEL}={self.project_id}",
                                     "--format=json"])
             if listing.returncode != 0:
-                return SweepReport(refusal=Refusal("podman_failed", "podman could not list containers: "
-                                                   + _first_line(listing.stderr)))
+                return Refusal("podman_failed", "podman could not list containers: " + _first_line(listing.stderr))
             try:
                 rows = json.loads(listing.stdout or "[]")
             except ValueError:
                 rows = None
             if not isinstance(rows, list):
-                return SweepReport(refusal=Refusal("podman_failed", "podman's container list was not readable"))
+                return Refusal("podman_failed", "podman's container list was not readable")
         except _Refused as refused:
-            return SweepReport(refusal=refused.refusal)
+            return refused.refusal
+        return [row for row in rows if isinstance(row, dict) and isinstance(row.get("Labels"), dict)
+                and row["Labels"].get(PROJECT_LABEL) == self.project_id]
+
+    def sweep_orphans(self, live_run_ids: Iterable[str], *, grace_seconds: int = DEFAULT_GRACE_SECONDS,
+                      gone_timeout: float = DEFAULT_GONE_TIMEOUT_SECONDS) -> SweepReport:
+        rows = self.list_project()
+        if isinstance(rows, Refusal):
+            return SweepReport(refusal=rows)
+        return self.stop_orphans(rows, live_run_ids, grace_seconds=grace_seconds, gone_timeout=gone_timeout)
+
+    def stop_orphans(self, rows: Sequence[Mapping], live_run_ids: Iterable[str], *,
+                     grace_seconds: int = DEFAULT_GRACE_SECONDS,
+                     gone_timeout: float = DEFAULT_GONE_TIMEOUT_SECONDS) -> SweepReport:
+        """Stop each listed run container of this project whose run id is not live; report every one."""
+        live = set(live_run_ids)
         entries: list[SweepEntry] = []
         kept = 0
         for row in rows:
@@ -814,7 +856,8 @@ class ContainerRuntime:
             if run_id in live:
                 kept += 1
                 continue
-            result = self.stop(container_id, grace_seconds=grace_seconds, gone_timeout=gone_timeout)
+            result = self.stop(container_id, grace_seconds=grace_seconds, gone_timeout=gone_timeout,
+                               labels={PROJECT_LABEL: self.project_id, RUN_LABEL: run_id})
             outcome = {"gone": "removed"}.get(result.outcome, result.outcome)
             entries.append(SweepEntry(run_id, name, container_id, outcome,
                                       f"no live run {run_id}: {result.detail}"))
