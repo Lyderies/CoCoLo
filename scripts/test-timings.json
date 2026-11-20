@@ -2467,6 +2467,7 @@
  "codex:tests.test_watchdog_lifetime.WatchdogOwnershipTests.test_ack_error_survives_a_later_reap_failure_with_bookkeeping_closed": 0.0,
  "codex:tests.test_watchdog_lifetime.WatchdogOwnershipTests.test_cleanup_failures_still_close_bookkeeping_before_bounded_helper_wait": 0.0,
  "codex:tests.test_watchdog_lifetime.WatchdogOwnershipTests.test_unconfirmed_watchdog_fences_success_and_preserves_an_earlier_abort": 0.0,
+ "codex:tests.test_write_merge": 181.53,
  "root:test_attest": 18.41,
  "root:test_attest.AttestTests.test_a_failed_check_after_the_change_keeps_the_key_file": 0.14,
  "root:test_attest.AttestTests.test_a_failed_signature_records_nothing": 0.14,

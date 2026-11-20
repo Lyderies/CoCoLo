@@ -24,6 +24,15 @@ base is never overwritten, every merge keeps an exact undo):
   was already written, then completed; a path recovery cannot classify is left alone and reported.
 - M3-29 Nothing of COCOLO's left in the owner's repository: `.git` identical after every case, no
   `.cocolo-merge-*` name left behind.
+- The slice-2 adversarial review (NOT READY; F01-F11, S01, C01 and the small items), each finding a
+  test written first: the owner's newest file always stays at its path or the result says where it
+  is (a save by rename just before a delete, an in-place edit of COCOLO's new file, also in the
+  instant before the swap back, a write into an old file after the final check, a real editor
+  process saving while merges run); a SIGKILL at every file-system call of a merge and of an undo
+  (not only the hook points) recovers to all or nothing with nothing left in the folder, in `.git`
+  or in the state folder; a journal this COCOLO cannot read or does not trust is kept with its undo
+  and never acted on; the fence is never left empty and never removes a lock that is not COCOLO's;
+  a moved HEAD, a state-folder failure, new files' umask and a case-only rename are reported plainly.
 
 The folder oracle (`snapshot`): every entry of the working tree (tracked, untracked, ignored) and of
 `.git`, with type, mode, size, inode, modification time and content. Folder modification times are
@@ -1566,6 +1575,41 @@ class ReviewRecoveryTests(ReviewWorkspace):
                 outcomes = wm.recover(self.project, self.state)
                 self.assertEqual(["rolled_back"], [outcome.outcome for outcome in outcomes])
                 self.assert_unchanged(before)
+
+    def test_f06_recovery_after_applied_rolls_back_a_write_into_an_old_copy(self) -> None:
+        base = self.make_repository()
+        candidate = self.candidate(base)
+        before = snapshot(self.project)
+        ended = run_forked(self.candidate_merge(candidate, fault_hook=self.kill_at("applied", None)))
+        self.assertEqual(-signal.SIGKILL, ended)
+        # An editor that held src/app.py open from before the merge writes into it (now the old copy).
+        old = next(path for path in (self.project / "src").iterdir() if path.name.startswith(wm.TEMP_PREFIX))
+        inode = os.lstat(old).st_ino
+        with open(old, "r+b") as handle:
+            handle.write(b"OWNER")
+        outcomes = wm.recover(self.project, self.state)
+        self.assertEqual(["rolled_back"], [outcome.outcome for outcome in outcomes])
+        target = self.project / "src" / "app.py"
+        self.assertEqual(inode, os.lstat(target).st_ino)
+        self.assertEqual(b"OWNER" + b"def main():\n    return 1\n"[5:], target.read_bytes())
+        self.assertEqual([], leftovers(self.project))
+        self.assert_others_unchanged(before, "src/app.py")
+
+    def test_recovery_after_applied_leaves_a_file_the_owner_replaced_since(self) -> None:
+        base = self.make_repository()
+        candidate = self.candidate(base)
+        before = snapshot(self.project)
+        ended = run_forked(self.candidate_merge(candidate, fault_hook=self.kill_at("applied", None)))
+        self.assertEqual(-signal.SIGKILL, ended)
+        target = self.project / "src" / "app.py"
+        save_by_rename(target, b"owner saved after the merge\n")
+        outcomes = wm.recover(self.project, self.state)
+        self.assertEqual([("needs_owner", ("src/app.py",))], [(o.outcome, o.paths) for o in outcomes])
+        self.assertEqual(b"owner saved after the merge\n", target.read_bytes())
+        self.assertEqual([], leftovers(self.project))  # the old copy was exactly the base
+        self.assertFalse((self.project / ".git" / "index.lock").exists())
+        self.assert_merged(before, DEFAULT_CHANGES, DEFAULT_FOLDERS)  # the rest of the merge stands
+        self.assertEqual(b"#!/bin/sh\necho tool 2\n", (self.project / "tool.sh").read_bytes())
 
     def test_f07_a_merge_killed_as_the_fence_appears_leaves_no_lock(self) -> None:
         base = self.make_repository()
