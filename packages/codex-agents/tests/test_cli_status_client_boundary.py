@@ -204,6 +204,28 @@ class StatusCliClientBoundaryTests(unittest.TestCase):
         self.assertEqual(('unknown', 'account_health_unavailable'),
                          (report['account_health']['state'], report['account_health']['reason_code']))
 
+    def test_H1c_4_6_status_says_why_a_stuck_account_is_not_restarting(self):
+        clean = {name: self.lane() for name in ('signature', 'claims', 'observations', 'ingress', 'billing',
+                                                 'probe_worker')}
+        faulted = {**clean, 'claims': self.lane(faulted=True, last_failure={
+            'cause': 'claim_owner_failed', 'type': 'RuntimeError', 'at_ms': 1_700_000_000_000})}
+        for decision, words in (
+                ({'action': 'wait', 'lane': 'claims', 'cause': 'claim_owner_failed',
+                  'held': {'run_slots': ['a', 'b'], 'probes': [], 'lanes': {}}}, ('not restarting', '2 project')),
+                ({'action': 'suppressed', 'lane': 'claims', 'cause': 'claim_owner_failed', 'held': {}},
+                 ('restarted itself less than an hour ago',))):
+            with self.subTest(action=decision['action']):
+                self.collector.account_restart = decision
+                code, report = self.status_with(faulted)
+                self.assertEqual((0, True), (code, report['ready']))
+                text = ' '.join(report['account_health']['attention'])
+                for word in words:
+                    self.assertIn(word, text)
+                self.assertNotIn("'a'", text)  # project identifiers are not shown
+        self.collector.account_restart = ['malformed']
+        code, report = self.status_with(faulted)
+        self.assertEqual(('faulted', True), (report['account_health']['state'], report['ready']))
+
     def test_ST1_account_services_still_starting_say_starting(self):
         self.collector.account_services = 'starting'
         self.hint.unlink()
