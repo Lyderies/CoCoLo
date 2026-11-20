@@ -484,6 +484,14 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "gate_policy.py::runner": {
+   "checks": 1,
+   "ends": "per request: how deeply one command nests a runner (MAX_NESTING); computed for one hook request, nothing kept"
+  },
+  "gate_policy.py::sequence": {
+   "checks": 1,
+   "ends": "per request: brace alternatives of one Glob/Grep pattern (MAX_PATTERN_ALTERNATIVES); the list lives only for that request"
+  },
   "gate_policy.py::shell": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
