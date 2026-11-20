@@ -57,6 +57,7 @@ from .collector_client import (
 )
 from .active_run_capacity import CAPACITY_OBJECTS, CAPACITY_SCHEMA, CAPACITY_PARENT_SCHEMA, CAPACITY_COMPLETIONS_SCHEMA, CAPACITY_EXECUTIONS_SCHEMA
 from .active_run_capacity import INSTALLED_ACTIVE_RUN_LIMITS
+from .learning_cycle_core import LEARNING_RETENTION_MS, MAX_CASES as CYCLE_MAX_CASES, MAX_OUTCOMES as CYCLE_MAX_OUTCOMES
 from .active_run_capacity import CRASHED_CLAIM_GRACE_MS as CRASHED_CLAIM_GRACE_MS, crashed_claim
 from .active_run_capacity import LEGACY_RUN_MAX_MS as LEGACY_RUN_MAX_MS
 from .owned_execution import ExecutionCustodyError, OwnedExecutionKey, OwnedExecutionRegistry
@@ -156,7 +157,7 @@ from .account_claim_contracts import (
 # The one line `install_owner_public_key` writes; the allowed-signers file holds nothing else.
 # The owner's allowed-signers file is read whole up to this size; anything longer refuses.
 OWNER_KEY_REPLACE_HINT = "run ./setup.sh and choose Configure, then Replace a lost owner key"
-DEFAULT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
+DEFAULT_RETENTION_MS = LEARNING_RETENTION_MS
 # A project whose learning history moved to its own project store. The ledger
 # keeps that project's account rows and account-owned evidence; it accepts no
 # further learning records for it.
@@ -256,6 +257,28 @@ MAX_SUMMARY_KEEP_DAYS = 3650
 EVENT_SWEEP_BATCH = 500
 # How many windows of rows it cannot summarise a sweep reads past before it stops.
 EVENT_SWEEP_SCAN_FACTOR = 20
+
+# O0c P8: the learning cycle reads LEARNING_RETENTION_MS of outcomes, and the cases and candidates of that
+# window plus the ones kept for a reason; the collector sweep removes the rest, a small batch at a time.
+LEARNING_SWEEP_BATCH = 100
+
+
+def _kept_learning_sql(alias: str) -> str:
+    """The cases and candidates the sweep never removes, and the cycle reads whatever their age: a case in a
+    controlled corpus (promoted policy), and any record a later record names (a record link from it: the case
+    another case supersedes, the case or candidate of an assignment, trial, comparison or promotion), a granted
+    candidate, an owner-attested record."""
+    link = (f"EXISTS (SELECT 1 FROM record_links l WHERE l.project_id={alias}.project_id "
+            f"AND l.from_record_id={alias}.record_id)")
+    grant = (f"({alias}.record_type='candidate' AND EXISTS (SELECT 1 FROM consumed_grants g "
+             f"WHERE g.project_id={alias}.project_id AND g.candidate_digest="
+             f"json_extract(CAST({alias}.content AS TEXT),'$.candidate_digest')))")
+    attested = (f"EXISTS (SELECT 1 FROM owner_attestations a WHERE a.project_id={alias}.project_id "
+                f"AND a.subject_record_id={alias}.record_id)")
+    controlled = (f"({alias}.record_type='evaluation_case' AND "
+                  f"json_extract(CAST({alias}.content AS TEXT),'$.corpus_state')!='development')")
+    return f"({controlled} OR {link} OR {grant} OR {attested})"
+
 _DAY_MS = 24 * 60 * 60 * 1000
 
 
@@ -2339,6 +2362,37 @@ class LearningLedger:
                 return 0
             now = self._clock_ms() if now_ms is None else now_ms
             return purge_old_observations(self, now, batch) + purge_finished_opens(self, now, batch)
+
+    def sweep_learning_retention(self, *, now_ms: int | None = None, batch: int = LEARNING_SWEEP_BATCH) -> int:
+        """Remove up to `batch` unpromoted cases and candidates past the learning retention; returns how many.
+
+        O0c P8, for projects whose learning is still in the ledger (one moved to its project store is that
+        store's own cleanup). Kept, however old: a case in a controlled corpus, and any record a later record
+        names, a granted candidate, an owner-attested record (`_kept_learning_sql`), so the cycle's window and
+        this sweep agree. The kept rows are left out in the query, so they never use up a batch. Outcomes are
+        not touched; the owner's learning-expire removes those. Skipped while a reader or a transaction is
+        active.
+        """
+        with self._held():
+            if self._readers() or self._connection.in_transaction:
+                return 0
+            now = self._clock_ms() if now_ms is None else now_ms
+            rows = self._connection.execute(
+                "SELECT r.project_id,r.record_id FROM records r "
+                "JOIN projects p ON p.project_id=r.project_id AND p.status='active' "
+                "WHERE r.record_type IN ('evaluation_case','candidate') AND r.ingested_at_ms<=? "
+                f"AND NOT {_kept_learning_sql('r')} "
+                "AND NOT EXISTS (SELECT 1 FROM additive_migrations m WHERE m.feature_key=?||r.project_id) "
+                "ORDER BY r.project_id,r.source_sequence LIMIT ?",
+                (now - LEARNING_RETENTION_MS, LEARNING_MOVED_KEY, batch),
+            ).fetchall()
+            if not rows:
+                return 0
+            with self._account_transaction():
+                self._connection.executemany(
+                    "DELETE FROM records WHERE project_id=? AND record_id=?",
+                    [(str(row[0]), str(row[1])) for row in rows])
+            return len(rows)
 
     def sweep_event_retention(self, *, now_ms: int | None = None, batch: int = EVENT_SWEEP_BATCH) -> int:
         """Summarise, then remove, up to `batch` expired raw events; returns how many were removed.
@@ -11059,12 +11113,16 @@ class LearningLedger:
                 raise LedgerError("project binding is not active")
             if self._learning_moved_locked(project_id):
                 raise LedgerError(LEARNING_MOVED_ERROR)
+            # The window (O0c P8): outcomes of the retention, and the cases and candidates of it and the
+            # ones kept for a reason, never all time; the collector sweep removes the rest.
+            horizon = as_of_ms - LEARNING_RETENTION_MS
+            windowed = f" AND (ingested_at_ms>? OR {_kept_learning_sql('records')})"
             outcome_rows = self._connection.execute(
                 "SELECT content,content_digest FROM records WHERE project_id=? "
-                "AND record_type='outcome' ORDER BY source_sequence LIMIT 10001",
-                (project_id,),
+                "AND record_type='outcome' AND ingested_at_ms>? ORDER BY source_sequence LIMIT ?",
+                (project_id, horizon, CYCLE_MAX_OUTCOMES + 1),
             ).fetchall()
-            if len(outcome_rows) > 10_000:
+            if len(outcome_rows) > CYCLE_MAX_OUTCOMES:
                 raise LedgerError("learning cycle evidence exceeds its bounded window")
             outcome_pairs = [
                 (json.loads(bytes(row["content"])), row) for row in outcome_rows
@@ -11089,8 +11147,8 @@ class LearningLedger:
                 json.loads(bytes(row[0]))["source_outcome_id"]
                 for row in self._connection.execute(
                     "SELECT content FROM records WHERE project_id=? "
-                    "AND record_type='evaluation_case'",
-                    (project_id,),
+                    "AND record_type='evaluation_case'" + windowed,
+                    (project_id, horizon),
                 ).fetchall()
             }
             mined = []
@@ -11131,10 +11189,10 @@ class LearningLedger:
             )
             controlled_rows = self._connection.execute(
                 "SELECT content FROM records WHERE project_id=? "
-                "AND record_type='evaluation_case' LIMIT 20001",
-                (project_id,),
+                "AND record_type='evaluation_case'" + windowed + " LIMIT ?",
+                (project_id, horizon, CYCLE_MAX_CASES + 1),
             ).fetchall()
-            if len(controlled_rows) > 20_000:
+            if len(controlled_rows) > CYCLE_MAX_CASES:
                 raise LedgerError("learning case corpus exceeds its bounded window")
             all_cases = [json.loads(bytes(row["content"])) for row in controlled_rows]
             protected_lineages = {
@@ -11196,8 +11254,8 @@ class LearningLedger:
                 json.loads(bytes(row[0]))["candidate_digest"]
                 for row in self._connection.execute(
                     "SELECT content FROM records WHERE project_id=? "
-                    "AND record_type='candidate'",
-                    (project_id,),
+                    "AND record_type='candidate'" + windowed,
+                    (project_id, horizon),
                 ).fetchall()
             }
             groups: dict[tuple[str, str], list[tuple[dict[str, Any], str]]] = {}
@@ -12512,9 +12570,10 @@ class CollectorServer:
             # M4b E1b's owner thread exists this runs where the other account sweeps run, under the ledger lock.
             sweeps = [(self.ledger.sweep_worker_results, (LedgerError, OSError, sqlite3.Error)),
                       (self.ledger.sweep_event_retention, loose),
+                      (self.ledger.sweep_learning_retention, loose),  # O0c P8: cases and candidates past the window
                       (self.ledger.sweep_account_retention, loose),
                       (release_holds, loose)]
-            for sweep, errors in sweeps[3:] if holds_only else sweeps:
+            for sweep, errors in sweeps[4:] if holds_only else sweeps:
                 if self._sweeps_stop.is_set():
                     return None
                 with contextlib.suppress(*errors):

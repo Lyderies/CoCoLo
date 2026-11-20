@@ -270,6 +270,7 @@ class ProjectHistory:
         self._result_key = None
         self._result_capacity = None
         self._result_expiry_cursor: int | None = None
+        self._learning_purge_cursor = 0  # Scheduling only, like the cursor above; a restart starts over.
         self._lease_expiry_cursor: int | None = None
         # Where the finished-row purge goes on from (0.3.4 R1g): scheduling state only, like the above.
         self._purge_cursors: dict[str, int | None] = {"reservations": None, "leases": None, "orchestrations": None, "earlier": None}
@@ -2184,10 +2185,13 @@ class ProjectHistory:
             except (sqlite3.Error, OSError):
                 if failure is None:
                     failure = "history_unavailable"
+        from .project_learning_owner import LEARNING_PURGE_BATCH, purge_old_learning
         from .project_qa_checks import purge_old_qa
         # Each removal has its turn whatever another one meets (0.3.4 R1g).
         for purge in (self._purge_finished_results, self._orchestration_owner().purge_closed,
-                      lambda now, limit: purge_old_qa(self, now, limit)):
+                      lambda now, limit: purge_old_qa(self, now, limit),
+                      # Cases and candidates past the learning retention, in batches of their own (O0c P7).
+                      lambda now, limit: purge_old_learning(self, now, LEARNING_PURGE_BATCH)):
             try:
                 purge(now, limit)
             except HistoryError as exc:

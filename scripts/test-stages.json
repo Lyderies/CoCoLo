@@ -127,6 +127,7 @@
  "codex:tests.test_learning_migration": "integration",
  "codex:tests.test_learning_outcome_pages": "unit",
  "codex:tests.test_learning_qa_upgrade": "unit",
+ "codex:tests.test_learning_retention": "integration",
  "codex:tests.test_learning_source_image": "integration",
  "codex:tests.test_learning_source_image_legacy": "integration",
  "codex:tests.test_learning_source_transfer": "integration",

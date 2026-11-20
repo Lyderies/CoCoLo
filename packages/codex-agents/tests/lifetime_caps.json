@@ -643,7 +643,8 @@
   },
   "learning_cycle_core.py::_snapshot": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
+   "test": "test_P7_more_cases_mined_over_the_retention_than_the_case_limit_never_fail_the_cycle"
   },
   "learning_cycle_core.py::plan_learning_cycle": {
    "checks": 1,
@@ -651,7 +652,8 @@
   },
   "learning_cycle_core.py::select_mining_outcomes": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
+   "test": "test_P7_more_cases_mined_over_the_retention_than_the_case_limit_never_fail_the_cycle"
   },
   "learning_eligibility.py::check_candidate_eligibility": {
    "checks": 2,
@@ -888,6 +890,16 @@
   "learning_store.py::recorded_owner_key": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+  },
+  "learning_store.py::run_learning_cycle": {
+   "checks": 4,
+   "ends": "O0c P8: the legacy ledger cycle reads outcomes of the retention window and the cases and candidates of it plus the kept ones; the collector sweep (learning_store.sweep_learning_retention, bounded batches, only projects whose learning has not moved to the project store) removes unpromoted, unreferenced cases and candidates past it; outcomes still go by the owner's learning-expire",
+   "test": "test_P8_more_cases_mined_over_the_retention_than_the_case_limit_never_fail_the_cycle"
+  },
+  "learning_store.py::sweep_learning_retention": {
+   "checks": 1,
+   "ends": "O0c P8: the legacy ledger cycle reads outcomes of the retention window and the cases and candidates of it plus the kept ones; the collector sweep (learning_store.sweep_learning_retention, bounded batches, only projects whose learning has not moved to the project store) removes unpromoted, unreferenced cases and candidates past it; outcomes still go by the owner's learning-expire",
+   "test": "test_P8_the_collector_sweep_removes_unpromoted_cases_and_candidates_past_the_retention"
   },
   "liveness_clock.py::_integer": {
    "checks": 1,
@@ -1169,15 +1181,23 @@
   },
   "project_learning_live.py::read_cycle_rows": {
    "checks": 8,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
+   "test": "test_P7_candidates_past_the_retention_do_not_count_against_the_corpus_limit"
   },
   "project_learning_live.py::take": {
    "checks": 1,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
+   "test": "test_P7_more_cases_mined_over_the_retention_than_the_case_limit_never_fail_the_cycle"
   },
   "project_learning_owner.py::corpus_records": {
    "checks": 2,
-   "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept (case review reads cases after now minus the retention, plus every promoted one)",
+   "test": "test_P7_case_review_reads_a_window_not_all_cases"
+  },
+  "project_learning_owner.py::purge_old_learning": {
+   "checks": 1,
+   "ends": "O0c P7: the cycle and case review read the retention window (learning_cycle_core.LEARNING_RETENTION_MS, 90 days, one constant, owner-changeable); unpromoted cases and candidates past it are removed by the project service's cleanup pass (project_learning_owner.purge_old_learning, bounded batches); promoted policy and anything a live record names are kept",
+   "test": "test_P7_the_cleanup_pass_removes_unpromoted_cases_and_candidates_past_the_retention"
   },
   "project_learning_owner.py::record_feedback": {
    "checks": 2,
