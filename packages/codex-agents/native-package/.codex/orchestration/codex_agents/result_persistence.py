@@ -825,6 +825,15 @@ class ResultPersistenceLane:
                     self._requests.close()
                 self._incoming.put_nowait(None)
 
+    def faulted(self):
+        """O10 D13: whether the writer stopped on its own (never after a normal close).
+
+        A faulted lane refuses every later call for good, so its service stops itself and the next
+        start settles from the store. A plain flag read under the lane's lock; the writer only sets it.
+        """
+        with self._lock:
+            return self._fault
+
     def _history(self):
         if self._store is None:
             store = self._open()

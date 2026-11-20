@@ -136,7 +136,7 @@ def service_history(directory, project_id, **options):
 
 def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_STOP_NS, bundle_root=None,
                   liveness=LIVENESS, retaining_idle_stop_ns=RETAINING_IDLE_STOP_NS):
-    """Run the host until a signal, idleness or withdrawal; return a closed report."""
+    """Run the host until a signal, idleness, withdrawal or a writer fault; return a closed report."""
 
     state = CollectorPaths(state_root)
     root = _canonical_project_root(Path(project_root))
@@ -165,7 +165,7 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
                                   if bundle_root is None else Path(bundle_root))
     except HistoryError as error:
         return {'ready': False, 'reason_code': error.reason_code}
-    stopping, checked = [], [0.0]
+    stopping, checked, faulted = [], [0.0], []
     if stopped is None:
         for signum in (signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, lambda *_: stopping.append(True))
@@ -174,6 +174,15 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
     def finished():
         if stopped():
             return True
+        if host.faulted():
+            # O10 D13: its result writer faulted, so every later store call is refused for good.
+            # It stops, holding or not, by the normal stop path below, after one more step: the lane
+            # marked its jobs `unknown` with the fault, so that step ends the runs waiting on it
+            # (run_unavailable, O10 D12) and their status shows the fault before the service goes.
+            if faulted:
+                return True
+            faulted.append(True)
+            return False
         if time.monotonic() - checked[0] >= 1:
             checked[0] = time.monotonic()
             # Stop when idle, or when the state under this host has been removed.
@@ -192,7 +201,14 @@ def serve_project(state_root, project_root, *, stopped=None, idle_stop_ns=IDLE_S
         end = time.monotonic() + 10
         while not host.threads_stopped() and time.monotonic() < end:
             time.sleep(0.01)
-        # A run it still held (a running child it stopped, a finished one not yet
-        # released) is settled now on kernel evidence, or by the next host.
-        host.settle_lost_runs()
+        if faulted:
+            # Nothing is settled or released by a service whose writer faulted: what its store
+            # committed is not known here. The next host settles its runs and reconciles the store.
+            host.settle_lost_runs_later()
+        else:
+            # A run it still held (a running child it stopped, a finished one not yet
+            # released) is settled now on kernel evidence, or by the next host.
+            host.settle_lost_runs()
+    if faulted:
+        return {'ready': True, 'stopped': True, 'reason_code': 'writer_fault'}
     return {'ready': True, 'stopped': True}
