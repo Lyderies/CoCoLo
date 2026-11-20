@@ -2061,6 +2061,12 @@ class LearningLedger:
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS records_type_project ON records(record_type, project_id)"
             )
+            # O0b B0-1 (narrowed): the open-time cap reads only live pending bindings, so expired ones
+            # piling up never slow it (additive, as above).
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS host_run_bindings_live ON host_run_bindings(project_id, expires_at_ms) "
+                "WHERE binding_state='pending'"
+            )
             self._record_first_owner_key()
             self.state.mark_initialized()
             self._reconcile_managed_files()

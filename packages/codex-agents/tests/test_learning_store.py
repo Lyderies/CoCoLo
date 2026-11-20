@@ -335,6 +335,8 @@ class LearningStoreTests(unittest.TestCase):
                 self.ledger._connection.execute("DROP TABLE " + name)
             self.ledger._connection.execute("DROP TABLE launch_claims")
             self.ledger._connection.execute("DROP TABLE orchestration_checkpoints")
+            # O0b B0-1 (requirement): 0.4.0's additive index on binding_state is newer than schema five.
+            self.ledger._connection.execute("DROP INDEX IF EXISTS host_run_bindings_live")
             for column in (
                 "deadline_observed",
                 "last_progress_at_ms",

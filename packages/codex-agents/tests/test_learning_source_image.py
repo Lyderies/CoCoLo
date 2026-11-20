@@ -318,12 +318,14 @@ class LearningSourceImageTests(unittest.TestCase):
         self.assertIs(False, self.capture()['learning_ready'])
 
     def test_callback_budget_bounds_global_pending_scan_and_preserves_owner(self):
+        # Corrected for O0b B0-1 (requirement): the live-binding index means the pending scan reads only
+        # pending rows, so the rows that load it are pending (and expired), not consumed.
         for number in range(200):
             self.connection.execute('INSERT INTO host_run_bindings(project_id,handle_digest,run_id,'
                 'assignment_digest,task_digest,route_digest,configuration_digest,client_version,'
                 'created_at_ms,expires_at_ms,binding_state) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                 (self.fixture.project_b_id, str(number).zfill(64), str(number), 'b' * 64, 'c' * 64,
-                 'd' * 64, 'e' * 64, 'fixture', 1, 2, 'consumed')).close()
+                 'd' * 64, 'e' * 64, 'fixture', 1, 2, 'pending')).close()
         before = self.settings()
         self.refuse('history_learning_capacity', lambda: self.capture(limits=SQLReadLimits(1, 1000, 1_048_576)))
         self.assertEqual(before, self.settings())
