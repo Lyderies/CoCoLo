@@ -198,6 +198,31 @@ class RunHoldTests(ActiveRunCapacityTests):
         with self.assertRaisesRegex(LedgerError, "project_has_active_launch_capacity"):
             self.ledger.delete_project(self.project, now_ms=now)
 
+    def crashed_release(self):
+        self.case.claim()
+        row = self.rows()[0]
+        now = row["deadline_at_ms"] + learning_store.CRASHED_CLAIM_GRACE_MS + 1
+        self.assertEqual(1, self.sweep(now, row["clock_reference_ns"] - 1))
+        return row
+
+    def test_RS_A_F4_a_caller_time_never_moves_deletion_past_the_caution_day(self):
+        """Round 1 F4: deletion's caution uses the ledger's clock, never a caller-supplied time."""
+        row = self.crashed_release()
+        future = row["claimed_at_ms"] + learning_store.LEGACY_RUN_MAX_MS + 1
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=row["claimed_at_ms"] + 1):
+            with self.assertRaisesRegex(LedgerError, "project_has_active_launch_capacity"):
+                self.ledger.delete_project(self.project, now_ms=future)
+
+    def test_RS_A_F4_deletion_after_the_day_removes_the_project_s_register_rows(self):
+        """Round 1 F4 (draft 4b item 1): capacity rows, bindings and register rows go together."""
+        row = self.crashed_release()
+        after = row["claimed_at_ms"] + learning_store.LEGACY_RUN_MAX_MS + 1
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=after), \
+                mock.patch.object(self.ledger, "_holds_account_restrictions_locked", return_value=False):
+            self.ledger.delete_project(self.project, now_ms=after)
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM run_holds WHERE project_id=?", (self.project,)).fetchone()[0])
+
     def test_RS_A_1_each_account_hold_has_its_register_row(self):
         self.case.claim()
         holds = [dict(r) for r in self.ledger._connection.execute(
