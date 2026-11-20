@@ -2050,6 +2050,12 @@ class LearningLedger:
             self._connection = self._connect()
             self._connection.share_with_lock(self._lock, waits=self._lock_waits)
             self._migrate()
+            # O10 AP: after every migration path (each returns early), one additive index lets an
+            # append find the project's latest observed time from an index end, not by reading every
+            # record. No schema version change: an older version opens the ledger and ignores it.
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS records_observed_at ON records(project_id, observed_at_ms)"
+            )
             self._record_first_owner_key()
             self.state.mark_initialized()
             self._reconcile_managed_files()
@@ -9941,9 +9947,11 @@ class LearningLedger:
                 "source_sequence": int(existing["source_sequence"]),
             }
         row = self._connection.execute(
-            "SELECT COALESCE(MAX(source_sequence),0), COALESCE(MAX(observed_at_ms),0) "
-            "FROM records WHERE project_id=?",
-            (project_id,),
+            # O10 AP: two lookups, each answered from one end of an index (the combined form reads
+            # every one of the project's records); the results are the same.
+            "SELECT COALESCE((SELECT MAX(source_sequence) FROM records WHERE project_id=?),0), "
+            "COALESCE((SELECT MAX(observed_at_ms) FROM records WHERE project_id=?),0)",
+            (project_id, project_id),
         ).fetchone()
         sequence = int(row[0]) + 1
         late = int(checked.get("observed_at_ms", timestamp) < int(row[1]))

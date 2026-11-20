@@ -107,7 +107,15 @@ class AppendLookupTests(unittest.TestCase):
         check(other, 'ap2_other_high', 99_000)  # another project's larger maximum does not reach this one
         self.assertEqual(0, check(self.project, 'ap2_after_other', 13_000))
 
+    def reopen(self):
+        self.ledger.close()
+        self.ledger = LearningLedger(self.store.state)
+        self.store.ledger = self.ledger
+
     def test_AP3_a_ledger_without_the_index_gets_it_on_open_and_nothing_else_changes(self):
+        # Reopened once first: an open also completes other open-time objects the fixture's first
+        # open had not (test correction, recorded), so only the index's effect is compared.
+        self.reopen()
         connection = self.ledger._connection
         connection.execute('DROP INDEX IF EXISTS records_observed_at')  # as an older version leaves it
 
@@ -115,9 +123,7 @@ class AppendLookupTests(unittest.TestCase):
             return sorted(tuple(row) for row in self.ledger._connection.execute(
                 "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name != 'records_observed_at'"))
         before, version = schema(), connection.execute('PRAGMA user_version').fetchone()[0]
-        self.ledger.close()
-        self.ledger = LearningLedger(self.store.state)
-        self.store.ledger = self.ledger
+        self.reopen()
         names = {row[0] for row in self.ledger._connection.execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='records'")}
         self.assertIn('records_observed_at', names)
