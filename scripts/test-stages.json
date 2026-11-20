@@ -184,6 +184,7 @@
  "codex:tests.test_routing": "integration",
  "codex:tests.test_run_driver_retries": "unit",
  "codex:tests.test_run_holds": "integration",
+ "codex:tests.test_run_network": "integration",
  "codex:tests.test_run_provenance": "integration",
  "codex:tests.test_runtime_release": "unit",
  "codex:tests.test_service_harness": "integration",
