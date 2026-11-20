@@ -188,6 +188,7 @@
  "codex:tests.test_service_queue": "unit",
  "codex:tests.test_service_transport": "integration",
  "codex:tests.test_session_guard": "unit",
+ "codex:tests.test_shutdown_watchdog": "integration",
  "codex:tests.test_signature_execution": "integration",
  "codex:tests.test_signature_input_wire": "integration",
  "codex:tests.test_signature_inputs": "integration",
