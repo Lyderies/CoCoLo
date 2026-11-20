@@ -122,6 +122,17 @@ class SignatureWorkerPoolTests(unittest.TestCase):
             time.sleep(0.002)
         return handle
 
+    def test_C4_an_offer_that_fails_shows_the_pool_faulted_without_another_poll(self):
+        pool = self.make_pool()
+        self.capture(0)
+        with mock.patch.object(pool._slots[0].incoming, 'put_nowait', side_effect=RuntimeError('a secret')):
+            with self.assertRaises(BaseException):
+                pool.offer_next()
+        self.pool = None  # a faulted pool keeps its intake for an explicit shutdown
+        view = pool.health.view()
+        self.assertEqual((True, 'signature_offer_failed', 'RuntimeError'),
+                         (view['faulted'], view['last_failure']['cause'], view['last_failure']['type']))
+
     def test_H1a_an_internal_failure_is_noted_with_its_type_and_no_fault(self):
         pool = self.make_pool()
         with mock.patch.object(execution, '_execute_signature_job', side_effect=RuntimeError('a secret')):
