@@ -87,6 +87,12 @@ class LedgerBusyAnswerTests(AccountApiTests):
         self.assertFalse(account_claim_jobs.completion_fault(SQLReadError("sql_read_busy")))
         self.assertTrue(account_claim_jobs.completion_fault(RuntimeError("x")))
 
+    def test_E1a_2_a_busy_open_is_answered_open_account_busy_at_the_shared_boundary(self):
+        from codex_agents import account_service
+        self.assertEqual("open_account_busy", account_service.busy_reason("account.open_host_run"))
+        self.assertEqual("account_busy", account_service.busy_reason("account.claim_launch"))
+        self.assertEqual("account_busy", account_service.busy_reason(None))  # not yet decoded
+
     def test_E1a_2_every_busy_answer_has_its_own_next_step(self):
         for reason in ("account_busy", "open_account_busy"):
             with self.subTest(reason=reason):
