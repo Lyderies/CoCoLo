@@ -687,6 +687,15 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.tampered_evidence("crashed", lambda raw: raw[:-1])
         self.refused()
 
+    def test_RS_A_G11_evidence_stored_in_another_form_that_still_hashes_to_its_receipt_opens(self):
+        """Round 2 G11: the register check's fast path (the stored bytes hash to the receipt) never narrows what
+        opens: evidence stored with other spacing, whose decoded form still hashes to its receipt, still opens
+        everywhere, as before."""
+        import json
+        self.crashed_release()
+        self.tampered_evidence("crashed", lambda raw: json.dumps(json.loads(raw), indent=1))
+        self.accepted()
+
     def test_RS_A_G1_pruned_evidence_unknown_times_and_pruned_sources_still_open(self):
         """Round 2 G1: what the register may legitimately lack (pruned evidence, history's unknown times, a
         tombstone whose source retention removed) is still accepted everywhere. (requirement) Round 2 G10

@@ -3571,11 +3571,14 @@ class LearningLedger:
                 "WHEN consumed_at_ms IS NULL THEN 'pending' ELSE 'terminal' END "
                 "WHERE binding_state IS NULL"
             )
+            # O0b RS-A round 2 G11: this layout step runs at every open; it backfills only the rows still missing
+            # a value (each writer sets all three), so an open never rewrites every binding.
             self._connection.execute(
                 "UPDATE host_run_bindings SET "
                 "observation_started_at_ms=COALESCE(observation_started_at_ms,created_at_ms),"
                 "last_progress_at_ms=COALESCE(last_progress_at_ms,created_at_ms),"
-                "deadline_observed=COALESCE(deadline_observed,0)"
+                "deadline_observed=COALESCE(deadline_observed,0) "
+                "WHERE observation_started_at_ms IS NULL OR last_progress_at_ms IS NULL OR deadline_observed IS NULL"
             )
             if current < 6:
                 self._execute_schema_script_locked(
