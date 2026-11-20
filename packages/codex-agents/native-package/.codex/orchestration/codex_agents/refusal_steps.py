@@ -62,8 +62,16 @@ FAMILY = {
 }
 
 
+# A result that fails its contract (these codes share no family word).
+RESULT_STEP = ("The result does not meet its contract: correct it as the reason says; one structural repair is "
+               "allowed, with its repair_receipt.")
+
+
 def next_step(reason_code: object) -> str:
     """The plain next step for a refusal's fixed reason code."""
+    from .contracts import RESULT_VALIDATION_REASON_CODES
     if type(reason_code) is not str:
         return DEFAULT
+    if reason_code in RESULT_VALIDATION_REASON_CODES:
+        return EXACT.get(reason_code) or RESULT_STEP
     return EXACT.get(reason_code) or FAMILY.get(reason_code.split('_', 1)[0], DEFAULT)

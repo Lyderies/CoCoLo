@@ -12,6 +12,7 @@ from unittest import mock
 
 from tests.support import BUNDLE_ROOT, ORCHESTRATION_ROOT, TEMP_ROOT
 
+from codex_agents import refusal_steps
 from codex_agents.contracts import (
     EVIDENCE_OUTCOME_SEVERITY,
     EVIDENCE_OUTCOMES,
@@ -211,6 +212,7 @@ class ContractTests(unittest.TestCase):
                 "reason_code": "missing_evidence",
                 "repair_receipt": None,
                 "learning_ready": None,
+                "next_step": refusal_steps.RESULT_STEP,  # S1-H1b: every refusal names its next step
             },
             report,
         )

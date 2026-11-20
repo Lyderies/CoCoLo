@@ -218,8 +218,10 @@ class DispatchDeliveryCliTests(unittest.TestCase):
         probe = {}
         code, response, ledger, maintenance, dispatched, _, owner, opened = self.invoke(
             self.report(), provider='codex', probe=probe, client_error=DispatchError('dispatch_not_authorized'))
+        from codex_agents.refusal_steps import next_step  # S1-H1b: every refusal names its next step
         self.assertEqual((2, {'ready': False, 'error': 'dispatch unavailable',
-                             'reason_code': 'dispatch_not_authorized'}), (code, response))
+                             'reason_code': 'dispatch_not_authorized',
+                             'next_step': next_step('dispatch_not_authorized')}), (code, response))
         probe['client'].assert_called_once()
         for operation in (opened, owner, dispatched, ledger.close, maintenance.resume):
             operation.assert_not_called()
