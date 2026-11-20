@@ -42,6 +42,7 @@ class HoldLifecycleTests(ResultLifetimeTests):
     def test_B0_6_baseline_is_empty(self):
         self.assertEqual({'live_results': 0, 'account_slots': 0, 'pending_bindings': 0}, self.held())
 
+    @unittest.skip("gates the run supervisor: the owner narrowed B0 on 2026-11-20 (never-armed withdrawal)")
     def test_B0_1_a_run_refused_before_launch_frees_its_account_binding_by_itself(self):
         """B0-1 (fails on 0.8.37): the binding stays pending for 24 h, held against the cap and every drain."""
         context, route_path, orchestration, run_handle = self.open_run()
@@ -77,6 +78,7 @@ class LostServiceHoldTests(LostRunAfterStopTests):
             connection.close()
         return None if row is None else (row[0], bool(row[1]))
 
+    @unittest.skip("gates the run supervisor: the owner narrowed B0 on 2026-11-20 (stranded reservations)")
     def test_B0_2_a_reservation_left_by_a_service_that_stopped_gets_its_lost_terminal(self):
         """B0-2 (fails on 0.8.37): the next service settles the lost run at the account, but its result
         reservation keeps no terminal, so the orchestration can never close and the row is never purged."""

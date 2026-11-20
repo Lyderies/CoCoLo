@@ -162,18 +162,6 @@ class OriginalAccountOpenPendingTests(unittest.TestCase):
                 self.preflight(request_id='second-open', limits=limits)
         self.assertEqual(1, len(self.pending()))
 
-    def test_B0_1_an_expired_pending_binding_does_not_count_against_the_cap(self):
-        """O0b B0-1: the cap counts only live bindings (pending and not past their expiry), the rule
-        _drained already uses; an expired one never fills a project for good."""
-        self.preflight()
-        self.ledger._connection.execute("UPDATE host_run_bindings SET expires_at_ms=1 WHERE binding_state='pending'")
-        self.base.task = {**self.base.task, 'id': 'independent-second-verifier'}
-        self.base.route = {**self.base.route, 'task_id': self.base.task['id']}
-        self.base.assignment = {**self.base.assignment, 'task_id': self.base.task['id'], 'assignment_id': 'second-verifier'}
-        self.base.context = replace(self.base.context, task=self.base.task, route=self.base.route, assignment=self.base.assignment)
-        self.refresh_context()
-        self.preflight(request_id='second-open', limits=OpenOwnerLimits(1, 1, 1_048_576))  # not open_busy
-
     def test_native_context_and_copied_byte_quota_refuse_before_clock_or_request_write(self):
         with mock.patch.object(self.ledger, '_clock_ms', side_effect=AssertionError('clock before authority')):
             with self.assertRaisesRegex(OpenError, 'open_invalid_request'):
@@ -218,6 +206,30 @@ class OriginalAccountOpenJobTests(unittest.TestCase):
                 return reply
             self.assertLess(time.monotonic()-started, 10, 'original open signature worker did not finish')
             time.sleep(.002)
+
+    def another_task(self, name):
+        base = self.reference.base
+        base.task = {**base.task, 'id': name}
+        base.route = {**base.route, 'task_id': name}
+        base.assignment = {**base.assignment, 'task_id': name, 'assignment_id': name + '-assignment'}
+        base.context = replace(base.context, task=base.task, route=base.route, assignment=base.assignment)
+        self.reference.refresh_context()
+
+    def test_B0_1_an_expired_pending_binding_does_not_count_against_the_binding_cap(self):
+        """O0b B0-1 (narrowed): the cap on pending bindings, checked when an open finishes, counts only live
+        ones (pending and not past expiry), so expired bindings never fill a project for good. Corrected
+        before code: the first version of this test hit the preflight request cap instead."""
+        from codex_agents import learning_store
+        held = self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM host_run_bindings WHERE binding_state='pending'").fetchone()[0]  # the fixture's own
+        self.enterContext(mock.patch.object(learning_store, 'MAX_PENDING_HOST_RUNS', held + 1))
+        self.assertIsNone(self.pump(self.submit()).reason)  # the cap's last live place
+        self.another_task('second-verifier')
+        refused = self.pump(self.submit(request_id='second-open'))
+        self.assertEqual('open_busy', refused.reason)  # control: a live binding still counts
+        self.ledger._connection.execute("UPDATE host_run_bindings SET expires_at_ms=1 WHERE binding_state='pending'")
+        self.another_task('third-verifier')
+        self.assertIsNone(self.pump(self.submit(request_id='third-open')).reason)  # the expired one does not
 
     def test_actual_registered_signature_return_commits_minimal_original_open_without_central_history_copy(self):
         before = {table: self.ledger._connection.execute('SELECT COUNT(*) FROM '+table).fetchone()[0]

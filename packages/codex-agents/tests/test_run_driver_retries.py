@@ -200,6 +200,8 @@ class RetiredMonitorSlotTests(unittest.TestCase):
 
 
 
+@unittest.skip("gates the run supervisor: the owner narrowed B0 on 2026-11-20 and moved the never-armed "
+               "withdrawal there (DESIGN-0.4.0-B0-holds.md, Stop and analyse)")
 class UnclaimedRunFenceTests(unittest.TestCase):
     """O0b B0-1: a run that fails before its claim is sent is fenced at the account, so its binding ends
     at once instead of holding every drain for 24 h (2026-11-20, the control project's migration)."""
