@@ -228,6 +228,80 @@ class AccountBillingJobTests(unittest.TestCase):
         self.assertNotIn(queued, self.claims._intake._jobs)
         self.take(self.begin(self.request('probe-after-failed-forget')), self.request('probe-after-failed-forget'))
 
+    # O0b RS-A round 3 (review 040-rsa-code-r3-2): faults inside the G9 cleanup itself, not around it.
+
+    def failing_once(self, target, name):
+        """`target.name` raises on its first call, then works (a transient fault)."""
+        real, calls = getattr(target, name), []
+
+        def call(*args, **kwargs):
+            calls.append(args)
+            if len(calls) == 1:
+                raise RuntimeError(f'injected {name} failure')
+            return real(*args, **kwargs)
+        return mock.patch.object(target, name, side_effect=call), calls
+
+    def assertNotedNotFaulted(self):
+        self.assertFalse(self.claims._faulted or self.billing._faulted)
+        view = self.billing.health.view()
+        self.assertEqual(('probe_forget_failed', 'RuntimeError'),
+                         (view['last_failure']['cause'], view['last_failure']['type']))
+
+    def test_RS_A_G9_a_failed_pool_cancel_while_forgetting_keeps_its_work_and_is_retried(self):
+        """Round 3 (1): the pool's cancel fails inside the forget step: noted, the lane drives on, the original
+        and its handle stay as the retry target, and the next step frees the queued work."""
+        owner = self.billing._owner
+        original = owner.reserve(self.fixture.project_id, self.runtime, 'b'*64, 'probe-expiring',
+                                 self.contexts[self.fixture.project_id], before_commit=lambda: True)
+        queued = owner.prepare(original)
+        self.assertEqual(1, self.sweep_expired(original.deadline))
+        patch, calls = self.failing_once(self.claims._pool, 'cancel')
+        with mock.patch.object(self.claims._pool, 'offer_next', return_value=None), patch:
+            self.service.drive_claims()
+            self.assertNotedNotFaulted()
+            self.assertIs(queued, owner._signatures.get(original))  # kept for the retry
+            self.assertIn(queued, self.claims._intake._jobs)
+            self.service.drive_claims()  # retried
+        self.assertEqual([(queued,), (queued,)], calls)
+        self.assertEqual(({}, {}, {}), (owner._pending, owner._reserved_inputs, owner._signatures))
+        self.assertNotIn(queued, self.claims._intake._jobs)
+
+    def test_RS_A_G9_a_failed_cancel_of_a_closed_live_job_is_noted_and_it_still_ends_with_the_stored_answer(self):
+        """Round 3 (1): ending a closed live job fails (its observation's cancel raises): the failure is noted
+        in this lane, never escapes the drive into the claims lane, and the job still ends with the stored
+        denial once the cancel works."""
+        ticket = self.begin()
+        job = self.billing._jobs[ticket]
+        self.assertEqual('identity', job.state)
+        self.assertEqual(1, self.sweep_expired(job.reservation.deadline))
+        patch, calls = self.failing_once(self.observations, 'cancel')
+        with patch:
+            self.service.drive_claims()
+            self.assertNotedNotFaulted()
+            self.assertEqual(1, len(calls))
+            self.assertEndedWithStoredAnswer(ticket)
+
+    def test_RS_A_G9_a_job_cancelled_by_its_own_deadline_before_the_sweep_ends_with_the_stored_answer(self):
+        """Round 3 (3): the job's own deadline cancels it (discarding) before the sweep commits its close; the
+        answer is the stored denial, as an authenticated replay reads it, not probe_unavailable."""
+        from types import SimpleNamespace
+        from codex_agents import account_billing_jobs
+        ticket = self.begin()
+        job = self.billing._jobs[ticket]
+        self.assertEqual('identity', job.state)
+        late = SimpleNamespace(monotonic_ns=lambda: job.reservation.deadline_ns + 1)
+        with mock.patch.object(account_billing_jobs, 'time', late):
+            # Its observation's stop is not yet confirmed, so the job is still discarding when the sweep commits.
+            with mock.patch.object(self.observations, 'take', return_value=None):
+                self.service.drive_claims()
+            self.assertEqual('discarding', job.state)
+            self.assertTrue(job.cancelled)
+            self.assertEqual(1, self.sweep_expired(job.reservation.deadline))
+            self.assertEndedWithStoredAnswer(ticket)
+        replay = self.take(self.begin())
+        self.assertEqual(('denied', 'probe_unlaunched_expired', True),
+                         (replay['probe'], replay['reason_code'], replay['known']))
+
     def test_complete_service_phases_use_one_signature_pool_and_recover_without_reprobe(self):
         with mock.patch.object(sqlite3, 'connect', side_effect=AssertionError('second SQL connection')):
             ticket = self.begin()

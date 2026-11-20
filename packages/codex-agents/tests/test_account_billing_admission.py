@@ -264,6 +264,40 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.owner.forget_expired()
         self.assertKept(returned, queued)
 
+    def failing_once(self, name):
+        """The pool's `name` raises on its first call, then works (a transient pool fault)."""
+        real, calls = getattr(self.pool, name), []
+
+        def call(handle):
+            calls.append(handle)
+            if len(calls) == 1:
+                raise RuntimeError(f'injected {name} failure')
+            return real(handle)
+        return mock.patch.object(self.pool, name, side_effect=call), calls
+
+    def assertForgetRetried(self, name, handle, returned, queued):
+        """Round 3 (review 040-rsa-code-r3-2): a pool failure while forgetting keeps the original and its
+        handle mapping (the retry target) and the notice, so the next step retries and frees the work."""
+        patch, calls = self.failing_once(name)
+        with patch:
+            with self.assertRaisesRegex(RuntimeError, f'injected {name}'):
+                self.owner.forget_expired()
+            self.assertIn(handle, self.owner._signatures.values())  # kept for the retry
+            self.assertTrue(self.owner._closed_notice.is_set())
+            self.owner.forget_expired()
+        self.assertEqual(2, calls.count(handle))
+        self.assertForgotten(returned, queued)
+
+    def test_RS_A_G9_a_failed_discard_while_forgetting_keeps_its_handle_and_is_retried(self):
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep(thread=True))
+        self.assertForgetRetried('discard', returned, returned, queued)
+
+    def test_RS_A_G9_a_failed_cancel_while_forgetting_keeps_its_handle_and_is_retried(self):
+        returned, queued = self.expiring_with_work()
+        self.assertEqual(2, self.sweep(thread=True))
+        self.assertForgetRetried('cancel', queued, returned, queued)
+
     def test_second_request_cannot_take_the_account_bootstrap_or_refresh_original_deadline(self):
         original = self.reserve()
         self.prepared(original)
