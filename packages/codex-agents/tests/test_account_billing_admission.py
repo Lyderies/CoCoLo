@@ -148,6 +148,30 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual(('denied', 'probe_unlaunched_expired', True),
                          (replay['probe'], replay['reason_code'], replay['known']))
 
+    def test_RS_A_F5_an_expired_probe_records_the_time_it_was_closed(self):
+        """Round 1 F5: the register's release time is the decision's, never the probe's creation time."""
+        original = self.reserve()
+        self.clock = original.deadline + 1
+        with mock.patch.object(self.ledger, '_capacity_clock_reference', return_value=0):
+            self.ledger.release_due_account_holds(limit=64)
+        self.assertEqual(self.clock, self.ledger._connection.execute(
+            "SELECT released_at_ms FROM run_holds WHERE kind='probe'").fetchone()[0])
+
+    def test_RS_A_F6_expired_probes_free_their_owner_memory_so_new_ones_fit(self):
+        """Round 1 F6: a project's eight expired reservations, prepared or not, never block a ninth."""
+        from codex_agents.account_billing_admission import MAX_PENDING_PROJECT_PROBES
+        originals = [self.reserve('probe-%d' % n) for n in range(MAX_PENDING_PROJECT_PROBES)]
+        self.prepared(originals[0])  # one with pooled signature work
+        with self.assertRaises(ProbeAdmissionError):
+            self.reserve('one-too-many')
+        self.clock = max(o.deadline for o in originals) + 1
+        with mock.patch.object(self.ledger, '_capacity_clock_reference', return_value=0):
+            self.assertEqual(MAX_PENDING_PROJECT_PROBES, self.ledger.release_due_account_holds(limit=64))
+        fresh = self.reserve('after-expiry')
+        self.assertEqual('reserved', next(r for r in self.rows() if r['state'] == 'reserved')['state'])
+        self.assertEqual([fresh], list(self.owner._reserved_inputs))
+        self.assertEqual({}, self.owner._signatures)
+
     def test_second_request_cannot_take_the_account_bootstrap_or_refresh_original_deadline(self):
         original = self.reserve()
         self.prepared(original)

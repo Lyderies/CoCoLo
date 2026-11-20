@@ -232,6 +232,41 @@ class RunHoldTests(ActiveRunCapacityTests):
         self.assertEqual(1, self.sweep(now, row["clock_reference_ns"] - 1))
         return row
 
+    def test_RS_A_F5_a_crashed_decision_keeps_its_evidence_with_its_digest(self):
+        """Round 1 F5 (design: the release evidence): the observed clocks are kept, and hash to the receipt."""
+        import json
+        from codex_agents.learning_contracts import content_digest
+        row = self.crashed_release()
+        hold = self.ledger._connection.execute(
+            "SELECT receipt, evidence FROM run_holds WHERE kind='run_slot' AND identity=?",
+            (row["handle_digest"],)).fetchone()
+        evidence = json.loads(hold["evidence"])
+        self.assertEqual(hold["receipt"], content_digest(evidence))
+        self.assertEqual(("crashed", row["clock_reference_ns"] - 1),
+                         (evidence["kind"], evidence["observed_monotonic_ns"]))
+
+    def test_RS_A_F5_a_withdrawn_binding_records_the_time_it_was_withdrawn(self):
+        project, launch = self.new_attempt()
+        at = self.case.stamp + 12_345
+        with mock.patch.object(self.ledger, "_clock_ms", return_value=at):
+            self.ledger.withdraw_open(project, run_handle=launch.run_handle)
+        from codex_agents.learning_contracts import keyed_digest
+        self.assertEqual(at, self.ledger._connection.execute(
+            "SELECT released_at_ms FROM run_holds WHERE kind='binding' AND identity=?",
+            (keyed_digest(self.ledger.state.digest_key(), launch.run_handle),)).fetchone()[0])
+
+    def test_RS_A_F5_an_adopted_release_whose_time_history_lacks_keeps_it_unknown(self):
+        """Round 1 F5: adoption never writes a creation time as a release time."""
+        project, launch = self.new_attempt()
+        self.ledger.withdraw_open(project, run_handle=launch.run_handle)
+        self.schema_fourteen(backup=True)
+        ledger = self.upgraded()
+        from codex_agents.learning_contracts import keyed_digest
+        row = ledger._connection.execute(
+            "SELECT state, release_kind, released_at_ms FROM run_holds WHERE kind='binding' AND identity=?",
+            (keyed_digest(ledger.state.digest_key(), launch.run_handle),)).fetchone()
+        self.assertEqual(("released", "withdrawn", None), tuple(row))
+
     def test_RS_A_F4_a_caller_time_never_moves_deletion_past_the_caution_day(self):
         """Round 1 F4: deletion's caution uses the ledger's clock, never a caller-supplied time."""
         row = self.crashed_release()

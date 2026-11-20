@@ -823,6 +823,14 @@ class CapacityCompletionTests(unittest.TestCase):
         self.fixture.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients)
         self.addCleanup(self.fixture.ledger.close)
 
+    def test_RS_A_F5_a_completed_slot_s_register_receipt_is_its_release_digest(self):
+        self.run_one()
+        row = self.ledger._connection.execute(
+            "SELECT a.release_digest, r.receipt, r.release_kind FROM active_run_capacity a JOIN run_holds r "
+            "ON r.kind='run_slot' AND r.identity=a.handle_digest").fetchone()
+        self.assertEqual((row[0], "completed"), (row[1], row[2]))
+        self.assertIsNotNone(row[0])
+
     def test_three_completed_owned_runs_release_default_slots_without_relaunch(self):
         for _ in range(3):
             last_handle, output = self.run_one()
