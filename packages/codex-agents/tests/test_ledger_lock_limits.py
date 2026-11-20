@@ -5,6 +5,7 @@ thread holding the ledger lock, coordinated by events; elapsed times are checked
 bounds with a tolerance.
 """
 import ast
+import contextlib
 import threading
 import time
 import unittest
@@ -219,6 +220,98 @@ class LedgerLockLimitTests(unittest.TestCase):
             server._sweep_cycle()
         released.assert_called_once()
         self.assertEqual(64, released.call_args.kwargs.get('limit'))
+
+    def sweep_loop(self, release, interval, enter=None):
+        """The collector's sweep loop on its own thread, every sweep but the release a no-op; `cycles` counts
+        the full cycles (each runs sweep_worker_results once). `enter` takes the patches (default: the test)."""
+        from unittest import mock
+        enter = enter or self.enterContext
+        server = learning_store.CollectorServer(self.ledger)
+        cycles = []
+        enter(mock.patch.object(learning_store, 'WORKER_RESULT_SWEEP_SECONDS', interval))
+        enter(mock.patch.object(self.ledger, 'sweep_worker_results',
+                                side_effect=lambda: cycles.append(time.monotonic())))
+        for name in ('sweep_event_retention', 'sweep_account_retention'):
+            enter(mock.patch.object(self.ledger, name, return_value=0))
+        enter(mock.patch.object(self.ledger, 'release_due_account_holds', side_effect=release))
+        thread = threading.Thread(target=server._sweep_loop, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(server._sweeps_stop.set)
+        return server, thread, cycles
+
+    def test_RS_A_F12_a_burst_of_1000_due_holds_drains_before_the_next_cycle_with_the_lock_freed_between(self):
+        """O0b RS-A round 1 F12 (draft 3 item 6): while due holds remain the next batch of 64 runs promptly,
+        not a whole interval later, and the ledger lock is released between batches."""
+        lock, remaining, calls, between = self.ledger._lock, [1000], [], set()
+        stop = threading.Event()
+        cycles = []
+
+        def release(*, limit):
+            calls.append((limit, len(cycles)))
+            done = min(limit, remaining[0])
+            remaining[0] -= done
+            return done
+
+        def contender():  # another caller takes the lock whenever the sweep leaves it free
+            while not stop.is_set():
+                if lock.acquire(timeout=0.5):
+                    between.add(len(calls))
+                    lock.release()
+                time.sleep(0.001)
+        _, _, cycles = self.sweep_loop(release, 1.0)
+        other = threading.Thread(target=contender, daemon=True)
+        other.start()
+        self.addCleanup(other.join, 5)
+        self.addCleanup(stop.set)
+        end = time.monotonic() + 10
+        while remaining[0] and time.monotonic() < end:
+            time.sleep(0.01)
+        self.assertEqual(0, remaining[0])
+        self.assertEqual([(64, 1)] * 16, calls[:16])  # all sixteen batches inside the first cycle's interval
+        self.assertLessEqual(set(range(1, 16)), between)  # another caller took the lock between each batch
+
+    def test_RS_A_F12_a_busy_cycle_is_retried_before_the_next_interval(self):
+        """O0b RS-A round 1 F12: a cycle refused because the ledger is held, or skipped with a reader inside,
+        is retried soon, not a whole interval later (fault matrix: busy cycles resuming)."""
+        for busy in ('held', 'reader'):
+            with self.subTest(busy=busy), contextlib.ExitStack() as stack:
+                released, leave, entered = [], threading.Event(), threading.Event()
+
+                def occupy():
+                    with (self.ledger._lock if busy == 'held' else self.ledger.repository(self.project)):
+                        entered.set()
+                        leave.wait(10)
+                occupant = threading.Thread(target=occupy, daemon=True)
+                occupant.start()
+                self.assertTrue(entered.wait(5))
+                started = time.monotonic()
+                server, thread, _ = self.sweep_loop(lambda *, limit: released.append(time.monotonic()) or 0,
+                                                    4.0, stack.enter_context)
+                time.sleep(4.0 + learning_store.LEDGER_LOCK_WAIT_MS / 1000 + 0.3)  # the first cycle was busy
+                self.assertEqual([], released)
+                leave.set()
+                occupant.join(5)
+                while not released and time.monotonic() < started + 7.5:  # the next full cycle is due at 8 s
+                    time.sleep(0.01)
+                self.assertTrue(released, 'the busy cycle was retried before the next interval')
+                server._sweeps_stop.set()
+                thread.join(5)
+
+    def test_RS_A_F12_a_stop_ends_the_drain_at_once(self):
+        """O0b RS-A round 1 F12: shutdown still stops the sweep while due holds remain."""
+        calls = []
+        server, thread, _ = self.sweep_loop(lambda *, limit: calls.append(limit) or limit, 0.2)
+        end = time.monotonic() + 5
+        while len(calls) < 3 and time.monotonic() < end:
+            time.sleep(0.005)
+        self.assertGreaterEqual(len(calls), 3)  # draining: more remain after every batch
+        server._sweeps_stop.set()
+        thread.join(1)
+        self.assertFalse(thread.is_alive())
+        count = len(calls)
+        time.sleep(0.1)
+        self.assertEqual(count, len(calls))
 
     def test_E1a_T4_maintenance_never_runs_while_a_reader_is_inside(self):
         """Review 040-m4b-e1a-code-2: a reader enters under the ledger lock and the sweep holds that lock for
