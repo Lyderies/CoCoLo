@@ -34,9 +34,10 @@ launched as a process, exactly as before. It is flipped by setting it to a `Cont
 (the image and the seccomp profile file) once the remaining container slices exist: the COCOLO
 machine (C-VM) and the owner's sign-in test, the image with the clients, COCOLO's own credentials
 and the per-run network. Until then the command a child is given is the host's, which a container
-cannot run. Recovery of container entries after a restart (C4) is a later slice: until then an
-earlier instance's container entry is never settled by the process rule, so its slot stays held
-for the account's own timed rule (a live service settles its own, see `project_driver`).
+cannot run. An earlier instance's container entry is never settled by the process rule: C4's
+recovery (`container_recovery`) finds its container by name and label, stops it through the same
+stop action (reason `service_lost`) and settles the run (a live service settles its own, see
+`project_driver`).
 
 Standard library only.
 """
@@ -51,7 +52,8 @@ import threading
 import time
 
 from .container_runtime import (DEFAULT_GRACE_SECONDS, DEFAULT_NAME_PREFIX, MAX_TIMEOUT_SECONDS, PODMAN_ENVIRONMENT,
-                                ContainerLimits, ContainerRuntime, ContainerSpec, Refusal, SubprocessPodman)
+                                PROJECT_LABEL, RUN_LABEL, ContainerLimits, ContainerRuntime, ContainerSpec, Refusal,
+                                SubprocessPodman)
 from .launch_journal import CONTAINER_STOP_REASONS, JournalError, new_token
 from .process_tree import RUN_TAG_VARIABLE
 
@@ -273,8 +275,10 @@ class ContainerLauncher:
         except JournalError:
             pass  # Stopped all the same; whether it is gone is recorded below if it can be.
         try:
+            # C4: only a container that carries this run's own labels is stopped under its name.
             result = self.runtime.stop(record.started.name, grace_seconds=self.config.grace_seconds,
-                                       cgroup_path=record.started.cgroup_path or None)
+                                       cgroup_path=record.started.cgroup_path or None,
+                                       labels={PROJECT_LABEL: self.runtime.project_id, RUN_LABEL: record.started.token})
             gone, detail = result.gone, result.detail
         except Exception as error:  # A primitive fault is never "gone".
             gone, detail = False, f'the stop failed: {type(error).__name__}; hold its slot and tell the owner'

@@ -37,10 +37,15 @@ bridge run id comes with the account's reply, and their states are:
   gone: the slot stays held; a stop may be tried again). C3: each stop records
   the reason the container was first stopped for (`CONTAINER_STOP_REASONS`,
   kept across retries) and counts its attempts.
-- ``settled``: the account no longer counts the run.
+- ``settled``: the account no longer counts the run (outcome ``settled`` or
+  ``released``), or, for an intent whose claim was never admitted, the account
+  closed its claim request for good (``fenced``).
 
 The process rule (`tree_state`) never reads a container entry as gone: only the
-container's own recovery may settle it.
+container's own recovery may settle it. C4: a later service takes custody of a
+stopped instance's container entry (`adopt`, only once that instance's lock is
+free) before it stops the container and settles the run (`container_recovery`);
+its last answer for status is kept beside the entries (`RECOVERY_REPORT`).
 
 A normal release removes both files. Each service instance holds an exclusive
 lock on its own ``<instance>.lock`` for as long as any of its threads may
@@ -72,7 +77,7 @@ CONTAINER_KIND_LABELS = ('cocolo.project', 'cocolo.run', 'cocolo.kind')
 # the run's own end, the service closing, a refused launch, and a start that could not be recorded.
 CONTAINER_STOP_REASONS = frozenset({
     'cancel_requested', 'startup_silence', 'work_silence', 'absolute_deadline', 'monitor_unavailable',
-    'service_close', 'run_ended', 'launch_refused', 'record_failed',
+    'service_close', 'run_ended', 'launch_refused', 'record_failed', 'service_lost',
 })
 # Plain words for status, one per reason.
 STOP_REASON_WORDS = {
@@ -80,11 +85,16 @@ STOP_REASON_WORDS = {
     'work_silence': 'it went silent while working', 'absolute_deadline': 'it reached its deadline',
     'monitor_unavailable': 'its monitor stopped', 'service_close': 'its service was closing',
     'run_ended': 'its run had ended', 'launch_refused': 'its launch was refused',
-    'record_failed': 'its start could not be recorded',
+    'record_failed': 'its start could not be recorded', 'service_lost': 'the service that started it had stopped',
 }
 # The container states status counts (settled entries are no longer held).
 CONTAINER_HELD_STATES = ('intent', 'started', 'stopping', 'gone', 'stop_failed')
 MAX_STOP_DETAIL = 600
+# C4: the container recovery's last answer, for status (beside the entries; never an entry itself).
+RECOVERY_REPORT = 'container-recovery.json'
+MAX_RECOVERY_REPORT_BYTES = 65_536
+# The settled outcomes of a container entry: C4 adds `fenced` (an intent whose claim was closed, never admitted).
+CONTAINER_OUTCOMES = frozenset({'settled', 'released', 'fenced'})
 MAX_ENTRY_BYTES = 65_536
 # Entries read per listing; successive listings go round every file (O10 D6).
 MAX_ENTRIES = 256
@@ -176,7 +186,7 @@ def _checked_container_entry(value):
             type(value['stop_attempts']) is not int or not 0 <= value['stop_attempts'] <= 1_000_000):
         return None
     if value['state'] == 'settled':
-        if value['outcome'] not in {'settled', 'released'} or type(value['settled_at_ms']) is not int:
+        if value['outcome'] not in CONTAINER_OUTCOMES or type(value['settled_at_ms']) is not int:
             return None
     elif value['outcome'] is not None or value['settled_at_ms'] is not None:
         return None
@@ -407,6 +417,49 @@ class LaunchJournal:
         value = self._container(token, {'stopping'})
         self._write(token, {**value, 'state': 'gone' if gone is True else 'stop_failed',
                             'stop_detail': str(detail)[:MAX_STOP_DETAIL]})
+
+    def adopt(self, token, instance):
+        """C4: take custody of a stopped instance's unsettled container entry; the entry as it now stands.
+
+        Only when that instance's lock is free (none of its threads can launch or own anything any
+        more); the entry is then this instance's, so its stops and settlement are written here, and a
+        later instance takes it over the same way if this one dies too.
+        """
+        self._writable()
+        value = self.entry(token)
+        if (value is None or value['version'] != 2 or value['state'] == 'settled' or value['instance'] != instance
+                or not self.instance_stopped(instance)):
+            raise JournalError('launch entry is not a stopped instance\'s')
+        value = {**value, 'instance': self.instance}
+        self._write(token, value)
+        return value
+
+    def tokens(self):
+        """Every container entry's launch token (from the file names only); None when the folder cannot be listed."""
+        names = self._names()
+        return None if names is None else {name[:-5] for name in names if _matches(name[:-5], _TOKEN)}
+
+    def write_recovery(self, report):
+        """C4: the container recovery's last answer, for status; replaced whole (owner-only, atomic)."""
+        self._writable()
+        body = json.dumps(report, sort_keys=True, separators=(',', ':')).encode('ascii')
+        if len(body) > MAX_RECOVERY_REPORT_BYTES:
+            raise JournalError('recovery report is too large')
+        temporary = self.directory / ('.recovery.%s.tmp' % secrets.token_hex(4))
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+            try:
+                view = memoryview(body)
+                while view:
+                    view = view[os.write(descriptor, view):]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, self.directory / RECOVERY_REPORT)
+        except OSError as error:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
+            raise JournalError('recovery report was not written') from error
 
     def claimed(self, bridge_run_id, *, run_handle, attempt, host_client, lease, identity_digest, claim_request_id,
                 storage_evidence, workspace):
@@ -647,9 +700,13 @@ def unresolved(directory, *, now_ms=None):
             changed_ms = os.lstat(path).st_mtime_ns // 1_000_000
         except OSError:
             continue  # Removed since it was listed.
-        found.append({'bridge_run_id': name[:-5], 'state': None if value is None else value['state'],
-                      'age_ms': max(0, now_ms - changed_ms)})
-    found.sort(key=lambda item: (-item['age_ms'], item['bridge_run_id']))
+        # C4: a container entry is named by its launch token in its own field; its bridge run id is the
+        # account's, once admitted.
+        container = _matches(name[:-5], _TOKEN)
+        found.append({'bridge_run_id': (value['bridge_run_id'] if value is not None else None) if container
+                      else name[:-5], 'token': name[:-5] if container else None,
+                      'state': None if value is None else value['state'], 'age_ms': max(0, now_ms - changed_ms)})
+    found.sort(key=lambda item: (-item['age_ms'], item['token'] or item['bridge_run_id']))
     report.update(count=len(found), oldest_age_ms=found[0]['age_ms'] if found else None,
                   entries=found[:MAX_UNRESOLVED_LISTED])
     return report
@@ -664,10 +721,16 @@ def container_holds(directory, *, now_ms=None):
     was stopped for, the last stop's answer and the attempts, and gets one plain line for the
     owner: its slot stays held, and how to end it by hand. Read only: nothing is written, removed
     or asked of podman.
+
+    C4: `recovery` is the container recovery's last answer (`RECOVERY_REPORT`): whether podman
+    answered, how many entries an earlier service left still wait, and each orphan container it
+    stopped or could not stop. Entries left waiting because podman does not answer, and each
+    orphan that could not be stopped, get one owner line each.
     """
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     counts = {state: 0 for state in CONTAINER_HELD_STATES}
-    report = {'counts': counts, 'stop_failed': [], 'summary': 'Run containers: none held.', 'attention': []}
+    report = {'counts': counts, 'stop_failed': [], 'summary': 'Run containers: none held.', 'attention': [],
+              'recovery': None}
     directory = Path(directory)
     try:
         info = os.lstat(directory)
@@ -711,7 +774,55 @@ def container_holds(directory, *, now_ms=None):
     if len(failed) > len(report['stop_failed']):
         report['attention'].append(f'{len(failed) - len(report["stop_failed"])} more run container(s) could not '
                                    'be stopped; their slots stay held.')
+    recovery = _read_recovery(directory / RECOVERY_REPORT)
+    report['recovery'] = recovery
+    if recovery is not None:
+        if recovery['podman'] == 'unavailable' and recovery['waiting']:
+            report['attention'].append(
+                f"{recovery['waiting']} run container(s) an earlier service of this project left cannot be checked: "
+                f"{recovery['detail'] or 'podman did not answer'}. Their run slots stay held until podman answers; "
+                "the project's service keeps asking.")
+        for item in recovery['orphans']:
+            if item['outcome'] in ('stop_failed', 'refused'):
+                report['attention'].append(
+                    f"Run container {item['container']} carries this project's label but no run of it is known, "
+                    f"and it could not be stopped: {item['detail']}. To end it yourself: podman rm --force "
+                    f"{item['container']}")
     return report
+
+
+_RECOVERY_FIELDS = {'checked_at_ms', 'podman', 'detail', 'waiting', 'orphans'}
+_ORPHAN_FIELDS = {'container', 'run', 'outcome', 'detail', 'at_ms'}
+
+
+def _read_recovery(path):
+    """The recovery report in that file if it has its fixed shape, else None (read only)."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    except OSError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077
+                or info.st_size > MAX_RECOVERY_REPORT_BYTES):
+            return None
+        raw = os.read(descriptor, MAX_RECOVERY_REPORT_BYTES + 1)
+        value = json.loads(raw)
+    except (OSError, ValueError):
+        return None
+    finally:
+        os.close(descriptor)
+    if (type(value) is not dict or value.keys() != _RECOVERY_FIELDS or value['podman'] not in ('ok', 'unavailable')
+            or type(value['checked_at_ms']) is not int or type(value['waiting']) is not int
+            or (value['detail'] is not None and type(value['detail']) is not str)
+            or type(value['orphans']) is not list):
+        return None
+    for item in value['orphans']:
+        if (type(item) is not dict or item.keys() != _ORPHAN_FIELDS
+                or any(type(item[name]) is not str for name in ('container', 'run', 'outcome', 'detail'))
+                or type(item['at_ms']) is not int):
+            return None
+    return value
 
 
 def _read_entry(path):

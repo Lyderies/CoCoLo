@@ -53,7 +53,9 @@ import tests.support  # noqa: F401
 from tests.support import ORCHESTRATION_ROOT, SHORT_TMP
 from tests.test_container_launch_journal import (BRIDGE, CONTAINER_PROJECT, HANDLE, OTHER_BRIDGE, TimeoutPodman,
                                                  deadline_ms, private_folder, write_intent)
+from tests.test_bridge import null_filled, result
 from tests.test_container_runtime import FakeClock, FakeHostFiles, REAL_IMAGE, REAL_PODMAN, REAL_SKIP_REASON
+from tests.test_lost_run_settlement import LostRunAfterStopTests
 
 from codex_agents import container_launch, launch_journal
 from codex_agents import container_runtime as cr
@@ -520,6 +522,43 @@ class MachineRestartTests(RecoveryCase):
         self.assertEqual(sorted(tokens), sorted(self.settled_tokens()))
 
 
+class RecoveryReportBoundTests(RecoveryCase):
+    """The recovery report is one file, replaced whole on each pass: its size and orphan list are bounded."""
+
+    def test_a_report_past_its_size_limit_is_not_written_and_the_last_one_stays(self):
+        self.crash_earlier()
+        self.later()
+        self.sweep()
+        before = self.holds()['recovery']
+        self.assertEqual('ok', before['podman'])
+        huge = {'checked_at_ms': 1, 'podman': 'ok', 'detail': 'x' * (launch_journal.MAX_RECOVERY_REPORT_BYTES + 1),
+                'waiting': 0, 'orphans': []}
+        with self.assertRaises(launch_journal.JournalError):
+            self.later_journal.write_recovery(huge)
+        self.assertEqual(before, self.holds()['recovery'])
+        # A report file past the limit (written by something else) is never read.
+        path = self.directory / launch_journal.RECOVERY_REPORT
+        path.write_text(json.dumps(huge))
+        os.chmod(path, 0o600)
+        self.assertIsNone(self.holds()['recovery'])
+
+    def test_more_orphans_than_the_limit_keep_only_the_newest_in_status(self):
+        from codex_agents import container_recovery
+        count = container_recovery.MAX_REPORTED_ORPHANS + 4
+        names = []
+        for _ in range(count):
+            identity = self.runtime().identity(launch_journal.new_token())
+            self.podman.add_container(identity.name, identity.labels)
+            names.append(identity.name)
+        self.crash_earlier()
+        self.later()
+        self.sweep()
+        self.assertEqual({}, self.podman.containers)  # every orphan stopped, whatever the report keeps
+        reported = self.holds()['recovery']['orphans']
+        self.assertEqual(container_recovery.MAX_REPORTED_ORPHANS, len(reported))
+        self.assertTrue(all(item['outcome'] == 'removed' for item in reported))
+
+
 # --------------------------------------------------------------------------------------------
 # C4-8 status and C4-9 the network's labels
 # --------------------------------------------------------------------------------------------
@@ -574,6 +613,77 @@ class NetworkLabelTests(unittest.TestCase):
         launched = self.launch()
         self.assertTrue(launched.ok, launched)
         self.assertIn('--network=cocolo-run-net', self.podman.commands('create')[0])
+
+
+# --------------------------------------------------------------------------------------------
+# The account's slot, end to end: in-process collector, account and project services, fake podman
+# --------------------------------------------------------------------------------------------
+
+class ContainerRecoveryHoldTests(LostRunAfterStopTests):
+    """A service that stops part way through a stop (podman went away; it settles nothing itself), with its
+    run's container still running: the next service's recovery stops the container, the account settles
+    the run as lost and its slot is free again, once."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory(dir=SHORT_TMP)
+        self.addCleanup(folder.cleanup)
+        self.seccomp = os.path.join(os.path.realpath(folder.name), 'seccomp.json')
+        Path(self.seccomp).write_text('{}')
+        self.podman_host = FakeHostFiles()
+        self.podman = TimeoutPodman(self.podman_host)
+        clock = FakeClock()  # the primitive's own polling only; back-off and sweeps run on real time
+
+        def launcher_for(project_id, journal, settings=None):
+            runtime = cr.ContainerRuntime(project_id, runner=self.podman, host_files=self.podman_host,
+                                          monotonic=clock.monotonic, sleep=clock.sleep)
+            config = container_launch.ContainerLaunchConfig(image='python:3.12-slim', seccomp_profile=self.seccomp,
+                                                            grace_seconds=1)
+            return container_launch.ContainerLauncher(runtime, journal, config, attach=self.attached)
+
+        patcher = mock.patch.object(container_launch, 'launcher_for', launcher_for)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
+    def attached(self, started):
+        """The command the container was created with, run locally in its place."""
+        args = self.podman.containers[started.name].args
+        image = next(index for index, arg in enumerate(args) if index and not arg.startswith('-'))
+        return list(args[image + 1:])
+
+    def container_entries(self):
+        return [json.loads(path.read_text()) for path in sorted(self.journal().glob('lnc_*.json'))]
+
+    def test_C4_a_lost_services_running_container_is_stopped_and_its_slot_freed_by_the_next_service(self):
+        context, route_path, orchestration, run_handle = self.open_run()
+        self.frames('codex', [{'type': 'thread.started', 'thread_id': 'orphan'}, {'sleep': 30},
+                              {'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
+        (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
+        dispatch = self.separate_dispatch(context, route_path, run_handle)
+        self.wait_for(lambda: any(c.status == 'running' for c in self.podman.containers.values()), seconds=30)
+        self.assertEqual(1, self.counted())
+        [name] = list(self.podman.containers)
+        refused = cr.StopResult('refused', 'podman is installed but not reachable; the container is not known '
+                                'to be gone')
+        original = RunDriver.settle_on_exit
+        with mock.patch.object(cr.ContainerRuntime, 'stop', return_value=refused), \
+                mock.patch.object(RunDriver, 'settle_on_exit', lambda driver, settle=True: original(driver,
+                                                                                                    settle=False)):
+            self.stop_host()
+        dispatch.communicate(timeout=30)
+        self.assertEqual('running', self.podman.containers[name].status)  # the lost service could not stop it
+        [entry] = self.container_entries()
+        self.assertEqual('stop_failed', entry['state'])
+        self.assertEqual(1, self.counted())  # still held
+        self.start_host()
+        # The account settles first, then the entry is written `settled`.
+        self.wait_for(lambda: self.counted() == 0 and self.container_entries()[0]['state'] == 'settled', seconds=30)
+        self.assertNotIn(name, self.podman.containers)
+        [entry] = self.container_entries()
+        self.assertEqual(('settled', 'settled'), (entry['state'], entry['outcome']))
+        self.assertEqual([('abandoned', 'service_lost', 1)], self.claimed_bindings())
+        self.restart_host()
+        self.assertEqual([('abandoned', 'service_lost', 1)], self.claimed_bindings())  # settled once
 
 
 # --------------------------------------------------------------------------------------------
@@ -756,6 +866,18 @@ class RealRecoveryTests(unittest.TestCase):
         self.assertEqual(1, self.podman('container', 'exists', name).returncode)
         self.assertEqual('settled', self.journal.entry(token)['state'])
         driver._settle_entry.assert_called_once()
+
+
+def load_tests(loader, tests, pattern):
+    """Only this module's own tests: the inherited lost-run ones run in their own module."""
+    suite = unittest.TestSuite()
+    for case in (RecoveryByStateTests, StopFailedRecoveryTests, OrphanRecoveryTests, UnreachablePodmanRecoveryTests,
+                 NeverTouchedTests, MachineRestartTests, RecoveryReportBoundTests, StatusTokenTests, NetworkLabelTests,
+                 ContainerRecoveryHoldTests, RealRecoveryTests):
+        for name in loader.getTestCaseNames(case):
+            if name in case.__dict__:
+                suite.addTest(case(name))
+    return suite
 
 
 if __name__ == '__main__':

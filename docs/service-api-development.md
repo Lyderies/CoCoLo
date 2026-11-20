@@ -430,7 +430,7 @@ of the run can still be running:
   once podman returns. The bridge reads the output through a local `podman logs --follow`
   then `podman wait`. Cleanup writes `stopping`, then `gone` or `stop_failed`; a run whose
   container is not proven gone is never confirmed clean. `tree_state` never reads a
-  container entry as gone: recovery after a restart is slice C4. Tests:
+  container entry as gone: only the container recovery (C4, below) settles one. Tests:
   `tests/test_container_launch_journal.py`.
 - Container stops (0.4.0 slice C3, container mode only). One stop action,
   `ContainerLauncher.stop` over `ContainerRuntime.stop` (SIGTERM, the grace, SIGKILL to
@@ -447,13 +447,41 @@ of the run can still be running:
   its own failed admitted runs whose container is `gone` (`_settle_own_ended`:
   `settle_lost_run`, entry `settled`, preparation given back) while it runs; at its own stop
   it stops what is left once more (`service_close`) and settles what is gone; another
-  instance's container entries wait for C4. The detached watchdog gets the container
+  instance's container entries are left to the next service's recovery (C4). The detached watchdog gets the container
   (`--container <json>`, the podman client's environment only) and stops it through the same
   primitive once its service has died (its parent pid changed); while the service lives it
   leaves the container to it. Status: `learning-status` `container_holds` (counts by state,
   each `stop_failed` with reason, detail, attempts) and one owner alert per `stop_failed`
   container in `account_health.attention`, naming `podman rm --force <name>`. Tests:
   `tests/test_container_stop.py`, `tests/test_hold_lifecycle.py` (ContainerRunHoldTests).
+- Container recovery (0.4.0 slice C4, container mode only; `container_recovery`). At start
+  and on each sweep (`RunDriver._settle_lost`, on the sweep thread, never the foreground
+  account thread), every unsettled container entry of a stopped instance (its lock free) is
+  recovered: first the project's listing (`podman ps --all --filter
+  label=cocolo.project=<project>`); podman unreachable settles nothing and writes no entry,
+  and the listing is asked again after 1 s doubling to 300 s. Then the entry is adopted
+  (`LaunchJournal.adopt`: rewritten under this instance, so a later instance takes it over
+  the same way if this one dies), its container stopped through the one stop action (reason
+  `service_lost`; only a container under its name that carries the run's own
+  `cocolo.project`/`cocolo.run` labels, else `stop_failed`, left alone), unless the entry is
+  already `gone` and nothing is listed for it. A stop not proven gone stays `stop_failed`,
+  held, retried with the launcher's back-off. Once gone: an admitted entry is settled
+  (`settle_lost_run`); an `intent` whose admission was never recorded is fenced
+  (`RunDriver._fence_entry`, `account.fence_claim`, request id `recover-<sha256(token)[:32]>`):
+  closed for good (entry outcome `fenced`; its armed lease is expired by the existing
+  earlier-lease fence) or, admitted after all, settled lost with the receipt's bridge run id.
+  Then the workspace is removed (unchecked, as before) and the entry written `settled`, its
+  stop answer kept as evidence. Account failures back off the same way. Orphans: at start and
+  every 60 s, each listed container whose run has no journal entry (tokens read after the
+  listing) is stopped (`ContainerRuntime.stop_orphans`); other projects' containers are never
+  listed, labelled ones whose name is not their run's are `skipped`. The last pass is kept in
+  `launches/container-recovery.json` (podman ok or unavailable, entries waiting, the newest
+  16 orphans); `learning-status` shows it as `container_holds.recovery`, with an owner line
+  when entries wait on podman and for each orphan that could not be stopped.
+  `unresolved_launches` names a container entry by `token` (its own field) and its
+  `bridge_run_id` once admitted. A per-run network must carry the run's labels
+  (`network_not_this_run` otherwise). Not yet: checked workspace removal (design draft 2
+  item 8). Tests: `tests/test_container_recovery.py`.
 - Instance lock. Each driver holds an exclusive `flock` on its own
   `<instance>.lock` for as long as any of its threads may launch or own a child: the
   kernel frees it when the process dies, and a graceful stop frees it only after every
