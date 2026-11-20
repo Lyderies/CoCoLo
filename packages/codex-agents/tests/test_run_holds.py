@@ -4,12 +4,16 @@ RS-A-8; written before the code, each fails first).
 Integration stage: a real ledger with a claimed run (the test_active_run_capacity fixture); clocks are
 patched, never slept.
 """
+import hashlib
+import sqlite3
 import unittest
 from unittest import mock
 
 from tests.test_active_run_capacity import ActiveRunCapacityTests
 
 from codex_agents import learning_store
+from codex_agents.learning_contracts import canonical_json
+from codex_agents.learning_store import LearningLedger, LedgerError
 from codex_agents.account_claim_contracts import ClaimError
 from codex_agents.active_run_capacity import ActiveRunLimits
 
@@ -90,6 +94,59 @@ class RunHoldTests(ActiveRunCapacityTests):
                          status["run_slot"]["next_eligible"])
         self.assertIn("binding", status)
         self.assertEqual({"held": 0, "past_due": 0, "next_eligible": None}, status["probe"])
+
+    def schema_fourteen(self, *, backup):
+        """The ledger as 0.8.38 leaves it (schema 14): no register, no release kinds."""
+        with self.ledger._account_transaction():
+            self.ledger._connection.execute("DROP TABLE IF EXISTS run_holds")
+            columns = {row[1] for row in self.ledger._connection.execute("PRAGMA table_info(active_run_capacity)")}
+            if "release_kind" in columns:
+                self.ledger._connection.execute("ALTER TABLE active_run_capacity DROP COLUMN release_kind")
+            self.ledger._connection.execute("PRAGMA user_version=14")
+        if backup:
+            body = learning_store._snapshot_project_partition(self.ledger._connection, self.project,
+                                                              ledger_schema_version=14)
+            raw = canonical_json({"backup_sha256": hashlib.sha256(canonical_json(body)).hexdigest(), "body": body})
+            path = self.ledger._write_owner_file("backup", self.project, "schema14_holds_backup", raw)
+            self.ledger._register_stored_file(self.project, file_id="schema14_holds_backup", kind="backup", path=path,
+                                              digest=hashlib.sha256(raw).hexdigest(), expires_at_ms=self.case.stamp + 60_000)
+        self.ledger.close()
+
+    def upgraded(self):
+        self.case.ledger = LearningLedger(self.fixture.state, client_capabilities=self.fixture.clients,
+                                          allow_schema_upgrade=True)
+        self.addCleanup(self.case.ledger.close)
+        return self.case.ledger
+
+    def test_RS_A_8_the_register_comes_with_a_new_ledger_version(self):
+        self.case.claim()
+        version = self.ledger._connection.execute("PRAGMA user_version").fetchone()[0]
+        self.assertGreater(version, 14)
+        self.assertIsNotNone(self.ledger._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_holds'").fetchone())
+
+    def test_RS_A_8_an_upgrade_without_a_verified_backup_is_refused_and_changes_nothing(self):
+        self.case.claim()
+        self.schema_fourteen(backup=False)
+        with self.assertRaises(LedgerError):
+            self.upgraded()
+        check = sqlite3.connect(self.fixture.state.database)
+        try:
+            self.assertEqual(14, check.execute("PRAGMA user_version").fetchone()[0])
+            self.assertIsNone(check.execute("SELECT 1 FROM sqlite_master WHERE name='run_holds'").fetchone())
+        finally:
+            check.close()
+
+    def test_RS_A_8_existing_holds_are_adopted_by_their_evidence(self):
+        self.case.claim()
+        self.schema_fourteen(backup=True)
+        ledger = self.upgraded()
+        holds = sorted((row["kind"], row["state"]) for row in ledger._connection.execute(
+            "SELECT kind, state FROM run_holds"))
+        self.assertIn(("run_slot", "held"), holds)
+        self.assertIn(("binding", "held"), holds)
+        self.assertEqual(len(holds), len(set(
+            (row["kind"], row["identity"]) for row in ledger._connection.execute("SELECT kind, identity FROM run_holds"))))
 
     def test_RS_A_1_each_account_hold_has_its_register_row(self):
         self.case.claim()
