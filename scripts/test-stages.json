@@ -4,7 +4,7 @@
  "claude:tests.test_journal": "unit",
  "claude:tests.test_native_fixtures": "unit",
  "claude:tests.test_packaging": "integration",
- "claude:tests.test_previous_release": "unit",
+ "claude:tests.test_previous_release": "integration",
  "claude:tests.test_previous_release_recorded": "unit",
  "claude:tests.test_stream_projection": "unit",
  "claude:tests.test_subscription_stream": "unit",
