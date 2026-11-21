@@ -114,13 +114,15 @@ class AccountBillingAdmission:
     def _one(self, sql, parameters=()):
         return self._read(lambda: self._ledger._connection.execute(sql, parameters).fetchone())
 
-    def _authorize(self, context, snapshot, callback):
+    def _authorize(self, context, snapshot, callback, keys=True):
+        # keys=False (admit only): a provider API key is not refused here but judged by the admission, which
+        # refuses it with its own reason (provider_api_key_present) before any provider call.
         self._guard()
         if (type(context) is not ObservationContext or context.snapshot() != snapshot
                 or not callable(callback) or callback() is not True):
             raise ProbeAdmissionError('probe_not_authorized')
         self._guard()
-        if context.snapshot() != snapshot or any(os.environ.get(n) for n in API_KEY_VARIABLES):
+        if context.snapshot() != snapshot or (keys and any(os.environ.get(n) for n in API_KEY_VARIABLES)):
             raise ProbeAdmissionError('probe_not_authorized')
 
     def _project(self, project, context):
@@ -173,7 +175,7 @@ class AccountBillingAdmission:
                 if row['parameters_digest'] != parameters:
                     raise ProbeAdmissionError('probe_conflict')
                 if row['state'] == 'committed':
-                    reply = self._reply(row, known=True)
+                    reply = self._replayable(row, self._reply(row, known=True))
                     self._authorize(context, snapshot, before_commit)
                     if self._project(project, context) != root or self._row(project, key) != row:
                         raise ProbeAdmissionError('probe_conflict')
@@ -221,7 +223,7 @@ class AccountBillingAdmission:
         return (reservation.project, reservation.key, reservation.parameters, reservation.created,
                 reservation.deadline, reservation.deadline_ns)
 
-    def _original(self, reservation):
+    def _original(self, reservation, keys=True):
         self._guard()
         if (type(reservation) is not _Reservation
                 or self._pending.get((reservation.project, reservation.key)) is not reservation):
@@ -231,7 +233,7 @@ class AccountBillingAdmission:
                 or reservation.context is not captured[1] or reservation.snapshot != captured[2]
                 or reservation.authorize is not captured[3]):
             raise ProbeAdmissionError('probe_not_authorized')
-        self._authorize(reservation.context, reservation.snapshot, reservation.authorize)
+        self._authorize(reservation.context, reservation.snapshot, reservation.authorize, keys)
         self._project(reservation.project, reservation.context)
         row = self._row(reservation.project, reservation.key)
         if (row is None or row['parameters_digest'] != reservation.parameters
@@ -301,7 +303,7 @@ class AccountBillingAdmission:
         return bool(newer) and headroom_state('claude', fingerprint, newer, [], now)[0] != 'ample'
 
     def admit(self, reservation):
-        row = self._original(reservation)
+        row = self._original(reservation, False)
         if row['state'] == 'admitted':
             original = self._permits.get(reservation)
             if original is None:
@@ -325,7 +327,7 @@ class AccountBillingAdmission:
         prepared = open_admission_inputs(result.prepared, verified)
         guard = {n: 'present' for n in API_KEY_VARIABLES if os.environ.get(n)}
         with self._ledger._account_transaction():
-            row = self._original(reservation)
+            row = self._original(reservation, False)
             if row['state'] != 'reserved':
                 raise ProbeAdmissionError('probe_conflict')
             now = self._fresh(reservation, snapshot)
@@ -398,7 +400,7 @@ class AccountBillingAdmission:
                     final = self._update(row, state='admitted')
                 else:
                     final = self._commit_reply(row, 'denied', decision['reason_code'], [], result.prepared.rows)
-            self._authorize(reservation.context, reservation.snapshot, reservation.authorize)
+            self._authorize(reservation.context, reservation.snapshot, reservation.authorize, False)
             self._fresh(reservation, snapshot, appended=appended)
             if (execution_owner is not None
                     and execution_owner._prepared_identity(reservation) != canonical_json(identity)):
@@ -422,7 +424,7 @@ class AccountBillingAdmission:
         self._pending.pop((reservation.project, reservation.key))
         self._reserved_inputs.pop(reservation)
         reply = self._reply(final, known=False)
-        self._authorize(reservation.context, reservation.snapshot, reservation.authorize)
+        self._authorize(reservation.context, reservation.snapshot, reservation.authorize, False)
         if self._row(reservation.project, reservation.key) != final:
             raise ProbeAdmissionError('probe_conflict')
         return reply
@@ -597,7 +599,7 @@ class AccountBillingAdmission:
             parameters = keyed(self._key, b'billing-probe-parameters-v1\0', [runtime, caller, root])
             if row['parameters_digest'] != parameters:
                 raise ProbeAdmissionError('probe_conflict')
-            reply = self._reply(row, known=True)
+            reply = self._replayable(row, self._reply(row, known=True))
             self._authorize(context, snapshot, before_commit)
             if self._project(project, context) != root or self._row(project, key) != row:
                 raise ProbeAdmissionError('probe_conflict')
@@ -662,6 +664,16 @@ class AccountBillingAdmission:
         if len(raw) > 4096:
             raise ProbeAdmissionError()
         return self._update(row, state='committed', references_json=raw.decode())
+
+    def _replayable(self, row, reply):
+        # B1: no 'reused' answer is returned without a judgment at that time. A replay has no verified inputs to
+        # judge again (that needs signature work), so a stored 'reused' is returned only inside its own request
+        # window (deadline_at_ms: the window in which it was judged; this also lets the job verify the answer it
+        # just produced); after it the replay is refused and the caller asks again. Denials and completions are
+        # returned as stored.
+        if type(reply) is dict and reply.get('probe') == 'reused' and not self._now() < row['deadline_at_ms']:
+            raise ProbeAdmissionError('probe_conflict')
+        return reply
 
     def _reply(self, row, *, known):
         from .learning_store import DEFAULT_RETENTION_MS

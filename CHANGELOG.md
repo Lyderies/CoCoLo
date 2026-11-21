@@ -7,10 +7,14 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 - Package 0.8.46 (billing admission safety fix): a billing probe that is answered from a recent probe record
   ("probe: reused") is now judged again before it is answered. Before, any recent probe record skipped the
   judgment, so a probe that had seen paid usage (overage in use) was answered "reused" instead of being refused
-  with paid_usage_usable, and a provider API key in the environment, an unreviewed client version or a missing
-  billing attestation was not noticed either. Now a reuse skips only the provider call: paid usage, an API key,
-  the client version and the attestation are checked on every reuse and refused with their own reason; a clean
-  reuse still answers "reused" and starts no new probe.
+  with paid_usage_usable, and an unreviewed client version or a missing billing attestation was not noticed
+  either. Now a reuse skips only the provider call: paid usage, the client version and the attestation are
+  checked on every reuse and refused with their own reason. A provider API key in the environment was already
+  stopped before admission; it is now refused with its own reason (provider_api_key_present) and the denial is
+  recorded. A stored "reused" answer is replayed only inside its own request window (the time it was
+  judged in); after that a retry of the same request is refused with probe_conflict, as a replay cannot judge
+  again; stored denials still replay. A clean reuse still answers
+  "reused" and starts no new probe.
 
 - Package 0.8.45 (Phase 1.2, core API round 6): the owner-facing core API (TM0) joins the 0.8.44 base after six
   review rounds (owner decision 34, no seventh). Fixed with tests that failed first: a single-digit price ("$5")

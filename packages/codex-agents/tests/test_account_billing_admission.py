@@ -473,18 +473,22 @@ class AccountBillingAdmissionTests(unittest.TestCase):
             self.assertEqual('denied', result['probe'], result)
             self.assertEqual('paid_usage_usable', result['reason_code'], result)
 
-    def test_B3_an_api_key_at_reuse_time_is_refused_even_with_a_fresh_probe_record(self):
+    def test_B3_an_api_key_at_reuse_time_is_refused_with_its_own_reason_before_any_provider_call(self):
         self.store_probe_only(self.FAVOURABLE)
         original = self.reserve('probe-api-key')
         self.prepared(original)
         with mock.patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'sk-test'}):
-            # The caller's own authorisation stops a key first (probe_not_authorized); the judgment must hold too,
-            # so it is exercised with that earlier gate out of the way.
-            with self.assertRaisesRegex(ProbeAdmissionError, 'probe_not_authorized'):
-                self.owner.admit(original)
-            with mock.patch.object(self.owner, '_authorize'):
-                result = self.owner.admit(original)
+            result = self.owner.admit(original)
         self.assertIs(type(result), dict, result)
+        self.assertEqual('denied', result['probe'], result)
+        self.assertEqual('provider_api_key_present', result['reason_code'], result)
+        self.assertEqual([], [r for r in self.rows() if r['state'] == 'admitted'])
+
+    def test_B3_an_api_key_with_no_probe_record_is_also_refused_with_its_own_reason(self):
+        original = self.reserve('probe-api-key-fresh')
+        self.prepared(original)
+        with mock.patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'sk-test'}):
+            result = self.owner.admit(original)
         self.assertEqual('denied', result['probe'], result)
         self.assertEqual('provider_api_key_present', result['reason_code'], result)
 
@@ -510,7 +514,8 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual('denied', result['probe'], result)
         self.assertEqual('billing_attestation_missing', result['reason_code'], result)
 
-    def test_B4_a_clean_reuse_still_answers_reused_without_a_new_probe_admission(self):
+    def test_B4_regression_guard_a_clean_reuse_still_answers_reused_without_a_new_probe_admission(self):
+        # A no-regression guard: it may pass on the code before the fix (not a red-first proof).
         records = self.store_probe_only(self.FAVOURABLE)
         original = self.reserve('probe-clean')
         self.prepared(original)
@@ -520,6 +525,30 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         self.assertEqual([self.identity, *records], result['records'])
         self.assertEqual(0, self.ledger._connection.execute(
             "SELECT COUNT(*) FROM records WHERE record_type='probe_admission'").fetchone()[0])
+
+    def test_H1_a_stored_reused_answer_is_not_replayed_after_its_request_window(self):
+        self.store_probe_only(self.FAVOURABLE)
+        original = self.reserve('probe-replay')
+        self.prepared(original)
+        self.assertEqual('reused', self.owner.admit(original)['probe'])
+        later = claude_rate_limit_records({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'},
+            account_fingerprint=self.identity['account_fingerprint'], observed_at_ms=self.clock)
+        self.ledger._store_provider_observations(self.fixture.project_id, later, timestamp=self.clock)
+        self.assertEqual('reused', self.reserve('probe-replay')['probe'])  # still inside its own request window
+        self.clock += self.owner._timeout+1
+        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
+            self.reserve('probe-replay')
+        with self.assertRaisesRegex(ProbeAdmissionError, 'probe_conflict'):
+            self.owner.known_reply(self.fixture.project_id, 'a'*64, 'b'*64, 'probe-replay', self.context,
+                                   before_commit=lambda: True)
+
+    def test_H1_a_stored_denial_is_still_replayed(self):
+        self.store_probe_only({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'})
+        original = self.reserve('probe-replay-deny')
+        self.prepared(original)
+        denied = self.owner.admit(original)
+        self.assertEqual('denied', denied['probe'], denied)
+        self.assertEqual({**denied, 'known': True}, self.reserve('probe-replay-deny'))
 
     def tearDown_probe_state(self):
         connection = self.ledger._connection
