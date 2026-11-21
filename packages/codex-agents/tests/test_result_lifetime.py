@@ -77,7 +77,7 @@ class ResultLifetimeTests(DriverHarness):
         context, route_path, orchestration, run_handle = self.open_run()
         self.frames('codex', [{'type': 'turn.completed', 'usage': {'input_tokens': 1}}])
         (self.tools / 'codex-last-message.json').write_text(json.dumps(null_filled(result())))
-        self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)  # reply lost: unused
+        first = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)  # reply lost
         later = self.cli('dispatch', *context, '--route', route_path, '--run-handle', run_handle)
         observation = self.write('observation.json', {'run_handle': run_handle, 'result_attempts': [
             {'status': 'accepted', 'reason_code': None, 'receipt_id': None}]})
@@ -85,6 +85,10 @@ class ResultLifetimeTests(DriverHarness):
                             '--result', self.write('result.json', later['result']), '--observation', observation)
         self.assertRegex(recorded['host_outcome_digest'], '^[0-9a-f]{64}$')
         self.assertEqual(1, len([i for i in self.invocations('codex') if 'exec' in i['argv']]))
+        # review r1 MED-2: the later read is the same result, and exactly one record is stored for it
+        self.assertEqual(first['result'], later['result'])
+        self.wait_for(lambda: ('driver', 'retiring', 'released') in self.stopped_runs, seconds=30)
+        self.assertEqual(['committed'], self.result_states())
 
     @unittest.skip("RC-3 fails: the refused run's binding stays 'pending' (24 h); the account operation that calls "
                    "withdraw_open and the driver calling it are RS-B (not built)")
