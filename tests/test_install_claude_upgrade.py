@@ -620,14 +620,14 @@ class ClaudeUpgradeTests(unittest.TestCase):
 
     def test_a_refused_undo_never_recreates_a_folder_the_user_deleted(self) -> None:
         """Owner fix 3 (r4 MEDIUM, install.py:1272). Fails on 1d359e3b: the undo makes the folder again before it
-        finds the file gone, and leaves it behind empty."""
-        skill_folder = (self.target / self.SKILL).parent
-        self.during_the_claude_step(lambda: shutil.rmtree(skill_folder))
+        finds the file gone, and leaves it behind empty. The folder holds files the update wrote."""
+        agents = (self.target / self.PLANNER).parent
+        self.during_the_claude_step(lambda: shutil.rmtree(agents))
         self.settings_fail()
         summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
         self.assertFalse(summary["ok"], summary)
-        self.assertFalse(skill_folder.exists())
-        self.assertIn(self.SKILL, self.claude_entry(summary)["left_alone"])
+        self.assertFalse(agents.exists())
+        self.assertIn(self.PLANNER, self.claude_entry(summary)["left_alone"])
 
     def test_the_pending_marker_is_never_undone_while_a_lock_is_held(self) -> None:
         """Pure guard of owner fix 4 (r4 MEDIUM 'control cleanup can erase the pending marker before discovering an
