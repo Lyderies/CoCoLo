@@ -16,7 +16,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(1, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from test_install import PROJECT_CONFIG, git, installer, inventory, isolate_home, make_target  # noqa: E402
+from test_install import (  # noqa: E402
+    PROJECT_CONFIG, git, installed_base, installer, inventory, isolate_home, make_target,
+)
 
 from setup_wizard import steps  # noqa: E402
 
@@ -41,11 +43,13 @@ def failed_with_writes(report: dict, **fields) -> dict:
 
 class ClaudeUpgradeTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.base = Path(tempfile.mkdtemp(dir=os.path.realpath(tempfile.gettempdir())))
-        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
-        isolate_home(self, self.base / "home")
-        self.target, self.codex_options = make_target(self.base)
-        done = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        # The install and the previous release's files are built once per process and restored by copy.
+        self.base, self.codex_options = installed_base(self, "claude-upgrade", self.build_previous_release)
+        self.target = self.base / "target"
+
+    def build_previous_release(self, base: Path) -> list[str]:
+        target, codex_options = make_target(base)
+        done = installer.operate("install", target, apply=True, codex_options=codex_options)
         self.assertTrue(done["ok"], done)
         # Put the previous release's Claude files and manifest in place of the new ones.
         release = json.loads((PACKAGE / "previous-releases.json").read_text())["releases"][0]
@@ -57,9 +61,10 @@ class ClaudeUpgradeTests(unittest.TestCase):
         manifest["bundle_sha256"] = hashlib.sha256(canonical(manifest)).hexdigest()
         files[MANIFEST] = canonical(manifest).decode()
         for path, content in files.items():
-            (self.target / path).write_text(content)
-        git(self.target, "add", ".")
-        git(self.target, "commit", "-qm", "claude package 0.8.40")
+            (target / path).write_text(content)
+        git(target, "add", ".")
+        git(target, "commit", "-qm", "claude package 0.8.40")
+        return codex_options
 
     def test_preview_and_apply_upgrade_the_previous_claude_release(self) -> None:
         preview = installer.operate("install", self.target, codex_options=self.codex_options)
