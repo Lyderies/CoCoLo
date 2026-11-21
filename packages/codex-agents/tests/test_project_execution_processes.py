@@ -13,7 +13,7 @@ import unittest
 
 import tests.support  # noqa: F401
 from tests import test_account_claim_storage as fixtures
-from tests.learning_support import admit_provider
+from tests.learning_support import admit_provider, replace_fake_client
 from tests.test_bridge import CLEAN
 
 from codex_agents.account_api import AccountRequest, account_request_digest
@@ -129,7 +129,7 @@ time.sleep(30)
             # One inert fixture client serves metadata/help and the
             # actual slow child. Preparation resolves this same original file.
             wrapper = self.bridge.tools/'codex'
-            wrapper.write_text('#!'+sys.executable+'\n'+f'''
+            replace_fake_client(wrapper, '#!'+sys.executable+'\n'+f'''
 import json, os, sys, time
 from pathlib import Path
 if sys.argv[1:2] == ['exec'] and '-m' in sys.argv:

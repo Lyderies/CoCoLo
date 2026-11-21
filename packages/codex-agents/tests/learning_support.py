@@ -624,6 +624,16 @@ def _launcher() -> str:
     return path
 
 
+def replace_fake_client(path, data, mode: int = 0o700) -> None:
+    """Give one test its own fake client at `path`: unlink the shared hard link, write a fresh file.
+
+    Writing through the link would change the shared read-only launcher for every test."""
+    path = Path(path)
+    path.unlink(missing_ok=True)
+    path.write_bytes(data if isinstance(data, bytes) else data.encode())
+    path.chmod(mode)
+
+
 def fake_provider_tools(directory: Path) -> dict[str, str]:
     """Install fake `codex` and `claude` clients; return an environment using them.
 
