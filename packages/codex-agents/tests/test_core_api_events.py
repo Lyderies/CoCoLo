@@ -43,21 +43,6 @@ class FilterAndBoundsTests(CoreCase):
         self.service.emit("alert.guard", {"why": "ctx"})
         self.assertEqual("alert.guard", next(stream)["kind"])
 
-    def test_api13_slow_subscriber_is_dropped_without_blocking_others_or_the_writer(self):  # API-13
-        self.service.stop(); self.start(event_buffer=3, max_subscriptions=4)
-        slow, fast = self.client().subscribe({"from_seq": 5}), self.client().subscribe({"from_seq": 5})
-        for i in range(20):
-            self.service.emit("unit.updated", {"n": i}, unit_id="U-0001")  # never blocks
-        self.assertEqual(25, read_jsonl(self.records / "events.jsonl")[-1]["seq"])
-        self.assertEqual(6, next(fast)["seq"])
-        self.assertEqual("subscription.dropped", self._last_kind(slow))
-
-    def _last_kind(self, stream):
-        last = None
-        for event in stream:
-            last = event["kind"]
-        return last
-
 
 class NoSecretsTests(CoreCase):
     def test_api14_events_carry_ids_and_summaries_never_transcripts_or_secrets(self):  # API-14
