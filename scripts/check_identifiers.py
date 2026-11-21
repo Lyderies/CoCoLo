@@ -43,9 +43,12 @@ MAX_DENYLIST_BYTES = 1024 * 1024
 GIT_SECONDS = 120
 DEFAULT_DENYLIST_PARTS = (".config", "codex-claude-agent-orchestration", "identifier-denylist.txt")
 
+# Where /Users or /home may start: not inside another path or word, but also right after a file URL
+# scheme (a file URL) and after the macOS data-volume prefix (/System/Volumes/Data).
+HOME_ROOT = r"(?:(?<![\w/])|(?<=file://)|(?<=/System/Volumes/Data))"
 PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("home-path", re.compile(r"(?<![\w/])/Users/(?!Shared\b)[A-Za-z0-9._-]+")),
-    ("home-path", re.compile(r"(?<![\w/])/home/[A-Za-z0-9._-]+")),
+    ("home-path", re.compile(rf"{HOME_ROOT}/Users/(?!Shared\b)[A-Za-z0-9._-]+")),
+    ("home-path", re.compile(rf"{HOME_ROOT}/home/[A-Za-z0-9._-]+")),
     ("home-path", re.compile(r"\b[A-Za-z]:\\+Users\\+[A-Za-z0-9._-]+", re.IGNORECASE)),
     ("hostname", re.compile(r"\b[A-Za-z0-9-]+\.local\b(?!\.)")),
     ("hostname", re.compile(r"\b[A-Za-z0-9]+-MacBook(?:-[A-Za-z0-9]+)*\b")),
@@ -143,21 +146,27 @@ def email_allowed(address: str) -> bool:
     return any(pattern.fullmatch(address) for pattern in ALLOWED_EMAILS)
 
 
-def _placeholder_home(match: re.Match[str], line: str) -> bool:
-    """True only for an exact, lower-case placeholder token that is a whole path component."""
+def _placeholder_home(match: re.Match[str], line: str, strict: bool = False) -> bool:
+    """True only for an exact, lower-case placeholder token that is a whole path component.
+
+    ``strict`` is for file names, which have no prose around them: only a separator or the end ends the token.
+    """
 
     if re.split(r"[\\/]+", match.group(0))[-1] not in ALLOWED_HOME_NAMES:
         return False
     following = line[match.end():match.end() + 1]
     if following == "" or following in COMPONENT_END:
         return True
+    if strict:
+        return False
     if following in PROSE_PUNCTUATION:
-        rest = line[match.end() + 1:]
+        # The whole run of prose punctuation must be followed by the end, a space or a separator, never more name.
+        rest = line[match.end() + 1:].lstrip("'`)]},;")
         return rest == "" or rest[0] in AFTER_PROSE or (rest[0] == "." and rest[1:2] in ("", " ", "\t"))
     return False
 
 
-def scan_text(text: str, location: str, denylist: tuple[str, ...]) -> list[Finding]:
+def scan_text(text: str, location: str, denylist: tuple[str, ...], strict: bool = False) -> list[Finding]:
     findings = []
     for number, line in enumerate(text.splitlines(), start=1):
         where = f"{location}:{number}"
@@ -167,7 +176,7 @@ def scan_text(text: str, location: str, denylist: tuple[str, ...]) -> list[Findi
                     continue
                 if category == "hostname" and match.group(0).casefold() in ALLOWED_HOSTNAMES:
                     continue
-                if category == "home-path" and _placeholder_home(match, line):
+                if category == "home-path" and _placeholder_home(match, line, strict):
                     continue
                 findings.append(Finding(category, where))
         folded = line.casefold()
@@ -322,7 +331,7 @@ def _display_name(raw: bytes, denylist: tuple[str, ...]) -> str:
         name = raw.decode("utf-8")
     except UnicodeDecodeError:
         return REDACTED
-    if any(unicodedata.category(ch)[0] == "C" for ch in name) or scan_text(name, "", denylist):
+    if any(unicodedata.category(ch)[0] == "C" for ch in name) or scan_text(name, "", denylist, strict=True):
         return REDACTED
     return name
 
@@ -337,7 +346,7 @@ def _scan_named(raw: bytes, content: Callable[[], bytes | None], denylist: tuple
     except UnicodeDecodeError:
         findings.append(Finding("non-utf8-name", f"{REDACTED}:0"))
     display = _display_name(raw, denylist)
-    findings.extend(Finding(f.category, f"{REDACTED}:0") for f in scan_text(name, "", denylist))
+    findings.extend(Finding(f.category, f"{REDACTED}:0") for f in scan_text(name, "", denylist, strict=True))
     data = content()
     if data is not None and (text := _decode(data)) is not None:
         findings.extend(scan_text(text, display, denylist))
