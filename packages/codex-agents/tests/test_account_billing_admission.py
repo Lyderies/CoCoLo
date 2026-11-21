@@ -452,6 +452,75 @@ class AccountBillingAdmissionTests(unittest.TestCase):
         result = self.owner.admit(original)
         self.assertIs(type(result), ProbeAdmission, result)
 
+    def store_probe_only(self, info, *, age=2000):
+        """A probe's own records (no run), inside the reuse window."""
+        records = claude_rate_limit_records(info, account_fingerprint=self.identity['account_fingerprint'],
+                                            observed_at_ms=self.clock-age)
+        self.ledger._store_provider_observations(self.fixture.project_id, records, timestamp=self.clock-age)
+        return records
+
+    FAVOURABLE = {'status': 'allowed', 'isUsingOverage': False,
+                  'overageStatus': 'rejected', 'overageDisabledReason': 'org_level_disabled'}
+
+    def test_B2_a_probe_that_saw_paid_usage_is_refused_on_that_probe_and_on_every_reuse(self):
+        """B1/B2 (safety): reuse skips only the provider call, never the judgment; no run record is involved."""
+        self.store_probe_only({'status': 'allowed', 'isUsingOverage': True, 'overageStatus': 'allowed'})
+        for number in range(2):
+            original = self.reserve(f'probe-overage-{number}')
+            self.prepared(original)
+            result = self.owner.admit(original)
+            self.assertIs(type(result), dict, result)
+            self.assertEqual('denied', result['probe'], result)
+            self.assertEqual('paid_usage_usable', result['reason_code'], result)
+
+    def test_B3_an_api_key_at_reuse_time_is_refused_even_with_a_fresh_probe_record(self):
+        self.store_probe_only(self.FAVOURABLE)
+        original = self.reserve('probe-api-key')
+        self.prepared(original)
+        with mock.patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'sk-test'}):
+            # The caller's own authorisation stops a key first (probe_not_authorized); the judgment must hold too,
+            # so it is exercised with that earlier gate out of the way.
+            with self.assertRaisesRegex(ProbeAdmissionError, 'probe_not_authorized'):
+                self.owner.admit(original)
+            with mock.patch.object(self.owner, '_authorize'):
+                result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertEqual('denied', result['probe'], result)
+        self.assertEqual('provider_api_key_present', result['reason_code'], result)
+
+    def test_B3_an_unreviewed_client_version_at_reuse_time_is_refused_even_with_a_fresh_probe_record(self):
+        from codex_agents.admission_inputs import AdmissionInputPolicy
+        self.store_probe_only(self.FAVOURABLE)
+        with mock.patch.object(self.views, '_claim_policy', return_value=AdmissionInputPolicy('999.0.0', '1000.0.0', None)):
+            original = self.reserve('probe-version')
+            self.prepared(original)
+            result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertEqual('denied', result['probe'], result)
+        self.assertEqual('client_version_unreviewed', result['reason_code'], result)
+
+    def test_B3_a_missing_attestation_at_reuse_time_is_refused_even_with_a_fresh_probe_record(self):
+        self.store_probe_only(self.FAVOURABLE)
+        with self.ledger._lock, self.ledger._connection:
+            self.ledger._connection.execute('DELETE FROM owner_attestations')
+        original = self.reserve('probe-attestation')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertEqual('denied', result['probe'], result)
+        self.assertEqual('billing_attestation_missing', result['reason_code'], result)
+
+    def test_B4_a_clean_reuse_still_answers_reused_without_a_new_probe_admission(self):
+        records = self.store_probe_only(self.FAVOURABLE)
+        original = self.reserve('probe-clean')
+        self.prepared(original)
+        result = self.owner.admit(original)
+        self.assertIs(type(result), dict, result)
+        self.assertEqual('reused', result['probe'], result)
+        self.assertEqual([self.identity, *records], result['records'])
+        self.assertEqual(0, self.ledger._connection.execute(
+            "SELECT COUNT(*) FROM records WHERE record_type='probe_admission'").fetchone()[0])
+
     def tearDown_probe_state(self):
         connection = self.ledger._connection
         with self.ledger._lock, connection:

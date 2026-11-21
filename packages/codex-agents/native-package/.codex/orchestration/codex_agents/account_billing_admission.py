@@ -348,7 +348,17 @@ class AccountBillingAdmission:
             if latest is not None and (not 0 <= now-latest['observed_at_ms'] < PROBE_REUSE_MS
                     or self._newer_run_restricts(latest, mine, prepared['headroom'], fingerprint, now)):
                 latest = None
+            judged = None
             if latest is not None:
+                # B1: a reuse skips only the provider call, never the judgment. Paid usage, an API key, the client
+                # version and the attestation are judged again on the records at hand; a refusal is the answer.
+                judged = evaluate_admission(provider='claude', identities=prepared['identities'],
+                    attestations=prepared['attestations'], billing=prepared['billing'], headroom=prepared['headroom'],
+                    window_headroom=prepared['headroom'], prior_claude_admissions=prepared['prior_claude_admissions'],
+                    environ=guard, now_ms=now, admission_policy=prepared['admission_policy'],
+                    cited_digests=prepared['cited_digests'], probe=True,
+                    prior_run_admissions=[(f, t) for f, t in prepared['prior_admissions'] if t >= now-18_000_000])
+            if latest is not None and judged['decision'] == 'pass':
                 heads = [r for r, _ in prepared['headroom']
                          if r['account_fingerprint'] == fingerprint and r.get('run_id') is None and r.get('phase') is None]
                 selected = [identity, *heads[-1:], latest]
@@ -359,7 +369,8 @@ class AccountBillingAdmission:
                     and r.record['provider'] == 'claude' and r.record['decision'] == 'pass'
                     and r.record['account_fingerprint'] == fingerprint and r.record['observed_at_ms'] > now-PROBE_COOLDOWN_MS
                     for r in result.prepared.rows)
-                decision = ({'provider': 'claude', 'decision': 'deny', 'reason_code': 'probe_cooldown',
+                decision = (judged if judged is not None else
+                    {'provider': 'claude', 'decision': 'deny', 'reason_code': 'probe_cooldown',
                     'admission_basis': None, 'account_fingerprint': fingerprint, 'evidence_digests': [], 'observed_at_ms': now}
                     if cooldown else evaluate_admission(provider='claude', identities=prepared['identities'],
                         attestations=prepared['attestations'], billing=prepared['billing'], headroom=prepared['headroom'],
