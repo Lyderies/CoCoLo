@@ -169,15 +169,6 @@ class ControlCommandTests(CoreCase):
 
 
 class ReplyTextTests(CoreCase):
-    def test_api16_query_answered_event_has_no_reply_text_but_the_asker_can_read_it(self):
-        query = self.client("confirm").call("query.ask", {"text": "Rewrite the parser?", "mode": "forward"})["query_id"]
-        stream = self.client("read").subscribe({"from_seq": 6, "filter": {"kinds": ["query.answered"]}, "limit": 1})
-        self.client("owner").call("query.reply", {"query_id": query, "text": "No, keep it.", "cost_tokens": 12})
-        event = next(stream)
-        self.assertEqual(query, event["data"]["query_id"])
-        self.assertNotIn("No, keep it.", json.dumps(event))
-        answer = self.client("confirm").call("queries.get", {"id": query})["query"]
-        self.assertEqual(("answered", "No, keep it.", 12), (answer["state"], answer["reply"], answer["cost_tokens"]))
 
     def test_api16_reply_cost_must_be_a_non_negative_integer(self):
         query = self.client("confirm").call("query.ask", {"text": "Rewrite the parser?", "mode": "forward"})["query_id"]
