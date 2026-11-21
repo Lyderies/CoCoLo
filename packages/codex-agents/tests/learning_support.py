@@ -191,6 +191,7 @@ def result() -> dict:
     return {
         "assignment_id": "assignment-1",
         "status": "completed",
+        "semantic_verdict": "pass",
         "summary": "sensitive result text",
         "artifacts": ["private/path"],
         "evidence": [
