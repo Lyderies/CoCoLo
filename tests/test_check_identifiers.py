@@ -35,6 +35,29 @@ class ScanTextTests(unittest.TestCase):
     def test_placeholders_and_shared_paths_are_allowed(self) -> None:
         self.assertEqual(categories("use /" + "Users/<name> or /" + "Users/Shared/x"), [])
 
+    def test_placeholder_exemption_is_exact_case_sensitive_and_whole_component(self) -> None:
+        """Only a bare placeholder token that ends at a separator or the end of the path is exempt."""
+
+        win = "C:" + "\\Users" + "\\"
+        for name, sample in {
+            "space in the account name": win + "User Smith" + "\\p",
+            "non-ASCII suffix": "/" + "home/user" + "\u00f1ame/p",
+            "capitalised placeholder": "/" + "Users/User/p",
+            "upper-case single letter": "/" + "Users/X/p",
+            "capitalised word": "/" + "Users/Example/p",
+            "tilde suffix": "/" + "home/user~1/p",
+            "plus suffix": "/" + "home/user+a/p",
+            "space after the token is ambiguous": "/" + "Users/x y/p",
+        }.items():
+            with self.subTest(name):
+                self.assertEqual(categories(sample), ["home-path"], name)
+        for sample in (
+            "/" + "Users/x", "/" + "Users/x/", "`" + "/" + "Users/you" + "`", "(" + "/" + "home/user" + ")",
+            '"' + "/" + "Users/name" + '"', win + "user" + "\\p", "cd " + "/" + "home/example/p",
+        ):
+            with self.subTest(sample):
+                self.assertEqual(categories(sample), [])
+
     def test_hostnames_are_flagged(self) -> None:
         self.assertEqual(categories(f"host {HOSTNAME}"), ["hostname"])
         self.assertEqual(categories(f"machine {LAPTOP}"), ["hostname"])

@@ -1,0 +1,18 @@
+#!@QA_PYTHON@
+# QA identifier scan. Replace @QA_PYTHON@ on the first line with the absolute trusted interpreter path
+# (no flags), save it as qa-security at the project root next to scripts/check_identifiers.py, and commit both. QA cannot start git,
+# so the host lists the files with git before the sandbox starts and passes that manifest, and a copy of
+# the owner's private denylist, in AO_QA_FILE_MANIFEST and AO_IDENTIFIER_DENYLIST. The scan refuses
+# (exit 2) rather than scan fewer files when either is missing.
+import sys
+from pathlib import Path
+
+root = Path.cwd()  # QA runs the wrapper from the project root (the wrapper itself is a sealed copy)
+sys.path.insert(0, str(root / "scripts"))
+import check_identifiers  # noqa: E402
+
+try:
+    findings = check_identifiers.scan_tree(root, check_identifiers.load_denylist(), manifest=check_identifiers.manifest_from_environment())
+    sys.exit(check_identifiers.report(findings))
+except check_identifiers.ScanRefused as reason:
+    sys.exit(check_identifiers.refuse(reason))

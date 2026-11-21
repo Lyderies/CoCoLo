@@ -2,7 +2,8 @@
 """Block personal and machine identifiers from entering this public repository.
 
 Findings report only a category, path and line, never the matched text, so CI logs
-cannot leak a denylisted value. Owner-specific terms live in a private denylist file
+cannot leak a denylisted value. A path that itself holds a value (an identifier, a denylisted
+term, a control character or invalid UTF-8) is printed as ``[redacted]``. Owner-specific terms live in a private denylist file
 outside the repository (one term per line, ``#`` comments allowed):
 
 - ``$AO_IDENTIFIER_DENYLIST`` when set, otherwise
@@ -10,6 +11,7 @@ outside the repository (one term per line, ``#`` comments allowed):
 
 Usage:
     check_identifiers.py                 scan tracked files plus untracked files that are not ignored
+                                         (the git file manifest; refuses when git cannot produce it)
     check_identifiers.py --staged        scan staged content (pre-commit)
     check_identifiers.py --identity      check the configured commit identity
     check_identifiers.py --commits REV   check author/committer emails reachable from REV
@@ -18,11 +20,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,9 +49,17 @@ ALLOWED_EMAILS = (
     re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]*\.(?:invalid|test|example|localhost)$"),
     re.compile(r"^[A-Za-z0-9._-]+@openssh\.com$"),  # SSH key-type names, not mailboxes
 )
-# Obvious placeholder account names in documentation and evidence (/Users/x, /home/user). A real-looking
-# name (anything else, including names that merely start with one of these) is still a finding.
+# Obvious placeholder account names in documentation and evidence (/Users/x, /home/user). The exemption is
+# exact: the whole path component must be one of these lower-case tokens, so "User", "X", "User Smith" and
+# a name that merely starts with a token are all findings. A token counts as a whole component only when the
+# next character ends it (a path separator, the end of the line, or a quote or bracket); anything else,
+# including a space or a non-ASCII letter, might continue a real account name.
 ALLOWED_HOME_NAMES = frozenset({"x", "user", "you", "name", "username", "yourname", "example"})
+COMPONENT_END = frozenset("/\\\"'`)]}>,;:")
+REDACTED = "[redacted]"
+# Command-line git, run with no user or system configuration so every machine lists the same files.
+GIT_LIST_ARGS = ("ls-files", "-z", "--cached", "--others", "--exclude-per-directory=.gitignore")
+MANIFEST_ENVIRONMENT = "AO_QA_FILE_MANIFEST"
 # Project namespaces that look like mDNS hostnames but identify no machine.
 ALLOWED_HOSTNAMES = frozenset({"codex-agents.local", "claude-agents.local"})
 
@@ -61,8 +73,12 @@ class Finding:
         return f"{self.location}: {self.category}"
 
 
+class ScanRefused(Exception):
+    """The scan cannot be done as specified; it refuses rather than scan fewer files."""
+
+
 def load_denylist(path: Path | None = None) -> tuple[str, ...]:
-    """Return lower-cased private terms; a missing file yields no terms."""
+    """Return lower-cased private terms; a missing file yields no terms, an unreadable one refuses."""
 
     if path is None:
         configured = os.environ.get("AO_IDENTIFIER_DENYLIST")
@@ -71,12 +87,23 @@ def load_denylist(path: Path | None = None) -> tuple[str, ...]:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return ()
+    except (OSError, UnicodeError):
+        raise ScanRefused("the private denylist exists but cannot be read") from None
     terms = (line.strip() for line in text.splitlines())
     return tuple(term.casefold() for term in terms if term and not term.startswith("#"))
 
 
 def email_allowed(address: str) -> bool:
     return any(pattern.fullmatch(address) for pattern in ALLOWED_EMAILS)
+
+
+def _placeholder_home(match: re.Match[str], line: str) -> bool:
+    """True only for an exact, lower-case placeholder token that is a whole path component."""
+
+    if re.split(r"[\\/]+", match.group(0))[-1] not in ALLOWED_HOME_NAMES:
+        return False
+    following = line[match.end():match.end() + 1]
+    return following == "" or following in COMPONENT_END
 
 
 def scan_text(text: str, location: str, denylist: tuple[str, ...]) -> list[Finding]:
@@ -89,7 +116,7 @@ def scan_text(text: str, location: str, denylist: tuple[str, ...]) -> list[Findi
                     continue
                 if category == "hostname" and match.group(0).casefold() in ALLOWED_HOSTNAMES:
                     continue
-                if category == "home-path" and re.split(r"[\\/]+", match.group(0))[-1].casefold() in ALLOWED_HOME_NAMES:
+                if category == "home-path" and _placeholder_home(match, line):
                     continue
                 findings.append(Finding(category, where))
         folded = line.casefold()
@@ -98,8 +125,64 @@ def scan_text(text: str, location: str, denylist: tuple[str, ...]) -> list[Findi
     return findings
 
 
-def _git(*args: str) -> bytes:
+def _git(*args: str | bytes) -> bytes:
     return subprocess.run(["git", *args], check=True, capture_output=True).stdout
+
+
+def _git_environment() -> dict[str, str]:
+    """No GIT_* variables and no user or system git configuration: the same file list on every machine."""
+
+    environment = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    environment.update({
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0", "xcrun_nocache": "1",
+    })
+    return environment
+
+
+def parse_manifest(data: bytes) -> list[bytes]:
+    """NUL-separated git path names to a sorted, de-duplicated list; entries ending in ``/`` are nested repositories."""
+
+    return sorted({name for name in data.split(b"\0") if name and not name.endswith(b"/")})
+
+
+def git_manifest(root: Path) -> list[bytes]:
+    """The one file list every identifier scan uses, straight from git: tracked files (even when an
+    ignore rule names them) plus untracked files that no ``.gitignore`` ignores.
+
+    Only ``.gitignore`` files count (not ``.git/info/exclude`` or a global ignore file), so a clean
+    checkout in CI lists exactly what QA lists. Refuses when git cannot produce the list.
+    """
+
+    git = shutil.which("git")
+    if git is None:
+        raise ScanRefused("git is unavailable, so the files to scan cannot be listed")
+    try:
+        completed = subprocess.run(
+            [git, "-c", "core.fsmonitor=false", "-C", str(root), *GIT_LIST_ARGS],
+            capture_output=True, env=_git_environment(), stdin=subprocess.DEVNULL, timeout=120, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise ScanRefused("git could not be run, so the files to scan cannot be listed") from None
+    if completed.returncode != 0:
+        raise ScanRefused("git could not list the files to scan (not a repository?)")
+    return parse_manifest(completed.stdout)
+
+
+def read_manifest(path: Path) -> list[bytes]:
+    try:
+        return parse_manifest(path.read_bytes())
+    except OSError:
+        raise ScanRefused("the file manifest supplied by the host cannot be read") from None
+
+
+def manifest_from_environment() -> list[bytes]:
+    """The manifest the QA host wrote from git before the sandbox started (QA cannot run git itself)."""
+
+    configured = os.environ.get(MANIFEST_ENVIRONMENT)
+    if not configured:
+        raise ScanRefused("the host supplied no git file manifest; QA must not scan a smaller set of files")
+    return read_manifest(Path(configured))
 
 
 def _decode(data: bytes) -> str | None:
@@ -108,98 +191,62 @@ def _decode(data: bytes) -> str | None:
     return data.decode("utf-8", errors="replace")
 
 
-def _gitignore_rules(directory: Path, prefix: str) -> list[tuple[str, bool, bool, bool]]:
-    """Parse one .gitignore as (pattern, anchored, directory_only, negated); anchored to ``prefix``."""
+def list_scan_files(root: Path, *, manifest: list[bytes] | None = None) -> list[str]:
+    """Display form of the scan manifest (git's when none is given); for tests and reporting."""
 
+    return [os.fsdecode(name) for name in (git_manifest(root) if manifest is None else manifest)]
+
+
+def _display_name(name: str, denylist: tuple[str, ...]) -> str:
+    """The path as printed: itself only if it passes the scan and holds no control character."""
+
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in name) or scan_text(name, "", denylist):
+        return REDACTED
+    return name
+
+
+def _scan_named(raw: bytes, content: Callable[[], bytes | None], denylist: tuple[str, ...]) -> list[Finding]:
+    """Scan one listed path: its name, then its text. A name that is not valid UTF-8 is a finding."""
+
+    name = os.fsdecode(raw)
+    findings: list[Finding] = []
     try:
-        lines = (directory / ".gitignore").read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return []
-    rules = []
-    for raw in lines:
-        line = raw.rstrip()
-        if not line or line.startswith("#"):
-            continue
-        negated = line.startswith("!")
-        line = line[1:] if negated else line
-        directory_only = line.endswith("/")
-        line = line.strip("/") if directory_only else line
-        anchored = "/" in line
-        rules.append((prefix + line.lstrip("/") if anchored else line, anchored, directory_only, negated))
-    return rules
+        raw.decode("utf-8")
+    except UnicodeDecodeError:
+        findings.append(Finding("non-utf8-name", f"{REDACTED}:0"))
+    display = _display_name(name, denylist)
+    findings.extend(Finding(f.category, f"{REDACTED}:0") for f in scan_text(name, "", denylist))
+    data = content()
+    if data is not None and (text := _decode(data)) is not None:
+        findings.extend(scan_text(text, display, denylist))
+    return findings
 
 
-def _ignored(relative: str, is_dir: bool, rules: list[tuple[str, bool, bool, bool]]) -> bool:
-    ignored = False
-    for pattern, anchored, directory_only, negated in rules:
-        if directory_only and not is_dir:
-            continue
-        target = relative if anchored else relative.rsplit("/", 1)[-1]
-        if fnmatch.fnmatchcase(target, pattern):
-            ignored = not negated
-    return ignored
+def scan_tree(root: Path, denylist: tuple[str, ...], *, manifest: list[bytes] | None = None) -> list[Finding]:
+    """Scan every file in the manifest (git's own list when none is given).
 
-
-def _walk_files(root: Path) -> list[str]:
-    """In-process file set (no subprocess) matching ``git ls-files --cached --others --exclude-standard``.
-
-    Supports plain .gitignore patterns (globs, anchoring, trailing slash, negation); a file that is
-    tracked yet ignored is not listed here, which only matters outside a clean checkout.
+    A symbolic link is never followed: its name and its target text are scanned. A listed path that
+    does not exist or is not a regular file (a deleted file, a submodule) has only its name scanned.
     """
 
-    found: list[str] = []
+    def reader(raw: bytes) -> Callable[[], bytes | None]:
+        def read() -> bytes | None:
+            path = os.path.join(os.fsencode(root), raw)
+            try:
+                info = os.lstat(path)
+                if stat.S_ISLNK(info.st_mode):
+                    return os.readlink(path)
+                if not stat.S_ISREG(info.st_mode):
+                    return None
+                with open(path, "rb") as handle:
+                    return handle.read(MAX_BYTES + 1)
+            except OSError:
+                return None
+        return read
 
-    def visit(directory: Path, prefix: str, rules: list[tuple[str, bool, bool, bool]]) -> None:
-        rules = rules + _gitignore_rules(directory, prefix)
-        for entry in sorted(os.scandir(directory), key=lambda item: item.name):
-            relative = prefix + entry.name
-            if entry.name == ".git":
-                continue
-            is_dir = entry.is_dir(follow_symlinks=False)
-            if _ignored(relative, is_dir, rules):
-                continue
-            if is_dir:
-                if not (Path(entry.path) / ".git").exists():  # a nested repository is not ours to scan
-                    visit(Path(entry.path), relative + "/", rules)
-            else:
-                found.append(relative)
-
-    visit(root, "", [])
-    return sorted(found)
-
-
-def list_scan_files(root: Path, *, use_git: bool = True) -> list[str]:
-    """The one file set every identifier scan uses: tracked files plus untracked files not ignored.
-
-    ``use_git=False`` is for the QA sandbox, which cannot start git; it walks the disk in-process.
-    """
-
-    if not use_git:
-        return _walk_files(root)
-    out = subprocess.run(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        cwd=root, check=True, capture_output=True,
-    ).stdout
-    names = (raw.decode("utf-8", errors="replace") for raw in filter(None, out.split(b"\0")))
-    return sorted({name for name in names if not name.endswith("/")})
-
-
-def scan_tree(
-    root: Path, denylist: tuple[str, ...], *, use_git: bool = True, exclude: frozenset[str] = frozenset(),
-) -> list[Finding]:
-    """Scan list_scan_files(root); ``exclude`` names top-level entries to skip (private installation files)."""
-
-    findings = []
-    for name in list_scan_files(root, use_git=use_git):
-        if name.split("/", 1)[0] in exclude:
-            continue
-        path = root / name
-        if path.is_symlink() or not path.is_file():
-            continue
-        findings.extend(scan_text(name, f"{name} (path)", denylist))
-        text = _decode(path.read_bytes())
-        if text is not None:
-            findings.extend(scan_text(text, name, denylist))
+    findings: list[Finding] = []
+    for raw in git_manifest(root) if manifest is None else manifest:
+        findings.extend(_scan_named(raw, reader(raw), denylist))
     return findings
 
 
@@ -209,11 +256,7 @@ def scan_paths(staged: bool, denylist: tuple[str, ...]) -> list[Finding]:
     names = _git("diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z")
     findings = []
     for raw in filter(None, names.split(b"\0")):
-        path = raw.decode("utf-8", errors="replace")
-        findings.extend(scan_text(path, f"{path} (path)", denylist))
-        text = _decode(_git("show", f":{path}"))
-        if text is not None:
-            findings.extend(scan_text(text, path, denylist))
+        findings.extend(_scan_named(raw, lambda raw=raw: _git("show", b":" + raw), denylist))
     return findings
 
 
@@ -244,6 +287,23 @@ def check_commits(revision: str, denylist: tuple[str, ...]) -> list[Finding]:
     return findings
 
 
+def report(findings: list[Finding], denylist_terms: int = 0) -> int:
+    """Print value-free findings; the exit status is 1 with any finding, else 0."""
+
+    for finding in findings:
+        print(finding, file=sys.stderr)
+    if findings:
+        print(f"FAIL: {len(findings)} identifier finding(s); values are not printed.", file=sys.stderr)
+        return 1
+    print(f"PASS: no identifiers found ({denylist_terms} private denylist terms loaded).")
+    return 0
+
+
+def refuse(reason: ScanRefused) -> int:
+    print(f"REFUSED: {reason}. Nothing was scanned.", file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--staged", action="store_true", help="scan staged content")
@@ -251,19 +311,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commits", metavar="REV", help="check commit identities reachable from REV")
     args = parser.parse_args(argv)
 
-    denylist = load_denylist()
-    findings = scan_paths(args.staged, denylist)
-    if args.identity:
-        findings += check_identity(denylist)
-    if args.commits:
-        findings += check_commits(args.commits, denylist)
-    for finding in findings:
-        print(finding, file=sys.stderr)
-    if findings:
-        print(f"FAIL: {len(findings)} identifier finding(s); values are not printed.", file=sys.stderr)
-        return 1
-    print(f"PASS: no identifiers found ({len(denylist)} private denylist terms loaded).")
-    return 0
+    try:
+        denylist = load_denylist()
+        findings = scan_paths(args.staged, denylist)
+        if args.identity:
+            findings += check_identity(denylist)
+        if args.commits:
+            findings += check_commits(args.commits, denylist)
+    except ScanRefused as reason:
+        return refuse(reason)
+    return report(findings, len(denylist))
 
 
 if __name__ == "__main__":
