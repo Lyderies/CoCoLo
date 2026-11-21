@@ -227,11 +227,19 @@ class AuditTests(CoreCase):
                                                         {"kind": "note", "text": "x"}))
         self.assertEqual([], self.inbox())
 
-    def test_api23_refusal_audit_is_bounded_per_connection(self):
+    def test_api23_refusal_audit_is_bounded_per_connection(self):  # API-23, API-24 (rewritten to the 2026-11-21 contract)
+        """A refusal flood keeps audit.jsonl bounded by its one rotation and leaves commands.jsonl unchanged."""
+        self.service.stop()
+        self.start(audit_max_bytes=3000)
+        before = (self.records / "commands.jsonl").read_bytes()
         client = self.client("read")
-        for _ in range(80):
+        for _ in range(150):
             self.error_code(client, "control.pause")
-        self.assertLess(len(self.audit()), 80)
+        self.assertEqual(before, (self.records / "commands.jsonl").read_bytes())
+        self.assertTrue((self.records / "audit.jsonl.1").exists())
+        for name in ("audit.jsonl", "audit.jsonl.1"):
+            self.assertLess((self.records / name).stat().st_size, 3000 + 400, name)  # one row of overshoot at most
+        self.assertEqual({"audit.jsonl", "audit.jsonl.1"}, {p.name for p in self.records.iterdir() if "audit" in p.name})
 
 
 class LimitTests(CoreCase):
