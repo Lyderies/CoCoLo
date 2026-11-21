@@ -74,6 +74,47 @@ class RefusedPreviewTests(unittest.TestCase):
         self.assertIn("untrusted_manifest".replace("_", " "), caught.exception.message.lower())
 
 
+class RefusalWordingTests(unittest.TestCase):
+    """Each Claude refusal says plainly what is known, that nothing changed, and what to do next."""
+
+    MANUAL = "python3 install.py install --target /p"
+
+    def message(self, code: str) -> str:
+        text, known = steps.installer_refusal(f'{{"claude": {{"error": "{code}"}}}}', self.MANUAL)
+        self.assertTrue(known, code)
+        return text
+
+    def test_a_catalogue_refusal_blames_this_copy_of_cocolo_not_the_project(self) -> None:
+        for code in ("previous_release_not_pinned", "previous_release_path_refused", "invalid_previous_release"):
+            with self.subTest(code=code):
+                text = self.message(code)
+                self.assertIn("This copy of CoCoLo", text)
+                self.assertIn("Nothing was changed", text)
+                self.assertIn("Get a fresh copy of CoCoLo", text)
+                self.assertIn("run setup again", text)
+                self.assertNotIn("Restore them with git", text)
+
+    def test_a_missing_or_changed_file_is_not_called_hand_edited(self) -> None:
+        text = self.message("managed_file_modified")
+        self.assertNotIn("by hand", text)
+        self.assertIn("changed or missing", text)
+        self.assertIn("Nothing was changed", text)
+        self.assertIn("git restore .claude", text)
+        self.assertIn("run setup again", text)
+
+    def test_an_untrusted_manifest_names_what_to_do_without_asserting_a_cause(self) -> None:
+        text = self.message("untrusted_manifest")
+        self.assertNotIn("older", text)
+        self.assertIn("Nothing was changed", text)
+        self.assertIn("git restore .claude", text)
+        self.assertIn("run setup again", text)
+
+    def test_update_required_does_not_claim_the_install_is_older(self) -> None:
+        text = self.message("update_required")
+        self.assertNotIn("is an older release", text)
+        self.assertIn("Update the install", text)
+
+
 class DoneScreenTests(unittest.TestCase):
     def summary(self, project: str) -> Screen:
         wizard = make_wizard(update=False)

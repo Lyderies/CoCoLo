@@ -292,15 +292,22 @@ _INSTALLER_REFUSALS = (
       "*bisect*progress*", "*unmerged*"),
      "A Git operation (merge, rebase, cherry-pick or similar) is unfinished in the project. Finish or abort it "
      "first."),
+    (("*previous_release_not_pinned*", "*previous_release_path_refused*", "*invalid_previous_release*"),
+     "This copy of CoCoLo carries a list of earlier releases that failed its safety check, so setup will not "
+     "use it to upgrade your project. Nothing was changed. Get a fresh copy of CoCoLo from its official "
+     "source, then run setup again from that copy."),
     (("*untrusted_manifest*",),
-     "The Claude files installed in this project are not from a release this setup can upgrade (untrusted manifest): "
-     "they were edited, or come from an older or unknown release. Restore them with git, or remove the Claude "
-     "package files, then run setup again."),
+     "The Claude files installed in this project do not match any release this setup knows how to upgrade "
+     "(untrusted manifest). Nothing was changed. If you changed them, put them back with git restore .claude "
+     "(and git status to check), then run setup again."),
     (("*update_required*",),
-     "The Claude package installed in this project is an older release and must be updated first (update required)."),
+     "The Claude files installed in this project are from a different release than this setup (update "
+     "required). Nothing was changed. Update the install (choose Configure, then 'Update the install and "
+     "walk through every step')."),
     (("*managed_file_modified*",),
-     "A Claude file installed in this project was edited by hand (managed file modified), so it was not "
-     "replaced. Restore it with git, then run setup again."),
+     "A Claude file installed in this project is changed or missing (managed file modified), so setup did "
+     "not replace it. Nothing was changed. Put the Claude files back with git restore .claude, then run "
+     "setup again."),
     (("*managed paths*", "*uncommitted*"),
      "Managed paths (.codex, .agents, .claude) have uncommitted changes. Commit or discard them first."),
     (("*top of its working tree*", "*not a usable git*"),
