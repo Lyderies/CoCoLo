@@ -89,6 +89,7 @@ RUNTIME_FILES = (
     "codex_agents/control_api.py",
     "codex_agents/control_loop.py",
     "codex_agents/control_service.py",
+    "codex_agents/core_api.py",
     "codex_agents/dispatch_api.py",
     "codex_agents/egress_proxy.py",
     "codex_agents/evaluation.py",
