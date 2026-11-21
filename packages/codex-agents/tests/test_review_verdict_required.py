@@ -36,11 +36,28 @@ class ReviewVerdictRequiredTests(unittest.TestCase):
     def test_a_null_verdict_after_the_strict_schema_is_refused_not_passed(self):
         original = json.loads(test_bridge.RESULT_SCHEMA)
         normalized = remove_optional_nulls(test_bridge.null_filled(body()), original)
-        with self.assertRaises(ContractError):
-            validate_result(normalized, assignment=self.assignment('codex_agents_security_reviewer'))
-        with self.assertRaises(ContractError):
-            validate_result({**body(), 'semantic_verdict': None},
-                            assignment=self.assignment('codex_agents_security_reviewer'))
+        # Strengthened (never loosened): the earlier assertions accepted any ContractError, which the old
+        # code also raised for a null verdict (invalid_status); the requirement is that it is refused as missing.
+        for refused_body in (normalized, {**body(), 'semantic_verdict': None}):
+            with self.assertRaises(ResultContractError) as refused:
+                validate_result(refused_body, assignment=self.assignment('codex_agents_security_reviewer'))
+            self.assertEqual('missing_required_fields', refused.exception.reason_code)
+
+    def test_a_blocked_review_without_a_verdict_is_refused_not_read_as_blocked(self):
+        # status "blocked" is projected to a completed run with the verdict "blocked"; the review still has to
+        # state it. Likewise an explicit completed execution_state with the verdict left out.
+        for role in ('codex_agents_security_reviewer', 'claude_agents_verification_worker'):
+            for changes in ({'status': 'blocked'}, {'execution_state': 'completed'},
+                            {'status': 'blocked', 'execution_state': 'completed', 'semantic_verdict': None}):
+                with self.subTest(role=role, changes=changes), self.assertRaises(ResultContractError) as refused:
+                    validate_result(body(**changes), assignment=self.assignment(role))
+                self.assertEqual('missing_required_fields', refused.exception.reason_code)
+
+    def test_a_blocked_review_that_states_its_verdict_is_accepted(self):
+        checked = validate_result(body(status='blocked', semantic_verdict='blocked'),
+                                  assignment=self.assignment('codex_agents_security_reviewer'))
+        self.assertEqual('blocked', checked['semantic_verdict'])
+        validate_result(body(status='blocked'), assignment=self.assignment('codex_agents_researcher'))
 
     def test_an_explicit_verdict_is_accepted_and_other_roles_keep_the_legacy_projection(self):
         checked = validate_result(body(semantic_verdict='ready'),

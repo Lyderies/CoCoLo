@@ -912,9 +912,11 @@ def validate_result(data: Any, *, assignment: Any) -> dict[str, Any]:
         )
     if not isinstance(data["status"], str) or data["status"] not in RESULT_STATUSES:
         raise ResultContractError("invalid_status", "result status is unsupported")
-    if (data["status"] == "completed" and _is_review_role(assignment.get("role"))
-            and (data.get("semantic_verdict") is None)):
-        # A review states its verdict; a missing or null one is never filled in as "pass".
+    if (_is_review_role(assignment.get("role"))
+            and data.get("execution_state", _legacy_result_axes(data["status"])[0]) == "completed"
+            and data.get("semantic_verdict") is None):
+        # A review that completed states its verdict; a missing or null one is never filled in, whether the
+        # legacy status is "completed" (read as "pass") or "blocked" (read as "blocked").
         raise ResultContractError(
             "missing_required_fields", "result missing required fields: semantic_verdict"
         )
