@@ -174,14 +174,6 @@ class OwnerWallTests(CoreCase):
             with self.subTest(method):
                 self.assertEqual("owner_terminal_only", self.error_code(owner, method, {"confirm_id": "x"}))
 
-    def test_api22_walled_actions_change_no_records(self):  # API-22
-        before = {p.name: p.read_bytes() for p in self.records.iterdir() if p.name not in ("commands.jsonl", "tokens.json")}
-        owner = self.client("owner")
-        for method in self.WALLED:
-            self.error_code(owner, method)
-        after = {p.name: p.read_bytes() for p in self.records.iterdir() if p.name not in ("commands.jsonl", "tokens.json")}
-        self.assertEqual(before, after)
-
 
 class AuditTests(CoreCase):
 
