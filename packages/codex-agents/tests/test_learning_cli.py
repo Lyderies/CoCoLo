@@ -53,6 +53,7 @@ from tests.learning_support import (
     admit_provider,
     fake_provider_tools,
     generate_test_owner_key,
+    OWNER_SIGNATURE_NAMESPACE,
     trusted_tools,
     sign_owner_payload,
     result,
@@ -441,11 +442,30 @@ class LearningCliTests(unittest.TestCase):
             directory.mkdir()
             key, public = generate_test_owner_key(directory)
             self.assertNotIn("fingerprint", before)  # D36: status shows no key fingerprint
+            self.assertIsNone(before["last_replaced_at_ms"])
+            statement = b"owner statement"
+            allowed = self.state_root / "owner-allowed-signers"
+
+            def accepted(private: Path, name: str) -> bool:
+                signature = sign_owner_payload(private, statement, name)
+                try:
+                    return subprocess.run(
+                        ["ssh-keygen", "-Y", "verify", "-f", str(allowed), "-I", "codex-agents-owner",
+                         "-n", OWNER_SIGNATURE_NAMESPACE, "-s", str(signature)],
+                        input=statement, capture_output=True, check=False).returncode == 0
+                finally:
+                    signature.unlink(missing_ok=True)
+
+            self.assertTrue(accepted(self.owner_private_key, "old-before"))
             replaced = self._run(
                 "learning-replace-owner-key", "--public-key", f"{key}.pub"
             )["owner_key"]
             self.assertEqual((replaced["state"], replaced["replacements"]), ("ok", 1))
             self.assertNotIn("fingerprint", replaced)
+            # L2.2: the replacement really changed the key: the old key's signature is refused, the new one's accepted.
+            self.assertIsInstance(replaced["last_replaced_at_ms"], int)
+            self.assertTrue(accepted(key, "new-after"))
+            self.assertFalse(accepted(self.owner_private_key, "old-after"))
             after = self._run("learning-status")["owner_key"]
             self.assertEqual(after, replaced)
             fields = public.split()
