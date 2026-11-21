@@ -368,11 +368,29 @@ class StoredContextTests(RecordedContextFixture):
         self.assertEqual({'binding': self.binding.as_data(), 'delivery': {
             'record_id': self.delivery.record_id, 'record_content_digest': self.delivery.record_content_digest,
             'result_digest': self.delivery.result_digest}}, found)
-        for changes in ({'host_class': CLAUDE}, {'inputs_digest': 'f' * 64}):
-            with self.subTest(changes=changes), self.assertRaisesRegex(HistoryError, 'history_not_authorized'):
+        # O0d R1: another host class is not authorized; this class's run asked with other original inputs conflicts.
+        for changes, reason in (({'host_class': CLAUDE}, 'history_not_authorized'),
+                                ({'inputs_digest': 'f' * 64}, 'history_conflict')):
+            with self.subTest(changes=changes), self.assertRaisesRegex(HistoryError, reason):
                 store.stored_result_reference(self.binding.run_handle, self.binding.attempt,
                                               **{'host_class': CODEX,
                                                  'inputs_digest': self.record_context.inputs_digest, **changes})
+
+    def test_A1_an_attempt_that_was_never_opened_is_not_found_while_another_host_class_is_still_not_authorized(self):
+        # O0d R1: a missing dispatch is named plainly; only a caller that is not allowed is "not authorized".
+        self.open_and_consume()
+        self.publish()
+        store = self.reopen()
+        inputs = self.record_context.inputs_digest
+        with self.assertRaisesRegex(HistoryError, 'history_not_found'):
+            store.stored_result_reference('hrn_' + 'e' * 48, self.binding.attempt, host_class=CODEX,
+                                          inputs_digest=inputs)
+        with self.assertRaisesRegex(HistoryError, 'history_not_found'):
+            store.stored_result_reference(self.binding.run_handle, self.binding.attempt + 1, host_class=CODEX,
+                                          inputs_digest=inputs)
+        with self.assertRaisesRegex(HistoryError, 'history_not_authorized'):  # not this caller's run: nothing more said
+            store.stored_result_reference(self.binding.run_handle, self.binding.attempt, host_class=CLAUDE,
+                                          inputs_digest=inputs)
 
     def test_A2_each_wrong_caller_or_changed_input_is_refused_and_changes_nothing(self):
         digest = self.recorded()
