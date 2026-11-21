@@ -349,7 +349,9 @@ class SignedLegacyLearningStagingTests(unittest.TestCase):
             store = ProjectHistory(directory, PROJECT, allow_schema_upgrade=True)
             try:
                 self.assertEqual(records, list(store.learning_import_records('formal')))
-                self.assertEqual(signatures, list(store.learning_import_attestations('formal')))
+                # The store lists attestations by subject_record_id (its paging key), not in staging order.
+                self.assertEqual(sorted(signatures, key=lambda row: row['subject_record_id']),
+                                 list(store.learning_import_attestations('formal')))
                 self.assertEqual(0, store._connection.execute('SELECT COUNT(*) FROM project_operational_qa').fetchone()[0])
                 for qa, row in zip((positive, negative), signatures):
                     self.assertTrue(authority.verify_qa_attestation(PROJECT, qa, row['signature']))

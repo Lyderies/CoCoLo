@@ -2566,7 +2566,8 @@ class BridgeLifecycleTests(CliTestCase):
         with self.assertRaisesRegex(LedgerError, "differs from the bridged child's result"):
             self.commit(
                 route, assigned, handle,
-                {**output["result"], "status": "failed", "execution_state": "timed_out"},
+                {**output["result"], "status": "failed", "execution_state": "timed_out",
+                 "semantic_verdict": "not-applicable"},
                 "timed_out",
             )
         self.commit(route, assigned, handle, output["result"])
@@ -2806,7 +2807,7 @@ class BridgeLifecycleTests(CliTestCase):
                     route = self.bridged_route(provider)
                     assigned = self.assignment_for(route)
                     handle = self.open(route, assigned)
-                    candidate = {**result(), "status": "blocked"}
+                    candidate = {**result(), "status": "blocked", "semantic_verdict": "blocked"}
                     if explicit_axes:
                         candidate.update(execution_state="completed", semantic_verdict="blocked",
                                          admission_state="unverified")
@@ -3312,7 +3313,7 @@ class ClaudePrimaryTests(ClaudePrimaryCase):
         )
         bounded = self.cli("learning-route", "--task", self.write("b.json", self.bounded()))
         self.assertEqual(
-            ("codex", "bridge", "gpt-6.1-sol", "medium"),
+            ("codex", "bridge", "gpt-6-sol", "medium"),
             (bounded["provider"], bounded["dispatch"], bounded["model"], bounded["effort"]),
         )
         refused = self.cli(
@@ -3386,7 +3387,7 @@ class ClaudePrimaryTests(ClaudePrimaryCase):
             context, opened["run_handle"], dispatched["result"],
             dispatched["bridge_report"]["terminal_state"], route_path,
         )
-        self.assertEqual("gpt-6.1-sol", recorded["outcome"]["model"])
+        self.assertEqual("gpt-6-sol", recorded["outcome"]["model"])
 
 
     def test_provider_observe_shows_an_attested_credits_waiver(self) -> None:
