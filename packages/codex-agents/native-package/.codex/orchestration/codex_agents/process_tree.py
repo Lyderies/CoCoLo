@@ -58,6 +58,12 @@ WATCHDOG_INTERVAL_SECONDS = 0.5
 WATCHDOG_IDENTIFY_SECONDS = 5
 WATCHDOG_READY_SECONDS = 10
 WATCHDOG_READY = b"ready\n"
+# C3: an orphaned watchdog asks the container primitive to stop the container at most this many
+# times (one try, then a retry after each pause below), then ends the tree anyway. Each try is itself
+# bounded by the primitive (grace + its kill and gone waits), so the whole stop ends: attempts x that
+# bound + the pauses (1 + 2 + 4 s).
+WATCHDOG_STOP_ATTEMPTS = 4
+WATCHDOG_STOP_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
 # Kill rounds: each takes a fresh snapshot, adopts what the tree started since and
 # kills every live tracked process, until a round finds none left alive.
 MAX_KILL_ROUNDS = 5
@@ -1011,6 +1017,21 @@ def container_watcher(argument: str) -> _ContainerWatch:
     return _ContainerWatch(runtime, config["name"], config["grace"], config["cgroup"], config["parent"])
 
 
+def _stop_container(container) -> bool:
+    """Stop the container until it is gone: a refused or stop_failed answer, or an exception, is
+    retried after a back-off, at most WATCHDOG_STOP_ATTEMPTS times in all. True once gone; False
+    when the bound ends it (recovery asks the OS again, as before)."""
+    for attempt in range(WATCHDOG_STOP_ATTEMPTS):
+        if attempt:
+            time.sleep(WATCHDOG_STOP_BACKOFF_SECONDS[min(attempt, len(WATCHDOG_STOP_BACKOFF_SECONDS)) - 1])
+        try:
+            if container.stop().gone:
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def watch(root: int, birth: str, deadline: float, announce, marker: str | None = None,
           bridge_run_id: str | None = None, run_tag: str | None = None, *, container=None) -> None:
     """The detached deadline watchdog for one bridged child.
@@ -1045,8 +1066,7 @@ def watch(root: int, birth: str, deadline: float, announce, marker: str | None =
         orphaned = container is not None and not container.parent_alive()
         if orphaned or tree.root_exited() or time.monotonic() >= deadline:
             if orphaned:
-                with contextlib.suppress(Exception):
-                    container.stop()  # Nothing records it here: recovery asks the OS again.
+                _stop_container(container)  # Nothing records it here: recovery asks the OS again.
             tree.terminate()
             if marker is not None and bridge_run_id is not None and tree.cleanup_confirmed():
                 write_cleanup_marker(marker, bridge_run_id, root, tree.root_birth)

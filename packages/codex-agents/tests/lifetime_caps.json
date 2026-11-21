@@ -1129,6 +1129,11 @@
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "process_tree.py::_stop_container": {
+   "checks": 1,
+   "ends": "C3 watchdog stop: at most WATCHDOG_STOP_ATTEMPTS (4) tries of container.stop(), pauses of 1, 2 and 4 s between them; then the tree is ended anyway",
+   "test": "test_cs2_the_watchdog_stops_trying_after_its_stated_bound_and_still_ends_the_tree"
+  },
   "project_backup.py::estimate_bytes": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"

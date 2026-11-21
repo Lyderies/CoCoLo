@@ -644,6 +644,13 @@ class FakeContainerWatch:
         return cr.StopResult('gone', 'the container no longer exists')
 
 
+def watchdog_running(name):
+    """True once a process_tree.py watchdog guarding the container `name` (--container) is in the process table."""
+    listing = subprocess.run(['/bin/ps', '-axww', '-o', 'command='], capture_output=True, text=True,
+                             env={'PATH': os.defpath, 'LC_ALL': 'C'}).stdout
+    return any('process_tree.py' in line and '--container' in line and name in line for line in listing.splitlines())
+
+
 class WatchdogTests(unittest.TestCase):
     def child(self, seconds='30'):
         process = subprocess.Popen(['/bin/sleep', seconds], start_new_session=True)
@@ -683,6 +690,55 @@ class WatchdogTests(unittest.TestCase):
         thread = self.watch(process, birth, container, deadline=0.5)  # its deadline, service alive
         thread.join(10)
         self.assertEqual(0, container.stops)
+        self.assertIsNotNone(process.wait(5))
+
+    def scripted_watch(self, results, process):
+        """watch() directly, the service gone, with a container whose stops answer from `results` (an
+        exception instance is raised); records whether the child was still alive at each stop."""
+        container = FakeContainerWatch()
+        container.parent = False
+        container.alive_at_stop = []
+
+        def stop():
+            container.stops += 1
+            container.alive_at_stop.append(process.poll() is None)
+            result = results[min(container.stops, len(results)) - 1]
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        container.stop = stop
+        # create=True: the back-off is a module constant the pre-0.8.47 code does not have.
+        with mock.patch.object(process_tree, 'WATCHDOG_STOP_BACKOFF_SECONDS', (0.01, 0.01, 0.01), create=True), \
+                mock.patch.object(process_tree, 'WATCHDOG_STOP_ATTEMPTS', 4, create=True):
+            process_tree.watch(process.pid, self.birth_of(process), time.monotonic() + 60, lambda: None,
+                               container=container)
+        return container
+
+    def birth_of(self, process):
+        tree = process_tree.ProcessTree(process.pid, None)
+        self.assertTrue(tree.identify(process_tree.process_table()))
+        return tree.root_birth
+
+    def test_cs2_a_refused_stop_is_retried_and_the_tree_is_killed_only_after_the_container_is_gone(self):
+        gone = cr.StopResult('gone', 'the container no longer exists')
+        refused = cr.StopResult('refused', 'podman is unusable')
+        for first in (refused, cr.StopResult('stop_failed', 'still there'), RuntimeError('podman exploded')):
+            with self.subTest(first=type(first).__name__ if isinstance(first, Exception) else first.outcome):
+                process, _ = self.child()
+                container = self.scripted_watch([first, gone], process)
+                self.assertEqual(2, container.stops)
+                self.assertEqual([True, True], container.alive_at_stop)  # killed only after the second stop
+                self.assertIsNotNone(process.wait(5))
+
+    def test_cs2_the_watchdog_stops_trying_after_its_stated_bound_and_still_ends_the_tree(self):
+        process, _ = self.child()
+        container = self.scripted_watch([cr.StopResult('stop_failed', 'still there')], process)
+        self.assertEqual(4, container.stops)  # WATCHDOG_STOP_ATTEMPTS, patched to 4
+        self.assertIsNotNone(process.wait(5))
+        process, _ = self.child()
+        container = self.scripted_watch([RuntimeError('podman exploded')], process)
+        self.assertEqual(4, container.stops)
         self.assertIsNotNone(process.wait(5))
 
     def test_the_launcher_gives_the_watchdog_the_container_and_podman_environment(self):
@@ -869,7 +925,8 @@ class RealContainerStopTests(unittest.TestCase):
             name = json.loads(line)
             self.assertTrue(wait_until(lambda: self.podman('inspect', name, '--format', '{{.State.Status}}')
                                        .stdout.strip() == 'running', 60))
-            time.sleep(1.0)  # the watchdog has acknowledged and watches
+            # The watchdog is spawned after the container runs (bridge.start), so wait for the process itself.
+            self.assertTrue(wait_until(lambda: watchdog_running(name), 60), 'the watchdog was never started')
         finally:
             os.killpg(service.pid, signal.SIGKILL)  # only the service: the attach and watchdog have their own
             service.wait(10)
