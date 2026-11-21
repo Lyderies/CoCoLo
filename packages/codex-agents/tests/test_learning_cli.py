@@ -440,12 +440,12 @@ class LearningCliTests(unittest.TestCase):
             directory = Path(self.temporary.name) / "replacement"
             directory.mkdir()
             key, public = generate_test_owner_key(directory)
-            self.assertNotEqual(before["fingerprint"], None)
+            self.assertNotIn("fingerprint", before)  # D36: status shows no key fingerprint
             replaced = self._run(
                 "learning-replace-owner-key", "--public-key", f"{key}.pub"
             )["owner_key"]
             self.assertEqual((replaced["state"], replaced["replacements"]), ("ok", 1))
-            self.assertNotEqual(replaced["fingerprint"], before["fingerprint"])
+            self.assertNotIn("fingerprint", replaced)
             after = self._run("learning-status")["owner_key"]
             self.assertEqual(after, replaced)
             fields = public.split()

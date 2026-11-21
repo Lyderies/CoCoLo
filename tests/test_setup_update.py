@@ -193,7 +193,8 @@ class SetupUpdateTests(DirectDriverMixin, WizardTerminalTests):
                  "operational_checks": {"operational_checks": ""},
                  "providers.codex": {"providers": {"codex": "maybe", "claude": "on",
                                                    "claude_models": "claude-sonnet-5-5", "bridge": "off"}},
-                 "commands_rule": {"commands_rule": "yes"}}
+                 "commands_rule": {"commands_rule": "yes"},
+                 "billing_sign_again": {"billing_sign_again": "yes"}}
         for named, changes in cases.items():
             with self.subTest(named=named):
                 code, screen = self.scripted(self.answers_for(project, checks, **changes))

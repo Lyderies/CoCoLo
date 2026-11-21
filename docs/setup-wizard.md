@@ -199,6 +199,8 @@ answer is refused by name (exit 2).
 
 - `operational_checks` is needed only when the project has none yet.
 - `codex_profile` (`"create"` or `"skip"`) is needed when `bridge` is `"on"`.
+- `billing_sign_again` (true or false, optional): a re-run skips signing the billing statements when this
+  project's attestation is already signed and current; `true` signs again.
 - `move_records` and `upgrade_records` (true or false) are always required, so every consent is stated
   before anything changes; they are used only if setup finds earlier records to move or upgrade.
 - The run stops at the first step that fails, with that step's reason and the summary; nothing after

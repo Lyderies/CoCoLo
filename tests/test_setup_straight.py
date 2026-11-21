@@ -182,12 +182,25 @@ class SetupStraightTests(SetupUpdateTests):
         self.send("\r")
         self.expect("attest stub run 1")
 
-    def test_S4_3_an_answers_file_always_runs_the_attestation(self):
+    def test_S4_3_an_answers_file_skips_a_current_signature_signs_when_not_current_or_when_asked(self):
+        # Owner decision 37: an answers-file re-run skips the billing statements when this project's
+        # attestation is already signed and current, as an update does; `billing_sign_again: true` signs again.
         project, checks = self.make_project()
-        answers = self.answers_for(project, checks)
-        code, screen = self.scripted(answers, {"FAKE_STATUS_REPLY": self.ATTESTED, "FAKE_OBSERVE": self.OBSERVED})
-        self.assertEqual(0, code, screen[-1500:])
-        self.assertEqual(1, self.attested())
+        current = {"FAKE_STATUS_REPLY": self.ATTESTED, "FAKE_OBSERVE": self.OBSERVED}
+        missing = {"FAKE_STATUS_REPLY": self.MISSING, "FAKE_OBSERVE": self.OBSERVED}
+        cases = [("current: skipped", {}, current, 0), ("not current: signed", {}, missing, 1),
+                 ("current, asked to sign again", {"billing_sign_again": True}, current, 1),
+                 ("current, not asked", {"billing_sign_again": False}, current, 0)]
+        for name, changes, env, runs in cases:
+            with self.subTest(name):
+                self.attest_count = self.base / "attest.count"
+                self.attest_count.unlink(missing_ok=True)
+                (self.base / "status.count").unlink(missing_ok=True)
+                code, screen = self.scripted(self.answers_for(project, checks, **changes), env)
+                self.assertEqual(0, code, screen[-1500:])
+                self.assertEqual(runs, self.attested())
+                self.assertEqual(runs == 0, "already attested" in screen)
+                self._reap()
 
     # Review 040-s4-code: Quit changes nothing; the owner's profile, rule and records choices stay asked.
 
