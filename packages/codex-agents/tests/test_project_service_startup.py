@@ -119,9 +119,12 @@ class ProjectServiceStartupTests(unittest.TestCase):
     def test_a_killed_host_is_replaced_and_an_unregistered_project_gets_none(self):
         opened = self.cli('learning-open-orchestration', '--request-id', 'crash-open')
         (pid,) = self.hosts()
+        directory = read_runtime_hint(self.paths, self.project)[1].parent
         os.kill(pid, signal.SIGKILL)
         end = time.monotonic() + 10
-        while self.hosts():
+        # CI2: "killed" means gone by the kernel's lock too; pgrep stops seeing a SIGKILLed process up to ~90 ms
+        # before its file locks are released, and a command in that window rightly sees a live host.
+        while self.hosts() or _host_alive(directory) is not False:
             self.assertLess(time.monotonic(), end)
             time.sleep(.02)
         # The dead host's hint, sockets and capability are still on disk.
