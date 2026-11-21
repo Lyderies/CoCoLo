@@ -1,0 +1,43 @@
+#!@QA_PYTHON@
+# QA identifier scan. Fill in the two placeholders and save the result as qa-security at the project root,
+# next to scripts/check_identifiers.py, then commit both:
+#   @QA_PYTHON@      on the first line: the absolute trusted interpreter path (no flags)
+#   @SCANNER_SHA256@ below: the sha256 of scripts/check_identifiers.py (shasum -a 256 scripts/check_identifiers.py)
+# The approval of this wrapper covers the scanner: the wrapper runs only the scanner whose digest it
+# carries, read once and executed from those bytes, so changing the scanner needs a new wrapper and a new
+# approval. QA cannot start git, so the host lists the files with git before the sandbox starts and passes
+# that manifest, and a copy of the owner's private denylist (an empty file when the owner has none), in
+# AO_QA_FILE_MANIFEST and AO_IDENTIFIER_DENYLIST. The scan refuses (exit 2) rather than scan fewer files
+# or with fewer terms when either is missing, unreadable or too large.
+import hashlib
+import sys
+import types
+from pathlib import Path
+
+SCANNER_SHA256 = "@SCANNER_SHA256@"
+
+
+def refuse(reason: str) -> None:
+    print(f"REFUSED: {reason}. Nothing was scanned.", file=sys.stderr)
+    sys.exit(2)
+
+
+root = Path.cwd()  # QA runs the wrapper from the project root (the wrapper itself is a sealed copy)
+try:
+    source = (root / "scripts" / "check_identifiers.py").read_bytes()
+except OSError:
+    refuse("the identifier scanner cannot be read")
+if hashlib.sha256(source).hexdigest() != SCANNER_SHA256:
+    refuse("the identifier scanner is not the one this wrapper was approved with")
+check_identifiers = types.ModuleType("check_identifiers")
+sys.modules["check_identifiers"] = check_identifiers  # dataclasses look their module up here
+exec(compile(source, "scripts/check_identifiers.py", "exec"), check_identifiers.__dict__)
+
+try:
+    findings = check_identifiers.scan_tree(
+        root, check_identifiers.load_required_denylist(), manifest=check_identifiers.manifest_from_environment())
+    sys.exit(check_identifiers.report(findings))
+except check_identifiers.ScanRefused as reason:
+    sys.exit(check_identifiers.refuse(reason))
+except Exception as error:  # an error message can hold a file name, so only its type is reported
+    refuse(f"unexpected {type(error).__name__}")

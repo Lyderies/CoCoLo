@@ -22,8 +22,8 @@ EMAIL = "alice" + "@" + "mailhost.io"
 NOREPLY = "123+someone" + "@" + "users.noreply.github.com"
 
 
-def categories(text: str, denylist: tuple[str, ...] = ()) -> list[str]:
-    return [finding.category for finding in check.scan_text(text, "sample", denylist)]
+def categories(text: str, denylist: tuple[str, ...] = (), **options: bool) -> list[str]:
+    return [finding.category for finding in check.scan_text(text, "sample", denylist, **options)]
 
 
 class ScanTextTests(unittest.TestCase):
@@ -34,6 +34,88 @@ class ScanTextTests(unittest.TestCase):
 
     def test_placeholders_and_shared_paths_are_allowed(self) -> None:
         self.assertEqual(categories("use /" + "Users/<name> or /" + "Users/Shared/x"), [])
+
+    def test_placeholder_exemption_is_exact_case_sensitive_and_whole_component(self) -> None:
+        """Only a bare placeholder token that ends at a separator or the end of the path is exempt."""
+
+        win = "C:" + "\\Users" + "\\"
+        for name, sample in {
+            "space in the account name": win + "User Smith" + "\\p",
+            "non-ASCII suffix": "/" + "home/user" + "\u00f1ame/p",
+            "capitalised placeholder": "/" + "Users/User/p",
+            "upper-case single letter": "/" + "Users/X/p",
+            "capitalised word": "/" + "Users/Example/p",
+            "tilde suffix": "/" + "home/user~1/p",
+            "plus suffix": "/" + "home/user+a/p",
+            "space after the token is ambiguous": "/" + "Users/x y/p",
+        }.items():
+            with self.subTest(name):
+                self.assertEqual(categories(sample), ["home-path"], name)
+        for sample in (
+            "/" + "Users/x", "/" + "Users/x/", "`" + "/" + "Users/you" + "`", "(" + "/" + "home/user" + ")",
+            '"' + "/" + "Users/name" + '"', win + "user" + "\\p", "cd " + "/" + "home/example/p",
+        ):
+            with self.subTest(sample):
+                self.assertEqual(categories(sample), [])
+
+    def test_placeholder_followed_by_punctuation_and_more_name_is_still_an_account(self) -> None:
+        """A character that may legally sit inside an account name cannot end the component by itself.
+
+        Windows account names may contain an apostrophe, backquote, brackets, comma and semicolon, so
+        ``user'smith`` is one account name, not the placeholder ``user`` followed by quoted prose.
+        """
+
+        win = "C:" + "\\Users" + "\\"
+        for ending in ("'smith", "`smith", ")smith", "]smith", "}smith", ",smith", ";smith", "'s"):
+            for prefix in ("/" + "Users/user", "/" + "home/x", win + "user"):
+                with self.subTest(prefix=prefix, ending=ending):
+                    self.assertEqual(categories(prefix + ending + "\\notes.txt"), ["home-path"])
+        for sample in ("see '" + "/" + "Users/x" + "' here", "(" + "/" + "home/user" + "), then", "paths " + "/" + "Users/you" + ", " + "/" + "Users/x"):
+            with self.subTest(sample):
+                self.assertEqual(categories(sample), [])
+
+    def test_placeholder_then_two_punctuation_chars_and_more_name_is_an_account(self) -> None:
+        """``user''smith`` and ``user')smith`` are accounts, in content and as printed file names."""
+
+        for ending in ("''smith", "')smith", "'`smith", ")]smith"):
+            for prefix in ("/" + "Users/user", "/" + "home/x"):
+                with self.subTest(ending=ending, prefix=prefix):
+                    self.assertEqual(categories(prefix + ending + "/notes.txt"), ["home-path"])
+                    self.assertEqual(categories("see " + prefix + ending), ["home-path"])
+                    self.assertEqual(categories(prefix + ending + "/notes.txt", strict=True), ["home-path"])
+
+    def test_file_names_get_no_prose_exemption_so_placeholder_plus_space_name_is_an_account(self) -> None:
+        """A file name has no prose around it: ``user' smith`` is a name, not a quoted placeholder."""
+
+        for ending in ("' smith", "'' smith", "') smith"):
+            with self.subTest(ending=ending):
+                sample = "/" + "Users/user" + ending + "/notes.txt"
+                self.assertEqual(categories(sample, strict=True), ["home-path"])
+        self.assertEqual(categories("/" + "Users/user/notes.txt", strict=True), [])
+        self.assertEqual(categories("/" + "Users/x", strict=True), [])
+        self.assertEqual(
+            check._display_name(("/" + "Users/user' smith/n.txt").encode(), ()), check.REDACTED)
+
+    def test_content_findings_redact_a_file_name_holding_placeholder_plus_punctuation_and_name(self) -> None:
+        content = ("see " + "bob" + "@" + "mailhost.io\n").encode()
+        for tail in ("''smith", "')smith", "' smith"):
+            with self.subTest(tail=tail):
+                raw = ("/" + "Users/user" + tail + "/n.txt").encode()
+                findings = [str(f) for f in check._scan_named(raw, lambda: content, ())]
+                self.assertIn("[redacted]:1: email", findings)
+                self.assertTrue(all(f.startswith("[redacted]:") for f in findings), findings)
+
+    def test_file_url_and_system_volumes_home_paths_are_flagged(self) -> None:
+        for sample in (
+            "file://" + "/" + "Users/smith/p", "file://" + "/" + "home/jdoe/p",
+            "/System/Volumes/Data" + "/" + "Users/smith/p", "/System/Volumes/Data" + "/" + "home/jdoe/p",
+        ):
+            with self.subTest(sample=sample):
+                self.assertEqual(categories("open " + sample), ["home-path"])
+        for sample in ("file://" + "/Users/user/p", "/System/Volumes/Data" + "/Users/x/p", "file://" + "/Users/Shared/p"):
+            with self.subTest(sample=sample):
+                self.assertEqual(categories(sample), [])
+        self.assertEqual(categories("/opt" + "/" + "Users/smith/p"), [])
 
     def test_hostnames_are_flagged(self) -> None:
         self.assertEqual(categories(f"host {HOSTNAME}"), ["hostname"])

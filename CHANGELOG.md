@@ -9,6 +9,26 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   the expected 'tests not run' statement is ignored; a refuted finding still disagrees; other tasks stay strict)
   (owner decision 32). O0c caps: lifetime caps on open requests and expired bindings, with their
   tests and limits file. DR-3: extra dispatch-wait and result-lifetime tests (the RC-3 test stays skipped).
+  Identifier scan parity (Phase 1.3), below.
+
+- Package 0.8.44, identifier scan parity: the identifier guard scanned a different file set in QA than in CI, and QA could miss a real identifier. QA
+  and CI now scan one list that git produces (tracked files, even when an ignore rule names them, plus untracked
+  files no `.gitignore` ignores); the QA runner writes it before the sandbox starts, with a copy of the owner's
+  private denylist, and the shipped `scripts/qa-security.template` scans exactly that list. It refuses, rather
+  than scan fewer files, when git, the list or the denylist is unavailable. Tracked symbolic links are scanned
+  by name and target text, and a file name that is not valid UTF-8 is a finding. The placeholder exemption
+  (`/Users/x`, `/home/user`) is exact, lower-case and whole-component only: `User`, `User Smith` and a name that
+  merely starts with a placeholder now fail, and so does a placeholder followed by a character that can sit
+  inside an account name (`user'smith`), or by more punctuation and then more name (`user''smith`, `user')smith`);
+  file names get no prose exemption. `file:///Users/<name>` and `/System/Volumes/Data/Users/<name>` (and the
+  `/home` forms) are found. A file name that holds a value, is not valid UTF-8 or holds a control
+  character prints as `[redacted]`, and no error message names a file. QA diagnostics keep a path only if git
+  lists it and it holds no value; the line is always 0, since a wrapper could choose the number. The scan and
+  the runner now fail closed: the runner does not start a security check without the git file list and the
+  denylist, and the scan refuses a file it cannot read, a path below a symbolic link, a pipe, a work tree moved
+  by repository config, an oversize list, a run from a subdirectory, a denylist that was not provisioned, and a
+  scanner that differs from the digest the approved wrapper carries (the wrapper now has a second placeholder,
+  `@SCANNER_SHA256@`). Git lists files with ignore rules matched case-sensitively, whatever `core.ignorecase` says.
 
 - Package 0.8.43 (RT-21 Phase 0): low/medium coding and research judgment/exploration,
   and planning synthesis, try GPT-6.1 Sol before Sonnet 5.5. Confirmed quality failures

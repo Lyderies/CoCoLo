@@ -2126,6 +2126,145 @@ def _committed_and_clean(git_executable: str, root: Path, commit: str, relative:
         os.close(descriptor)
 
 
+_QA_FINDING_LINE = re.compile(
+    rb"([^\n\r]{1,512}?):(\d{1,9}): "
+    rb"(home-path|hostname|email|denylisted-term|non-noreply-email|non-utf8-name)"
+)
+MAX_QA_FINDING_RECORDS = 50
+MAX_QA_FINDING_BYTES = 64 * 1024
+QA_REDACTED = "[redacted]"
+# The one file list the identifier scanner uses, with the same flags as scripts/check_identifiers.py
+# (a test keeps the two equal). QA cannot start git inside its sandbox, so the host runs this first.
+QA_MANIFEST_LIST_ARGS = ("ls-files", "-z", "--cached", "--others", "--exclude-per-directory=.gitignore")
+# Ignore rules are matched case-sensitively whatever the repository's own config says, as in the scanner.
+QA_MANIFEST_CONFIG = ("core.ignorecase=false",)
+MAX_QA_MANIFEST_BYTES = 16 * 1_048_576
+MAX_QA_DENYLIST_BYTES = 1_048_576
+QA_MANIFEST_ENVIRONMENT = "AO_QA_FILE_MANIFEST"
+QA_DENYLIST_ENVIRONMENT = "AO_IDENTIFIER_DENYLIST"
+QA_INPUTS_UNAVAILABLE = "security check inputs (git file list, private denylist) are unavailable"
+QA_DEFAULT_DENYLIST = (
+    Path("~/.config/codex-claude-agent-orchestration/identifier-denylist.txt")
+)
+_QA_SAFE_PATH = re.compile(r"[A-Za-z0-9._/-]{1,512}")
+
+
+def _qa_file_manifest(root: Path) -> bytes | None:
+    """git's own list of the files a scan covers, NUL-separated; None when git cannot produce it.
+
+    Runs outside the sandbox before a check starts, so the check scans exactly the files CI scans.
+    The scanner refuses when this is missing, never scanning a smaller set.
+    """
+
+    executable = find_git(untrusted=[root])
+    if executable is None:
+        return None
+    try:
+        if repository_layout_problem(executable, root) is not None:
+            return None
+        completed = run_git(
+            executable, root, *QA_MANIFEST_LIST_ARGS, timeout=60, max_output_bytes=MAX_QA_MANIFEST_BYTES,
+            config=QA_MANIFEST_CONFIG,
+        )
+    except (OSError, UnicodeError, subprocess.SubprocessError):
+        return None
+    return completed.stdout if completed.returncode == 0 else None
+
+
+def _qa_denylist_bytes() -> bytes | None:
+    """The owner's private identifier denylist, for the sandbox that cannot read the home folder.
+
+    The file the scanner itself would read: ``$AO_IDENTIFIER_DENYLIST`` or the default. A missing file
+    means no terms (as for the scanner); an unreadable or oversize one is None, so the scanner refuses.
+    """
+
+    configured = os.environ.get(QA_DENYLIST_ENVIRONMENT)
+    path = Path(configured) if configured else QA_DEFAULT_DENYLIST.expanduser()
+    try:
+        with path.open("rb") as handle:
+            data = handle.read(MAX_QA_DENYLIST_BYTES + 1)
+    except FileNotFoundError:
+        return b""
+    except OSError:
+        return None
+    return None if len(data) > MAX_QA_DENYLIST_BYTES else data
+
+
+def _qa_denylist_terms(data: bytes) -> tuple[str, ...]:
+    lines = (line.strip() for line in data.decode("utf-8", errors="replace").splitlines())
+    return tuple(line.casefold() for line in lines if line and not line.startswith("#"))
+
+
+def _qa_listed_names(manifest: bytes) -> frozenset[str]:
+    return frozenset(
+        os.fsdecode(name) for name in manifest.split(b"\0") if name and not name.endswith(b"/")
+    )
+
+
+def _qa_write_private(path: Path, data: bytes) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(descriptor, view):]
+    finally:
+        os.close(descriptor)
+
+
+def _diagnostic_path(raw: bytes, listed: frozenset[str], denylist: tuple[str, ...]) -> str | None:
+    """The path only when the host can vouch for it: listed by git, a plain alphabet, no value in it."""
+
+    try:
+        name = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if name not in listed or not _QA_SAFE_PATH.fullmatch(name) or name.startswith("/"):
+        return None
+    if ".." in name.split("/"):
+        return None
+    folded = name.casefold()
+    if ".local" in folded or "macbook" in folded or any(term in folded for term in denylist):
+        return None
+    return name
+
+
+def _security_findings(
+    stderr_file: Path, *, listed: frozenset[str], denylist: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Bounded ``{path, line, category}`` records from a scanner's stderr; never any matched value.
+
+    The wrapper is pinned project code, but its output is not trusted. Only lines of the exact shape
+    ``path:line: category`` (category from a closed set) are kept. A path is forwarded only if it is in
+    the host's git file list, uses a plain alphabet, names no host and holds no denylisted term, else it
+    is ``[redacted]``. The line is always 0: the host cannot tell a true line from a number the wrapper
+    chose, and any number up to the file's length is a channel for a value. A final line cut by the read
+    bound is dropped.
+    """
+
+    try:
+        descriptor = os.open(stderr_file, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as handle:
+            data = handle.read(MAX_QA_FINDING_BYTES)
+    except OSError:
+        return []
+    if len(data) >= MAX_QA_FINDING_BYTES:
+        data = data[: data.rfind(b"\n") + 1]
+    records: list[dict[str, Any]] = []
+    for line in data.splitlines():
+        if len(records) >= MAX_QA_FINDING_RECORDS:
+            break
+        match = _QA_FINDING_LINE.fullmatch(line)
+        if match is None:
+            continue
+        path = _diagnostic_path(match.group(1), listed, denylist)
+        records.append({
+            "path": path if path is not None else QA_REDACTED,
+            "line": 0,
+            "category": match.group(3).decode("ascii"),
+        })
+    return records
+
+
 def run_operational_check_suite(
     project_root: Path, *, scratch_root: Path,
     diagnostics: list[dict[str, Any]] | None = None,
@@ -2159,6 +2298,11 @@ def run_operational_check_suite(
         "security_checks": [],
         "observed_at_ms": 0,
     }
+    # Security checks scan what git lists, with the owner's real denylist. The sandbox cannot run git or
+    # read the home folder, so both are read here and handed over read-only (a missing one makes the
+    # scanner refuse instead of scanning less).
+    scan_manifest = _qa_file_manifest(root) if normalized["security_checks"] else None
+    scan_denylist = _qa_denylist_bytes() if normalized["security_checks"] else None
     for group, checks in normalized.items():
         for check in checks:
             status = "failed"
@@ -2166,6 +2310,7 @@ def run_operational_check_suite(
             phase = "snapshot"
             reason_code = None
             process: subprocess.Popen[bytes] | None = None
+            findings: list[dict[str, Any]] = []
             try:
                 temporary = private_directory(scratch_root, "scratch", "qa-")
             except HostPathError as exc:
@@ -2176,8 +2321,20 @@ def run_operational_check_suite(
                 sealed.mkdir(mode=0o700)
                 work.mkdir(mode=0o700)
                 check_environment = {**environment, "TMPDIR": str(work)}
+                if group == "security_checks":
+                    for name, data, variable in (
+                        ("scan-manifest", scan_manifest, QA_MANIFEST_ENVIRONMENT),
+                        ("scan-denylist", scan_denylist, QA_DENYLIST_ENVIRONMENT),
+                    ):
+                        if data is not None:
+                            _qa_write_private(temporary / name, data)
+                            check_environment[variable] = str(temporary / name)
                 guard: _SnapshotGuard | None = None
                 try:
+                    if group == "security_checks" and (scan_manifest is None or scan_denylist is None):
+                        # Never launch a wrapper without both inputs: one that ignores them would pass
+                        # a scan of fewer files, or with fewer terms, than CI runs.
+                        raise ContractError(QA_INPUTS_UNAVAILABLE)
                     effective_argv = [
                         str(work / "pytest")
                         if item == QA_WORK_DIRECTORY_TOKEN else item
@@ -2213,18 +2370,25 @@ def run_operational_check_suite(
                         if check["runtime_libraries"] else None,
                     )
                     phase = "launch"
-                    process = subprocess.Popen(
-                        command,
-                        cwd=root,
-                        env=check_environment,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True,
-                        preexec_fn=_qa_resource_limiter(  # noqa: PLW1509
-                            check["timeout_seconds"]
-                        ),
+                    stderr_file = temporary / "stderr"
+                    stderr_descriptor = os.open(
+                        stderr_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
                     )
+                    try:
+                        process = subprocess.Popen(
+                            command,
+                            cwd=root,
+                            env=check_environment,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=stderr_descriptor,
+                            start_new_session=True,
+                            preexec_fn=_qa_resource_limiter(  # noqa: PLW1509
+                                check["timeout_seconds"]
+                            ),
+                        )
+                    finally:
+                        os.close(stderr_descriptor)
                     phase = "execution"
                     status, return_code = _wait_for_qa_process(
                         process,
@@ -2241,6 +2405,7 @@ def run_operational_check_suite(
                         "operational check temporary storage exceeds its bounds": "temporary_storage_limit",
                         "operational check temporary storage is invalid": "temporary_storage_invalid",
                         "operational check temporary storage is unstable": "temporary_storage_unstable",
+                        QA_INPUTS_UNAVAILABLE: "identifier_inputs_unavailable",
                     }.get(str(exc), f"{phase}_rejected")
                 finally:
                     cleanup_error: ContractError | None = None
@@ -2264,6 +2429,12 @@ def run_operational_check_suite(
                         guard.close()
                     if cleanup_error is not None:
                         raise cleanup_error
+                if group == "security_checks" and status == "failed":
+                    findings = _security_findings(
+                        temporary / "stderr",
+                        listed=_qa_listed_names(scan_manifest or b""),
+                        denylist=_qa_denylist_terms(scan_denylist or b""),
+                    )
             finally:
                 remove_private_directory(temporary)
             evidence_digest = content_digest(
@@ -2292,6 +2463,7 @@ def run_operational_check_suite(
                         "passed": "check_passed", "failed": "nonzero_exit",
                         "timeout": "deadline_elapsed",
                     }.get(status, "runner_unavailable"),
+                    **({"findings": findings} if findings else {}),
                 })
             report[group].append(
                 {
