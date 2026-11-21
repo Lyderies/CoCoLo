@@ -122,6 +122,23 @@ def fake_child_source() -> str:
     raise HarnessError("the repository's fake provider client was not found")
 
 
+def claude_probe_frames(**rate_limit) -> list[dict]:
+    """What the fake Claude client prints for a billing probe: the init frame, one rate-limit event (the
+    favourable reading, changed by `rate_limit`, e.g. isUsingOverage=True) and a successful result.
+    The shapes follow packages/codex-agents/tests/test_bridge.py (init_frame, RATE_LIMIT, result_frame)."""
+    info = {"status": "allowed", "rateLimitType": "five_hour", "utilization": 0.2, "isUsingOverage": False,
+            "overageStatus": "rejected", "overageDisabledReason": "org_level_disabled", **rate_limit}
+    return [
+        {"type": "system", "subtype": "init", "session_id": "session-1", "apiKeySource": "none",
+         "model": "claude-haiku-5-5", "plugins": [], "claude_code_version": "2.1.311", "mcp_servers": [],
+         "tools": []},
+        {"type": "rate_limit_event", "session_id": "session-1", "uuid": "rate-1", "rate_limit_info": info},
+        {"type": "result", "subtype": "success", "is_error": False, "result": "OK",
+         "usage": {"input_tokens": 120, "output_tokens": 30, "cache_read_input_tokens": 0,
+                   "cache_creation_input_tokens": 0},
+         "total_cost_usd": 0.42, "permission_denials": []}]
+
+
 @dataclass
 class Run:
     """One program run on a terminal: its exit status, whole screen text and seconds."""
@@ -142,6 +159,7 @@ class World:
     env: dict = field(init=False)
     outputs: list = field(default_factory=list)  # every output a step produced, for G8
     steps: list = field(default_factory=list)  # every step run: {"step": label, "code": exit status, "refuses": bool}
+    known_passphrases: set = field(default_factory=set)  # every other passphrase a step typed (G8)
 
     def __enter__(self) -> "World":
         try:
@@ -199,11 +217,15 @@ class World:
 
     def key_values(self) -> tuple[str, str]:
         """The test owner key's fingerprint and public blob, once the product has made the key."""
-        pub = self.home / ".ssh" / "codex-agents-owner.pub"
-        if not pub.is_file():
-            return "", ""
-        done = subprocess.run(["/usr/bin/ssh-keygen", "-lf", str(pub)], capture_output=True, text=True)
-        return (done.stdout.split() or ["", ""])[1], pub.read_text().split()[1]
+        return (self.all_key_values() or [("", "")])[0]
+
+    def all_key_values(self) -> list[tuple[str, str]]:
+        """Every owner key the run has made (a replacement makes the next one): (fingerprint, public blob)."""
+        found = []
+        for pub in sorted((self.home / ".ssh").glob("codex-agents-owner*.pub")):
+            done = subprocess.run(["/usr/bin/ssh-keygen", "-lf", str(pub)], capture_output=True, text=True)
+            found.append(((done.stdout.split() or ["", ""])[1], pub.read_text().split()[1]))
+        return found
 
     def _environment(self) -> dict:
         env = {key: value for key, value in os.environ.items()
@@ -270,12 +292,17 @@ class World:
     # Running -------------------------------------------------------------------------------------
 
     def terminal(self, argv: list[str], *, label: str = "setup", refuses: bool = False,
-                 cwd: Path | None = None, timeout: float = SETUP_TIMEOUT_SECONDS) -> Run:
+                 cwd: Path | None = None, timeout: float = SETUP_TIMEOUT_SECONDS,
+                 passphrase: str | None = None, answers: tuple = (), record: bool = True) -> Run:
         """Run `argv` on a pseudo-terminal, as an owner at a terminal does, answering what it asks.
 
         The owner's three kinds of question are answered the way the test owner would: a yes or no
         statement about billing is answered yes, and a passphrase is typed. Anything else that waits is
-        a failure (the run times out and is stopped). Output is collected for the G8 scan."""
+        a failure (the run times out and is stopped). Output is collected for the G8 scan.
+
+        `passphrase` types another passphrase than the world's; `answers` are further (pattern, reply)
+        pairs tried first; `record=False` keeps a tool's output (one that names scratch paths) out of the
+        G8 outputs, for a step that is not a product output."""
         started = time.monotonic()
         pid, descriptor = pty.fork()
         if pid == 0:  # the child: its own session, the terminal its controlling one
@@ -284,7 +311,10 @@ class World:
                 os.execve(argv[0], argv, self.env)
             os._exit(127)
         raw, mark, timed_out, status = b"", 0, False, None
-        rules = ((re.compile(r"\[y/N\]\s*$"), "y"), (re.compile(r"[Pp]assphrase[^\n]*:\s*$"), self.passphrase))
+        typed = self.passphrase if passphrase is None else passphrase
+        self.known_passphrases.add(typed)
+        rules = (*((re.compile(pattern), reply) for pattern, reply in answers),
+                 (re.compile(r"\[y/N\]\s*$"), "y"), (re.compile(r"[Pp]assphrase[^\n]*:\s*$"), typed))
         try:
             while True:
                 ready, _, _ = select.select([descriptor], [], [], 0.25)
@@ -317,9 +347,10 @@ class World:
             except ChildProcessError:
                 status = 0
         text = strip_ansi(raw)
-        self.outputs.append(text)
         code = os.waitstatus_to_exitcode(status) if status is not None else -1
-        self.steps.append({"step": label, "code": code, "refuses": refuses, "timed_out": timed_out})
+        if record:
+            self.outputs.append(text)
+            self.steps.append({"step": label, "code": code, "refuses": refuses, "timed_out": timed_out})
         self.register_private_values()
         return Run(code, text, round(time.monotonic() - started, 3), timed_out)
 
@@ -332,19 +363,73 @@ class World:
         """`./setup.sh --update PROJECT`: setup again on the installed project, no menu."""
         return self.terminal(["/bin/bash", str(SETUP), "--update", str(self.project)], label="setup_update")
 
-    def cli(self, *args: str, timeout: float = 60) -> tuple[int, dict | None, str]:
-        """An owner command of this clone's orchestrator CLI for the fake project; (exit, JSON reply, text)."""
-        done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(CLI), *args, "--project-root", str(self.project)],
-                              capture_output=True, text=True, env=self.env, stdin=subprocess.DEVNULL,
-                              timeout=timeout, cwd=str(self.base))
+    def cli(self, *args: str, timeout: float = 60, refuses: bool = False, program: Path | None = None,
+            environment: dict | None = None, cwd: Path | None = None) -> tuple[int, dict | None, str]:
+        """An owner command of this clone's orchestrator CLI for the fake project; (exit, JSON reply, text).
+
+        `refuses` marks a step whose refusal the check expects (G1); `program` and `environment` run another
+        copy of the CLI or add markers, as host_cli does."""
+        done = subprocess.run([str(self.shim), "-I", "-B", "-S", str(program or CLI), *args,
+                               "--project-root", str(self.project)],
+                              capture_output=True, text=True, env={**self.env, **(environment or {})},
+                              stdin=subprocess.DEVNULL, timeout=timeout, cwd=str(cwd or self.base))
         text = done.stdout + done.stderr
         self.outputs.append(text)
-        self.steps.append({"step": args[0], "code": done.returncode, "refuses": False, "timed_out": False})
+        self.steps.append({"step": args[0], "code": done.returncode, "refuses": refuses, "timed_out": False})
         try:
             reply = json.loads(done.stdout)
         except ValueError:
             reply = None
         return done.returncode, reply if isinstance(reply, dict) else None, text
+
+    # Host sessions and the fake Claude client's scripts ------------------------------------------
+
+    CLAUDE_HOST = {"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "e2e-claude-session"}
+
+    def host_cli(self, host: str, *args: str, refuses: bool = False, environment: dict | None = None,
+                 timeout: float = 90) -> tuple[int, dict | None, str]:
+        """A command as a primary host session runs it (the host's markers set; the project's own CLI).
+
+        Only the Claude host is built here: a Codex primary's commands go through the protected copy and
+        its session guard, which needs a recorded Codex session (a later group)."""
+        if host != "claude":
+            raise HarnessError("only a Claude primary session is built by this harness so far")
+        return self.cli(*args, refuses=refuses, program=self.project / ".codex" / "orchestration" / "cli.py",
+                        environment={**self.CLAUDE_HOST, **(environment or {})}, cwd=self.project, timeout=timeout)
+
+    @property
+    def tools(self) -> Path:
+        return self.home / ".local" / "bin"
+
+    def claude_frames(self, frames: list[dict]) -> None:
+        """The stream the fake Claude client prints when it runs a turn (a billing probe or a child)."""
+        (self.tools / "claude-frames.jsonl").write_text("".join(json.dumps(frame) + "\n" for frame in frames))
+
+    def claude_version(self, text: str | None) -> None:
+        """What `claude --version` prints (None: the client's reviewed default)."""
+        (self.tools / "claude-version.txt").unlink(missing_ok=True)
+        if text is not None:
+            (self.tools / "claude-version.txt").write_text(text + "\n")
+
+    def claude_signed_in(self, signed_in: bool) -> None:
+        """Sign the fake Claude client out or in. A real signed-out `claude auth status --json` prints its
+        state and exits 1, so the stand-in does the same while the status file says `loggedIn: false`."""
+        status = json.loads((PROVIDER_FIXTURES / "claude-auth-status.json").read_text())
+        status["loggedIn"] = signed_in
+        (self.tools / "claude-status.json").write_text(json.dumps(status))
+        script = self.tools / "claude"
+        script.unlink(missing_ok=True)  # never write through a shared link
+        script.write_text(
+            '#!/bin/sh\nif [ "$1 $2" = "auth status" ] && grep -q \'"loggedIn": false\' "${0%/*}/claude-status.json"; '
+            'then cat "${0%/*}/claude-status.json"; exit 1; fi\n' + CLIENT.split("\n", 1)[1].replace("%PYTHON%", self.python))
+        script.chmod(0o755)
+
+    def claude_account(self, email: str | None) -> None:
+        """Make the fake Claude client another account (None: the fixture's own), keeping it signed in."""
+        status = json.loads((PROVIDER_FIXTURES / "claude-auth-status.json").read_text())
+        if email is not None:
+            status["email"] = email
+        (self.tools / "claude-status.json").write_text(json.dumps(status))
 
     # Snapshots -----------------------------------------------------------------------------------
 
@@ -429,10 +514,16 @@ class World:
 
     def private_values(self) -> dict:
         """The values no output may carry: name -> the text to look for (the names are what is reported)."""
-        fingerprint, blob = self.key_values()
-        return {"owner_key_fingerprint": fingerprint, "owner_key_material": blob,
-                "passphrase": self.passphrase, "temporary_home_path": str(self.home),
-                "temporary_home_realpath": os.path.realpath(self.home)}
+        values = {"owner_key_fingerprint": "", "owner_key_material": "",
+                  "passphrase": self.passphrase, "temporary_home_path": str(self.home),
+                  "temporary_home_realpath": os.path.realpath(self.home)}
+        for number, (fingerprint, blob) in enumerate(self.all_key_values()):
+            suffix = f"_{number}" if number else ""
+            values[f"owner_key_fingerprint{suffix}"] = fingerprint
+            values[f"owner_key_material{suffix}"] = blob
+        for number, other in enumerate(sorted(self.known_passphrases - {self.passphrase})):
+            values[f"passphrase_other_{number}"] = other
+        return values
 
     def register_private_values(self) -> None:
         """Remember the values for the report's own scan (kept in memory only, never written)."""
