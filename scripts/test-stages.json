@@ -129,6 +129,7 @@
  "codex:tests.test_learning_contracts": "unit",
  "codex:tests.test_learning_cycle_core": "integration",
  "codex:tests.test_learning_engine": "integration",
+ "codex:tests.test_review_qa": "integration",
  "codex:tests.test_learning_hook": "integration",
  "codex:tests.test_learning_live": "unit",
  "codex:tests.test_learning_migration": "integration",

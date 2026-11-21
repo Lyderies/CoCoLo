@@ -2580,6 +2580,38 @@ def build_verified_qa_records(
 
 # Operational QA accepts the routed verifier of either provider: the policy's
 # Codex verification role and its Claude verification role.
+# The only statements a read-only review is expected to make about not running tests.
+# Matched as a whole sentence (case, spacing and final punctuation aside), so a sentence
+# that also asserts anything else is never ignored.
+_EXPECTED_REVIEW_STATEMENTS = frozenset({
+    "tests were not run",
+    "tests were not run: this review is read-only",
+    "tests were not run because this review is read-only",
+    "i did not run the tests",
+    "i did not run any tests",
+    "no tests were run",
+    "tests not run",
+})
+
+
+def _is_expected_review_claim(claim: str) -> bool:
+    """True when every sentence of the claim is an expected 'tests not run' statement."""
+
+    sentences = [
+        " ".join(part.lower().split()).rstrip(" .!")
+        for part in re.split(r"(?<=[.!?])\s+", " ".join(claim.split()))
+    ]
+    sentences = [sentence for sentence in sentences if sentence]
+    return bool(sentences) and all(s in _EXPECTED_REVIEW_STATEMENTS for s in sentences)
+
+
+def _is_review_slice(task_slice: Any) -> bool:
+    """A review task slice has `review` as its operation (fourth) part."""
+
+    parts = task_slice.split("-") if isinstance(task_slice, str) else []
+    return len(parts) >= 4 and parts[3] == "review"
+
+
 OPERATIONAL_VERIFIER_ROLES = frozenset({
     "codex_agents_verification_worker",
     "claude_agents_verification_worker",
@@ -2661,6 +2693,8 @@ def build_operational_qa_records(
     ):
         raise ContractError("operational verifier is not independently bound")
 
+    review = _is_review_slice(host["task_slice"])
+
     def assessment(result: dict[str, Any]) -> tuple[set[str], bool, str, dict[str, str]]:
         axes = result_axes(result)
         outcomes = {
@@ -2677,6 +2711,18 @@ def build_operational_qa_records(
         positive = axes["semantic_verdict"] in {
             "pass", "ready", "ready-with-corrections"
         }
+        if review:
+            # Judge the review, not the code: only a completed result that answers every
+            # criterion and has no unexpected unverified claim is complete.
+            complete = (
+                axes["execution_state"] == "completed"
+                and set(outcomes) == evaluator_criteria
+                and not [
+                    claim for claim in result["unverified_claims"]
+                    if not _is_expected_review_claim(claim)
+                ]
+            )
+            return passed, complete, axes["semantic_verdict"], outcomes
         complete = (
             axes["execution_state"] == "completed"
             and set(outcomes) == evaluator_criteria
@@ -2693,7 +2739,7 @@ def build_operational_qa_records(
     )
     verifier_disagreement = (
         evaluator_complete != verifier_complete
-        or evaluator_verdict != verifier_verdict
+        or (not review and evaluator_verdict != verifier_verdict)
         or evaluator_outcomes != verifier_outcomes
         or host.get("semantic_verdict", "pass") != evaluator_verdict
         or verifier_host.get("semantic_verdict", "pass") != verifier_verdict

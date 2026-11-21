@@ -132,6 +132,11 @@ markers, never set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, and never pass `--ba
    --evaluator-result <worker result file> --verifier-assignment <verifier assignment
    file> --verifier-result <verifier result file>`. Every argument is required. The
    assignment and result files are the exact ones you validated and recorded.
+   For a review task (operation `review`), QA judges the review, not the code: it is accepted when the
+   verifier confirms the worker's findings (same per-criterion outcomes), whatever verdict either gives
+   the code, and an expected "tests not run" unverified claim in a read-only review does not count against
+   it. A refuted finding or any other unverified claim still gives `accepted: false`, which is not
+   retried. Other task types keep the strict rule.
 9. **Close.** Report failed, blocked and unverified work plainly, then run
    `learning-close-orchestration` with the real terminal state. Claude Code has no
    native goal counters, so omit `--goal-tokens-used` and `--goal-time-used-seconds`
