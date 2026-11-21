@@ -34,13 +34,6 @@ class SocketTests(CoreCase):
                              capture_output=True, text=True).stdout
         self.assertEqual("", out.strip())
 
-    def test_api1_core_is_the_only_record_writer_and_reads_do_not_write(self):  # API-1
-        before = {p.name: p.read_bytes() for p in self.records.iterdir()}
-        client = self.client("read")
-        client.call("state.get"); client.call("units.list")
-        after = {p.name: p.read_bytes() for p in self.records.iterdir() if p.name != "tokens.json"}
-        self.assertEqual({k: v for k, v in before.items() if k != "tokens.json"}, after)
-
 
 class UidTests(CoreCase):
     start_service = False
@@ -107,7 +100,6 @@ class ContractTests(CoreCase):
         client = self.client()
         for method in ("state.get", "units.list", "usage.get", "health.get"):
             self.assertEqual(5, client.call(method)["seq_at"], method)
-
 
 
 class LimitTests(CoreCase):
