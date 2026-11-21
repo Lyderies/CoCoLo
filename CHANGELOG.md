@@ -4,6 +4,16 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
 
 ## 0.4.0 (in progress)
 
+- Package 0.8.45 (Phase 1.2, core API round 6): the owner-facing core API (TM0) joins the 0.8.44 base after six
+  review rounds (owner decision 34, no seventh). Fixed with tests that failed first: a single-digit price ("$5")
+  is removed by the money filter; id allocation and refusal-log rotation are locked across processes; a failed
+  connection audit, unencodable text and any unexpected handler failure are audited refusals; refusals keep a
+  bounded audit budget past the deadline; a cut (incomplete) read answers `unavailable`, never `not_found`, also
+  for every change it would feed; routing.json is flushed with its directory; writes that make no progress fail;
+  a blank token-store entry no longer crashes a revoke; the history answer says when lines were skipped; the
+  empty token store message names tokens.json and the delete step. Five tests that could pass on broken code now
+  prove their requirement.
+
 - Package 0.8.44 (Phase 1 merges): three reviewed changes join the 0.8.43 base.
   Review QA: operational QA judges a review, not the code (accepted when the verifier confirms the findings;
   the expected 'tests not run' statement is ignored; a refuted finding still disagrees; other tasks stay strict)
