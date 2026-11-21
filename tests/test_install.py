@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import contextlib
 import errno
 import hashlib
@@ -170,6 +171,39 @@ def isolate_home(test: unittest.TestCase, home: Path) -> None:
         python = mock.patch.object(installer, "_python", lambda: HOOK_PYTHON)
         python.start()
         test.addCleanup(python.stop)
+
+
+_SNAPSHOTS: dict[object, tuple[Path, Path, object]] = {}
+
+
+def installed_base(test: unittest.TestCase, key: object, build, *, prefix: str = "tmp",
+                   directory: Path | None = None) -> tuple[Path, object]:
+    """A test's base folder with its home isolated, holding what `build(base)` made: built once per
+    process for `key`, then restored by copying a snapshot of it to the same path for every later test.
+
+    An install of both packages costs about 2 s of process starts; the tests that begin from one used to
+    repeat it in every setUp. The snapshot keeps every file's mode and time, and the folder keeps its path
+    (the install records paths), so a test sees what a fresh build gives. `build` returns whatever the
+    test also needs (the installer's options); it is returned again for every test. The folder is removed
+    when the test ends, as before."""
+    directory = directory or Path(os.path.realpath(tempfile.gettempdir()))
+    entry = _SNAPSHOTS.get(key)
+    if entry is None:
+        base = Path(tempfile.mkdtemp(prefix=prefix, dir=directory))
+        test.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        isolate_home(test, base / "home")
+        built = build(base)
+        snapshot = base.with_name(base.name + ".snapshot")
+        shutil.copytree(base, snapshot, symlinks=True)
+        atexit.register(shutil.rmtree, snapshot, True)
+        _SNAPSHOTS[key] = (base, snapshot, built)
+        return base, built
+    base, snapshot, built = entry
+    shutil.rmtree(base, ignore_errors=True)
+    shutil.copytree(snapshot, base, symlinks=True)
+    test.addCleanup(shutil.rmtree, base, ignore_errors=True)
+    isolate_home(test, base / "home")
+    return base, built
 
 
 class UmbrellaInstallTests(unittest.TestCase):
@@ -858,14 +892,9 @@ class CodexRuleRemovalTests(unittest.TestCase):
         outside = outside_temporary_folders()
         if outside is None:
             self.skipTest("no folder outside the temporary roots is available")
-        self.base = Path(tempfile.mkdtemp(prefix="agent-orch-test-", dir=outside))
-        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
-        isolate_home(self, self.base / "home")
-        self.target, codex_options = make_target(self.base)
-        installed = installer.operate("install", self.target, apply=True, codex_options=codex_options)
-        self.assertTrue(installed["ok"], installed)
-        git(self.target, "add", "-A")
-        git(self.target, "commit", "-qm", "install packages")
+        self.base, _ = installed_base(self, "installed-packages-removal", self.build_installed,
+                                      prefix="agent-orch-test-", directory=outside)
+        self.target = self.base / "target"
         self.ran: list[list[str]] = []
         real_run = subprocess.run
 
@@ -876,6 +905,13 @@ class CodexRuleRemovalTests(unittest.TestCase):
         patcher = mock.patch.object(installer.subprocess, "run", spy)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def build_installed(self, base: Path) -> None:
+        target, codex_options = make_target(base)
+        installed = installer.operate("install", target, apply=True, codex_options=codex_options)
+        self.assertTrue(installed["ok"], installed)
+        git(target, "add", "-A")
+        git(target, "commit", "-qm", "install packages")
 
     def owner_runs(self) -> list[list[str]]:
         return [command for command in self.ran if command[6:7] == [str(installer.attest.clone_cli())]]
@@ -953,16 +989,18 @@ class OwnerCommandsFromThisCheckoutTests(unittest.TestCase):
         outside = outside_temporary_folders()
         if outside is None:
             self.skipTest("no folder outside the temporary roots is available")
-        self.base = Path(tempfile.mkdtemp(prefix="agent-orch-test-", dir=outside))
-        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
+        self.base, _ = installed_base(self, "installed-packages-owner", self.build_installed,
+                                      prefix="agent-orch-test-", directory=outside)
         self.home = self.base / "home"
-        isolate_home(self, self.home)
-        self.target, codex_options = make_target(self.base)
-        installed = installer.operate("install", self.target, apply=True, codex_options=codex_options)
-        self.assertTrue(installed["ok"], installed)
-        git(self.target, "add", "-A")
-        git(self.target, "commit", "-qm", "install packages")
+        self.target = self.base / "target"
         self.installed_cli = self.target / ".codex" / "orchestration" / "cli.py"
+
+    def build_installed(self, base: Path) -> None:
+        target, codex_options = make_target(base)
+        installed = installer.operate("install", target, apply=True, codex_options=codex_options)
+        self.assertTrue(installed["ok"], installed)
+        git(target, "add", "-A")
+        git(target, "commit", "-qm", "install packages")
 
     def run_cli(self, cli: Path, *args: str) -> dict:
         # Without CODEX_THREAD_ID, so host-command never reads real Codex session records

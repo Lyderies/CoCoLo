@@ -46,6 +46,7 @@ from __future__ import annotations
 # ruff: noqa: I001 -- tests.support bootstraps the native package import path.
 
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -149,6 +150,19 @@ class Workspace(unittest.TestCase):
     """A throwaway folder: the owner's repository, COCOLO's private store and merge state."""
 
     def setUp(self) -> None:
+        # The merge flushes to the disk with F_FULLFSYNC on macOS, which takes tens of milliseconds a call and
+        # is what made the kill-at-every-call tests last minutes. A process killed at a call leaves what it wrote
+        # in the file system cache either way, so no test here depends on the flush: only the flush is skipped,
+        # the call is still made and counted as before.
+        real_fcntl = fcntl.fcntl
+        flush = getattr(fcntl, "F_FULLFSYNC", None)
+
+        def fcntl_without_flush(descriptor, command, *arguments):
+            return (os.fstat(descriptor) and 0) if flush is not None and command == flush else real_fcntl(descriptor, command, *arguments)
+
+        patcher = mock.patch.object(fcntl, "fcntl", fcntl_without_flush)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.temporary = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
         self.addCleanup(self.temporary.cleanup)
         self.base_folder = Path(self.temporary.name)
@@ -337,6 +351,38 @@ class CleanMergeTests(Workspace):
         self.assertEqual(listing, git_dir_listing(self.project))
         self.assertEqual(index, (self.project / ".git" / "index").read_bytes())
         self.assertFalse((self.project / ".git" / "index.lock").exists())
+
+
+class FullFlushTests(unittest.TestCase):
+    """The real flush path, without the Workspace stub."""
+
+    def _file(self):
+        directory = tempfile.TemporaryDirectory(dir=TEMP_ROOT)
+        self.addCleanup(directory.cleanup)
+        return os.open(os.path.join(directory.name, "f"), os.O_RDWR | os.O_CREAT, 0o600)
+
+    def test_real_full_flush_is_called_and_a_bad_descriptor_still_fails(self) -> None:
+        descriptor = self._file()
+        os.write(descriptor, b"x")
+        wm._fsync(descriptor)  # Real fcntl, real flush (or os.fsync off macOS).
+        os.close(descriptor)
+        with self.assertRaises(OSError):
+            wm._fsync(descriptor)
+
+    def test_a_refused_full_flush_falls_back_to_fsync(self) -> None:
+        descriptor = self._file()
+        self.addCleanup(os.close, descriptor)
+        calls = []
+        def refuse(*arguments):
+            calls.append(arguments)
+            raise OSError(errno.ENOTSUP, "no full flush")
+        with mock.patch.object(wm.sys, "platform", "darwin"), \
+                mock.patch.object(wm.fcntl, "F_FULLFSYNC", 51, create=True), \
+                mock.patch.object(wm.fcntl, "fcntl", refuse), \
+                mock.patch.object(wm.os, "fsync") as fsync:
+            wm._fsync(descriptor)
+        self.assertEqual(1, len(calls))
+        fsync.assert_called_once_with(descriptor)
 
 
 class MergeGitCallTests(unittest.TestCase):

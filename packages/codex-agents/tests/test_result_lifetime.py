@@ -6,12 +6,24 @@ Integration stage: the in-process collector, account and project services run a 
 import json
 import sqlite3
 import unittest
+from unittest import mock
 
+from codex_agents import project_driver
 from tests.test_bridge import null_filled, result
 from tests.test_project_driver import DriverHarness
 
+# How often the service looks for results to retire (production: every 10 s). These tests wait for that
+# look, up to six times each; a shorter wait changes no rule they check, only how long they sit idle.
+TEST_EXPIRY_SECONDS = 0.5
+
 
 class ResultLifetimeTests(DriverHarness):
+    def setUp(self):
+        patcher = mock.patch.object(project_driver, 'EXPIRY_SECONDS', TEST_EXPIRY_SECONDS)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
     def result_states(self):
         """The states of this project's results, read without the service's help."""
         states = []
