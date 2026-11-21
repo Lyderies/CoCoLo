@@ -404,7 +404,8 @@ class ClaudeUpgradeTests(unittest.TestCase):
             self.assertNotIn(relative, installer._owned_paths(self.target, name, {}))
 
     def test_a_project_folder_replaced_after_the_snapshot_is_refused(self) -> None:
-        """Guard (r4 test finding: the decoy did not match the journal, so content alone refused the undo). The
+        """GUARD (green on 1d359e3b, whose journal shape never matches a digest; r4 test finding: the decoy did not
+        match the journal, so content alone refused the undo). The
         decoy now holds exactly the journal's after-state, so only the project-folder identity check (and, for
         a symlink, the no-follow open) stops the undo from deleting it."""
         preview = {"changed_paths": [".claude/agents/claude_agents_planner.md"]}
@@ -435,26 +436,9 @@ class ClaudeUpgradeTests(unittest.TestCase):
                         self.target.rename(decoy)
                     moved.rename(self.target)
 
-    def test_a_folder_this_run_did_not_create_is_never_removed(self) -> None:
-        keep = self.target / ".claude/preexisting"
-        keep.mkdir()
-        wanted = ".claude/preexisting/made/by/step.txt"
-        snapshot = installer._snapshot(self.target, "claude", {"changed_paths": [wanted]})
-        (self.target / ".claude/preexisting/made/by").mkdir(parents=True)
-        (self.target / wanted).write_text("written by the step\n")
-        made = [{"path": path, "device": os.stat(self.target / path).st_dev, "inode": os.stat(self.target / path).st_ino}
-                for path in (".claude/preexisting/made", ".claude/preexisting/made/by")]
-        reply = {"writes": [{"path": wanted, "before": None, "after": sha(b"written by the step\n")}],
-                 "folders_created": made}
-        journal = installer._journal(self.target, "claude", snapshot, reply)
-        ok, left = installer._undo(self.target, "claude", snapshot, journal)
-        self.assertTrue(ok and not left, (ok, left))
-        self.assertTrue(keep.is_dir())
-        self.assertFalse((self.target / ".claude/preexisting/made").exists())
-
     @unittest.skipIf(os.geteuid() == 0, "a read-only folder does not stop root, so the write would not fail")
     def test_an_update_that_fails_partway_leaves_no_marker_or_lock_and_can_be_retried(self) -> None:
-        """Guard (passes on 1d359e3b too: the package undoes its own partial write). A real failure inside the
+        """GUARD (passes on 1d359e3b too: the package undoes its own partial write). A real failure inside the
         package; afterwards no control file is left, and once the folder is writable again setup really retries
         and upgrades."""
         folder = self.make_read_only_for_the_last_change()
@@ -527,13 +511,15 @@ class ClaudeUpgradeTests(unittest.TestCase):
         self.commit("current release")
         planner = self.target / self.PLANNER
         self.during_the_claude_step(lambda: planner.write_text("the user's edit\n"))
-        self.settings_fail()
+        calls = self.settings_fail()
         summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
         self.assertFalse(summary["ok"], summary)
         self.assertEqual("the user's edit\n", planner.read_text())
+        # r5 item 1: a changed owned path the report leaves out stops setup at once and is named, never ok.
+        self.assertEqual([], calls)
         claude = self.claude_entry(summary)
-        self.assertTrue(claude["ok"], claude)
-        self.assertNotIn("left_alone", claude)
+        self.assertFalse(claude["ok"], claude)
+        self.assertIn(self.PLANNER, claude["left_alone"])
 
     def test_a_package_reply_without_its_write_report_stops_setup_and_undoes_nothing_of_that_step(self) -> None:
         """Owner fix 1 ('no reply, or a malformed reply, means stop and undo conservatively, never ok'). Fails on
@@ -581,6 +567,7 @@ class ClaudeUpgradeTests(unittest.TestCase):
         self.assertFalse(summary["applied"], summary)
         self.assertEqual([], calls)
         self.assertIn("unsafe_or_unavailable_path", summary["claude"]["error"])
+        self.assertIn("project_folder_changed", summary["claude"]["error"])  # r5 item 5: its own remedy
         self.assertFalse(self.claude_entry(summary)["ok"])
         self.assertTrue(steps.rollback_incomplete(summary))
 
@@ -620,17 +607,95 @@ class ClaudeUpgradeTests(unittest.TestCase):
 
     def test_a_refused_undo_never_recreates_a_folder_the_user_deleted(self) -> None:
         """Owner fix 3 (r4 MEDIUM, install.py:1272). Fails on 1d359e3b: the undo makes the folder again before it
-        finds the file gone, and leaves it behind empty. The folder holds files the update wrote."""
+        finds the file gone, and leaves it behind empty. The folder holds files the update wrote, and it is deleted
+        after setup checked the write report (in the failing settings step), so only the undo-time guard can keep
+        it from being made again (r5: the earlier version was pruned by the check and never reached the undo)."""
         agents = (self.target / self.PLANNER).parent
-        self.during_the_claude_step(lambda: shutil.rmtree(agents))
-        self.settings_fail()
+
+        def deletes_then_fails(target, plan):
+            shutil.rmtree(agents)
+            raise installer.InstallRefused("simulated settings failure")
+
+        self.patch("apply_settings", deletes_then_fails)
         summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
         self.assertFalse(summary["ok"], summary)
         self.assertFalse(agents.exists())
         self.assertIn(self.PLANNER, self.claude_entry(summary)["left_alone"])
 
+    def drop_writes(self, keep) -> None:
+        """The real Claude step runs; its reply keeps only the write entries `keep` accepts (a truncated report)."""
+        def reply(report):
+            return {**report, "writes": [entry for entry in report["writes"] if keep(entry)]}
+        self.during_the_claude_step(lambda: None, reply=reply)
+
+    def test_a_write_report_that_leaves_out_a_changed_file_stops_setup_and_names_it(self) -> None:
+        """r5 item 1 (a truncated report, or writes=[] when the step changed owned files, was accepted as ok). The
+        snapshot is compared with the disk: an owned path that changed and is missing from the report stops setup
+        at once, is named, and is never undone. Fails on d946a683: the report is accepted and setup ends ok."""
+        for case, keep in (("one entry left out", lambda entry: entry["path"] != self.PLANNER),
+                           ("writes=[]", lambda entry: False)):
+            with self.subTest(case=case):
+                self.drop_writes(keep)
+                calls = []
+                real_settings = installer.apply_settings
+                self.patch("apply_settings", lambda target, plan: (calls.append(target), real_settings(target, plan))[1])
+                summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+                self.assertFalse(summary["ok"], summary)
+                self.assertFalse(summary["applied"], summary)
+                self.assertEqual([], calls)
+                self.assertIn("no_write_report", summary["claude"]["error"])
+                claude = self.claude_entry(summary)
+                self.assertFalse(claude["ok"], claude)
+                self.assertIn(self.PLANNER, claude["left_alone"])
+                self.assertNotEqual(self.release_file(self.PLANNER), (self.target / self.PLANNER).read_text())
+                git(self.target, "checkout", "--", ".")
+
+    def test_a_reported_new_file_that_was_never_saved_is_left_alone_not_deleted(self) -> None:
+        """r5 item 1 (install.py:231-232, :386-389: a before=null path that was not snapshotted was accepted and could
+        be deleted by the undo). Fails on d946a683: the user's own agent file is unlinked."""
+        mine = self.target / ".claude/agents/my_agent.md"
+        mine.write_text("the user's own agent\n")
+        self.commit("user agent")
+        entry = {"path": ".claude/agents/my_agent.md", "before": None, "after": sha(mine.read_bytes()), "mode": 0o644}
+        self.during_the_claude_step(lambda: None, reply=lambda report: {**report, "writes": [*report["writes"], entry]})
+        self.settings_fail()
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertEqual("the user's own agent\n", mine.read_text())
+        self.assertIn(".claude/agents/my_agent.md", self.claude_entry(summary)["left_alone"])
+
+    def test_a_path_with_a_nul_or_that_does_not_encode_is_no_write_report(self) -> None:
+        """r5 item 3 (install.py:41, :136, :613-619: such a path raised ValueError past every handler). It stops setup
+        as no_write_report and setup still returns its summary. Fails on d946a683: ValueError escapes, or the
+        reply is accepted and setup ends ok."""
+        bad = (".claude/agents/x\x00y.md", ".claude/agents/x\udc80y.md")
+        for field, path in [("writes", p) for p in bad] + [("folders_created", p) for p in bad]:
+            with self.subTest(field=field, path=repr(path)):
+                if field == "writes":
+                    extra = {"path": path, "before": None, "after": "0" * 64, "mode": 0o644}
+                else:
+                    extra = {"path": path, "device": 1, "inode": 1}
+                self.during_the_claude_step(
+                    lambda: None, reply=lambda report, field=field, extra=extra: {**report, field: [*report[field], extra]})
+                summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+                self.assertFalse(summary["ok"], summary)
+                self.assertIn("no_write_report", summary["claude"]["error"])
+                git(self.target, "checkout", "--", ".")
+
+    def test_a_mode_change_made_while_the_step_ran_is_left_alone_and_named(self) -> None:
+        """r5 item 4 (install.py:167-168, :384: the after-check compared bytes only, so the undo replaced a file whose
+        mode someone changed). Fails on d946a683: the file is undone and the user's mode is lost."""
+        planner = self.target / self.PLANNER
+        self.during_the_claude_step(lambda: planner.chmod(0o600))
+        self.settings_fail()
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        self.assertFalse(summary["ok"], summary)
+        self.assertEqual(0o600, stat.S_IMODE(planner.stat().st_mode))
+        self.assertNotEqual(self.release_file(self.PLANNER), planner.read_text())
+        self.assertIn(self.PLANNER, self.claude_entry(summary)["left_alone"])
+
     def test_the_pending_marker_is_never_undone_while_a_lock_is_held(self) -> None:
-        """Pure guard of owner fix 4 (r4 MEDIUM 'control cleanup can erase the pending marker before discovering an
+        """GUARD of owner fix 4 (r4 MEDIUM 'control cleanup can erase the pending marker before discovering an
         unsafe lock', install.py:1249). The package never reports its marker as a write to undo, so no operate
         flow reaches this. It passes on 1d359e3b only because that journal format never matches a digest."""
         pending, lock = installer.CLAUDE_CONTROL
@@ -751,6 +816,40 @@ class FreshInstallFailureTests(unittest.TestCase):
         summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
         self.assertEqual("the user's save\n", (self.target / planner).read_text())
         self.assertIn(planner, self.claude_entry(summary)["left_alone"])
+
+    def test_a_folder_this_run_did_not_create_is_never_removed(self) -> None:
+        """Owner fix 3, on the real Claude producer report (r5: the earlier version supplied folders_created itself,
+        so the folder survived by construction): .claude and .claude/skills exist (empty) before a fresh install
+        that fails; the undo removes the folders the package made and keeps those. GUARD: green on 1d359e3b
+        too, which inferred folders by reading back."""
+        keep = self.target / ".claude/skills"
+        keep.mkdir(parents=True)
+        self.patch_run({"error": "operation_failed"}, carry_writes=True)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        claude = self.claude_entry(summary)
+        self.assertTrue(claude["ok"], claude)
+        self.assertTrue(keep.is_dir())
+        self.assertFalse((self.target / ".claude/skills/claude-agents").exists())
+        self.assertFalse((self.target / ".claude/agents").exists())
+
+    @unittest.skipIf(os.geteuid() == 0, "root is not refused a folder search, so the stat would not fail")
+    def test_a_folder_that_cannot_be_examined_is_named_and_the_rollback_goes_on(self) -> None:
+        """r5 item 2 (install.py:439: a stat error other than FileNotFoundError escaped and aborted the rollback). A
+        folder the run created sits in a folder that can be read but not searched. Fails on d946a683:
+        PermissionError escapes operate; on 1d359e3b the folder is not named."""
+        skills = self.target / ".claude/skills"
+
+        def unsearchable() -> None:
+            skills.chmod(0o444)
+
+        self.addCleanup(lambda: skills.exists() and skills.chmod(0o755))
+        self.patch_run({"error": "operation_failed"}, damage=unsearchable, carry_writes=True)
+        summary = installer.operate("install", self.target, apply=True, codex_options=self.codex_options)
+        claude = self.claude_entry(summary)
+        self.assertFalse(claude["ok"], claude)
+        self.assertIn(".claude/skills/claude-agents", claude["left_alone"])
+        self.assertFalse((self.target / ".claude/agents/claude_agents_planner.md").exists())  # the rest was undone
+        self.assertEqual(["claude", "codex"], [entry["package"] for entry in summary["rollback"]])
 
     @unittest.skipIf(os.geteuid() == 0, "a read-only folder does not stop root, so the package's write would not fail")
     def test_a_real_codex_failure_partway_is_undone_from_the_packages_own_report(self) -> None:
