@@ -75,6 +75,24 @@ def collector_code_stale(*, root: Path | None = None, loaded: str | None = None)
 PACKAGE_VERSION = _package_version()
 
 
+def _with_loaded_digest(error: CollectorError, response: dict[str, Any]) -> CollectorError:
+    """Keep what the collector reported as the digest of the code it loaded, when well formed, on the error.
+
+    A client that starts after the runtime files changed hashes the new files, so an old collector's
+    digest differs from its own: health() then raises instead of returning `runtime_stale`. The error says
+    which code the collector loaded, so the callers can still show and act on a collector that runs old code.
+    """
+    digest = response.get("runtime_digest")
+    error.loaded_digest = digest if type(digest) is str and re.fullmatch(r"[0-9a-f]{64}", digest) else None
+    return error
+
+
+def collector_runs_other_code(error: BaseException) -> bool:
+    """True when this health() refusal means the collector runs code other than the files on disk:
+    an older package version or a different build of the same version (never a newer collector)."""
+    return isinstance(error, (CollectorUpgradeRequired, CollectorBuildConflictError))
+
+
 HOOK_EVENT_CODES = tuple(value[0] for value in HOOK_EVENTS.values())
 
 
@@ -215,15 +233,15 @@ class CollectorClient:
             or server_version is None
             or server_version < client_version
         ):
-            raise CollectorUpgradeRequired(
+            raise _with_loaded_digest(CollectorUpgradeRequired(
                 "collector runtime is older than the installed package",
                 code="runtime_upgrade_required",
-            )
+            ), response)
         if response.get("runtime_digest") != COLLECTOR_RUNTIME_DIGEST:
-            raise CollectorBuildConflictError(
+            raise _with_loaded_digest(CollectorBuildConflictError(
                 "collector build conflicts with this package version",
                 code="runtime_conflict",
-            )
+            ), response)
         return response
 
     def project(self, project_root: Path) -> str:

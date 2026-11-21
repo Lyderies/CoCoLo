@@ -13,7 +13,8 @@ import stat
 import threading
 import time
 
-from .collector_client import COLLECTOR_RUNTIME_DIGEST, CollectorClient, empty_ingestion_snapshot
+from .collector_client import (COLLECTOR_RUNTIME_DIGEST, CollectorClient, collector_runs_other_code,
+                               empty_ingestion_snapshot)
 from .account_api import ACCOUNT_REASON_CODES, AccountClient, AccountError, integer as account_integer, _ID as _ACCOUNT_ID
 from .account_claim_contracts import CLAIM_DENIAL_CODES
 from .preparation_reasons import PREPARATION_STAGE_REASONS
@@ -352,6 +353,10 @@ def _hold_words(name, kind):
     return f"{held} {noun} held" + (f" ({'; '.join(notes)})" if notes else '')
 
 
+_CODE_STALE_NOTE = ('collector_code_stale: this collector started before its code changed and still runs the old '
+                    'code; restart it before relying on a live check')
+
+
 def _status_collector_fields(health):
     """Closed display metadata only; a health view grants no execution authority."""
     template = empty_ingestion_snapshot(registered=False)
@@ -420,9 +425,7 @@ def _status_collector_fields(health):
             'collector_schema_version': health['schema_version'],
             'collector_runtime_version': health['runtime_version'], 'collector_runtime_digest': health['runtime_digest'],
             # Whether the collector's runtime files changed after it started; its code is then old.
-            'collector_code_stale': stale, 'collector_code_note': None if stale is not True else (
-                'collector_code_stale: this collector started before its code changed and still runs the old '
-                'code; restart it before relying on a live check'),
+            'collector_code_stale': stale, 'collector_code_note': None if stale is not True else _CODE_STALE_NOTE,
             'started_at_ms': health['started_at_ms'], 'collector_health': counters,
             'ingestion': ingestion, 'provider_attestations': attestations}
 
@@ -506,6 +509,12 @@ def status_client(state_root, project_root):
         reason = ('status_collector_transport_unavailable' if isinstance(error, CollectorTransportError)
                   else 'status_collector_unavailable')
         report.update(reason_code=reason, error='Collector status is unavailable.')
+        if collector_runs_other_code(error):
+            # A collector that loaded other code than the files on disk is the stale collector this status
+            # exists to name; health() refused it before it could say so (a fresh client hashes the new files).
+            report.update(collector_code_stale=True, collector_code_note=_CODE_STALE_NOTE)
+            if getattr(error, 'loaded_digest', None) is not None:
+                report['collector_runtime_digest'] = error.loaded_digest  # the code it loaded
         if error.code == 'project_unregistered':
             report['ingestion'] = empty_ingestion_snapshot(registered=False)
     except OSError:
@@ -861,7 +870,13 @@ def billing_probe_client(state_root, project_root, *, request_id=None):
         state = CollectorPaths(state_root)
         try:
             stale = CollectorClient(state.socket, timeout=1).health(project_root).get('runtime_stale')
-        except (CollectorError, OSError, ValueError, AttributeError):
+        except CollectorError as error:
+            if collector_runs_other_code(error):
+                # health() refuses a collector whose loaded digest or version differs from this fresh client's
+                # files before it can say `runtime_stale`: that is the collector running old code.
+                raise RuntimeBillingProbeError('collector_code_stale', request_id=identity) from None
+            stale = None  # an unreadable collector is the account request's to report
+        except (OSError, ValueError, AttributeError):
             stale = None  # an unreadable collector is the account request's to report
         if stale is True:
             # The collector's loaded code is older than its files: a live check would run old code.
