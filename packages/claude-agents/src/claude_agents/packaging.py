@@ -212,6 +212,18 @@ class Bundle:
     manifest: bytes
 
 
+# Native definition default per role (aliases the Claude client accepts). A route
+# that names a model still wins; this only stops a bare native launch from
+# inheriting the primary's model.
+ROLE_MODELS = {
+    "implementation_worker": "sonnet",
+    "planner": "sonnet",
+    "researcher": "sonnet",
+    "verification_worker": "sonnet",
+    "security_reviewer": "opus",
+}
+
+
 def compile_bundle(source_root: Path) -> Bundle:
     """Compile fixed paths from an owner-selected trusted source; never execute it."""
     root = None
@@ -232,14 +244,17 @@ def compile_bundle(source_root: Path) -> Bundle:
         files = {}
         for fixture, text in zip(fixtures, texts, strict=True):
             role = fixture.name.removeprefix("claude_agents_")
-            text = text.replace("\n---\n", "\nmaxTurns: 8\n---\n", 1)
+            model = ROLE_MODELS.get(role)
+            if model is None:
+                _fail("role_model_missing")
+            text = text.replace("\n---\n", f"\nmodel: {model}\nmaxTurns: 8\n---\n", 1)
             text = text.replace("Inert fixture only. Do not execute or install this definition.\n", "")
             text += (
                 "\n" + _CONTRACTS[role] + "\n"
                 "Use one assignment and one attempt. Do not retry or reroute.\n"
                 "Return the assigned structured result with admission_state unverified.\n"
                 "Keep unavailable usage null. Do not attest effect cessation or accept your result.\n"
-                "Model omission allows native inheritance and provides no model isolation.\n"
+                "The model field is only a default; it provides no model isolation.\n"
                 "Only the host/controller may select models or grant capabilities.\n"
             )
             files[".claude/agents/" + fixture.name + ".md"] = text.encode()

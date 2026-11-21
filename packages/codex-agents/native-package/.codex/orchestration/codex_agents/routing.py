@@ -410,7 +410,8 @@ def validate_project_agent_mapping(
                 )
         if candidate["errors"] or candidate["warnings"]:
             raise PolicyError(f"mapped project agent is not executable: {agent_type}")
-        if candidate["configured_model"] is not None:
+        # A model alias is only the definition's fallback; the route's model wins.
+        if candidate["configured_model"] not in (None, "sonnet", "opus", "haiku"):
             raise PolicyError(
                 f"mapped project agent must not override model or effort: {agent_type}"
             )
