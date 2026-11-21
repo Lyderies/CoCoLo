@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_identifiers.py"
@@ -58,22 +60,24 @@ class SharedScanTreeTests(unittest.TestCase):
         findings = check.scan_tree(root, ())
         self.assertEqual([str(f) for f in findings], ["evidence.txt:2: home-path"])
 
-    def test_qa_manifest_file_and_git_give_the_same_file_set_and_findings(self) -> None:
-        """QA reads the git-produced manifest the host wrote; the CLI asks git itself. One file set."""
+    def test_scan_set_is_an_independent_literal_even_when_the_repository_config_says_ignore_case(self) -> None:
+        """What it checks: the files the scanner lists equal a hand-written list that no scanner code produced,
+        in a repository whose own config sets ``core.ignorecase=true``. Git applies that setting to
+        ``.gitignore`` matching, so left alone it hides ``Doc/Keep.txt`` behind the rule ``doc/keep.txt`` on
+        every machine that sets it and not on CI. The old test wrote ``git_manifest`` output to a file and
+        compared it with ``list_scan_files``, which calls ``git_manifest`` again, so it could not fail."""
 
         root = self.make_repo()
+        git(root, "config", "core.ignorecase", "true")
+        (root / ".gitignore").write_text("ignored.txt\nbuild/\ndoc/keep.txt\n", encoding="utf-8")
+        (root / "Doc").mkdir()
+        (root / "Doc" / "Keep.txt").write_text("x\n", encoding="utf-8")
         (root / "sub").mkdir()
         (root / "sub" / "deep.txt").write_text("x\n", encoding="utf-8")
-        via_git = check.list_scan_files(root)
-        manifest_file = root.parent / (root.name + ".manifest")
-        self.addCleanup(manifest_file.unlink, missing_ok=True)
-        manifest_file.write_bytes(b"\0".join(check.git_manifest(root)) + b"\0")
-        via_manifest = check.list_scan_files(root, manifest=check.read_manifest(manifest_file))
-        self.assertEqual(via_git, via_manifest)
-        self.assertIn("untracked.txt", via_git)
-        self.assertIn("sub/deep.txt", via_git)
-        self.assertNotIn("ignored.txt", via_git)
-        self.assertNotIn("build/o.txt", via_git)
+        expected = {".gitignore", "Doc/Keep.txt", "sub/deep.txt", "tracked.txt", "untracked.txt"}
+        self.assertEqual(expected, set(check.list_scan_files(root)))
+        manifest = check.parse_manifest(b"\0".join(os.fsencode(name) for name in sorted(expected)) + b"\0")
+        self.assertEqual(sorted(expected), check.list_scan_files(root, manifest=manifest))
 
     def test_cli_scans_untracked_files_and_fails_on_real_path_only(self) -> None:
         root = self.make_repo()
@@ -91,6 +95,13 @@ SENTINEL = "SENTINEL_MATCHED_VALUE"
 TEMPLATE = Path(__file__).resolve().parents[1] / "scripts" / "qa-security.template"
 
 
+def fill_template() -> str:
+    """The shipped wrapper as a project saves it: interpreter and the approved scanner's digest filled in."""
+
+    return (TEMPLATE.read_text(encoding="utf-8").replace("@QA_PYTHON@", sys.executable)
+            .replace("@SCANNER_SHA256@", hashlib.sha256(_SCRIPT.read_bytes()).hexdigest()))
+
+
 def make_hole_repo(testcase: unittest.TestCase) -> Path:
     """A repository where git lists files that an approximate ignore walk would hide, plus links."""
 
@@ -100,8 +111,7 @@ def make_hole_repo(testcase: unittest.TestCase) -> Path:
     (root / "tracked.txt").write_text("clean\n", encoding="utf-8")
     (root / "scripts").mkdir()
     (root / "scripts" / "check_identifiers.py").write_bytes(_SCRIPT.read_bytes())
-    template = TEMPLATE.read_text(encoding="utf-8").replace("@QA_PYTHON@", sys.executable)
-    (root / "qa-security").write_text(template, encoding="utf-8")
+    (root / "qa-security").write_text(fill_template(), encoding="utf-8")
     # An anchored "/build/" ignores only the top-level directory; git lists the nested one.
     (root / "sub" / "build").mkdir(parents=True)
     (root / "sub" / "build" / "x.txt").write_text(f"{REAL}\n", encoding="utf-8")
@@ -124,10 +134,13 @@ def make_hole_repo(testcase: unittest.TestCase) -> Path:
     return root
 
 
-def scan_env(root: Path, denylist: tuple[str, ...] = ()) -> dict[str, str]:
-    names = root.parent / (root.name + ".denylist")
+def scan_env(testcase: unittest.TestCase, root: Path, denylist: tuple[str, ...] = ()) -> dict[str, str]:
+    """The inputs the host provides, in a private directory the test removes (never beside the repository)."""
+
+    inputs = Path(testcase.enterContext(tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")))).resolve()
+    names = inputs / "denylist"
     names.write_text("\n".join(denylist), encoding="utf-8")
-    manifest = root.parent / (root.name + ".manifest")
+    manifest = inputs / "manifest"
     manifest.write_bytes(b"\0".join(check.git_manifest(root)) + b"\0")
     return {
         **{k: v for k, v in os.environ.items() if not k.startswith("AO_")},
@@ -157,7 +170,7 @@ class EnumerationParityTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.root = make_hole_repo(self)
-        self.env = scan_env(self.root, (SENTINEL.casefold(),))
+        self.env = scan_env(self, self.root, (SENTINEL.casefold(),))
 
     def test_qa_and_ci_report_the_same_findings_for_files_an_ignore_approximation_would_hide(self) -> None:
         ci = run_cli(self.root, self.env)
@@ -208,7 +221,7 @@ class DiagnosticRedactionTests(unittest.TestCase):
         (root / "scripts" / "check_identifiers.py").write_bytes(_SCRIPT.read_bytes())
         for name in (f"{SENTINEL}-notes.txt", "ok.txt", "ali" + "ce@" + "mailhost.io.txt"):
             (root / name).write_text("see " + "bob" + "@" + "mailhost.io\n", encoding="utf-8")
-        env = scan_env(root, (SENTINEL.casefold(),))
+        env = scan_env(self, root, (SENTINEL.casefold(),))
         for result in (run_cli(root, env),):
             self.assertEqual(1, result.returncode)
             self.assertIn("ok.txt:1: email", result.stderr)
@@ -226,7 +239,7 @@ class ShippedQaTemplateTests(unittest.TestCase):
                  and isinstance(node.func, ast.Attribute) and node.func.attr == "scan_tree"]
         self.assertEqual(1, len(calls), "the template must call check_identifiers.scan_tree exactly once")
         rendered = ast.unparse(calls[0])
-        self.assertIn("load_denylist()", rendered)
+        self.assertIn("load_required_denylist()", rendered)
         self.assertIn("manifest_from_environment()", rendered)
         for forbidden in ("use_git", "exclude", "frozenset", "()),"):
             self.assertNotIn(forbidden, rendered)
@@ -241,8 +254,188 @@ class ShippedQaTemplateTests(unittest.TestCase):
         root = make_hole_repo(self)
         (root / "only-denylisted.txt").write_text("plain words: zebra crossing\n", encoding="utf-8")
         git(root, "add", "-A")
-        env = scan_env(root, ("zebra crossing",))
+        env = scan_env(self, root, ("zebra crossing",))
         self.assertIn("only-denylisted.txt:1: denylisted-term", run_template(root, env).stderr)
+
+
+class FailClosedScanTests(unittest.TestCase):
+    """QA must not pass where CI fails: anything the scanner cannot read or trust is a refusal (exit 2)."""
+
+    def setUp(self) -> None:
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")))).resolve()
+        git(self.root, "init", "-q")
+        (self.root / "scripts").mkdir()
+        (self.root / "scripts" / "check_identifiers.py").write_bytes(_SCRIPT.read_bytes())
+        (self.root / "qa-security").write_text(fill_template(), encoding="utf-8")
+        (self.root / "tracked.txt").write_text("clean\n", encoding="utf-8")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "x")
+        self.env = scan_env(self, self.root)
+
+    def assert_refused(self, result: subprocess.CompletedProcess, *, hidden: tuple[str, ...] = ()) -> None:
+        self.assertEqual(2, result.returncode, (result.stdout, result.stderr))
+        self.assertIn("REFUSED", result.stderr)
+        self.assertNotIn("PASS", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+        for value in hidden:
+            self.assertNotIn(value, result.stderr)
+
+    def test_an_unreadable_listed_file_refuses_instead_of_being_skipped(self) -> None:
+        locked = self.root / "locked.txt"
+        locked.write_text(f"{REAL}\n", encoding="utf-8")
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o600)
+        if os.access(locked, os.R_OK):
+            self.skipTest("this account can read files whatever their mode")
+        env = scan_env(self, self.root)
+        self.assert_refused(run_cli(self.root, env))
+        self.assert_refused(run_template(self.root, env))
+
+    def test_a_listed_path_below_a_symbolic_link_refuses(self) -> None:
+        outside = Path(self.enterContext(tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")))).resolve()
+        (outside / "f.txt").write_text(f"{REAL}\n", encoding="utf-8")
+        os.symlink(outside, self.root / "d")
+        with self.assertRaises(check.ScanRefused):
+            check.scan_tree(self.root, (), manifest=check.parse_manifest(b"tracked.txt\0d/f.txt\0"))
+
+    def test_a_listed_pipe_refuses_instead_of_blocking_or_being_skipped(self) -> None:
+        os.mkfifo(self.root / "pipe")
+        with self.assertRaises(check.ScanRefused):
+            check.scan_tree(self.root, (), manifest=check.parse_manifest(b"pipe\0"))
+
+    def test_a_deleted_file_and_a_directory_entry_are_scanned_by_name_only(self) -> None:
+        (self.root / "module").mkdir()
+        self.assertEqual([], check.scan_tree(
+            self.root, (), manifest=check.parse_manifest(b"gone.txt\0module\0gone-dir/x.txt\0")))
+
+    def test_a_manifest_naming_a_path_outside_the_project_refuses(self) -> None:
+        for name in (b"../x", b"/etc/hosts", b"a//b", b"./a"):
+            with self.subTest(name=name), self.assertRaises(check.ScanRefused):
+                check.scan_tree(self.root, (), manifest=[name])
+
+    def test_template_refuses_when_the_host_supplied_no_denylist_or_an_unreadable_one(self) -> None:
+        empty_home = Path(self.enterContext(tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")))).resolve()
+        without = {k: v for k, v in self.env.items() if k != "AO_IDENTIFIER_DENYLIST"}
+        self.assert_refused(run_template(self.root, {**without, "HOME": str(empty_home)}))
+        missing = {**self.env, "AO_IDENTIFIER_DENYLIST": str(empty_home / "absent.txt")}
+        self.assert_refused(run_template(self.root, missing))
+        directory = {**self.env, "AO_IDENTIFIER_DENYLIST": str(empty_home)}
+        self.assert_refused(run_template(self.root, directory))
+
+    def test_an_empty_provisioned_denylist_means_no_private_terms(self) -> None:
+        self.assertEqual(0, run_template(self.root, self.env).returncode)
+
+    def test_template_refuses_a_scanner_that_changed_after_the_wrapper_was_approved(self) -> None:
+        scanner = self.root / "scripts" / "check_identifiers.py"
+        scanner.write_text(scanner.read_text(encoding="utf-8") + "\nscan_tree = lambda *a, **k: []\n",
+                           encoding="utf-8")
+        (self.root / "leak.txt").write_text(f"{REAL}\n", encoding="utf-8")
+        self.assert_refused(run_template(self.root, scan_env(self, self.root)))
+
+    def test_an_oversize_manifest_refuses_instead_of_being_truncated(self) -> None:
+        manifest = Path(self.env["AO_QA_FILE_MANIFEST"])
+        names = (b"%06d" % number + b"x" * 250 for number in range(16 * 1_048_576 // 257 + 2))
+        manifest.write_bytes(b"\0".join(names) + b"\0")
+        self.assertGreater(manifest.stat().st_size, 16 * 1_048_576)
+        self.assert_refused(run_template(self.root, self.env))
+
+    def test_the_cli_refuses_to_scan_only_a_subdirectory(self) -> None:
+        (self.root / "sub").mkdir()
+        (self.root / "sub" / "a.txt").write_text("clean\n", encoding="utf-8")
+        (self.root / "elsewhere.txt").write_text(f"{REAL}\n", encoding="utf-8")
+        result = subprocess.run([sys.executable, str(self.root / "scripts" / "check_identifiers.py")],
+                                cwd=self.root / "sub", capture_output=True, text=True, env=self.env)
+        self.assert_refused(result)
+
+    def test_a_git_on_a_path_entry_inside_the_project_is_never_run(self) -> None:
+        marker = self.root / "git-ran"
+        (self.root / "bin").mkdir()
+        fake = self.root / "bin" / "git"
+        fake.write_text(f"#!/bin/sh\n: > {marker}\nexit 1\n", encoding="utf-8")
+        fake.chmod(0o700)
+        real_git = os.path.dirname(subprocess.run(["which", "git"], capture_output=True, text=True).stdout.strip())
+        env = {k: v for k, v in self.env.items() if k != "AO_QA_FILE_MANIFEST"}
+        env["PATH"] = f"{self.root / 'bin'}{os.pathsep}{real_git}"
+        run_cli(self.root, env)
+        self.assertFalse(marker.exists(), "the scanner ran a git binary that the project controls")
+
+    def test_a_repository_config_that_moves_the_work_tree_is_refused_or_listed_correctly(self) -> None:
+        other = Path(self.enterContext(tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")))).resolve()
+        (other / "other.txt").write_text(f"{REAL}\n", encoding="utf-8")
+        git(self.root, "config", "core.worktree", str(other))
+        env = {k: v for k, v in self.env.items() if k != "AO_QA_FILE_MANIFEST"}
+        result = run_cli(self.root, env)
+        self.assertNotEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("other.txt", result.stderr)
+
+
+class ErrorRedactionTests(unittest.TestCase):
+    """No error path prints a file name: names can hold a private value."""
+
+    def setUp(self) -> None:
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")))).resolve()
+        git(self.root, "init", "-q")
+        (self.root / "scripts").mkdir()
+        (self.root / "scripts" / "check_identifiers.py").write_bytes(_SCRIPT.read_bytes())
+        self.env = scan_env(self, self.root, (SENTINEL.casefold(),))
+
+    def test_a_staged_submodule_entry_is_scanned_by_name_only_and_never_traces_back(self) -> None:
+        git(self.root, "update-index", "--add", "--cacheinfo", "160000," + "a" * 40 + ",submodule-marker")
+        result = run_cli(self.root, scan_env(self, self.root), "--staged")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("submodule-marker", result.stdout + result.stderr)
+
+    def test_a_staged_blob_that_cannot_be_read_refuses_without_naming_the_file(self) -> None:
+        (self.root / f"{SENTINEL}-notes.txt").write_text("unique staged text 1\n", encoding="utf-8")
+        git(self.root, "add", "-A")
+        sha = subprocess.run(["git", "rev-parse", f":{SENTINEL}-notes.txt"], cwd=self.root, check=True,
+                             capture_output=True, text=True).stdout.strip()
+        (self.root / ".git" / "objects" / sha[:2] / sha[2:]).unlink()
+        result = run_cli(self.root, self.env, "--staged")
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn("REFUSED", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn(SENTINEL, (result.stdout + result.stderr).upper())
+
+    def test_an_invalid_revision_is_a_refusal_not_a_traceback(self) -> None:
+        result = run_cli(self.root, self.env, "--commits", "no-such-revision")
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_an_unexpected_error_is_reported_without_its_message(self) -> None:
+        import contextlib
+        import io
+
+        failure = OSError(13, "denied", f"{SENTINEL}-private-name")
+        captured = io.StringIO()
+        with unittest.mock.patch.object(check, "load_denylist", return_value=()), \
+                unittest.mock.patch.object(check, "scan_paths", side_effect=failure), \
+                contextlib.redirect_stderr(captured):
+            code = check.main([])
+        self.assertEqual(2, code)
+        self.assertNotIn(SENTINEL, captured.getvalue().upper())
+
+    def test_invalid_utf8_and_control_character_names_are_redacted_on_content_findings(self) -> None:
+        content = ("see " + "bob" + "@" + "mailhost.io\n").encode()
+        for raw in (b"bad\xff-notes.txt", "a\u202eb.txt".encode(), "x\u200by.txt".encode(), b"\xed\xa0\x80.txt"):
+            with self.subTest(raw=raw):
+                findings = check._scan_named(raw, lambda: content, ())
+                self.assertIn("[redacted]:1: email", [str(f) for f in findings])
+                for finding in findings:
+                    self.assertTrue(str(finding).startswith("[redacted]:"), str(finding))
+
+    def test_a_real_file_with_an_invalid_utf8_name_is_never_printed(self) -> None:
+        raw = os.fsencode(self.root) + b"/bad\xff-notes.txt"
+        try:
+            with open(raw, "wb") as handle:
+                handle.write(("see " + "bob" + "@" + "mailhost.io\n").encode())
+        except OSError:
+            self.skipTest("this filesystem rejects names that are not valid UTF-8")
+        result = run_cli(self.root, scan_env(self, self.root))
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertNotIn("bad", result.stderr)
+        self.assertNotIn("\\x", result.stderr)
 
 
 if __name__ == "__main__":

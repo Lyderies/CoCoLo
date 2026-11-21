@@ -39,7 +39,8 @@ trusted interpreter file (not a symlink or macOS's `/usr/bin/python3` shim).
 cd /path/to/project
 QA_PYTHON=/absolute/path/to/trusted/python3
 printf '#!%s\nimport os, sys, unittest\nsys.path.insert(0, os.getcwd())\nsuite = unittest.defaultTestLoader.discover("tests")\nraise SystemExit(0 if unittest.TextTestRunner().run(suite).wasSuccessful() else 1)\n' "$QA_PYTHON" > qa-check
-sed "s|@QA_PYTHON@|$QA_PYTHON|" scripts/qa-security.template > qa-security   # the shipped identifier scan, see below
+SCANNER=$(shasum -a 256 scripts/check_identifiers.py | cut -d' ' -f1)
+sed -e "s|@QA_PYTHON@|$QA_PYTHON|" -e "s|@SCANNER_SHA256@|$SCANNER|" scripts/qa-security.template > qa-security   # the shipped identifier scan, see below
 chmod 700 qa-check qa-security
 git add qa-check qa-security scripts/check_identifiers.py && git commit -m "Add QA check wrappers"
 INTERP=$(shasum -a 256 "$QA_PYTHON" | cut -d' ' -f1)   # sha256sum on Linux
@@ -59,22 +60,31 @@ used by `tests/test_install.py`. Operational QA runs these commands inside macOS
 and file sizes; tests requiring larger fixtures cannot pass that QA gate unchanged.
 
 Identifier scanning: `scripts/qa-security.template` is the shipped `qa-security` wrapper. It calls
-`check_identifiers.scan_tree(root, load_denylist(), manifest=manifest_from_environment())`, the same function the
+`check_identifiers.scan_tree(root, load_required_denylist(), manifest=manifest_from_environment())`, the same function the
 command line and CI use. All three scan one git-produced file list (`git ls-files -z --cached --others
 --exclude-per-directory=.gitignore`: tracked files even when an ignore rule names them, plus untracked files no
 `.gitignore` ignores). QA cannot start git, so the QA runner lists the files with git before the sandbox starts
 and hands the list and a copy of the owner's private denylist (`$AO_IDENTIFIER_DENYLIST` or
 `~/.config/codex-claude-agent-orchestration/identifier-denylist.txt`) to the wrapper in `AO_QA_FILE_MANIFEST` and
-`AO_IDENTIFIER_DENYLIST`. The scan refuses (exit 2, `REFUSED: ...`) rather than scan fewer files when git, the
-list or the denylist is unavailable. There are no project-chosen exclusions: QA must scan what CI scans (CI also
-checks commit identities, which QA does not). A symbolic link is scanned by name and target text, never followed;
-a name that is not valid UTF-8 is a finding. Only exact lower-case placeholder accounts that are a whole path
-component (`/Users/x`, `/home/user`) are allowed; any other name, `User` or `User Smith` included, fails.
+`AO_IDENTIFIER_DENYLIST` (an empty file when the owner has no denylist). The runner does not start a security
+check at all (`identifier_inputs_unavailable`) when it cannot produce both, and the scan refuses (exit 2,
+`REFUSED: ...`) rather than scan fewer files or with fewer terms when either is missing, unreadable or too large,
+when a listed file cannot be read, when a listed path lies below a symbolic link or is a pipe, socket or device,
+or when the repository's configuration moves its work tree. The wrapper carries the sha256 of
+`scripts/check_identifiers.py`, filled in when you save it, and runs only that scanner: changing the scanner
+means saving and approving a new wrapper. There are no project-chosen exclusions: QA must scan what CI scans
+(CI also checks commit identities, which QA does not). Git lists files with ignore rules matched case-sensitively,
+whatever the repository's `core.ignorecase` says. A symbolic link is scanned by name and target text, never
+followed; a name that is not valid UTF-8 is a finding. Only exact lower-case placeholder accounts that are a whole
+path component (`/Users/x`, `/home/user`) are allowed, and a character that can sit inside an account name
+(`'`, a backquote, a bracket, `,`, `;`) ends it only as prose punctuation, never before more name; any other
+name, `User` or `User Smith` included, fails. The command line refuses to scan from a subdirectory.
 
 When a security check fails, the runner records `{path, line, category}` for at most 50 findings. It accepts a
-path only if it is in the git list, uses a plain alphabet, names no host and holds no denylisted term, and a line
-only if it exists in that file; anything else is reported as `[redacted]` with line 0. Scanner output itself
-prints `[redacted]` for a file name that holds a value. Matched text is never printed.
+path only if it is in the git list, uses a plain alphabet, names no host and holds no denylisted term, else it
+is `[redacted]`. The line is always 0, because the runner cannot tell a real line from a number the wrapper chose.
+Scanner output itself prints `[redacted]` for a file name that holds a value, is not valid UTF-8 or holds a
+control or format character, and no error message names a file. Matched text is never printed.
 
 QA discards stdout. It keeps stderr in a private folder, only to extract those `path:line: category` records,
 and deletes it afterwards; the agent receives fixed diagnostic codes, the check's status, its exit code and those

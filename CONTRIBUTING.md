@@ -67,7 +67,7 @@ Commit with a GitHub `noreply` address.
 `scripts/check_identifiers.py` scans the files git lists (tracked files, plus untracked files no `.gitignore`
 ignores), and the pre-commit hook scans staged content and your commit identity. Operational QA scans the same
 list through `scripts/qa-security.template`. Findings report only a category, path and line, never the matched
-text; a file name that holds a value prints as `[redacted]`. Only exact placeholder accounts such as `/Users/x`
+text; a file name that holds a value prints as `[redacted]`, and a file the scan cannot read is a refusal, never a skip. Only exact placeholder accounts such as `/Users/x`
 are allowed. Terms specific
 to you can go in a private denylist outside the repository, one per line:
 `~/.config/codex-claude-agent-orchestration/identifier-denylist.txt`, or the file `$AO_IDENTIFIER_DENYLIST`

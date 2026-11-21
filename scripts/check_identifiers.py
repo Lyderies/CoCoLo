@@ -3,7 +3,11 @@
 
 Findings report only a category, path and line, never the matched text, so CI logs
 cannot leak a denylisted value. A path that itself holds a value (an identifier, a denylisted
-term, a control character or invalid UTF-8) is printed as ``[redacted]``. Owner-specific terms live in a private denylist file
+term, a control or format character, or bytes that are not valid UTF-8) is printed as ``[redacted]``,
+and no error message ever names a file. A listed file that cannot be read, a path that leaves the
+project, a link above a listed file, a pipe, socket or device, a repository whose configuration moves
+its work tree, a run from a subdirectory and an oversize file list are all refusals (exit 2), never a
+smaller scan. Owner-specific terms live in a private denylist file
 outside the repository (one term per line, ``#`` comments allowed):
 
 - ``$AO_IDENTIFIER_DENYLIST`` when set, otherwise
@@ -11,7 +15,8 @@ outside the repository (one term per line, ``#`` comments allowed):
 
 Usage:
     check_identifiers.py                 scan tracked files plus untracked files that are not ignored
-                                         (the git file manifest; refuses when git cannot produce it)
+                                         (the git file manifest; refuses when git cannot produce it, and
+                                         refuses to run anywhere but the top of the repository)
     check_identifiers.py --staged        scan staged content (pre-commit)
     check_identifiers.py --identity      check the configured commit identity
     check_identifiers.py --commits REV   check author/committer emails reachable from REV
@@ -26,11 +31,16 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 MAX_BYTES = 2 * 1024 * 1024
+MAX_MANIFEST_BYTES = 16 * 1024 * 1024  # the same bound the QA host puts on the list it hands over
+MAX_DENYLIST_BYTES = 1024 * 1024
+GIT_SECONDS = 120
 DEFAULT_DENYLIST_PARTS = (".config", "codex-claude-agent-orchestration", "identifier-denylist.txt")
 
 PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -52,10 +62,15 @@ ALLOWED_EMAILS = (
 # Obvious placeholder account names in documentation and evidence (/Users/x, /home/user). The exemption is
 # exact: the whole path component must be one of these lower-case tokens, so "User", "X", "User Smith" and
 # a name that merely starts with a token are all findings. A token counts as a whole component only when the
-# next character ends it (a path separator, the end of the line, or a quote or bracket); anything else,
-# including a space or a non-ASCII letter, might continue a real account name.
+# next character ends it. A path separator, the end of the line and the characters Windows forbids in an
+# account name (a double quote, ``<``, ``>``, ``:``) always end it. A character that is legal inside a name
+# (an apostrophe, backquote, bracket, comma, semicolon) ends it only as prose punctuation: when what
+# follows is the end of the line, a space or more punctuation, never more name (``user'smith`` is an
+# account). Anything else, including a space or a non-ASCII letter, might continue a real account name.
 ALLOWED_HOME_NAMES = frozenset({"x", "user", "you", "name", "username", "yourname", "example"})
-COMPONENT_END = frozenset("/\\\"'`)]}>,;:")
+COMPONENT_END = frozenset("/\\\"<>:")
+PROSE_PUNCTUATION = frozenset("'`)]},;")
+AFTER_PROSE = frozenset(" \t'`)]},;:!?\"<>")
 REDACTED = "[redacted]"
 # Command-line git, run with no user or system configuration so every machine lists the same files.
 GIT_LIST_ARGS = ("ls-files", "-z", "--cached", "--others", "--exclude-per-directory=.gitignore")
@@ -77,6 +92,11 @@ class ScanRefused(Exception):
     """The scan cannot be done as specified; it refuses rather than scan fewer files."""
 
 
+def _terms(text: str) -> tuple[str, ...]:
+    terms = (line.strip() for line in text.splitlines())
+    return tuple(term.casefold() for term in terms if term and not term.startswith("#"))
+
+
 def load_denylist(path: Path | None = None) -> tuple[str, ...]:
     """Return lower-cased private terms; a missing file yields no terms, an unreadable one refuses."""
 
@@ -95,8 +115,28 @@ def load_denylist(path: Path | None = None) -> tuple[str, ...]:
         return ()
     except (OSError, UnicodeError):
         raise ScanRefused("the private denylist exists but cannot be read") from None
-    terms = (line.strip() for line in text.splitlines())
-    return tuple(term.casefold() for term in terms if term and not term.startswith("#"))
+    return _terms(text)
+
+
+def load_required_denylist() -> tuple[str, ...]:
+    """The denylist the QA host provisioned, and nothing else.
+
+    QA has no home folder, and the host writes the owner's denylist (an empty file when the owner has none)
+    and names it in ``$AO_IDENTIFIER_DENYLIST``. Unset, missing, oversize, unreadable or not UTF-8 is a
+    refusal: falling back to a default location, or to no terms, would scan with a weaker list than CI.
+    """
+
+    configured = os.environ.get("AO_IDENTIFIER_DENYLIST")
+    if not configured:
+        raise ScanRefused("the host supplied no private denylist; QA must not scan without the owner's terms")
+    try:
+        with open(configured, "rb") as handle:
+            data = handle.read(MAX_DENYLIST_BYTES + 1)
+        if len(data) > MAX_DENYLIST_BYTES:
+            raise ScanRefused("the private denylist supplied by the host is too large")
+        return _terms(data.decode("utf-8"))
+    except (OSError, UnicodeError):
+        raise ScanRefused("the private denylist supplied by the host cannot be read") from None
 
 
 def email_allowed(address: str) -> bool:
@@ -109,7 +149,12 @@ def _placeholder_home(match: re.Match[str], line: str) -> bool:
     if re.split(r"[\\/]+", match.group(0))[-1] not in ALLOWED_HOME_NAMES:
         return False
     following = line[match.end():match.end() + 1]
-    return following == "" or following in COMPONENT_END
+    if following == "" or following in COMPONENT_END:
+        return True
+    if following in PROSE_PUNCTUATION:
+        rest = line[match.end() + 1:]
+        return rest == "" or rest[0] in AFTER_PROSE or (rest[0] == "." and rest[1:2] in ("", " ", "\t"))
+    return False
 
 
 def scan_text(text: str, location: str, denylist: tuple[str, ...]) -> list[Finding]:
@@ -131,10 +176,6 @@ def scan_text(text: str, location: str, denylist: tuple[str, ...]) -> list[Findi
     return findings
 
 
-def _git(*args: str | bytes) -> bytes:
-    return subprocess.run(["git", *args], check=True, capture_output=True).stdout
-
-
 def _git_environment() -> dict[str, str]:
     """No GIT_* variables and no user or system git configuration: the same file list on every machine."""
 
@@ -144,6 +185,74 @@ def _git_environment() -> dict[str, str]:
         "GIT_TERMINAL_PROMPT": "0", "xcrun_nocache": "1",
     })
     return environment
+
+
+# Repository-local settings that change which files git lists: ignore rules are matched case-sensitively
+# whatever a checkout's own config says, so every machine lists what a case-sensitive CI checkout lists.
+GIT_FIXED_CONFIG = ("-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.ignorecase=false")
+
+
+def _within(path: str, parent: str) -> bool:
+    return path == parent or path.startswith(parent.rstrip(os.sep) + os.sep)
+
+
+def _git_executable(project: Path | None) -> str:
+    """The git on PATH, ignoring relative entries and entries inside the project (project code could plant one)."""
+
+    entries = [entry for entry in os.environ.get("PATH", os.defpath).split(os.pathsep) if os.path.isabs(entry)]
+    if project is not None:
+        top = os.path.realpath(project)
+        entries = [entry for entry in entries if not _within(os.path.realpath(entry), top)]
+    git = shutil.which("git", path=os.pathsep.join(entries))
+    if git is None:
+        raise ScanRefused("git is unavailable, so the files to scan cannot be listed")
+    return git
+
+
+def _run_git(
+    args: tuple[str | bytes, ...], *, root: Path | None, limit: int, hardened: bool = True,
+) -> tuple[int, bytes, bool]:
+    """Run git; return (exit status, at most ``limit`` bytes of output, whether there was more).
+
+    Never raises anything that names an argument: every failure is a fixed ScanRefused message. The
+    ``hardened`` runs (the file list) use no user or system configuration and no GIT_* variables; the
+    staged and commit checks keep the caller's environment, which a pre-commit hook relies on.
+    """
+
+    command: list[str | bytes] = [_git_executable(root), *(GIT_FIXED_CONFIG if hardened else ())]
+    if root is not None:
+        command += ["-C", str(root)]
+    command += args
+    try:
+        process = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            env=_git_environment() if hardened else None,
+        )
+    except (OSError, ValueError):
+        raise ScanRefused("git could not be run") from None
+    expired = threading.Event()
+
+    def expire() -> None:
+        expired.set()
+        process.kill()
+
+    timer = threading.Timer(GIT_SECONDS, expire)
+    timer.start()
+    try:
+        data = process.stdout.read(limit + 1)
+        over = len(data) > limit
+        if over:
+            process.kill()
+        process.wait()
+    except OSError:
+        process.kill()
+        raise ScanRefused("git output could not be read") from None
+    finally:
+        timer.cancel()
+        process.stdout.close()
+    if expired.is_set():
+        raise ScanRefused("git took too long")
+    return process.returncode, data[:limit], over
 
 
 def parse_manifest(data: bytes) -> list[bytes]:
@@ -157,29 +266,31 @@ def git_manifest(root: Path) -> list[bytes]:
     ignore rule names them) plus untracked files that no ``.gitignore`` ignores.
 
     Only ``.gitignore`` files count (not ``.git/info/exclude`` or a global ignore file), so a clean
-    checkout in CI lists exactly what QA lists. Refuses when git cannot produce the list.
+    checkout in CI lists exactly what QA lists. Refuses when git cannot produce the list, when the
+    repository's configuration puts its work tree somewhere other than ``root``, or when the list is
+    larger than the bound the QA host applies.
     """
 
-    git = shutil.which("git")
-    if git is None:
-        raise ScanRefused("git is unavailable, so the files to scan cannot be listed")
-    try:
-        completed = subprocess.run(
-            [git, "-c", "core.fsmonitor=false", "-C", str(root), *GIT_LIST_ARGS],
-            capture_output=True, env=_git_environment(), stdin=subprocess.DEVNULL, timeout=120, check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        raise ScanRefused("git could not be run, so the files to scan cannot be listed") from None
-    if completed.returncode != 0:
+    status, data, over = _run_git(("rev-parse", "--show-toplevel"), root=root, limit=65_536)
+    if status != 0 or over or os.path.realpath(os.fsdecode(data).strip()) != os.path.realpath(root):
+        raise ScanRefused("the project is not the top of its git work tree, so the files to scan cannot be listed")
+    status, data, over = _run_git(GIT_LIST_ARGS, root=root, limit=MAX_MANIFEST_BYTES)
+    if over:
+        raise ScanRefused("the git file list is larger than the scan allows")
+    if status != 0:
         raise ScanRefused("git could not list the files to scan (not a repository?)")
-    return parse_manifest(completed.stdout)
+    return parse_manifest(data)
 
 
 def read_manifest(path: Path) -> list[bytes]:
     try:
-        return parse_manifest(path.read_bytes())
+        with open(path, "rb") as handle:
+            data = handle.read(MAX_MANIFEST_BYTES + 1)
     except OSError:
         raise ScanRefused("the file manifest supplied by the host cannot be read") from None
+    if len(data) > MAX_MANIFEST_BYTES:
+        raise ScanRefused("the file manifest supplied by the host is larger than the scan allows")
+    return parse_manifest(data)
 
 
 def manifest_from_environment() -> list[bytes]:
@@ -203,10 +314,15 @@ def list_scan_files(root: Path, *, manifest: list[bytes] | None = None) -> list[
     return [os.fsdecode(name) for name in (git_manifest(root) if manifest is None else manifest)]
 
 
-def _display_name(name: str, denylist: tuple[str, ...]) -> str:
-    """The path as printed: itself only if it passes the scan and holds no control character."""
+def _display_name(raw: bytes, denylist: tuple[str, ...]) -> str:
+    """The path as printed: itself only if it is valid UTF-8, passes the scan and holds no control,
+    format, surrogate or unassigned character (which could hide or reorder what is printed)."""
 
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in name) or scan_text(name, "", denylist):
+    try:
+        name = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return REDACTED
+    if any(unicodedata.category(ch)[0] == "C" for ch in name) or scan_text(name, "", denylist):
         return REDACTED
     return name
 
@@ -220,7 +336,7 @@ def _scan_named(raw: bytes, content: Callable[[], bytes | None], denylist: tuple
         raw.decode("utf-8")
     except UnicodeDecodeError:
         findings.append(Finding("non-utf8-name", f"{REDACTED}:0"))
-    display = _display_name(name, denylist)
+    display = _display_name(raw, denylist)
     findings.extend(Finding(f.category, f"{REDACTED}:0") for f in scan_text(name, "", denylist))
     data = content()
     if data is not None and (text := _decode(data)) is not None:
@@ -228,41 +344,115 @@ def _scan_named(raw: bytes, content: Callable[[], bytes | None], denylist: tuple
     return findings
 
 
+def _unsafe() -> ScanRefused:
+    return ScanRefused("a listed file cannot be read safely (unreadable, replaced, below a link, or not a plain file)")
+
+
+def _read_all(descriptor: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while total <= MAX_BYTES:
+        chunk = os.read(descriptor, MAX_BYTES + 1 - total)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks)
+
+
+def _read_listed(root_descriptor: int, raw: bytes) -> bytes | None:
+    """The content of one listed path, or its link target text; None when only its name can be scanned.
+
+    The path is walked one component at a time from the project's directory descriptor, and no
+    component is ever followed through a link. A path that is gone (a deleted file) or is a directory (a
+    submodule) has only its name scanned. Everything else that cannot be read exactly as listed is a refusal:
+    an unreadable or replaced file, a link above the file, a pipe, socket or device.
+    """
+
+    parts = raw.split(b"/")
+    if raw.startswith(b"/") or any(part in (b"", b".", b"..") for part in parts):
+        raise ScanRefused("a listed path is not a plain path inside the project")
+    opened: list[int] = []
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    try:
+        current = root_descriptor
+        for part in parts[:-1]:
+            try:
+                current = os.open(part, flags | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current)
+            except FileNotFoundError:
+                return None
+            opened.append(current)
+        leaf = parts[-1]
+        try:
+            info = os.stat(leaf, dir_fd=current, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        if stat.S_ISLNK(info.st_mode):
+            return os.readlink(leaf, dir_fd=current)
+        if stat.S_ISDIR(info.st_mode):
+            return None
+        if not stat.S_ISREG(info.st_mode):
+            raise _unsafe()
+        descriptor = os.open(leaf, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=current)
+        opened.append(descriptor)
+        held = os.fstat(descriptor)
+        if not stat.S_ISREG(held.st_mode) or (held.st_dev, held.st_ino) != (info.st_dev, info.st_ino):
+            raise _unsafe()
+        return _read_all(descriptor)
+    except OSError:
+        raise _unsafe() from None
+    finally:
+        for descriptor in opened:
+            os.close(descriptor)
+
+
 def scan_tree(root: Path, denylist: tuple[str, ...], *, manifest: list[bytes] | None = None) -> list[Finding]:
     """Scan every file in the manifest (git's own list when none is given).
 
     A symbolic link is never followed: its name and its target text are scanned. A listed path that
-    does not exist or is not a regular file (a deleted file, a submodule) has only its name scanned.
+    does not exist or is a directory (a deleted file, a submodule) has only its name scanned; any other
+    path that cannot be read exactly as listed refuses the whole scan (see ``_read_listed``).
     """
 
-    def reader(raw: bytes) -> Callable[[], bytes | None]:
-        def read() -> bytes | None:
-            path = os.path.join(os.fsencode(root), raw)
-            try:
-                info = os.lstat(path)
-                if stat.S_ISLNK(info.st_mode):
-                    return os.readlink(path)
-                if not stat.S_ISREG(info.st_mode):
-                    return None
-                with open(path, "rb") as handle:
-                    return handle.read(MAX_BYTES + 1)
-            except OSError:
-                return None
-        return read
-
-    findings: list[Finding] = []
-    for raw in git_manifest(root) if manifest is None else manifest:
-        findings.extend(_scan_named(raw, reader(raw), denylist))
-    return findings
+    names = git_manifest(root) if manifest is None else manifest
+    try:
+        root_descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        raise ScanRefused("the project directory cannot be opened") from None
+    try:
+        findings: list[Finding] = []
+        for raw in names:
+            findings.extend(_scan_named(raw, lambda raw=raw: _read_listed(root_descriptor, raw), denylist))
+        return findings
+    finally:
+        os.close(root_descriptor)
 
 
 def scan_paths(staged: bool, denylist: tuple[str, ...]) -> list[Finding]:
     if not staged:
         return scan_tree(Path.cwd(), denylist)
-    names = _git("diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z")
-    findings = []
-    for raw in filter(None, names.split(b"\0")):
-        findings.extend(_scan_named(raw, lambda raw=raw: _git("show", b":" + raw), denylist))
+    # Staged content: names and modes from the index. A submodule (mode 160000) has no blob to read here,
+    # so only its name is scanned.
+    status, data, over = _run_git(
+        ("diff", "--cached", "--raw", "-z", "--no-renames", "--diff-filter=ACMR"),
+        root=None, limit=MAX_MANIFEST_BYTES, hardened=False,
+    )
+    if status != 0 or over:
+        raise ScanRefused("git could not list the staged files")
+    fields = data.split(b"\0")
+    findings: list[Finding] = []
+    for meta, raw in zip(fields[0::2], fields[1::2]):
+        modes = meta.lstrip(b":").split(b" ")
+        if len(modes) < 2 or not raw:
+            raise ScanRefused("git listed the staged files in an unexpected form")
+
+        def staged_blob(raw: bytes = raw) -> bytes:
+            code, blob, over = _run_git(("show", b":" + raw), root=None, limit=MAX_BYTES + 1, hardened=False)
+            if code != 0 and not over:
+                raise ScanRefused("a staged file could not be read")
+            return blob
+
+        findings.extend(_scan_named(raw, (lambda: None) if modes[1] == b"160000" else staged_blob, denylist))
     return findings
 
 
@@ -284,7 +474,13 @@ def check_identity(denylist: tuple[str, ...]) -> list[Finding]:
 
 
 def check_commits(revision: str, denylist: tuple[str, ...]) -> list[Finding]:
-    log = _git("log", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce", revision).decode("utf-8", "replace")
+    status, data, over = _run_git(
+        ("log", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce", revision),
+        root=None, limit=MAX_MANIFEST_BYTES, hardened=False,
+    )
+    if status != 0 or over:
+        raise ScanRefused("git could not list the commits to check")
+    log = data.decode("utf-8", "replace")
     findings = []
     for line in filter(None, log.splitlines()):
         commit, author, author_email, committer, committer_email = line.split("\0")
@@ -326,6 +522,8 @@ def main(argv: list[str] | None = None) -> int:
             findings += check_commits(args.commits, denylist)
     except ScanRefused as reason:
         return refuse(reason)
+    except Exception as error:  # an error message can hold a file name, so only its type is reported
+        return refuse(ScanRefused(f"unexpected {type(error).__name__}"))
     return report(findings, len(denylist))
 
 

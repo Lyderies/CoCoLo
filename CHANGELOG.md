@@ -11,8 +11,15 @@ What changed in each release of COCOLO (Claude Orchestrator, Codex Orchestrator,
   than scan fewer files, when git, the list or the denylist is unavailable. Tracked symbolic links are scanned
   by name and target text, and a file name that is not valid UTF-8 is a finding. The placeholder exemption
   (`/Users/x`, `/home/user`) is exact, lower-case and whole-component only: `User`, `User Smith` and a name that
-  merely starts with a placeholder now fail. A file name that holds a value prints as `[redacted]`. QA
-  diagnostics keep a path only if git lists it and it holds no value, and a line only if the file has it.
+  merely starts with a placeholder now fail, and so does a placeholder followed by a character that can sit
+  inside an account name (`user'smith`). A file name that holds a value, is not valid UTF-8 or holds a control
+  character prints as `[redacted]`, and no error message names a file. QA diagnostics keep a path only if git
+  lists it and it holds no value; the line is always 0, since a wrapper could choose the number. The scan and
+  the runner now fail closed: the runner does not start a security check without the git file list and the
+  denylist, and the scan refuses a file it cannot read, a path below a symbolic link, a pipe, a work tree moved
+  by repository config, an oversize list, a run from a subdirectory, a denylist that was not provisioned, and a
+  scanner that differs from the digest the approved wrapper carries (the wrapper now has a second placeholder,
+  `@SCANNER_SHA256@`). Git lists files with ignore rules matched case-sensitively, whatever `core.ignorecase` says.
 - Two commands that came together on a project whose service was not running could leave one of them reporting
   `orchestration_client_unavailable`: the start that lost to the other's service ended before that service
   held its lock and did not wait for it. It now waits up to 3 s while no host lock is held, within the start timeout, for the winning service.

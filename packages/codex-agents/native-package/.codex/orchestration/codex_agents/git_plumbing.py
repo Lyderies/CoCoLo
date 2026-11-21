@@ -195,16 +195,20 @@ def run_git(
     timeout: float | None = 60,
     max_output_bytes: int | None = None,
     deadline: float | None = None,
+    config: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess:
+    """Run git with the fixed options; ``config`` adds ``key=value`` settings for this one call."""
+
+    extra = [item for setting in config for item in ("-c", setting)]
     if max_output_bytes is not None:
         return _bounded_git_output(
-            [executable, *GIT_OPTIONS, "-C", str(root), *arguments],
+            [executable, *GIT_OPTIONS, *extra, "-C", str(root), *arguments],
             text=text, timeout=timeout, limit=max_output_bytes, deadline=deadline,
         )
     if deadline is not None:
         raise ValueError("a git deadline requires bounded output")
     return subprocess.run(
-        [executable, *GIT_OPTIONS, "-C", str(root), *arguments],
+        [executable, *GIT_OPTIONS, *extra, "-C", str(root), *arguments],
         env=GIT_ENVIRONMENT,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,

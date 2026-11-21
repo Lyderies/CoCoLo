@@ -58,6 +58,22 @@ class ScanTextTests(unittest.TestCase):
             with self.subTest(sample):
                 self.assertEqual(categories(sample), [])
 
+    def test_placeholder_followed_by_punctuation_and_more_name_is_still_an_account(self) -> None:
+        """A character that may legally sit inside an account name cannot end the component by itself.
+
+        Windows account names may contain an apostrophe, backquote, brackets, comma and semicolon, so
+        ``user'smith`` is one account name, not the placeholder ``user`` followed by quoted prose.
+        """
+
+        win = "C:" + "\\Users" + "\\"
+        for ending in ("'smith", "`smith", ")smith", "]smith", "}smith", ",smith", ";smith", "'s"):
+            for prefix in ("/" + "Users/user", "/" + "home/x", win + "user"):
+                with self.subTest(prefix=prefix, ending=ending):
+                    self.assertEqual(categories(prefix + ending + "\\notes.txt"), ["home-path"])
+        for sample in ("see '" + "/" + "Users/x" + "' here", "(" + "/" + "home/user" + "), then", "paths " + "/" + "Users/you" + ", " + "/" + "Users/x"):
+            with self.subTest(sample):
+                self.assertEqual(categories(sample), [])
+
     def test_hostnames_are_flagged(self) -> None:
         self.assertEqual(categories(f"host {HOSTNAME}"), ["hostname"])
         self.assertEqual(categories(f"machine {LAPTOP}"), ["hostname"])
