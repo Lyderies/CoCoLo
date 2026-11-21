@@ -54,6 +54,7 @@
  "codex:tests.test_claim_denial_recovery": "integration",
  "codex:tests.test_claim_lookup_growth": "unit",
  "codex:tests.test_claude_activity": "integration",
+ "codex:tests.test_claude_init_plugins": "unit",
  "codex:tests.test_claude_structured_output": "integration",
  "codex:tests.test_cleanup_contracts": "integration",
  "codex:tests.test_cleanup_custody": "integration",
