@@ -436,6 +436,98 @@
    "checks": 2,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
   },
+  "core_api.py::_accept_loop": {
+   "checks": 2,
+   "ends": "open connections are capped at max_connections and a connection leaves the set when it closes; refusal workers are capped at MAX_REFUSAL_THREADS and each ends when its refusal is answered, a burst past either gets a refusal row and a closed socket, so neither count accumulates",
+   "test": "test_an_extra_connection_always_reads_too_many_connections_never_a_reset"
+  },
+  "core_api.py::_ask": {
+   "checks": 1,
+   "ends": "a per-call byte cap on a question; a longer one is refused too_large, nothing is kept",
+   "test": "test_api24_oversize_line_is_refused_with_fixed_code"
+  },
+  "core_api.py::_clean": {
+   "checks": 1,
+   "ends": "a recursion depth bound on one reply being filtered; deeper values become None, it ends with the call, nothing accumulates"
+  },
+  "core_api.py::_confirmed": {
+   "checks": 1,
+   "ends": "pending confirmations are capped per token; each expires after CONFIRM_SECONDS and expired ones are purged when a new one is asked for, or goes when it is used",
+   "test": "test_api24_pending_confirms_are_bounded_per_token_and_expire"
+  },
+  "core_api.py::_label": {
+   "checks": 1,
+   "ends": "a per-call byte cut of one source label as it is written into a delivered line; it ends with the call, nothing accumulates",
+   "test": "test_a_64_character_non_ascii_label_cannot_block_later_rows"
+  },
+  "core_api.py::_message_params": {
+   "checks": 1,
+   "ends": "a per-call byte cap on one message; a longer one is refused too_large, nothing is kept",
+   "test": "test_term4_validation"
+  },
+  "core_api.py::_need_str": {
+   "checks": 1,
+   "ends": "a per-call length and control-character check on a caller-supplied id or short string; it ends with the call, nothing accumulates"
+  },
+  "core_api.py::_need_text": {
+   "checks": 1,
+   "ends": "a per-call byte cap on free text (a note, question or reply); a longer one is refused too_large, nothing is kept",
+   "test": "test_reply_text_may_be_long_and_multiline_up_to_two_kb"
+  },
+  "core_api.py::_push_params": {
+   "checks": 1,
+   "ends": "a per-call byte cap on one pushed note; a longer one is refused too_large and no intent row is written",
+   "test": "test_api17_size_cap"
+  },
+  "core_api.py::_read_json": {
+   "checks": 1,
+   "ends": "a per-read byte cap on one records file; a larger file reads as None (unknown), nothing is kept",
+   "test": "test_every_file_read_is_size_capped"
+  },
+  "core_api.py::_read_jsonl_file": {
+   "checks": 1,
+   "ends": "a per-read byte cap on one records file; a larger file reads only its newest tail and the reply says incomplete, nothing is kept",
+   "test": "test_every_file_read_is_size_capped"
+  },
+  "core_api.py::_rewrite_tokens": {
+   "checks": 2,
+   "ends": "a byte cap on the token store (tokens.json); a larger store is refused on read and a write that would exceed it is refused before replacing, so the file stops at the cap; revoked tokens are marked revoked, not removed, so a store full of them stops new tokens until the owner deletes the file at their terminal",
+   "test": "test_the_token_store_size_is_checked_before_it_is_replaced"
+  },
+  "core_api.py::_subscribe": {
+   "checks": 2,
+   "ends": "live subscriptions are capped overall and per token; a subscription leaves the list when its reader closes, is dropped as too slow, or reaches its limit",
+   "test": "test_one_token_cannot_hold_more_than_its_subscription_cap"
+  },
+  "core_api.py::_take_push_allowance": {
+   "checks": 1,
+   "ends": "a per-token rate limit of PUSH_PER_WINDOW notes per window; times older than the window are dropped on each call; one small list stays per token that has pushed, in memory until the service restarts, so it is bounded by the tokens the capped store holds",
+   "test": "test_api17_rate_cap_resets_with_time"
+  },
+  "core_api.py::_tokens_used": {
+   "checks": 1,
+   "ends": "a per-call range check on a reported token count; an out-of-range value is refused, nothing is kept"
+  },
+  "core_api.py::changes_diff": {
+   "checks": 1,
+   "ends": "a per-call byte cut of one diff in the reply (truncated says so); the diffs record itself is bounded by its own retention",
+   "test": "test_term2_missing_is_unknown_not_found_and_big_diffs_are_cut"
+  },
+  "core_api.py::handle": {
+   "checks": 1,
+   "ends": "a per-reply cut of any list longer than LIST_MAX; the reply says incomplete, nothing is kept",
+   "test": "test_a_capped_collection_says_so"
+  },
+  "core_api.py::offer": {
+   "checks": 1,
+   "ends": "a per-subscriber buffer of undelivered events; when it is full the subscriber is marked dropped and closed, which frees its slot and its buffer",
+   "test": "test_api13_a_subscriber_that_never_reads_is_closed_and_frees_its_slot"
+  },
+  "core_api.py::readline": {
+   "checks": 1,
+   "ends": "a per-line byte cap on one request line; a longer line is refused too_large and the connection closed, the read buffer never exceeds the limit",
+   "test": "test_api24_unterminated_oversize_line_is_refused_then_closed"
+  },
   "dispatch_api.py::__init__": {
    "checks": 1,
    "ends": "audited 2026-11-21 (ANALYSIS-0.4.0-lifetime-caps.md); BOUNDED unless listed there as LIFETIME or UNCLEAR"
