@@ -83,6 +83,7 @@
  "codex:tests.test_control_loop": "unit",
  "codex:tests.test_control_process": "integration",
  "codex:tests.test_core_api_events": "integration",
+ "codex:tests.test_core_api_hardening": "integration",
  "codex:tests.test_core_api_reads": "integration",
  "codex:tests.test_core_api_talk_control": "integration",
  "codex:tests.test_core_api_transport": "integration",

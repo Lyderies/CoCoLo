@@ -93,7 +93,7 @@ class CoreCase(unittest.TestCase):
         return self.service
 
     def client(self, scope="read", token=None, handshake=True):
-        token = token or (self.mod.mint_token(str(self.records), scope) if scope else None)
+        token = token or (self.mod._mint_token(str(self.records), scope) if scope else None)
         client = self.mod.CoreClient(self.socket, token=token)
         self.clients.append(client)
         self.addCleanup(client.close)
