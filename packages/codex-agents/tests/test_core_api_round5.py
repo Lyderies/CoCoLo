@@ -513,3 +513,14 @@ class RetirementReplacements(Helpers, CoreCase):
                 for part in parts:
                     self.assertIn(part, answer["text"])
         self.assertEqual([], self.inbox())
+
+    def test_walled_actions_change_no_record_and_each_is_one_refusal_row(self):  # API-22, API-23 (replaces talk :187)
+        walled = ["install.run", "update.run", "setup.run", "install.reviewed", "records.write", "billing.attest",
+                  "client_range.widen", "token.mint"]
+        owner = self.client("owner")
+        before = {p.name: p.read_bytes() for p in self.records.iterdir() if p.name not in ("audit.jsonl", "tokens.json")}
+        for method in walled:
+            self.assertEqual("owner_terminal_only", self.error_code(owner, method, {"confirm_id": "x"}))
+        after = {p.name: p.read_bytes() for p in self.records.iterdir() if p.name not in ("audit.jsonl", "tokens.json")}
+        self.assertEqual(before, after)  # commands.jsonl included: a refusal is not a change
+        self.assertEqual(walled, [r["method"] for r in self.refusals() if r["outcome"] == "owner_terminal_only"])
